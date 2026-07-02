@@ -69,7 +69,7 @@ cd feishu-code-bridge
 | `/backend cursor\|claude\|codex` | 切换 Agent |
 | `/cd <path>` | 切换项目目录 |
 | `/ws list\|save\|use` | 命名工作区 |
-| `/model` `/effort` | 模型 / Claude effort |
+| `/model` `/effort` `/permission` | 模型 / Claude effort / 权限模式 |
 | `/clone` `/pull` | 本机 git 操作 |
 
 各 backend 的 session 目录：

@@ -14,14 +14,34 @@ describe("buildArgv model/effort", () => {
     ...partial,
   });
 
-  it("passes claude permission mode for headless -p", () => {
+  it("passes claude permission mode from profile", () => {
     const b = createBackend("claude", {
       type: "claude-code",
       command: "claude",
+      claudePermissionMode: "acceptEdits",
     });
     const argv = b.buildArgv(baseCtx({}));
     expect(argv).toContain("--permission-mode");
-    expect(argv).toContain("bypassPermissions");
+    expect(argv).toContain("acceptEdits");
+  });
+
+  it("passes claude permission mode from run context override", () => {
+    const b = createBackend("claude", {
+      type: "claude-code",
+      command: "claude",
+      claudePermissionMode: "acceptEdits",
+    });
+    const argv = b.buildArgv(
+      baseCtx({
+        claudePermissionMode: "dontAsk",
+        backendConfig: {
+          type: "claude-code",
+          command: "claude",
+          claudePermissionMode: "acceptEdits",
+        },
+      }),
+    );
+    expect(argv).toContain("dontAsk");
   });
 
   it("passes claude model and effort", () => {
@@ -50,12 +70,12 @@ describe("buildArgv model/effort", () => {
     });
     const argv = b.buildArgv(
       baseCtx({
-        model: "sonnet-4",
+        model: "composer-2.5",
         backendConfig: { type: "cursor-cli", command: "cursor-agent" },
       }),
     );
     expect(argv).toContain("--model");
-    expect(argv).toContain("sonnet-4");
+    expect(argv).toContain("composer-2.5");
   });
 
   it("passes codex -m", () => {

@@ -5,6 +5,7 @@ import {
   serializeSessionKey,
   type AppConfig,
   type BackendProfile,
+  type ClaudePermissionMode,
   type SessionKey,
   type SessionRecord,
 } from "@feishu-code-bridge/core";
@@ -15,11 +16,13 @@ export interface ChatBinding {
   topicId?: string;
   model?: string;
   effort?: string;
+  claudePermissionMode?: ClaudePermissionMode;
 }
 
 export interface ResolvedRunOptions {
   model?: string;
   effort?: string;
+  claudePermissionMode?: ClaudePermissionMode;
 }
 
 export class SessionRouter {
@@ -84,6 +87,17 @@ export class SessionRouter {
     });
   }
 
+  clearClaudePermissionMode(chatId: string, topicId?: string): void {
+    const key = this.bindingKey(chatId, topicId);
+    this.bindings.update((all) => {
+      const current = all[key];
+      if (!current) return all;
+      const next = { ...current };
+      delete next.claudePermissionMode;
+      return { ...all, [key]: next };
+    });
+  }
+
   resolveRunOptions(
     chatId: string,
     topicId: string | undefined,
@@ -94,9 +108,12 @@ export class SessionRouter {
       config.backends[binding.backendId];
     const rawModel = binding.model ?? profile?.model;
     const rawEffort = binding.effort ?? profile?.effort;
+    const rawPermission =
+      binding.claudePermissionMode ?? profile?.claudePermissionMode;
     return {
       model: rawModel,
       effort: rawEffort,
+      claudePermissionMode: rawPermission,
     };
   }
 

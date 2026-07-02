@@ -1,27 +1,42 @@
 /** Per-backend model hints for `/model` (not exhaustive; CLI aliases change). */
 export const MODEL_HINTS: Record<string, string[]> = {
   cursor: [
-    "gpt-5",
-    "sonnet-4",
-    "sonnet-4-thinking",
+    "auto",
+    "composer-2.5",
+    "composer-2.5-fast",
+    "gpt-5.5-medium",
     "（完整列表：终端运行 `cursor-agent models`）",
   ],
   claude: [
     "opus",
     "sonnet",
     "haiku",
-    "（完整列表：终端运行 `claude models`）",
+    "（别名指向当前最新版本；完整列表：`claude --help`）",
   ],
   codex: [
-    "gpt-5.1-codex",
-    "o3",
-    "（或 config.toml / `codex exec -m` 支持的名称）",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-high",
+    "gpt-5.2-codex",
+    "（或 `~/.codex/config.toml` / `codex exec -m` 支持的名称）",
   ],
 };
 
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
+export const CLAUDE_PERMISSION_MODES = [
+  "bypassPermissions",
+  "acceptEdits",
+  "auto",
+  "default",
+  "dontAsk",
+  "plan",
+] as const;
+
 export function backendSupportsEffort(backendId: string): boolean {
+  return backendId === "claude";
+}
+
+export function backendSupportsPermissionMode(backendId: string): boolean {
   return backendId === "claude";
 }
 
@@ -46,5 +61,26 @@ export function formatEffortHelp(backendId: string, current?: string): string {
   ];
   if (current) lines.push("", `当前会话: \`${current}\``);
   lines.push("", "用法: `/effort <级别>` | `/effort default` 恢复配置默认");
+  return lines.join("\n");
+}
+
+export function formatPermissionHelp(
+  backendId: string,
+  current?: string,
+): string {
+  if (!backendSupportsPermissionMode(backendId)) {
+    return `**${backendId}** 不支持 Claude \`--permission-mode\`（仅 Claude Code）。`;
+  }
+  const lines = [
+    "**Claude permission-mode** 可选：",
+    ...CLAUDE_PERMISSION_MODES.map((m) => `- \`${m}\``),
+    "",
+    "飞书非交互 `-p` 建议 `bypassPermissions`（可跑 Bash/skill）；`dontAsk` 会直接拒绝命令。",
+  ];
+  if (current) lines.push("", `当前会话: \`${current}\``);
+  lines.push(
+    "",
+    "用法: `/permission <模式>` | `/permission default` 恢复配置默认",
+  );
   return lines.join("\n");
 }

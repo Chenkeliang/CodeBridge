@@ -112,6 +112,7 @@ export class RunnerHost {
       backendConfig: this.options.config.backends[backendId]!,
       model: request.model,
       effort: request.effort,
+      claudePermissionMode: request.claudePermissionMode,
     };
 
     const argv = backend.buildArgv(ctx);

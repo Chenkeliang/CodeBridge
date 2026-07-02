@@ -6,7 +6,7 @@
 
 | 方式 | 是否可行 | 说明 |
 |------|----------|------|
-| **Slash 命令** | ✅ 已实现 | `/model`、`/effort`，按飞书会话记忆，写入 `chat-bindings.json` |
+| **Slash 命令** | ✅ 已实现 | `/model`、`/effort`、`/permission`，按飞书会话记忆，写入 `chat-bindings.json` |
 | **配置文件默认值** | ✅ | `backends.*.model` / `effort`，全局默认 |
 | **流式 Markdown 卡片** | ✅ 已有 | Agent 回复用 `channel.stream()` |
 | **交互式卡片按钮** | ⚠️ 未实现 | 飞书支持 [消息卡片](https://open.feishu.cn/document/ukTMukTMukTM/uczM3QjL3MzN04yNzcDN) + `card.action.trigger`；Channel SDK 文档称可「卡片按钮」场景，但码桥当前未做按钮选模型 |
@@ -46,15 +46,20 @@ backends:
 
 ```
 /model                  # 查看当前 backend 的 model 提示
-/model sonnet-4         # 设置（示例，Cursor）
-/model opus             # Claude
-/model gpt-5.1-codex    # Codex
+/model composer-2.5     # Cursor Agent
+/model sonnet           # Claude（别名，指向当前最新 Sonnet）
+/model gpt-5.3-codex    # Codex
 /model default          # 清除会话覆盖，回到 yaml 默认
 
 /effort high            # 仅 Claude
 /effort default         # 清除覆盖
 
-/status                 # 查看 backend / model / effort / cwd
+/permission             # 查看 Claude permission-mode
+/permission bypassPermissions
+/permission dontAsk       # 非交互下会拒绝 Bash
+/permission default     # 清除覆盖
+
+/status                 # 查看 backend / model / effort / permission / cwd
 ```
 
 ---
@@ -67,16 +72,17 @@ backends:
     type: cursor-cli
     command: cursor-agent
     args: ["--force"]
-    model: sonnet-4          # 可选全局默认
+    model: composer-2.5      # Cursor Agent；也可用 auto 交给 CLI 选择
   claude:
     type: claude-code
     command: claude
-    model: sonnet
+    model: sonnet            # 别名：opus / sonnet / haiku
     effort: medium
+    claudePermissionMode: bypassPermissions
   codex:
     type: codex
     command: codex
-    model: gpt-5.1-codex
+    model: gpt-5.3-codex     # Codex 5.3 标准档
 ```
 
 会话绑定持久化：`~/.feishu-code-bridge/chat-bindings.json`（按 `chatId|topicId`）。

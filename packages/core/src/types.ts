@@ -26,6 +26,7 @@ export interface RunRequest {
   resumeSessionId?: string;
   model?: string;
   effort?: string;
+  claudePermissionMode?: ClaudePermissionMode;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -60,7 +61,16 @@ export interface RunContext {
   backendConfig: BackendProfile;
   model?: string;
   effort?: string;
+  claudePermissionMode?: ClaudePermissionMode;
 }
+
+export type ClaudePermissionMode =
+  | "acceptEdits"
+  | "auto"
+  | "bypassPermissions"
+  | "default"
+  | "dontAsk"
+  | "plan";
 
 export interface BackendProfile {
   type: "cursor-cli" | "claude-code" | "codex" | "generic-spawn";
@@ -72,13 +82,7 @@ export interface BackendProfile {
   allowBypassApprovalsViaConfig?: boolean;
   claudeArgsOption?: string;
   /** Claude --permission-mode；飞书非交互场景建议 bypassPermissions */
-  claudePermissionMode?:
-    | "acceptEdits"
-    | "auto"
-    | "bypassPermissions"
-    | "default"
-    | "dontAsk"
-    | "plan";
+  claudePermissionMode?: ClaudePermissionMode;
   codexArgsOption?: string;
 }
 

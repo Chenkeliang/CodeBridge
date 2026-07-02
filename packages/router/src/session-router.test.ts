@@ -31,11 +31,22 @@ describe("SessionRouter resolveRunOptions", () => {
     tmpDirs.push(dataDir);
     const router = new SessionRouter(dataDir);
     const config = defaultConfig();
-    config.backends.codex!.model = "gpt-5.1-codex";
+    config.backends.codex!.model = "gpt-5.3-codex";
     router.initFromConfig(config);
     router.setBinding("chat1", { backendId: "codex", model: "o3" });
     router.clearModel("chat1");
     const opts = router.resolveRunOptions("chat1", undefined, config);
-    expect(opts.model).toBe("gpt-5.1-codex");
+    expect(opts.model).toBe("gpt-5.3-codex");
+  });
+
+  it("merges claude permission mode from binding", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const router = new SessionRouter(dataDir);
+    const config = defaultConfig();
+    router.initFromConfig(config);
+    router.setBinding("chat1", { claudePermissionMode: "dontAsk" });
+    const opts = router.resolveRunOptions("chat1", undefined, config);
+    expect(opts.claudePermissionMode).toBe("dontAsk");
   });
 });

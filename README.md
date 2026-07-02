@@ -10,7 +10,7 @@ Message your Feishu bot to run coding agents on your Mac/Linux host: stream repl
 
 - **Feishu WebSocket** long connection with streaming markdown replies
 - **Multi-backend**: `cursor` / `claude` / `codex` (local CLIs on the host)
-- **Session routing**: `/new`, `/resume`, `/backend`, `/cd`, `/ws`, `/model`, `/effort`, `/stop`
+- **Session routing**: `/new`, `/resume`, `/backend`, `/cd`, `/ws`, `/model`, `/effort`, `/permission`, `/stop`
 - **Resume local CLI sessions**: pick an existing Cursor / Claude / Codex session from disk and continue with `--resume`
 - **Pinned bot menu**: configure Feishu custom menu items for one-tap commands ([guide](docs/zh-CN/feishu-bot-menu.md))
 - **Git shortcuts**: `/clone`, `/pull` (uses host git + SSH credentials)
@@ -75,7 +75,7 @@ Other commands:
 | `/backend cursor\|claude\|codex` | Switch agent |
 | `/cd <path>` | Change project directory |
 | `/ws list\|save\|use` | Named workspaces |
-| `/model` `/effort` | Model / Claude effort overrides |
+| `/model` `/effort` `/permission` | Model / Claude effort / permission mode |
 | `/clone <url>` `/pull` | Git on the host |
 
 Session storage paths:

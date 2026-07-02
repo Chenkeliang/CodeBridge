@@ -5,10 +5,13 @@ import {
   formatFullCommandHelp,
 } from "./command-help.js";
 import {
+  CLAUDE_PERMISSION_MODES,
   EFFORT_LEVELS,
   backendSupportsEffort,
+  backendSupportsPermissionMode,
   formatEffortHelp,
   formatModelHelp,
+  formatPermissionHelp,
 } from "./model-effort.js";
 import {
   formatSessionListFooter,
@@ -98,6 +101,7 @@ export async function handleSlashCommand(
           `**cwd**: ${key.cwd}`,
           `**model**: ${runOpts.model ?? "(CLI 默认)"}${binding.model ? " _(会话覆盖)_" : profile?.model ? " _(配置默认)_" : ""}`,
           `**effort**: ${backendSupportsEffort(key.backendId) ? (runOpts.effort ?? "(CLI 默认)") : "_(不支持)_"}${binding.effort ? " _(会话覆盖)_" : profile?.effort ? " _(配置默认)_" : ""}`,
+          `**permission**: ${backendSupportsPermissionMode(key.backendId) ? (runOpts.claudePermissionMode ?? "bypassPermissions") : "_(不支持)_"}${binding.claudePermissionMode ? " _(会话覆盖)_" : profile?.claudePermissionMode ? " _(配置默认)_" : ""}`,
           `**cliSessionId**: ${rec?.cliSessionId ?? "(none)"}`,
           `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
         ].join("\n"),
@@ -109,6 +113,10 @@ export async function handleSlashCommand(
 
     case "/effort":
       return handleEffort(ctx, arg);
+
+    case "/permission":
+    case "/perm":
+      return handlePermission(ctx, arg);
 
     case "/cd": {
       if (!arg) return { type: "reply", text: "用法: `/cd /path/to/project`" };
@@ -353,6 +361,62 @@ function handleEffort(ctx: SlashContext, arg: string): SlashResult {
   return {
     type: "reply",
     text: `已设置 Claude effort: \`${level}\`\n下一条消息生效。`,
+  };
+}
+
+function handlePermission(ctx: SlashContext, arg: string): SlashResult {
+  const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
+  const backendId = binding.backendId;
+  const profile = ctx.config.backends[backendId];
+
+  if (!backendSupportsPermissionMode(backendId)) {
+    return {
+      type: "reply",
+      text: formatPermissionHelp(backendId),
+    };
+  }
+
+  if (!arg || arg.toLowerCase() === "list") {
+    const runOpts = ctx.router.resolveRunOptions(
+      ctx.chatId,
+      ctx.topicId,
+      ctx.config,
+    );
+    return {
+      type: "reply",
+      text: formatPermissionHelp(
+        backendId,
+        runOpts.claudePermissionMode ?? "bypassPermissions",
+      ),
+    };
+  }
+
+  if (arg.toLowerCase() === "default") {
+    ctx.router.clearClaudePermissionMode(ctx.chatId, ctx.topicId);
+    const fallback =
+      profile?.claudePermissionMode ?? "bypassPermissions（码桥默认）";
+    return {
+      type: "reply",
+      text: `已清除会话 permission 覆盖，将使用: ${fallback}`,
+    };
+  }
+
+  const mode = arg.trim();
+  if (!(CLAUDE_PERMISSION_MODES as readonly string[]).includes(mode)) {
+    return {
+      type: "reply",
+      text: `无效 permission-mode: ${arg}\n可选: ${CLAUDE_PERMISSION_MODES.join(", ")}`,
+    };
+  }
+
+  ctx.router.setBinding(
+    ctx.chatId,
+    { claudePermissionMode: mode as (typeof CLAUDE_PERMISSION_MODES)[number] },
+    ctx.topicId,
+  );
+  return {
+    type: "reply",
+    text: `已设置 Claude permission-mode: \`${mode}\`\n下一条消息生效。`,
   };
 }
 

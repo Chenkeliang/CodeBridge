@@ -100,16 +100,23 @@ export function defaultConfig(): AppConfig {
     },
     defaultBackend: "cursor",
     backends: {
-      cursor: { type: "cursor-cli", command: "cursor-agent", args: ["--force"] },
+      cursor: {
+        type: "cursor-cli",
+        command: "cursor-agent",
+        args: ["--force"],
+        model: "composer-2.5",
+      },
       claude: {
         type: "claude-code",
         command: "claude",
+        model: "sonnet",
+        effort: "medium",
         claudePermissionMode: "bypassPermissions",
       },
       codex: {
         type: "codex",
         command: "codex",
-        model: "gpt-5.1-codex",
+        model: "gpt-5.3-codex",
         allowBypassApprovals: false,
         allowBypassApprovalsViaConfig: true,
       },

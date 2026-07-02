@@ -106,7 +106,9 @@ class ClaudeCodeBackend extends BaseBackend {
       "--verbose",
     ];
     const permissionMode =
-      this.profile.claudePermissionMode ?? "bypassPermissions";
+      ctx.claudePermissionMode ??
+      this.profile.claudePermissionMode ??
+      "bypassPermissions";
     claudeArgs.unshift("--permission-mode", permissionMode);
 
     const model = ctx.model ?? this.profile.model;

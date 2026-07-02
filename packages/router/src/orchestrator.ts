@@ -97,6 +97,7 @@ export class RunOrchestrator {
       resumeSessionId: existing?.cliSessionId,
       model: runOpts.model,
       effort: runOpts.effort,
+      claudePermissionMode: runOpts.claudePermissionMode,
     };
 
     let cliSessionId = existing?.cliSessionId;
