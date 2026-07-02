@@ -4,5 +4,15 @@ dist/
 .DS_Store
 .env
 .env.local
+.env.*
+!.env.example
+deploy/.env
 coverage/
 *.log
+
+# Runtime / local secrets (never commit)
+**/config.yaml
+chat-bindings.json
+sessions.json
+workspaces.json
+logs/

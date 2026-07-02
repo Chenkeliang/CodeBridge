@@ -105,6 +105,10 @@ class ClaudeCodeBackend extends BaseBackend {
       "stream-json",
       "--verbose",
     ];
+    const permissionMode =
+      this.profile.claudePermissionMode ?? "bypassPermissions";
+    claudeArgs.unshift("--permission-mode", permissionMode);
+
     const model = ctx.model ?? this.profile.model;
     const effort = ctx.effort ?? this.profile.effort;
     if (model) {

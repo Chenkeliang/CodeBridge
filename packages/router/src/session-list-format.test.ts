@@ -10,11 +10,11 @@ describe("compactProjectPath", () => {
   it("shows repo tail segments", () => {
     expect(
       compactProjectPath(
-        "/Users/demo/go/src/gitlab.luojilab.com/rock/goblin-sorting",
+        "/tmp/workspace/src/gitlab.example.com/rock/goblin-sorting",
       ),
     ).toBe("rock/goblin-sorting");
     expect(
-      compactProjectPath("/Users/demo/go/src/gitlab.luojilab.com/shzf/hermes"),
+      compactProjectPath("/tmp/workspace/src/gitlab.example.com/shzf/hermes"),
     ).toBe("shzf/hermes");
   });
 });
@@ -36,7 +36,7 @@ describe("formatSessionLine", () => {
       {
         id: "e4e50b15-aaaa-bbbb-cccc-ddddeeeeffff",
         backend: "claude",
-        cwd: "/Users/demo/go/src/gitlab.luojilab.com/rock/goblin-sorting",
+        cwd: "/tmp/workspace/src/gitlab.example.com/rock/goblin-sorting",
         preview: "检查分拣拦截逻辑",
         updatedAt: "2026-06-29T06:38:38.000Z",
       },

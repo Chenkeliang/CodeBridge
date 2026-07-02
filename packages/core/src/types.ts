@@ -71,6 +71,14 @@ export interface BackendProfile {
   allowBypassApprovals?: boolean;
   allowBypassApprovalsViaConfig?: boolean;
   claudeArgsOption?: string;
+  /** Claude --permission-mode；飞书非交互场景建议 bypassPermissions */
+  claudePermissionMode?:
+    | "acceptEdits"
+    | "auto"
+    | "bypassPermissions"
+    | "default"
+    | "dontAsk"
+    | "plan";
   codexArgsOption?: string;
 }
 

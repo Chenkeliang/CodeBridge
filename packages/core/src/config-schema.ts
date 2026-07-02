@@ -25,6 +25,17 @@ export const BackendProfileSchema = z.object({
   allowBypassApprovals: z.boolean().optional(),
   allowBypassApprovalsViaConfig: z.boolean().optional(),
   claudeArgsOption: z.string().optional(),
+  /** Claude -p 非交互模式下的权限模式，默认 bypassPermissions 避免 dontAsk 拒绝 Bash */
+  claudePermissionMode: z
+    .enum([
+      "acceptEdits",
+      "auto",
+      "bypassPermissions",
+      "default",
+      "dontAsk",
+      "plan",
+    ])
+    .optional(),
   codexArgsOption: z.string().optional(),
 });
 
@@ -90,7 +101,11 @@ export function defaultConfig(): AppConfig {
     defaultBackend: "cursor",
     backends: {
       cursor: { type: "cursor-cli", command: "cursor-agent", args: ["--force"] },
-      claude: { type: "claude-code", command: "claude" },
+      claude: {
+        type: "claude-code",
+        command: "claude",
+        claudePermissionMode: "bypassPermissions",
+      },
       codex: {
         type: "codex",
         command: "codex",

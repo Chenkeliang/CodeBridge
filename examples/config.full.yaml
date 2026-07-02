@@ -25,6 +25,8 @@ backends:
   claude:
     type: claude-code
     command: claude
+    # 飞书非交互 -p 默认 dontAsk 会拒绝 Bash；用 bypassPermissions 才能跑 skill/脚本
+    claudePermissionMode: bypassPermissions
   codex:
     type: codex
     command: codex

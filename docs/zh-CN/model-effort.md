@@ -26,6 +26,20 @@
 
 优先级：**会话 slash 覆盖** > **config.yaml 默认** > **CLI 自身默认**。
 
+### Claude 权限模式（飞书必看）
+
+飞书通过 `claude -p` 非交互调用时，CLI 默认 `dontAsk` 会**直接拒绝 Bash**（无法跑 skill、curl、脚本）。
+
+码桥默认传入：
+
+```yaml
+backends:
+  claude:
+    claudePermissionMode: bypassPermissions
+```
+
+可选：`acceptEdits` / `auto` / `default` / `plan` / `dontAsk`（`claude --help` 查看）。仅在可信本机使用 `bypassPermissions`。
+
 ---
 
 ## 飞书命令

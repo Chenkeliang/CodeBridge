@@ -14,6 +14,16 @@ describe("buildArgv model/effort", () => {
     ...partial,
   });
 
+  it("passes claude permission mode for headless -p", () => {
+    const b = createBackend("claude", {
+      type: "claude-code",
+      command: "claude",
+    });
+    const argv = b.buildArgv(baseCtx({}));
+    expect(argv).toContain("--permission-mode");
+    expect(argv).toContain("bypassPermissions");
+  });
+
   it("passes claude model and effort", () => {
     const b = createBackend("claude", {
       type: "claude-code",
