@@ -1,0 +1,436 @@
+import { execSync } from "node:child_process";
+import type { AppConfig } from "@feishu-code-bridge/core";
+import type { CliSessionSummary } from "@feishu-code-bridge/runner-client";
+import {
+  formatFullCommandHelp,
+} from "./command-help.js";
+import {
+  EFFORT_LEVELS,
+  backendSupportsEffort,
+  formatEffortHelp,
+  formatModelHelp,
+} from "./model-effort.js";
+import {
+  formatSessionListFooter,
+  formatSessionListHeader,
+  formatSessionLine,
+} from "./session-list-format.js";
+import type { SessionRouter } from "./session-router.js";
+
+export interface SlashContext {
+  chatId: string;
+  topicId?: string;
+  senderId: string;
+  text: string;
+  config: AppConfig;
+  router: SessionRouter;
+  listCliSessions?: (
+    options?: { all?: boolean; limit?: number },
+  ) => Promise<CliSessionSummary[]>;
+  bindCliSession?: (sessionId: string) => void;
+  cancelActiveRun?: () => Promise<boolean>;
+}
+
+export type SlashResult =
+  | { type: "reply"; text: string }
+  | { type: "noop" }
+  | { type: "agent"; prompt: string }
+  | { type: "config_updated"; text: string };
+
+export async function handleSlashCommand(
+  ctx: SlashContext,
+): Promise<SlashResult | null> {
+  const trimmed = ctx.text.trim();
+  if (!trimmed.startsWith("/")) return null;
+
+  const [cmd, ...rest] = trimmed.split(/\s+/);
+  const arg = rest.join(" ").trim();
+  const lower = cmd!.toLowerCase();
+
+  switch (lower) {
+    case "/help":
+    case "/menu":
+      return {
+        type: "reply",
+        text: formatFullCommandHelp(),
+      };
+
+    case "/new":
+    case "/reset":
+      ctx.router.clearSession(ctx.chatId, ctx.topicId);
+      return { type: "reply", text: "已新建会话，下一条消息将开启新的 CLI session。" };
+
+    case "/stop":
+    case "/cancel":
+      if (!ctx.cancelActiveRun) {
+        return {
+          type: "reply",
+          text: "Runner 未就绪，无法停止任务。",
+        };
+      }
+      {
+        const stopped = await ctx.cancelActiveRun();
+        return {
+          type: "reply",
+          text: stopped
+            ? "已停止当前正在执行的 Agent 任务。"
+            : "当前没有正在运行的任务。",
+        };
+      }
+
+    case "/resume":
+      return handleResume(ctx, arg);
+
+    case "/status": {
+      const key = ctx.router.buildSessionKey(ctx.chatId, ctx.topicId);
+      const rec = ctx.router.getSessionRecord(key);
+      const runOpts = ctx.router.resolveRunOptions(
+        ctx.chatId,
+        ctx.topicId,
+        ctx.config,
+      );
+      const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
+      const profile = ctx.config.backends[key.backendId];
+      return {
+        type: "reply",
+        text: [
+          `**backend**: ${key.backendId}`,
+          `**cwd**: ${key.cwd}`,
+          `**model**: ${runOpts.model ?? "(CLI 默认)"}${binding.model ? " _(会话覆盖)_" : profile?.model ? " _(配置默认)_" : ""}`,
+          `**effort**: ${backendSupportsEffort(key.backendId) ? (runOpts.effort ?? "(CLI 默认)") : "_(不支持)_"}${binding.effort ? " _(会话覆盖)_" : profile?.effort ? " _(配置默认)_" : ""}`,
+          `**cliSessionId**: ${rec?.cliSessionId ?? "(none)"}`,
+          `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
+        ].join("\n"),
+      };
+    }
+
+    case "/model":
+      return handleModel(ctx, arg);
+
+    case "/effort":
+      return handleEffort(ctx, arg);
+
+    case "/cd": {
+      if (!arg) return { type: "reply", text: "用法: `/cd /path/to/project`" };
+      ctx.router.setBinding(ctx.chatId, { cwd: arg }, ctx.topicId);
+      ctx.router.clearSession(ctx.chatId, ctx.topicId);
+      return { type: "reply", text: `已切换工作目录: ${arg}` };
+    }
+
+    case "/backend": {
+      const id = arg === "default" || !arg ? ctx.config.defaultBackend : arg;
+      if (!ctx.config.backends[id]) {
+        return {
+          type: "reply",
+          text: `未知 backend: ${id}。可选: ${Object.keys(ctx.config.backends).join(", ")}`,
+        };
+      }
+      ctx.router.setBinding(ctx.chatId, { backendId: id }, ctx.topicId);
+      return { type: "reply", text: `已切换 backend: ${id}` };
+    }
+
+    case "/pull": {
+      const cwd = ctx.router.getBinding(ctx.chatId, ctx.topicId).cwd;
+      try {
+        const out = execSync("git pull --ff-only", {
+          cwd,
+          encoding: "utf8",
+        });
+        return { type: "reply", text: `git pull:\n${out}` };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { type: "reply", text: `git pull 失败: ${msg}` };
+      }
+    }
+
+    default:
+      if (lower === "/ws" || lower.startsWith("/ws")) {
+        return handleWs(ctx, rest);
+      }
+      if (lower === "/clone") {
+        return handleClone(ctx, rest);
+      }
+      if (lower === "/config") {
+        const p = ctx.config.feishu.policy;
+        return {
+          type: "reply",
+          text: [
+            "**配置摘要**",
+            `requireMention: ${p?.requireMention ?? true}`,
+            `defaultBackend: ${ctx.config.defaultBackend}`,
+            `runner: ${ctx.config.runner.url}`,
+            "完整配置见 ~/.feishu-code-bridge/config.yaml",
+          ].join("\n"),
+        };
+      }
+      return { type: "agent", prompt: trimmed };
+  }
+}
+
+async function handleResume(
+  ctx: SlashContext,
+  arg: string,
+): Promise<SlashResult> {
+  if (!ctx.listCliSessions || !ctx.bindCliSession) {
+    return {
+      type: "reply",
+      text: "Runner 未就绪，无法列出 CLI session。请先启动 feishu-code-runner。",
+    };
+  }
+
+  const key = ctx.router.buildSessionKey(ctx.chatId, ctx.topicId);
+  const listAll = arg.toLowerCase() === "all";
+
+  if (/^\d+$/.test(arg)) {
+    const index = Number(arg);
+    const sessions = await ctx.listCliSessions({ all: listAll });
+    const picked = sessions[index - 1];
+    if (!picked) {
+      return {
+        type: "reply",
+        text: `无效序号 ${index}。先发送 \`/resume\` 查看列表（共 ${sessions.length} 条）。`,
+      };
+    }
+    ctx.bindCliSession(picked.id);
+    return {
+      type: "reply",
+      text: [
+        `已绑定 **${key.backendId}** session 到当前飞书会话：`,
+        `- id: \`${picked.id}\``,
+        `- cwd: ${picked.cwd}`,
+        `- preview: ${picked.preview}`,
+        "",
+        "下一条消息将带 `--resume` 继续该 CLI session。",
+      ].join("\n"),
+    };
+  }
+
+  if (arg.toLowerCase() === "last") {
+    const sessions = await ctx.listCliSessions();
+    const picked = sessions[0];
+    if (!picked) {
+      return {
+        type: "reply",
+        text: `当前目录 \`${key.cwd}\` 下没有找到 **${key.backendId}** 本地 session。`,
+      };
+    }
+    ctx.bindCliSession(picked.id);
+    return {
+      type: "reply",
+      text: [
+        `已绑定最近一条 **${key.backendId}** session：`,
+        `- id: \`${picked.id}\``,
+        `- preview: ${picked.preview}`,
+        "",
+        "下一条消息将带 `--resume` 继续。",
+      ].join("\n"),
+    };
+  }
+
+  if (arg && arg.toLowerCase() !== "all") {
+    return {
+      type: "reply",
+      text: "用法: `/resume` | `/resume <N>` | `/resume last` | `/resume all`",
+    };
+  }
+
+  const sessions = await ctx.listCliSessions({ all: listAll });
+  const rec = ctx.router.getSessionRecord(key);
+  if (sessions.length === 0) {
+    const bound = rec?.cliSessionId
+      ? `\n当前已绑定: \`${rec.cliSessionId}\``
+      : "";
+    const scopeHint = listAll
+      ? "本机"
+      : `\`${key.cwd}\` 及其子目录`;
+    return {
+      type: "reply",
+      text: `在 ${scopeHint} 下未找到 **${key.backendId}** 本地 session。${bound}\n\n可在终端直接用对应 CLI 开聊后，再回来 \`/resume\`；或 \`/resume all\` 查看全部。`,
+    };
+  }
+
+  const showCwd =
+    listAll || new Set(sessions.map((s) => s.cwd)).size > 1;
+  const displayLimit = 15;
+  const visible = sessions.slice(0, displayLimit);
+  const lines = visible.map((s, i) => formatSessionLine(s, i, showCwd));
+  const boundLine = rec?.cliSessionId ? rec.cliSessionId : undefined;
+
+  return {
+    type: "reply",
+    text: [
+      formatSessionListHeader({
+        backendId: key.backendId,
+        scopeCwd: key.cwd,
+        listAll,
+        total: sessions.length,
+        showCwd,
+        displayLimit: sessions.length > displayLimit ? displayLimit : undefined,
+      }),
+      "",
+      ...lines,
+      "",
+      formatSessionListFooter(boundLine),
+    ].join("\n"),
+  };
+}
+
+function handleModel(ctx: SlashContext, arg: string): SlashResult {
+  const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
+  const backendId = binding.backendId;
+  const profile = ctx.config.backends[backendId];
+
+  if (!arg || arg.toLowerCase() === "list") {
+    const runOpts = ctx.router.resolveRunOptions(
+      ctx.chatId,
+      ctx.topicId,
+      ctx.config,
+    );
+    return {
+      type: "reply",
+      text: formatModelHelp(backendId, runOpts.model),
+    };
+  }
+
+  if (arg.toLowerCase() === "default") {
+    ctx.router.clearModel(ctx.chatId, ctx.topicId);
+    const fallback = profile?.model ?? "(CLI 默认)";
+    return {
+      type: "reply",
+      text: `已清除会话 model 覆盖，将使用: ${fallback}`,
+    };
+  }
+
+  ctx.router.setBinding(ctx.chatId, { model: arg }, ctx.topicId);
+  return {
+    type: "reply",
+    text: `已设置 **${backendId}** model: \`${arg}\`\n下一条消息生效。`,
+  };
+}
+
+function handleEffort(ctx: SlashContext, arg: string): SlashResult {
+  const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
+  const backendId = binding.backendId;
+  const profile = ctx.config.backends[backendId];
+
+  if (!backendSupportsEffort(backendId)) {
+    return {
+      type: "reply",
+      text: formatEffortHelp(backendId),
+    };
+  }
+
+  if (!arg || arg.toLowerCase() === "list") {
+    const runOpts = ctx.router.resolveRunOptions(
+      ctx.chatId,
+      ctx.topicId,
+      ctx.config,
+    );
+    return {
+      type: "reply",
+      text: formatEffortHelp(backendId, runOpts.effort),
+    };
+  }
+
+  if (arg.toLowerCase() === "default") {
+    ctx.router.clearEffort(ctx.chatId, ctx.topicId);
+    const fallback = profile?.effort ?? "(CLI 默认)";
+    return {
+      type: "reply",
+      text: `已清除会话 effort 覆盖，将使用: ${fallback}`,
+    };
+  }
+
+  const level = arg.toLowerCase();
+  if (!EFFORT_LEVELS.includes(level as (typeof EFFORT_LEVELS)[number])) {
+    return {
+      type: "reply",
+      text: `无效 effort: ${arg}\n可选: ${EFFORT_LEVELS.join(", ")}`,
+    };
+  }
+
+  ctx.router.setBinding(ctx.chatId, { effort: level }, ctx.topicId);
+  return {
+    type: "reply",
+    text: `已设置 Claude effort: \`${level}\`\n下一条消息生效。`,
+  };
+}
+
+function handleWs(ctx: SlashContext, rest: string[]): SlashResult {
+  const sub = rest[0]?.toLowerCase();
+  const name = rest[1];
+  if (sub === "list") {
+    const map = ctx.router.listWorkspaceNames();
+    const lines = Object.entries(map).map(([k, v]) => `- **${k}**: ${v}`);
+    return {
+      type: "reply",
+      text: lines.length ? lines.join("\n") : "（暂无命名工作区）",
+    };
+  }
+  if (sub === "save" && name) {
+    const cwd = ctx.router.getBinding(ctx.chatId, ctx.topicId).cwd;
+    ctx.router.saveWorkspace(name, cwd);
+    return { type: "reply", text: `已保存工作区 \`${name}\` → ${cwd}` };
+  }
+  if (sub === "use" && name) {
+    const map = ctx.router.listWorkspaceNames();
+    const cwd = map[name];
+    if (!cwd) return { type: "reply", text: `未找到工作区: ${name}` };
+    ctx.router.setBinding(ctx.chatId, { cwd }, ctx.topicId);
+    ctx.router.clearSession(ctx.chatId, ctx.topicId);
+    return { type: "reply", text: `已切换工作区: ${name} (${cwd})` };
+  }
+  if (sub === "remove" && name) {
+    ctx.router.removeWorkspace(name);
+    return { type: "reply", text: `已删除工作区: ${name}` };
+  }
+  return { type: "reply", text: "用法: `/ws list|save <名>|use <名>|remove <名>`" };
+}
+
+function handleClone(ctx: SlashContext, rest: string[]): SlashResult {
+  const url = rest[0];
+  const name = rest[1];
+  if (!url) return { type: "reply", text: "用法: `/clone <git-url> [name]`" };
+  const root =
+    ctx.config.workspaces?.root ?? `${process.env.HOME}/Projects`;
+  const dirName = name ?? url.split("/").pop()?.replace(/\.git$/, "") ?? "repo";
+  const target = `${root}/${dirName}`;
+  try {
+    execSync(`git clone ${JSON.stringify(url)} ${JSON.stringify(target)}`, {
+      encoding: "utf8",
+    });
+    ctx.router.setBinding(ctx.chatId, { cwd: target }, ctx.topicId);
+    ctx.router.clearSession(ctx.chatId, ctx.topicId);
+    return { type: "reply", text: `已 clone 到 ${target}` };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { type: "reply", text: `clone 失败: ${msg}` };
+  }
+}
+
+export function checkAccess(
+  config: AppConfig,
+  chatId: string,
+  senderId: string,
+  isDm: boolean,
+): boolean {
+  const access = config.access;
+  if (!access) return true;
+  if (access.allowedUsers?.length && !access.allowedUsers.includes(senderId)) {
+    return false;
+  }
+  if (
+    !isDm &&
+    access.allowedChats?.length &&
+    !access.allowedChats.includes(chatId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function isAdmin(config: AppConfig, senderId: string): boolean {
+  const admins = config.access?.admins;
+  if (!admins?.length) return true;
+  return admins.includes(senderId);
+}

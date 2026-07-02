@@ -1,0 +1,22 @@
+{
+  "name": "@feishu-code-bridge/bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "feishu-code-bridge": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --watch dist/cli.js start",
+    "start": "node dist/cli.js start"
+  },
+  "dependencies": {
+    "@feishu-code-bridge/channel-feishu": "workspace:*",
+    "@feishu-code-bridge/core": "workspace:*",
+    "@feishu-code-bridge/memory-plugin": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

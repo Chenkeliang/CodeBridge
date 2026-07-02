@@ -1,0 +1,45 @@
+feishu:
+  domain: https://open.feishu.cn
+  appId: ${FEISHU_APP_ID}
+  appSecret: ${FEISHU_APP_SECRET}
+  policy:
+    requireMention: true
+    dmMode: open
+    respondToMentionAll: false
+    scenarios:
+      - name: trusted_dev_group
+        chats: ["oc_xxxxxxxx"]
+        requireMention: false
+
+runner:
+  url: http://127.0.0.1:19789
+  token: ${RUNNER_TOKEN}
+
+defaultBackend: cursor
+
+backends:
+  cursor:
+    type: cursor-cli
+    command: cursor-agent
+    args: ["--force"]
+  claude:
+    type: claude-code
+    command: claude
+  codex:
+    type: codex
+    command: codex
+    model: gpt-5.1-codex
+    allowBypassApprovals: false
+    allowBypassApprovalsViaConfig: true
+
+workspaces:
+  root: ~/Projects
+  default: ~/Projects
+
+runnerHost:
+  listen: 127.0.0.1:19789
+  maxConcurrentRuns: 4
+
+# plugins:
+#   memory:
+#     enabled: false

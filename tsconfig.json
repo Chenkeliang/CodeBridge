@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/backends" },
+    { "path": "./packages/runner-client" },
+    { "path": "./packages/runner-host" },
+    { "path": "./packages/router" },
+    { "path": "./packages/channel-feishu" },
+    { "path": "./packages/memory-plugin" },
+    { "path": "./apps/bridge" }
+  ]
+}
