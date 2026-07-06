@@ -69,6 +69,16 @@ program
     process.on("SIGTERM", shutdown);
 
     await bridge.connect();
+
+    const apiPort = config.bridge?.apiPort ?? 19790;
+    const { serve } = await import("@hono/node-server");
+    const { createOutboundApp } = await import("./outbound-api.js");
+    serve({
+      fetch: createOutboundApp(bridge, config.runner.token).fetch,
+      hostname: "127.0.0.1",
+      port: apiPort,
+    });
+    console.log(`出站 API（fcb）监听 http://127.0.0.1:${apiPort}`);
     console.log("飞书码桥已启动，等待消息…");
   });
 

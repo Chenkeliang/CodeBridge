@@ -78,6 +78,12 @@ export const ConfigSchema = z.object({
         .default("auto_allow"),
     })
     .optional(),
+  /** Bridge 本地出站 API（供 Agent 内的 fcb 命令把文件/消息发回飞书） */
+  bridge: z
+    .object({
+      apiPort: z.number().int().positive().default(19790),
+    })
+    .optional(),
   plugins: z
     .object({
       memory: z.object({ enabled: z.boolean().default(false) }).optional(),

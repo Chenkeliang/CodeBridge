@@ -14,7 +14,9 @@
     "@feishu-code-bridge/channel-feishu": "workspace:*",
     "@feishu-code-bridge/core": "workspace:*",
     "@feishu-code-bridge/memory-plugin": "workspace:*",
-    "commander": "^12.1.0"
+    "@hono/node-server": "^1.19.14",
+    "commander": "^12.1.0",
+    "hono": "^4.12.27"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

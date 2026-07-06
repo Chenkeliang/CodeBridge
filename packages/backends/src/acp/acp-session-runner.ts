@@ -180,7 +180,7 @@ export async function* runAcpSession(
   const spawnProfile = resolveAcpSpawn(ctx.backendConfig);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
     cwd: ctx.cwd,
-    env: { ...process.env },
+    env: { ...process.env, ...ctx.extraEnv },
     stdio: ["pipe", "pipe", "pipe"],
   });
 

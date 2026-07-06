@@ -47,6 +47,8 @@ export class FeishuBridge {
   private config: AppConfig;
   /** 中断同会话内仍在进行的流式回复（斜杠命令需抢占） */
   private readonly chatStreamAbort = new Map<string, AbortController>();
+  /** chat|topic → 最近一条入站消息 id（出站消息回贴话题用） */
+  private readonly lastInboundMessageId = new Map<string, string>();
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
@@ -232,6 +234,12 @@ export class FeishuBridge {
       return;
     }
 
+    // 记录话题/会话最近一条入站消息，供出站 API 回贴到正确的话题
+    this.lastInboundMessageId.set(
+      this.chatKey(msg.chatId, msg.threadId),
+      msg.messageId,
+    );
+
     const slash = await handleSlashCommand({
       chatId: msg.chatId,
       topicId: msg.threadId,
@@ -398,6 +406,51 @@ export class FeishuBridge {
     await this.channel.send(chatId, { markdown }, { replyTo });
   }
 
+  /**
+   * 话题群出站消息定位：带 topicId 时回贴到该话题最近一条入站消息，
+   * 否则（或 Bridge 重启后话题内还没有新消息）落到群根/单聊。
+   */
+  private outboundSendOptions(
+    chatId: string,
+    topicId?: string,
+  ): { replyTo: string; replyInThread: true } | undefined {
+    if (!topicId) return undefined;
+    const replyTo = this.lastInboundMessageId.get(
+      this.chatKey(chatId, topicId),
+    );
+    if (!replyTo) return undefined;
+    return { replyTo, replyInThread: true };
+  }
+
+  /** 出站 API：把本机文件作为文件消息发进聊天（供 Agent 内 fcb 调用） */
+  async sendOutboundFile(
+    chatId: string,
+    rawPath: string,
+    topicId?: string,
+  ): Promise<string> {
+    if (!this.channel) throw new Error("飞书通道未连接");
+    const file = await resolveOutboundFile(rawPath);
+    await this.channel.send(
+      chatId,
+      { file: { source: file.path, fileName: file.fileName } },
+      this.outboundSendOptions(chatId, topicId),
+    );
+    return file.fileName;
+  }
+
+  /** 出站 API：把 markdown 消息发进聊天（供 Agent 内 fcb 调用） */
+  async sendOutboundMarkdown(
+    chatId: string,
+    markdown: string,
+    topicId?: string,
+  ): Promise<void> {
+    if (!this.channel) throw new Error("飞书通道未连接");
+    await this.channel.send(
+      chatId,
+      { markdown },
+      this.outboundSendOptions(chatId, topicId),
+    );
+  }
 }
 
 export async function runDoctor(

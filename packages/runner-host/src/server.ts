@@ -22,6 +22,7 @@ import {
   cleanupAttachments,
   materializeAttachments,
 } from "./materialize-attachments.js";
+import { writeFcbScript } from "./fcb-script.js";
 
 export interface RunnerHostOptions {
   token: string;
@@ -51,6 +52,7 @@ export class RunnerHost {
   private readonly maxConcurrent: number;
   private readonly dataDir: string;
   private readonly acpPermissionPolicy: AcpPermissionPolicy;
+  private readonly fcbBinDir: Promise<string | undefined>;
 
   constructor(private readonly options: RunnerHostOptions) {
     this.maxConcurrent = options.maxConcurrentRuns ?? 4;
@@ -60,6 +62,27 @@ export class RunnerHost {
     for (const [id, profile] of Object.entries(options.config.backends)) {
       this.registry.register(id, profile);
     }
+    // fcb 写失败不阻塞 Runner 启动，只是 Agent 内没有 fcb 可用
+    this.fcbBinDir = writeFcbScript(this.dataDir).catch(() => undefined);
+  }
+
+  /** Agent 子进程环境：fcb 出站 API 凭据 + 把 fcb 挂到 PATH */
+  private async buildAgentEnv(
+    request: RunRequest,
+  ): Promise<Record<string, string>> {
+    const env: Record<string, string> = {
+      FCB_CHAT_ID: request.sessionKey.chatId,
+      FCB_API: `http://127.0.0.1:${this.options.config.bridge?.apiPort ?? 19790}`,
+      FCB_TOKEN: this.options.token,
+    };
+    if (request.sessionKey.topicId) {
+      env.FCB_TOPIC_ID = request.sessionKey.topicId;
+    }
+    const binDir = await this.fcbBinDir;
+    if (binDir) {
+      env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+    }
+    return env;
   }
 
   get registryIds(): string[] {
@@ -166,6 +189,7 @@ export class RunnerHost {
       model: request.model,
       effort: request.effort,
       claudePermissionMode: request.claudePermissionMode,
+      extraEnv: await this.buildAgentEnv(request),
     };
 
     try {
@@ -233,7 +257,7 @@ export class RunnerHost {
 
     const child = spawn(command, args, {
       cwd: ctx.cwd,
-      env: { ...process.env },
+      env: { ...process.env, ...ctx.extraEnv },
       stdio: ["ignore", "pipe", "pipe"],
     });
 

@@ -29,9 +29,15 @@ importers:
       '@feishu-code-bridge/memory-plugin':
         specifier: workspace:*
         version: link:../../packages/memory-plugin
+      '@hono/node-server':
+        specifier: ^1.19.14
+        version: 1.19.14(hono@4.12.27)
       commander:
         specifier: ^12.1.0
         version: 12.1.0
+      hono:
+        specifier: ^4.12.27
+        version: 4.12.27
     devDependencies:
       typescript:
         specifier: ^5.7.2

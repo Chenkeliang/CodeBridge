@@ -75,6 +75,8 @@ export interface RunContext {
   model?: string;
   effort?: string;
   claudePermissionMode?: ClaudePermissionMode;
+  /** 注入 Agent 子进程的额外环境变量（如 FCB_* 出站 API 凭据） */
+  extraEnv?: Record<string, string>;
 }
 
 export type ClaudePermissionMode =
