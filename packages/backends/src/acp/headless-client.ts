@@ -2,6 +2,7 @@ import {
   client,
   methods,
   type ClientApp,
+  type PermissionOptionKind,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
@@ -11,21 +12,18 @@ export interface HeadlessClientOptions {
   permissionPolicy: AcpPermissionPolicy;
 }
 
-function pickAllowOption(
+export function pickAllowOption(
   params: RequestPermissionRequest,
 ): RequestPermissionResponse {
   const options = params.options ?? [];
-  if (!options.length) {
+  const byKind = (kind: PermissionOptionKind) =>
+    options.find((o) => o.kind === kind);
+  const allow = byKind("allow_once") ?? byKind("allow_always");
+  if (!allow) {
     return {
       outcome: { outcome: "cancelled" },
     };
   }
-  const allow =
-    options.find((o) =>
-      /allow|yes|approve|run|always/i.test(
-        String(o.name ?? o.optionId ?? ""),
-      ),
-    ) ?? options[0]!;
   return {
     outcome: {
       outcome: "selected",

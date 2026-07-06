@@ -124,4 +124,24 @@ describe("runActivePromptTurn", () => {
     aborted = true;
     expect(await done).toEqual([]);
   });
+
+  it("fires a fatal stall error when output goes silent mid-turn", async () => {
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      noOutputTimeoutMs: 10_000,
+      stallTimeoutMs: 100,
+    });
+    const done = collect(gen);
+
+    queue.enqueue(textChunk("hello"));
+    // 之后再不 enqueue 任何事件，模拟 tool 调用卡死
+
+    const events = await done;
+    expect(events[0]).toEqual({ type: "text_delta", text: "hello" });
+    const last = events[events.length - 1];
+    expect(last).toMatchObject({ type: "error", fatal: true });
+    expect((last as { message: string }).message).toMatch(/无新事件|stall/);
+  });
 });

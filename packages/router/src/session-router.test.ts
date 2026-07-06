@@ -96,4 +96,17 @@ describe("SessionRouter resolveRunOptions", () => {
     const opts = router.resolveRunOptions("chat1", undefined, config);
     expect(opts.transport).toBe("cli");
   });
+
+  it("bindCliSession on a fresh chat stamps the given transport instead of undefined", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const router = new SessionRouter(dataDir);
+    const config = defaultConfig();
+    router.initFromConfig(config);
+
+    router.bindCliSession("chat1", "acp-session-123", "acp");
+
+    const record = router.getSessionRecord(router.buildSessionKey("chat1"));
+    expect(record?.transport).toBe("acp");
+  });
 });

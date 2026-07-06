@@ -190,13 +190,15 @@ export class FeishuBridge {
         const message = err instanceof Error ? err.message : String(err);
         await this.sendMarkdown(
           msg.chatId,
-          `❌ 图片下载失败：${message}\n\n` +
+          `❌ 图片下载失败，将仅按文字处理：${message}\n\n` +
             "用户发送的图片需使用「消息资源」接口下载，请确认应用已开通：\n" +
             "- `im:message` 或 `im:message:readonly`\n" +
             "- `im:resource`（上传用；下载用户图片主要靠前者）",
           msg.messageId,
         );
-        return;
+        // 图片下载失败仅降级为纯文字处理，不中断整条消息；
+        // 若消息本身没有可用文字内容（纯图片消息），则没有必要继续触发一次空跑。
+        if (!resolveInboundPrompt(msg.content, 0)) return;
       }
     }
 
@@ -374,6 +376,7 @@ export class FeishuBridge {
     if (!this.channel) return;
     await this.channel.send(chatId, { markdown }, { replyTo });
   }
+
 }
 
 export async function runDoctor(

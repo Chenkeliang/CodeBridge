@@ -31,6 +31,10 @@ export interface AcpRunOptions {
   isAborted: () => boolean;
   /** 子进程 stderr 快照，用于超时/失败时给出真实原因 */
   readStderr?: () => string;
+  /** 测试用：覆盖下方三个超时常量 */
+  promptTimeoutMs?: number;
+  noOutputTimeoutMs?: number;
+  stallTimeoutMs?: number;
 }
 
 async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
@@ -70,6 +74,8 @@ async function waitMs(ms: number, isAborted: () => boolean): Promise<void> {
 const ACP_PROMPT_TIMEOUT_MS = 20 * 60 * 1000;
 /** 从发 prompt 起这么久仍无任何输出，视为卡住（常见于 session/load 或看图） */
 const ACP_NO_OUTPUT_TIMEOUT_MS = 120 * 1000;
+/** 已有输出后这么久没有新事件，视为 mid-turn 卡死（如 tool 调用卡死） */
+const ACP_STALL_TIMEOUT_MS = 10 * 60 * 1000;
 const ACP_INIT_TIMEOUT_MS = 30_000;
 
 function isActivityEvent(event: AgentEvent): boolean {
@@ -93,13 +99,21 @@ export async function* runActivePromptTurn(
 ): AsyncGenerator<AgentEvent> {
   void active.prompt(blocks);
 
+  const promptTimeoutMs = options.promptTimeoutMs ?? ACP_PROMPT_TIMEOUT_MS;
+  const noOutputTimeoutMs = options.noOutputTimeoutMs ?? ACP_NO_OUTPUT_TIMEOUT_MS;
+  const stallTimeoutMs = options.stallTimeoutMs ?? ACP_STALL_TIMEOUT_MS;
+
   let sawOutput = false;
   const promptStartedAt = Date.now();
+  let lastActivityAt = promptStartedAt;
   const noOutputTimeout = (): boolean =>
-    !sawOutput && Date.now() - promptStartedAt >= ACP_NO_OUTPUT_TIMEOUT_MS;
+    !sawOutput && Date.now() - promptStartedAt >= noOutputTimeoutMs;
+  // sawOutput 之后 120s watchdog 就不再生效，需要单独的 mid-turn 卡死检测
+  const stallTimeout = (): boolean =>
+    sawOutput && Date.now() - lastActivityAt >= stallTimeoutMs;
 
   let sawStop = false;
-  const deadline = Date.now() + ACP_PROMPT_TIMEOUT_MS;
+  const deadline = Date.now() + promptTimeoutMs;
   // 必须跨迭代复用同一个 nextUpdate()：每次调用都会在 SDK AsyncQueue 里注册一个
   // waiter，被 race 抛弃的 waiter 仍排在 FIFO 前面，会把后续事件全部吞掉。
   let pending: Promise<ActiveSessionMessage> | null = null;
@@ -124,6 +138,17 @@ export async function* runActivePromptTurn(
       };
       break;
     }
+    if (stallTimeout()) {
+      yield {
+        type: "error",
+        message: withStderr(
+          "ACP 超过 10 分钟无新事件（可能 tool 调用卡死）",
+          options,
+        ),
+        fatal: true,
+      };
+      break;
+    }
 
     pending ??= active.nextUpdate();
     const next = await Promise.race([
@@ -135,7 +160,10 @@ export async function* runActivePromptTurn(
 
     if (next.message.kind === "session_update") {
       for (const event of mapSessionUpdate(next.message.update)) {
-        if (isActivityEvent(event)) sawOutput = true;
+        if (isActivityEvent(event)) {
+          sawOutput = true;
+          lastActivityAt = Date.now();
+        }
         yield event;
       }
     } else if (next.message.kind === "stop") {
@@ -157,12 +185,17 @@ export async function* runAcpSession(
   });
 
   let stderr = "";
+  // 长时间任务下 stderr 会无界增长，只保留末尾 8 KiB 用于排障
+  const appendStderr = (chunk: string): void => {
+    stderr += chunk;
+    if (stderr.length > 8192) stderr = stderr.slice(-8192);
+  };
   // 未监听 'error' 事件时 spawn 失败（如 ENOENT）会以 uncaught exception 炸掉整个进程
   child.on("error", (err) => {
-    stderr += `${err.message}\n`;
+    appendStderr(`${err.message}\n`);
   });
   child.stderr?.on("data", (d) => {
-    stderr += d.toString();
+    appendStderr(d.toString());
   });
 
   const childAlive = () =>
@@ -215,12 +248,23 @@ export async function* runAcpSession(
       "ACP initialize 超时",
     );
 
+    let resumeFallbackReason: string | undefined;
     active = await openActiveSession(connection, ctx, ctx.backendConfig, {
       isAborted: options.isAborted,
+      onResumeFallback: (reason) => {
+        resumeFallbackReason = reason;
+      },
     });
     sessionId = active.sessionId;
 
     yield { type: "session", sessionId };
+    if (resumeFallbackReason) {
+      yield {
+        type: "error",
+        message: `ACP 续聊原会话失败，已自动新建会话：${resumeFallbackReason}`,
+        fatal: false,
+      };
+    }
 
     const blocks = await buildPromptBlocks(ctx);
     yield* runActivePromptTurn(active, blocks, {

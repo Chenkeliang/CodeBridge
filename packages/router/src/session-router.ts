@@ -176,13 +176,14 @@ export class SessionRouter {
   bindCliSession(
     chatId: string,
     cliSessionId: string,
+    transport: BackendTransport,
     topicId?: string,
   ): void {
     const key = this.buildSessionKey(chatId, topicId);
     const existing = this.getSessionRecord(key);
     this.saveSessionRecord(key, {
       cliSessionId,
-      transport: existing?.transport,
+      transport,
       lastRunAt: new Date().toISOString(),
       lastRunId: existing?.lastRunId,
     });

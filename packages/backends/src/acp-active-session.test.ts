@@ -128,6 +128,42 @@ describe("openActiveSession", () => {
     ).rejects.toBeInstanceOf(AcpTimeoutError);
   });
 
+  it("invokes onResumeFallback with the failure reason when session/load times out", async () => {
+    const fallback = { sessionId: "fresh", dispose: () => {} };
+    const agent = {
+      request: () => new Promise<void>(() => {}),
+      attachSession: () => {
+        throw new Error("should not attach");
+      },
+      buildSession: () => ({
+        start: async () => fallback,
+      }),
+    };
+    const connection = { agent } as unknown as ClientConnection;
+    const profile = defaultConfig().backends.cursor!;
+    const reasons: string[] = [];
+
+    const result = await openActiveSession(
+      connection,
+      {
+        runId: "r1",
+        cwd: "/tmp",
+        prompt: "hi",
+        resumeSessionId: "stale",
+        backendConfig: profile,
+      },
+      profile,
+      {
+        loadTimeoutMs: 30,
+        onResumeFallback: (reason) => reasons.push(reason),
+      },
+    );
+
+    expect(result).toBe(fallback);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/ACP session 续聊超时/);
+  });
+
   it("does not fall back to a new session when aborted during load", async () => {
     let buildCalls = 0;
     const agent = {

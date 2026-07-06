@@ -24,3 +24,11 @@ export async function materializeAttachments(
   }
   return out;
 }
+
+export async function cleanupAttachments(
+  dataDir: string,
+  runId: string,
+): Promise<void> {
+  const dir = path.join(dataDir, "attachments", runId);
+  await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+}

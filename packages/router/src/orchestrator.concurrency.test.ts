@@ -23,8 +23,8 @@ describe("SessionRouter multi-session", () => {
 
     router.setBinding("chat1", { backendId: "cursor", cwd: "/proj/a" });
     router.setBinding("chat2", { backendId: "claude", cwd: "/proj/b" });
-    router.bindCliSession("chat1", "cursor-session-111");
-    router.bindCliSession("chat2", "claude-session-222");
+    router.bindCliSession("chat1", "cursor-session-111", "acp");
+    router.bindCliSession("chat2", "claude-session-222", "acp");
 
     const rec1 = router.getSessionRecord(router.buildSessionKey("chat1"));
     const rec2 = router.getSessionRecord(router.buildSessionKey("chat2"));
@@ -40,9 +40,9 @@ describe("SessionRouter multi-session", () => {
     router.initFromConfig(defaultConfig());
 
     router.setBinding("chat1", { backendId: "cursor" });
-    router.bindCliSession("chat1", "cursor-sess");
+    router.bindCliSession("chat1", "cursor-sess", "acp");
     router.setBinding("chat1", { backendId: "claude" });
-    router.bindCliSession("chat1", "claude-sess");
+    router.bindCliSession("chat1", "claude-sess", "acp");
 
     const cursorKey = {
       chatId: "chat1",

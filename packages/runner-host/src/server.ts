@@ -18,7 +18,10 @@ import type {
 } from "@feishu-code-bridge/core";
 import { DEFAULT_DATA_DIR, VERSION } from "@feishu-code-bridge/core";
 import { Hono } from "hono";
-import { materializeAttachments } from "./materialize-attachments.js";
+import {
+  cleanupAttachments,
+  materializeAttachments,
+} from "./materialize-attachments.js";
 
 export interface RunnerHostOptions {
   token: string;
@@ -165,12 +168,18 @@ export class RunnerHost {
       claudePermissionMode: request.claudePermissionMode,
     };
 
-    if (transport === "acp") {
-      yield* this.executeAcpRun(request.runId, ctx);
-      return;
-    }
+    try {
+      if (transport === "acp") {
+        yield* this.executeAcpRun(request.runId, ctx);
+        return;
+      }
 
-    yield* this.executeCliRun(request.runId, ctx, backend);
+      yield* this.executeCliRun(request.runId, ctx, backend);
+    } finally {
+      if (localAttachments.length > 0) {
+        await cleanupAttachments(this.dataDir, request.runId);
+      }
+    }
   }
 
   private async *executeAcpRun(

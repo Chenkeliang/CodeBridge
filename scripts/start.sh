@@ -7,8 +7,8 @@
 #   ./scripts/start.sh docker      # 宿主机 Runner + Docker Bridge
 #   ./scripts/start.sh stop        # 停止服务
 #   ./scripts/start.sh restart     # 重启服务
-#   ./scripts/start.sh install-launchd   # macOS 开机自启（launchd）
-#   ./scripts/start.sh uninstall-launchd # 卸载 launchd（改用手动 start.sh）
+#   ./scripts/start.sh install-launchd [runner|bridge|all]   # macOS 开机自启（launchd，默认 all）
+#   ./scripts/start.sh uninstall-launchd [runner|bridge|all] # 卸载 launchd（改用手动 start.sh）
 #   ./scripts/start.sh status      # 查看状态
 #   ./scripts/start.sh doctor      # 诊断
 #   ./scripts/start.sh help        # 帮助
@@ -545,31 +545,63 @@ $(for a in "${args[@]}"; do printf '    <string>%s</string>\n' "$a"; done)
 EOF
 }
 
-cmd_install_launchd() {
-  ensure_built
-  need_cmd node || exit 1
-  info "安装 launchd 自启（Runner + Bridge）…"
-  cmd_stop 2>/dev/null || true
+check_launchd_component() {
+  local component="$1"
+  case "$component" in
+    runner|bridge|all) ;;
+    *)
+      err "未知组件: $component（可选 runner|bridge|all）"
+      exit 1
+      ;;
+  esac
+}
+
+install_launchd_runner() {
   launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
-  launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
   write_launchd_plist "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST" \
     "$RUNNER_LOG" "$DATA_DIR/runner.err.log" \
     "$ROOT/packages/runner-host/dist/cli.js"
+  launchd_bootstrap "$LAUNCHD_RUNNER_PLIST"
+}
+
+install_launchd_bridge() {
+  launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
   write_launchd_plist "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST" \
     "$BRIDGE_LOG" "$DATA_DIR/bridge.err.log" \
     "$ROOT/apps/bridge/dist/cli.js" "start"
-  launchd_bootstrap "$LAUNCHD_RUNNER_PLIST"
   launchd_bootstrap "$LAUNCHD_BRIDGE_PLIST"
+}
+
+cmd_install_launchd() {
+  local component="${1:-all}"
+  check_launchd_component "$component"
+  ensure_built
+  need_cmd node || exit 1
+  info "安装 launchd 自启（$component）…"
+  cmd_stop 2>/dev/null || true
+  [[ "$component" == "runner" || "$component" == "all" ]] && install_launchd_runner
+  [[ "$component" == "bridge" || "$component" == "all" ]] && install_launchd_bridge
   info "launchd 已加载。查看: launchctl list | grep feishu-code-bridge"
-  info "日志: $RUNNER_LOG / $BRIDGE_LOG"
+  case "$component" in
+    runner) info "日志: $RUNNER_LOG" ;;
+    bridge) info "日志: $BRIDGE_LOG" ;;
+    all) info "日志: $RUNNER_LOG / $BRIDGE_LOG" ;;
+  esac
   warn "之后请用 launchctl 或 $0 uninstall-launchd 管理，不要与 $0 start 混用。"
 }
 
 cmd_uninstall_launchd() {
-  info "卸载 launchd 自启…"
-  launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
-  launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
-  rm -f "$LAUNCHD_RUNNER_PLIST" "$LAUNCHD_BRIDGE_PLIST"
+  local component="${1:-all}"
+  check_launchd_component "$component"
+  info "卸载 launchd 自启（$component）…"
+  if [[ "$component" == "runner" || "$component" == "all" ]]; then
+    launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
+    rm -f "$LAUNCHD_RUNNER_PLIST"
+  fi
+  if [[ "$component" == "bridge" || "$component" == "all" ]]; then
+    launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
+    rm -f "$LAUNCHD_BRIDGE_PLIST"
+  fi
   stop_port_listener "$RUNNER_PORT"
   stop_orphan_processes
   info "launchd 已卸载。可执行: $0 start"
@@ -754,14 +786,14 @@ main() {
     docker) cmd_docker ;;
     stop) cmd_stop ;;
     restart) cmd_stop; cmd_start "${arg:-bg}" ;;
-    install-launchd) cmd_install_launchd ;;
-    uninstall-launchd) cmd_uninstall_launchd ;;
+    install-launchd) cmd_install_launchd "${arg:-all}" ;;
+    uninstall-launchd) cmd_uninstall_launchd "${arg:-all}" ;;
     status) cmd_status ;;
     doctor) cmd_doctor ;;
     help|-h|--help) cmd_help ;;
     *)
       err "未知命令: $cmd"
-      echo "用法: $0 {setup|start|fg|docker|stop|restart|install-launchd|uninstall-launchd|status|doctor|help}"
+      echo "用法: $0 {setup|start|fg|docker|stop|restart|install-launchd [runner|bridge|all]|uninstall-launchd [runner|bridge|all]|status|doctor|help}"
       exit 1
       ;;
   esac

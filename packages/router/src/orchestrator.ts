@@ -218,7 +218,12 @@ export class RunOrchestrator {
     topicId: string | undefined,
     cliSessionId: string,
   ): void {
-    this.router.bindCliSession(chatId, cliSessionId, topicId);
+    const runOpts = this.router.resolveRunOptions(
+      chatId,
+      topicId,
+      this.options.config,
+    );
+    this.router.bindCliSession(chatId, cliSessionId, runOpts.transport, topicId);
   }
 }
 

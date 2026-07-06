@@ -12,6 +12,8 @@ export const ACP_LOAD_TIMEOUT_MS = 60_000;
 export interface OpenActiveSessionOptions {
   isAborted?: () => boolean;
   loadTimeoutMs?: number;
+  /** 续聊失败静默回退新会话前的通知钩子，避免用户无感丢失上下文 */
+  onResumeFallback?: (reason: string) => void;
 }
 
 function attachActiveSession(
@@ -73,6 +75,8 @@ export async function openActiveSession(
     return attachActiveSession(agent, sessionId);
   } catch (err) {
     if (isAborted()) throw err;
+    const reason = err instanceof Error ? err.message : String(err);
+    options.onResumeFallback?.(reason);
     return startNewSession();
   }
 }
