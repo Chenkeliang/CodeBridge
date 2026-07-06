@@ -24,6 +24,7 @@ export const SLASH_COMMANDS: CommandHelpItem[] = [
     command: "/permission [模式|default]",
     summary: "Claude 权限模式（bypassPermissions 等）",
   },
+  { command: "/send <path>", summary: "把本机文件发到当前聊天" },
   { command: "/clone <url>", summary: "git clone" },
   { command: "/pull", summary: "git pull" },
 ];

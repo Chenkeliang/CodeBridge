@@ -39,7 +39,8 @@ export type SlashResult =
   | { type: "reply"; text: string }
   | { type: "noop" }
   | { type: "agent"; prompt: string }
-  | { type: "config_updated"; text: string };
+  | { type: "config_updated"; text: string }
+  | { type: "send_file"; path: string };
 
 export async function handleSlashCommand(
   ctx: SlashContext,
@@ -87,6 +88,15 @@ export async function handleSlashCommand(
 
     case "/resume":
       return handleResume(ctx, arg);
+
+    case "/send":
+      if (!arg) {
+        return {
+          type: "reply",
+          text: "用法: `/send /绝对路径/文件` 或 `/send ~/Desktop/xx.csv`（发送 Bridge 所在机器上的文件）",
+        };
+      }
+      return { type: "send_file", path: arg };
 
     case "/status": {
       const key = ctx.router.buildSessionKey(ctx.chatId, ctx.topicId);

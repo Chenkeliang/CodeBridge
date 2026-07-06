@@ -22,6 +22,7 @@ import {
   downloadInboundImages,
   resolveInboundPrompt,
 } from "./feishu-inbound-media.js";
+import { resolveOutboundFile } from "./feishu-outbound-file.js";
 
 export interface FeishuMessage {
   messageId: string;
@@ -261,6 +262,26 @@ export class FeishuBridge {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.options.onLog?.(`斜杠回复发送失败: ${message}`);
+      }
+      return;
+    }
+
+    if (slash?.type === "send_file") {
+      // /send 不打断正在进行的 Agent 任务，独立发送文件
+      try {
+        const file = await resolveOutboundFile(slash.path);
+        await this.channel?.send(
+          msg.chatId,
+          { file: { source: file.path, fileName: file.fileName } },
+          { replyTo: msg.messageId },
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await this.sendMarkdown(
+          msg.chatId,
+          `❌ 文件发送失败：${message}`,
+          msg.messageId,
+        ).catch(() => {});
       }
       return;
     }
