@@ -63,6 +63,27 @@ describe("buildArgv model/effort", () => {
     expect(joined).toContain("low");
   });
 
+  it("passes cursor-agent workspace and trust flags", () => {
+    const b = createBackend("cursor", {
+      type: "cursor-cli",
+      command: "cursor-agent",
+      args: ["--force", "--trust"],
+    });
+    const argv = b.buildArgv(
+      baseCtx({
+        cwd: "/tmp/my-project",
+        backendConfig: {
+          type: "cursor-cli",
+          command: "cursor-agent",
+          args: ["--force", "--trust"],
+        },
+      }),
+    );
+    expect(argv).toContain("--workspace");
+    expect(argv).toContain("/tmp/my-project");
+    expect(argv).toContain("--trust");
+  });
+
   it("passes cursor-agent -m", () => {
     const b = createBackend("cursor", {
       type: "cursor-cli",
@@ -92,5 +113,40 @@ describe("buildArgv model/effort", () => {
     const joined = argv.join(" ");
     expect(joined).toContain("-m");
     expect(joined).toContain("o3");
+  });
+
+  it("keeps shell metacharacters in the final prompt argument", () => {
+    const b = createBackend("cursor", {
+      type: "cursor-cli",
+      command: "cursor-agent",
+    });
+    const shellPrompt = 'git commit -m "fix" && npm test | head';
+    const argv = b.buildArgv(
+      baseCtx({
+        prompt: shellPrompt,
+        resumeSessionId: "sess-abc",
+        backendConfig: { type: "cursor-cli", command: "cursor-agent" },
+      }),
+    );
+    expect(argv[argv.length - 1]).toBe(shellPrompt);
+    expect(argv).toContain("--resume");
+    expect(argv).toContain("sess-abc");
+  });
+
+  it("appends attachment paths to prompt", () => {
+    const b = createBackend("claude", {
+      type: "claude-code",
+      command: "claude",
+    });
+    const argv = b.buildArgv(
+      baseCtx({
+        prompt: "看看截图",
+        attachments: [{ path: "/tmp/feishu-image-1.png" }],
+      }),
+    );
+    const joined = argv.join(" ");
+    expect(joined).toContain("看看截图");
+    expect(joined).toContain("/tmp/feishu-image-1.png");
+    expect(joined).toContain("[附件图片]");
   });
 });

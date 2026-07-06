@@ -18,6 +18,7 @@ export const SLASH_COMMANDS: CommandHelpItem[] = [
   { command: "/ws save <名>", summary: "保存当前目录为工作区" },
   { command: "/ws use <名>", summary: "切换到已保存工作区" },
   { command: "/model [名|default]", summary: "切换模型" },
+  { command: "/transport [acp|cli|default]", summary: "切换 ACP / CLI 传输" },
   { command: "/effort [级|default]", summary: "Claude effort" },
   {
     command: "/permission [模式|default]",

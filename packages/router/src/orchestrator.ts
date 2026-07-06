@@ -1,6 +1,6 @@
 import path from "node:path";
 import { appendJsonl } from "@feishu-code-bridge/core";
-import type { AgentEvent, AppConfig, RunRequest } from "@feishu-code-bridge/core";
+import type { AgentEvent, AppConfig, BackendTransport, RunAttachment, RunRequest, SessionRecord } from "@feishu-code-bridge/core";
 import {
   RunnerClient,
   type CliSessionSummary,
@@ -60,6 +60,7 @@ export class RunOrchestrator {
     chatId: string,
     topicId: string | undefined,
     prompt: string,
+    attachments?: RunAttachment[],
   ): AsyncGenerator<AgentEvent> {
     await this.cancelActiveForChat(chatId, topicId);
 
@@ -70,6 +71,7 @@ export class RunOrchestrator {
       topicId,
       this.options.config,
     );
+    const resumeSessionId = this.resumeSessionId(existing, runOpts.transport);
     const runId = this.router.newRunId();
     const chatKey = this.chatRunKey(chatId, topicId);
     const controller = new AbortController();
@@ -94,14 +96,40 @@ export class RunOrchestrator {
       runId,
       sessionKey,
       prompt,
-      resumeSessionId: existing?.cliSessionId,
+      attachments,
+      resumeSessionId,
       model: runOpts.model,
       effort: runOpts.effort,
       claudePermissionMode: runOpts.claudePermissionMode,
+      transport: runOpts.transport,
     };
 
-    let cliSessionId = existing?.cliSessionId;
+    let cliSessionId = resumeSessionId ?? existing?.cliSessionId;
     let stopped = false;
+    let loggedDone = false;
+
+    const logDone = () => {
+      if (loggedDone) return;
+      loggedDone = true;
+      appendJsonl(logPath, {
+        event: "done",
+        runId,
+        cliSessionId,
+        stopped: controller.signal.aborted || stopped,
+        ts: new Date().toISOString(),
+      });
+    };
+
+    const persistSession = (id?: string) => {
+      if (!id) return;
+      cliSessionId = id;
+      this.router.saveSessionRecord(sessionKey, {
+        cliSessionId: id,
+        transport: runOpts.transport,
+        lastRunAt: new Date().toISOString(),
+        lastRunId: runId,
+      });
+    };
 
     try {
       for await (const event of this.client.run(request, {
@@ -113,7 +141,7 @@ export class RunOrchestrator {
         }
         this.options.onEvent?.(runId, event);
         if (event.type === "session") {
-          cliSessionId = event.sessionId;
+          persistSession(event.sessionId);
         }
         yield event;
         if (event.type === "done") break;
@@ -122,10 +150,14 @@ export class RunOrchestrator {
       if (controller.signal.aborted) {
         stopped = true;
       } else {
-        throw err;
+        const message =
+          err instanceof Error ? err.message : String(err);
+        yield { type: "error", message, fatal: true };
+        yield { type: "done", exitCode: 1 };
       }
     } finally {
       this.activeChatRuns.delete(chatKey);
+      logDone();
     }
 
     if (stopped) {
@@ -135,16 +167,9 @@ export class RunOrchestrator {
 
     this.router.saveSessionRecord(sessionKey, {
       cliSessionId,
+      transport: runOpts.transport,
       lastRunAt: new Date().toISOString(),
       lastRunId: runId,
-    });
-
-    appendJsonl(logPath, {
-      event: "done",
-      runId,
-      cliSessionId,
-      stopped: controller.signal.aborted,
-      ts: new Date().toISOString(),
     });
   }
 
@@ -156,16 +181,31 @@ export class RunOrchestrator {
     return this.client.health();
   }
 
+  /** CLI 与 ACP 的 sessionId 不互通；无 transport 标记的旧记录按 CLI 处理 */
+  private resumeSessionId(
+    existing: SessionRecord | undefined,
+    transport: BackendTransport,
+  ): string | undefined {
+    if (!existing?.cliSessionId) return undefined;
+    const recorded = existing.transport ?? "cli";
+    return recorded === transport ? existing.cliSessionId : undefined;
+  }
+
   async listCliSessions(
     chatId: string,
     topicId?: string,
     options?: { all?: boolean; limit?: number },
   ): Promise<CliSessionSummary[]> {
     const key = this.router.buildSessionKey(chatId, topicId);
+    const runOpts = this.router.resolveRunOptions(
+      chatId,
+      topicId,
+      this.options.config,
+    );
     const result = await this.client.listSessions(
       key.backendId,
       key.cwd,
-      options,
+      { ...options, transport: runOpts.transport },
     );
     if (result.error) {
       throw new Error(result.error);
@@ -197,32 +237,4 @@ export function agentEventToMarkdown(event: AgentEvent): string {
     default:
       return "";
   }
-}
-
-/** 飞书流式展示：折叠密集 tool 事件，避免刷屏像「死循环」 */
-export function createFeishuStreamFormatter() {
-  let toolStarts = 0;
-  return (event: AgentEvent): string => {
-    switch (event.type) {
-      case "text_delta":
-        return event.text;
-      case "tool_start":
-        toolStarts++;
-        if (toolStarts <= 2 || toolStarts % 8 === 0) {
-          return `\n🔧 工具调用 ×${toolStarts}（\`${event.name}\`）…\n`;
-        }
-        return "";
-      case "tool_end":
-        return "";
-      case "error":
-        return `\n❌ ${event.message}\n`;
-      case "done":
-        if (toolStarts > 0 && event.exitCode === 0) {
-          return `\n✅ 完成（共 ${toolStarts} 次工具调用）\n`;
-        }
-        return event.exitCode === 0 ? "" : `\n（退出码 ${event.exitCode}）\n`;
-      default:
-        return "";
-    }
-  };
 }

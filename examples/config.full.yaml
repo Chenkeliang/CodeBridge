@@ -20,19 +20,28 @@ defaultBackend: cursor
 backends:
   cursor:
     type: cursor-cli
+    transport: acp
     command: cursor-agent
-    args: ["--force"]
+    args: ["--force", "--trust", "--approve-mcps"]
+    acpCommand: cursor-agent
+    acpArgs: ["acp"]
     model: composer-2.5
   claude:
     type: claude-code
+    transport: acp
     command: claude
+    acpCommand: npx
+    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.55.0"]
     model: sonnet
     effort: medium
     # 飞书非交互 -p 默认 dontAsk 会拒绝 Bash；用 bypassPermissions 才能跑 skill/脚本
     claudePermissionMode: bypassPermissions
   codex:
     type: codex
+    transport: acp
     command: codex
+    acpCommand: npx
+    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.0"]
     model: gpt-5.3-codex
     allowBypassApprovals: false
     allowBypassApprovalsViaConfig: true
@@ -44,6 +53,7 @@ workspaces:
 runnerHost:
   listen: 127.0.0.1:19789
   maxConcurrentRuns: 4
+  acpPermissionPolicy: auto_allow
 
 # plugins:
 #   memory:

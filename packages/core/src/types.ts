@@ -8,6 +8,8 @@ export interface SessionKey {
 
 export interface SessionRecord {
   cliSessionId?: string;
+  /** 创建该 session 时使用的 transport；CLI 与 ACP 的 sessionId 不互通 */
+  transport?: BackendTransport;
   lastRunAt: string;
   lastRunId?: string;
 }
@@ -18,15 +20,24 @@ export interface LocalMediaPath {
   name?: string;
 }
 
+/** Bridge → Runner：图片以 base64 传输，Runner 落盘后再交给 CLI */
+export interface RunAttachment {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+}
+
 export interface RunRequest {
   runId: string;
   sessionKey: SessionKey;
   prompt: string;
-  attachments?: LocalMediaPath[];
+  attachments?: RunAttachment[];
   resumeSessionId?: string;
   model?: string;
   effort?: string;
   claudePermissionMode?: ClaudePermissionMode;
+  /** 会话级 transport 覆盖，优先于 config.backends[].transport */
+  transport?: BackendTransport;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -42,6 +53,7 @@ export interface RunState {
 
 export type AgentEvent =
   | { type: "text_delta"; text: string }
+  | { type: "thought_delta"; text: string }
   | { type: "tool_start"; name: string; input?: unknown }
   | { type: "tool_end"; name: string; output?: unknown }
   | { type: "session"; sessionId: string }
@@ -57,6 +69,7 @@ export interface RunContext {
   runId: string;
   cwd: string;
   prompt: string;
+  attachments?: LocalMediaPath[];
   resumeSessionId?: string;
   backendConfig: BackendProfile;
   model?: string;
@@ -72,10 +85,18 @@ export type ClaudePermissionMode =
   | "dontAsk"
   | "plan";
 
+export type BackendTransport = "acp" | "cli";
+export type AcpPermissionPolicy = "auto_allow" | "prompt_deny";
+
 export interface BackendProfile {
   type: "cursor-cli" | "claude-code" | "codex" | "generic-spawn";
+  /** Agent 传输：acp（默认）或 cli（stream-json spawn 回退） */
+  transport?: BackendTransport;
   command: string;
   args?: string[];
+  /** ACP spawn 命令，默认同 command 或由 type 推断 */
+  acpCommand?: string;
+  acpArgs?: string[];
   model?: string;
   effort?: string;
   allowBypassApprovals?: boolean;

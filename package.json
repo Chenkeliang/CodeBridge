@@ -12,6 +12,7 @@
     "dev": "pnpm --filter @feishu-code-bridge/bridge dev",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:acp-probe": "node scripts/acp-probe.mjs",
     "lint": "tsc -b",
     "doctor": "node apps/bridge/dist/cli.js doctor",
     "start": "node apps/bridge/dist/cli.js start",

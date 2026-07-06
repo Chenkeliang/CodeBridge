@@ -24,7 +24,7 @@ export class RunnerClient {
   async listSessions(
     backend: string,
     cwd: string,
-    options?: { all?: boolean; limit?: number },
+    options?: { all?: boolean; limit?: number; transport?: RunRequest["transport"] },
   ): Promise<{ sessions: CliSessionSummary[]; error?: string }> {
     const params = new URLSearchParams({
       backend,
@@ -32,6 +32,7 @@ export class RunnerClient {
       limit: String(options?.limit ?? 20),
     });
     if (options?.all) params.set("all", "true");
+    if (options?.transport) params.set("transport", options.transport);
     const res = await this.fetch(`/sessions?${params}`);
     if (!res.ok) {
       throw new Error(`Runner error: ${res.status} ${await res.text()}`);
@@ -62,13 +63,32 @@ export class RunnerClient {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let sawDone = false;
+    const onAbort = () => {
+      void reader.cancel().catch(() => {});
+    };
+    const signal = options?.signal;
+    if (signal) {
+      if (signal.aborted) {
+        reader.releaseLock();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
     try {
       while (true) {
-        if (options?.signal?.aborted) {
-          await reader.cancel();
+        if (signal?.aborted) {
+          await reader.cancel().catch(() => {});
           break;
         }
-        const { done, value } = await reader.read();
+        let done = false;
+        let value: Uint8Array | undefined;
+        try {
+          ({ done, value } = await reader.read());
+        } catch (err) {
+          if (signal?.aborted) break;
+          throw this.mapStreamError(err, sawDone);
+        }
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const parts = buffer.split("\n\n");
@@ -77,12 +97,34 @@ export class RunnerClient {
           const line = part.trim();
           if (!line.startsWith("data:")) continue;
           const json = line.slice(5).trim();
-          if (json) yield JSON.parse(json) as AgentEvent;
+          if (!json) continue;
+          const event = JSON.parse(json) as AgentEvent;
+          if (event.type === "done") sawDone = true;
+          yield event;
         }
       }
+      if (!sawDone && !signal?.aborted) {
+        throw new Error(
+          "Runner 连接意外断开（无完成信号）。请执行 `./scripts/start.sh stop && ./scripts/start.sh start` 重启服务后重试。",
+        );
+      }
     } finally {
+      signal?.removeEventListener("abort", onAbort);
       reader.releaseLock();
     }
+  }
+
+  private mapStreamError(err: unknown, sawDone: boolean): Error {
+    if (sawDone) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === "terminated" || message.includes("other side closed")) {
+      return new Error(
+        "Runner 连接意外断开（常见于 Runner 僵尸进程）。请执行 `./scripts/start.sh stop && ./scripts/start.sh start` 重启后重试；或发送 `/transport cli` 切换传输。",
+      );
+    }
+    return err instanceof Error ? err : new Error(message);
   }
 
   private fetch(path: string, init?: RequestInit): Promise<Response> {

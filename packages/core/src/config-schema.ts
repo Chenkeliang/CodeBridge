@@ -18,8 +18,11 @@ export const FeishuPolicySchema = z.object({
 
 export const BackendProfileSchema = z.object({
   type: z.enum(["cursor-cli", "claude-code", "codex", "generic-spawn"]),
+  transport: z.enum(["acp", "cli"]).default("acp"),
   command: z.string(),
   args: z.array(z.string()).optional(),
+  acpCommand: z.string().optional(),
+  acpArgs: z.array(z.string()).optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
   allowBypassApprovals: z.boolean().optional(),
@@ -70,6 +73,9 @@ export const ConfigSchema = z.object({
     .object({
       listen: z.string().default("127.0.0.1:19789"),
       maxConcurrentRuns: z.number().int().positive().default(4),
+      acpPermissionPolicy: z
+        .enum(["auto_allow", "prompt_deny"])
+        .default("auto_allow"),
     })
     .optional(),
   plugins: z
@@ -102,20 +108,29 @@ export function defaultConfig(): AppConfig {
     backends: {
       cursor: {
         type: "cursor-cli",
+        transport: "acp",
         command: "cursor-agent",
-        args: ["--force"],
+        args: ["--force", "--trust", "--approve-mcps"],
+        acpCommand: "cursor-agent",
+        acpArgs: ["acp"],
         model: "composer-2.5",
       },
       claude: {
         type: "claude-code",
+        transport: "acp",
         command: "claude",
+        acpCommand: "npx",
+        acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.55.0"],
         model: "sonnet",
         effort: "medium",
         claudePermissionMode: "bypassPermissions",
       },
       codex: {
         type: "codex",
+        transport: "acp",
         command: "codex",
+        acpCommand: "npx",
+        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.0"],
         model: "gpt-5.3-codex",
         allowBypassApprovals: false,
         allowBypassApprovalsViaConfig: true,

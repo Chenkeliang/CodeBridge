@@ -28,6 +28,7 @@ async function main() {
     token: config.runner.token,
     config,
     maxConcurrentRuns: config.runnerHost?.maxConcurrentRuns,
+    dataDir: path.dirname(store.path),
   });
 
   const app = createRunnerApp(runnerHost, config.runner.token);

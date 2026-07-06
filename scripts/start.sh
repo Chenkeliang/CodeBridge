@@ -6,6 +6,9 @@
 #   ./scripts/start.sh fg          # 前台启动 Bridge（调试用）
 #   ./scripts/start.sh docker      # 宿主机 Runner + Docker Bridge
 #   ./scripts/start.sh stop        # 停止服务
+#   ./scripts/start.sh restart     # 重启服务
+#   ./scripts/start.sh install-launchd   # macOS 开机自启（launchd）
+#   ./scripts/start.sh uninstall-launchd # 卸载 launchd（改用手动 start.sh）
 #   ./scripts/start.sh status      # 查看状态
 #   ./scripts/start.sh doctor      # 诊断
 #   ./scripts/start.sh help        # 帮助
@@ -20,6 +23,10 @@ BRIDGE_PID="$PID_DIR/bridge.pid"
 RUNNER_LOG="$DATA_DIR/runner.log"
 BRIDGE_LOG="$DATA_DIR/bridge.log"
 RUNNER_PORT="${RUNNER_PORT:-19789}"
+LAUNCHD_RUNNER_LABEL="com.feishu-code-bridge.runner"
+LAUNCHD_BRIDGE_LABEL="com.feishu-code-bridge.bridge"
+LAUNCHD_RUNNER_PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_RUNNER_LABEL}.plist"
+LAUNCHD_BRIDGE_PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_BRIDGE_LABEL}.plist"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -393,20 +400,30 @@ stop_pid_file() {
 
 stop_port_listener() {
   local port="$1"
-  if has_cmd lsof; then
-    local pids
-    pids="$(lsof -ti:"$port" 2>/dev/null || true)"
-    if [[ -n "$pids" ]]; then
-      warn "释放端口 ${port} 上的旧进程: $pids"
-      kill $pids 2>/dev/null || true
-      sleep 0.3
-    fi
+  if ! has_cmd lsof; then
+    return
+  fi
+  local pids
+  pids="$(lsof -ti:"$port" 2>/dev/null || true)"
+  if [[ -z "$pids" ]]; then
+    return
+  fi
+  warn "释放端口 ${port} 上的旧进程: $pids"
+  kill $pids 2>/dev/null || true
+  sleep 0.5
+  pids="$(lsof -ti:"$port" 2>/dev/null || true)"
+  if [[ -n "$pids" ]]; then
+    kill -9 $pids 2>/dev/null || true
+    sleep 0.2
   fi
 }
 
 stop_orphan_processes() {
   pkill -f "packages/runner-host/dist/cli.js" 2>/dev/null || true
   pkill -f "apps/bridge/dist/cli.js start" 2>/dev/null || true
+  sleep 0.3
+  pkill -9 -f "packages/runner-host/dist/cli.js" 2>/dev/null || true
+  pkill -9 -f "apps/bridge/dist/cli.js start" 2>/dev/null || true
 }
 
 cmd_stop() {
@@ -415,9 +432,147 @@ cmd_stop() {
   stop_pid_file "Bridge" "$BRIDGE_PID" && stopped=1 || true
   stop_port_listener "$RUNNER_PORT"
   stop_orphan_processes
+  rm -f "$RUNNER_PID" "$BRIDGE_PID"
+  if [[ "$stopped" -eq 0 ]] && has_cmd lsof && lsof -ti:"$RUNNER_PORT" >/dev/null 2>&1; then
+    warn "已清理端口 ${RUNNER_PORT} 上的残留进程"
+    stopped=1
+  fi
   if [[ "$stopped" -eq 0 ]]; then
     warn "没有由本脚本管理的运行中进程"
   fi
+}
+
+bridge_orphan_pids() {
+  pgrep -f "apps/bridge/dist/cli.js start" 2>/dev/null || true
+}
+
+launchd_domain() {
+  echo "gui/$(id -u)"
+}
+
+launchd_loaded() {
+  local label="$1"
+  launchctl print "$(launchd_domain)/$label" &>/dev/null
+}
+
+launchd_path_for_agents() {
+  local path="${PATH:-}"
+  path="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:${path}"
+  printf '%s' "$path"
+}
+
+launchd_bootout() {
+  local label="$1"
+  local plist="$2"
+  [[ -f "$plist" ]] || return 0
+  if launchd_loaded "$label"; then
+    launchctl bootout "$(launchd_domain)" "$plist" 2>/dev/null \
+      || launchctl unload "$plist" 2>/dev/null \
+      || true
+  fi
+}
+
+launchd_bootstrap() {
+  local plist="$1"
+  launchctl bootstrap "$(launchd_domain)" "$plist" 2>/dev/null \
+    || launchctl load "$plist"
+}
+
+warn_launchd_conflict() {
+  local runner=0 bridge=0
+  launchd_loaded "$LAUNCHD_RUNNER_LABEL" && runner=1
+  launchd_loaded "$LAUNCHD_BRIDGE_LABEL" && bridge=1
+  if [[ "$runner" -eq 0 && "$bridge" -eq 0 ]]; then
+    return 1
+  fi
+  err "检测到 macOS launchd 自启服务（KeepAlive），会与 start.sh 抢端口、抢进程。"
+  err "常见症状：Runner 僵尸进程、/runs 空响应、飞书报 terminated。"
+  err "launchd 默认 PATH 不含 nvm，还会导致 cursor-agent ENOENT。"
+  [[ "$runner" -eq 1 ]] && err "  · 已加载: $LAUNCHD_RUNNER_LABEL"
+  [[ "$bridge" -eq 1 ]] && err "  · 已加载: $LAUNCHD_BRIDGE_LABEL"
+  err "请二选一："
+  err "  $0 uninstall-launchd && $0 restart    # 改用手动 start.sh（开发推荐）"
+  err "  $0 install-launchd                  # 只用 launchd 开机自启"
+  return 0
+}
+
+ensure_no_launchd_conflict() {
+  if warn_launchd_conflict; then
+    exit 1
+  fi
+}
+
+write_launchd_plist() {
+  local label="$1"
+  local plist="$2"
+  local stdout_log="$3"
+  local stderr_log="$4"
+  shift 4
+  local -a args=("$@")
+  local node path
+  node="$(command -v node)"
+  path="$(launchd_path_for_agents)"
+  mkdir -p "$(dirname "$plist")"
+  cat >"$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${node}</string>
+$(for a in "${args[@]}"; do printf '    <string>%s</string>\n' "$a"; done)
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${stdout_log}</string>
+  <key>StandardErrorPath</key>
+  <string>${stderr_log}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DATA_DIR</key>
+    <string>${DATA_DIR}</string>
+    <key>PATH</key>
+    <string>${path}</string>
+  </dict>
+</dict>
+</plist>
+EOF
+}
+
+cmd_install_launchd() {
+  ensure_built
+  need_cmd node || exit 1
+  info "安装 launchd 自启（Runner + Bridge）…"
+  cmd_stop 2>/dev/null || true
+  launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
+  launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
+  write_launchd_plist "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST" \
+    "$RUNNER_LOG" "$DATA_DIR/runner.err.log" \
+    "$ROOT/packages/runner-host/dist/cli.js"
+  write_launchd_plist "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST" \
+    "$BRIDGE_LOG" "$DATA_DIR/bridge.err.log" \
+    "$ROOT/apps/bridge/dist/cli.js" "start"
+  launchd_bootstrap "$LAUNCHD_RUNNER_PLIST"
+  launchd_bootstrap "$LAUNCHD_BRIDGE_PLIST"
+  info "launchd 已加载。查看: launchctl list | grep feishu-code-bridge"
+  info "日志: $RUNNER_LOG / $BRIDGE_LOG"
+  warn "之后请用 launchctl 或 $0 uninstall-launchd 管理，不要与 $0 start 混用。"
+}
+
+cmd_uninstall_launchd() {
+  info "卸载 launchd 自启…"
+  launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
+  launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
+  rm -f "$LAUNCHD_RUNNER_PLIST" "$LAUNCHD_BRIDGE_PLIST"
+  stop_port_listener "$RUNNER_PORT"
+  stop_orphan_processes
+  info "launchd 已卸载。可执行: $0 start"
 }
 
 cmd_status() {
@@ -425,15 +580,25 @@ cmd_status() {
   echo "数据: $DATA_DIR"
   if is_running "$RUNNER_PID"; then
     echo "Runner: 运行中 (pid $(cat "$RUNNER_PID"), log $RUNNER_LOG)"
+  elif has_cmd lsof && lsof -ti:"$RUNNER_PORT" >/dev/null 2>&1; then
+    echo "Runner: 端口 ${RUNNER_PORT} 被占用但无 pid 文件（僵尸进程，请 $0 stop)"
   else
     echo "Runner: 未运行"
   fi
   if is_running "$BRIDGE_PID"; then
     echo "Bridge: 运行中 (pid $(cat "$BRIDGE_PID"), log $BRIDGE_LOG)"
+  elif [[ -n "$(bridge_orphan_pids)" ]]; then
+    echo "Bridge: 进程在运行但无 pid 文件（pid $(bridge_orphan_pids | tr '\n' ' ')，请 $0 stop)"
   else
     echo "Bridge: 未运行"
   fi
   echo ""
+  if launchd_loaded "$LAUNCHD_RUNNER_LABEL" || launchd_loaded "$LAUNCHD_BRIDGE_LABEL"; then
+    warn "launchd 自启: 已加载（与 start.sh 手动模式冲突时请 $0 uninstall-launchd）"
+    launchd_loaded "$LAUNCHD_RUNNER_LABEL" && echo "  · $LAUNCHD_RUNNER_LABEL"
+    launchd_loaded "$LAUNCHD_BRIDGE_LABEL" && echo "  · $LAUNCHD_BRIDGE_LABEL"
+    echo ""
+  fi
   check_one_cli "Cursor" cursor-agent agent || true
   check_one_cli "Claude Code" claude || true
   check_one_cli "Codex" codex || true
@@ -446,14 +611,14 @@ cmd_doctor() {
 
 start_runner_bg() {
   mkdir -p "$PID_DIR" "$(dirname "$RUNNER_LOG")"
+  stop_orphan_processes
   stop_port_listener "$RUNNER_PORT"
   info "启动 Runner → $RUNNER_LOG"
-  (
-    cd "$ROOT"
-    export DATA_DIR
-    nohup node packages/runner-host/dist/cli.js >>"$RUNNER_LOG" 2>&1 &
-    echo $! >"$RUNNER_PID"
-  )
+  cd "$ROOT"
+  export DATA_DIR
+  nohup node packages/runner-host/dist/cli.js >>"$RUNNER_LOG" 2>&1 &
+  echo $! >"$RUNNER_PID"
+  disown -h 2>/dev/null || true
   local token
   token="$(read_yaml_scalar runner.token)"
   if wait_runner "$token"; then
@@ -464,14 +629,20 @@ start_runner_bg() {
   fi
 }
 
+stop_bridge_orphans() {
+  pkill -f "apps/bridge/dist/cli.js start" 2>/dev/null || true
+  sleep 0.2
+  pkill -9 -f "apps/bridge/dist/cli.js start" 2>/dev/null || true
+}
+
 start_bridge_bg() {
+  stop_bridge_orphans
   info "启动 Bridge → $BRIDGE_LOG"
-  (
-    cd "$ROOT"
-    export DATA_DIR
-    nohup node apps/bridge/dist/cli.js start >>"$BRIDGE_LOG" 2>&1 &
-    echo $! >"$BRIDGE_PID"
-  )
+  cd "$ROOT"
+  export DATA_DIR
+  nohup node apps/bridge/dist/cli.js start >>"$BRIDGE_LOG" 2>&1 &
+  echo $! >"$BRIDGE_PID"
+  disown -h 2>/dev/null || true
   sleep 1
   if is_running "$BRIDGE_PID"; then
     info "Bridge 运行中 (pid $(cat "$BRIDGE_PID"))"
@@ -502,6 +673,7 @@ run_preflight() {
 
 cmd_start() {
   local mode="${1:-bg}"
+  ensure_no_launchd_conflict
   need_cmd node || exit 1
   need_cmd pnpm || exit 1
   need_cmd curl || exit 1
@@ -581,12 +753,15 @@ main() {
     fg|foreground) cmd_start fg ;;
     docker) cmd_docker ;;
     stop) cmd_stop ;;
+    restart) cmd_stop; cmd_start "${arg:-bg}" ;;
+    install-launchd) cmd_install_launchd ;;
+    uninstall-launchd) cmd_uninstall_launchd ;;
     status) cmd_status ;;
     doctor) cmd_doctor ;;
     help|-h|--help) cmd_help ;;
     *)
       err "未知命令: $cmd"
-      echo "用法: $0 {setup|start|fg|docker|stop|status|doctor|help}"
+      echo "用法: $0 {setup|start|fg|docker|stop|restart|install-launchd|uninstall-launchd|status|doctor|help}"
       exit 1
       ;;
   esac

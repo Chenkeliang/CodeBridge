@@ -14,7 +14,7 @@ describe("parseStreamJsonLine cursor-agent", () => {
     expect(events).toEqual([{ type: "text_delta", text: "hello from cursor" }]);
   });
 
-  it("parses result with final text and session", () => {
+  it("parses result without duplicating final text body", () => {
     const line = JSON.stringify({
       type: "result",
       subtype: "success",
@@ -24,8 +24,8 @@ describe("parseStreamJsonLine cursor-agent", () => {
     });
     const events = parseStreamJsonLine(line);
     expect(events).toContainEqual({ type: "session", sessionId: "abc-123" });
-    expect(events).toContainEqual({ type: "text_delta", text: "bin\npkg\nsrc" });
     expect(events).toContainEqual({ type: "done", exitCode: 0 });
+    expect(events.some((e) => e.type === "text_delta")).toBe(false);
   });
 
   it("parses system init session_id", () => {

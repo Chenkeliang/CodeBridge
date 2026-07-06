@@ -71,10 +71,8 @@ function mapStreamObject(obj: Record<string, unknown>): AgentEvent[] {
       (obj.session_id as string) ?? (obj.sessionId as string);
     const events: AgentEvent[] = [];
     if (sessionId) events.push({ type: "session", sessionId });
-    const resultText = obj.result;
-    if (typeof resultText === "string" && resultText.trim()) {
-      events.push({ type: "text_delta", text: resultText });
-    }
+    // stream-json + --stream-partial-output 已在 assistant/delta 中流式输出正文；
+    // result 里的全文会重复，此处只发 done。
     const isError = obj.is_error === true;
     events.push({
       type: "done",

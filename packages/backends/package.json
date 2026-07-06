@@ -14,7 +14,9 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@feishu-code-bridge/core": "workspace:*"
+    "@agentclientprotocol/sdk": "1.1.0",
+    "@feishu-code-bridge/core": "workspace:*",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

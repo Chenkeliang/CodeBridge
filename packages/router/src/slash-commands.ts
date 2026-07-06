@@ -32,6 +32,7 @@ export interface SlashContext {
   ) => Promise<CliSessionSummary[]>;
   bindCliSession?: (sessionId: string) => void;
   cancelActiveRun?: () => Promise<boolean>;
+  hasActiveRun?: () => boolean;
 }
 
 export type SlashResult =
@@ -61,7 +62,10 @@ export async function handleSlashCommand(
     case "/new":
     case "/reset":
       ctx.router.clearSession(ctx.chatId, ctx.topicId);
-      return { type: "reply", text: "已新建会话，下一条消息将开启新的 CLI session。" };
+      return {
+        type: "reply",
+        text: "已新建会话，下一条消息将开启新的 Agent session。",
+      };
 
     case "/stop":
     case "/cancel":
@@ -100,10 +104,13 @@ export async function handleSlashCommand(
           `**backend**: ${key.backendId}`,
           `**cwd**: ${key.cwd}`,
           `**model**: ${runOpts.model ?? "(CLI 默认)"}${binding.model ? " _(会话覆盖)_" : profile?.model ? " _(配置默认)_" : ""}`,
+          `**transport**: ${runOpts.transport}${binding.transport ? " _(会话覆盖)_" : profile?.transport ? " _(配置默认)_" : " _(默认 acp)_"}`,
           `**effort**: ${backendSupportsEffort(key.backendId) ? (runOpts.effort ?? "(CLI 默认)") : "_(不支持)_"}${binding.effort ? " _(会话覆盖)_" : profile?.effort ? " _(配置默认)_" : ""}`,
           `**permission**: ${backendSupportsPermissionMode(key.backendId) ? (runOpts.claudePermissionMode ?? "bypassPermissions") : "_(不支持)_"}${binding.claudePermissionMode ? " _(会话覆盖)_" : profile?.claudePermissionMode ? " _(配置默认)_" : ""}`,
           `**cliSessionId**: ${rec?.cliSessionId ?? "(none)"}`,
+          `**sessionTransport**: ${rec?.transport ?? "-"}`,
           `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
+          `**runnerActive**: ${ctx.hasActiveRun?.() ? "是（后台仍在收尾，请稍候再追问）" : "否"}`,
         ].join("\n"),
       };
     }
@@ -113,6 +120,9 @@ export async function handleSlashCommand(
 
     case "/effort":
       return handleEffort(ctx, arg);
+
+    case "/transport":
+      return handleTransport(ctx, arg);
 
     case "/permission":
     case "/perm":
@@ -134,7 +144,14 @@ export async function handleSlashCommand(
         };
       }
       ctx.router.setBinding(ctx.chatId, { backendId: id }, ctx.topicId);
-      return { type: "reply", text: `已切换 backend: ${id}` };
+      ctx.router.clearRunOverrides(ctx.chatId, ctx.topicId);
+      ctx.router.clearSession(ctx.chatId, ctx.topicId);
+      const profile = ctx.config.backends[id];
+      const modelHint = profile?.model ? `，model 默认 \`${profile.model}\`` : "";
+      return {
+        type: "reply",
+        text: `已切换 backend: ${id}${modelHint}（已清除上一 backend 的 model/effort/transport 覆盖及续聊 session）`,
+      };
     }
 
     case "/pull": {
@@ -361,6 +378,82 @@ function handleEffort(ctx: SlashContext, arg: string): SlashResult {
   return {
     type: "reply",
     text: `已设置 Claude effort: \`${level}\`\n下一条消息生效。`,
+  };
+}
+
+const TRANSPORT_MODES = ["acp", "cli"] as const;
+
+function formatTransportHelp(current: string, source?: string): string {
+  const lines = [
+    `当前 transport: \`${current}\`${source ? ` ${source}` : ""}`,
+    "",
+    "**acp** — Agent Client Protocol（默认，推荐）",
+    "**cli** — 直接 spawn CLI（stream-json 回退）",
+    "",
+    "用法: `/transport acp|cli|default`",
+  ];
+  return lines.join("\n");
+}
+
+function handleTransport(ctx: SlashContext, arg: string): SlashResult {
+  const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
+  const profile = ctx.config.backends[binding.backendId];
+  const runOpts = ctx.router.resolveRunOptions(
+    ctx.chatId,
+    ctx.topicId,
+    ctx.config,
+  );
+  const source = binding.transport
+    ? "_(会话覆盖)_"
+    : profile?.transport
+      ? "_(配置默认)_"
+      : "_(默认 acp)_";
+
+  if (!arg || arg.toLowerCase() === "list") {
+    return {
+      type: "reply",
+      text: formatTransportHelp(runOpts.transport, source),
+    };
+  }
+
+  if (arg.toLowerCase() === "default") {
+    const prevTransport = runOpts.transport;
+    ctx.router.clearTransport(ctx.chatId, ctx.topicId);
+    const fallback = profile?.transport ?? "acp";
+    if (fallback !== prevTransport) {
+      ctx.router.clearSession(ctx.chatId, ctx.topicId);
+    }
+    return {
+      type: "reply",
+      text:
+        fallback !== prevTransport
+          ? `已清除会话 transport 覆盖，将使用: ${fallback}\n已清除旧 session（CLI ↔ ACP 的续聊 ID 不通用）。`
+          : `已清除会话 transport 覆盖，将使用: ${fallback}`,
+    };
+  }
+
+  const mode = arg.toLowerCase();
+  if (!TRANSPORT_MODES.includes(mode as (typeof TRANSPORT_MODES)[number])) {
+    return {
+      type: "reply",
+      text: `无效 transport: ${arg}\n可选: ${TRANSPORT_MODES.join(", ")}`,
+    };
+  }
+
+  ctx.router.setBinding(
+    ctx.chatId,
+    { transport: mode as (typeof TRANSPORT_MODES)[number] },
+    ctx.topicId,
+  );
+  if (mode !== runOpts.transport) {
+    ctx.router.clearSession(ctx.chatId, ctx.topicId);
+  }
+  return {
+    type: "reply",
+    text:
+      mode !== runOpts.transport
+        ? `已设置 transport: \`${mode}\`\n已清除旧 session（CLI ↔ ACP 的续聊 ID 不通用）。\n下一条消息生效。`
+        : `已设置 transport: \`${mode}\`\n下一条消息生效。`,
   };
 }
 

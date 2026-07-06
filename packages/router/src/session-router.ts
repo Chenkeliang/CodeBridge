@@ -5,6 +5,7 @@ import {
   serializeSessionKey,
   type AppConfig,
   type BackendProfile,
+  type BackendTransport,
   type ClaudePermissionMode,
   type SessionKey,
   type SessionRecord,
@@ -17,12 +18,14 @@ export interface ChatBinding {
   model?: string;
   effort?: string;
   claudePermissionMode?: ClaudePermissionMode;
+  transport?: BackendTransport;
 }
 
 export interface ResolvedRunOptions {
   model?: string;
   effort?: string;
   claudePermissionMode?: ClaudePermissionMode;
+  transport: BackendTransport;
 }
 
 export class SessionRouter {
@@ -98,6 +101,25 @@ export class SessionRouter {
     });
   }
 
+  clearTransport(chatId: string, topicId?: string): void {
+    const key = this.bindingKey(chatId, topicId);
+    this.bindings.update((all) => {
+      const current = all[key];
+      if (!current) return all;
+      const next = { ...current };
+      delete next.transport;
+      return { ...all, [key]: next };
+    });
+  }
+
+  /** 切换 backend 时清除 model/effort/permission/transport 会话覆盖 */
+  clearRunOverrides(chatId: string, topicId?: string): void {
+    this.clearModel(chatId, topicId);
+    this.clearEffort(chatId, topicId);
+    this.clearClaudePermissionMode(chatId, topicId);
+    this.clearTransport(chatId, topicId);
+  }
+
   resolveRunOptions(
     chatId: string,
     topicId: string | undefined,
@@ -110,10 +132,13 @@ export class SessionRouter {
     const rawEffort = binding.effort ?? profile?.effort;
     const rawPermission =
       binding.claudePermissionMode ?? profile?.claudePermissionMode;
+    const transport: BackendTransport =
+      binding.transport ?? profile?.transport ?? "acp";
     return {
       model: rawModel,
       effort: rawEffort,
       claudePermissionMode: rawPermission,
+      transport,
     };
   }
 
@@ -157,7 +182,8 @@ export class SessionRouter {
     const existing = this.getSessionRecord(key);
     this.saveSessionRecord(key, {
       cliSessionId,
-      lastRunAt: existing?.lastRunAt ?? new Date().toISOString(),
+      transport: existing?.transport,
+      lastRunAt: new Date().toISOString(),
       lastRunId: existing?.lastRunId,
     });
   }

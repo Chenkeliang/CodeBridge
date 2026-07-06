@@ -1,37 +1,59 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import {
   BackendRegistry,
+  getBackendTransport,
+  listAcpSessions,
   listSessionsForBackend,
+  runAcpSession,
   type CliSessionSummary,
 } from "@feishu-code-bridge/backends";
 import type {
   AgentEvent,
+  AcpPermissionPolicy,
   AppConfig,
   RunContext,
   RunRequest,
 } from "@feishu-code-bridge/core";
-import { VERSION } from "@feishu-code-bridge/core";
+import { DEFAULT_DATA_DIR, VERSION } from "@feishu-code-bridge/core";
 import { Hono } from "hono";
+import { materializeAttachments } from "./materialize-attachments.js";
 
 export interface RunnerHostOptions {
   token: string;
   config: AppConfig;
   maxConcurrentRuns?: number;
+  dataDir?: string;
 }
 
 interface ActiveRun {
   runId: string;
-  child: ChildProcess;
   aborted: boolean;
+  cancel: () => void;
+}
+
+function resolveDoctorCwd(config: AppConfig): string {
+  const home = os.homedir();
+  const raw =
+    config.workspaces?.default ??
+    config.workspaces?.root ??
+    path.join(home, "Projects");
+  return raw.startsWith("~") ? path.join(home, raw.slice(1)) : raw;
 }
 
 export class RunnerHost {
   private readonly registry = new BackendRegistry();
   private readonly active = new Map<string, ActiveRun>();
   private readonly maxConcurrent: number;
+  private readonly dataDir: string;
+  private readonly acpPermissionPolicy: AcpPermissionPolicy;
 
   constructor(private readonly options: RunnerHostOptions) {
     this.maxConcurrent = options.maxConcurrentRuns ?? 4;
+    this.dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
+    this.acpPermissionPolicy =
+      options.config.runnerHost?.acpPermissionPolicy ?? "auto_allow";
     for (const [id, profile] of Object.entries(options.config.backends)) {
       this.registry.register(id, profile);
     }
@@ -42,7 +64,7 @@ export class RunnerHost {
   }
 
   async doctor() {
-    const backend = await this.registry.doctor();
+    const backend = await this.registry.doctor(resolveDoctorCwd(this.options.config));
     return {
       version: VERSION,
       backends: this.registry.ids(),
@@ -54,10 +76,7 @@ export class RunnerHost {
     const run = this.active.get(runId);
     if (!run) return false;
     run.aborted = true;
-    run.child.kill("SIGTERM");
-    setTimeout(() => {
-      if (!run.child.killed) run.child.kill("SIGKILL");
-    }, 2000);
+    run.cancel();
     this.active.delete(runId);
     return true;
   }
@@ -66,11 +85,22 @@ export class RunnerHost {
     backendId: string,
     cwd: string,
     options?: { limit?: number; all?: boolean },
+    requestTransport?: RunRequest["transport"],
   ): Promise<{ sessions: CliSessionSummary[]; error?: string }> {
     const profile = this.options.config.backends[backendId];
     if (!profile) {
       return { sessions: [], error: `Unknown backend: ${backendId}` };
     }
+
+    const transport = this.effectiveTransport(backendId, requestTransport);
+
+    if (transport === "acp") {
+      const sessions = await listAcpSessions(backendId, profile, cwd, {
+        limit: options?.limit ?? 20,
+      });
+      return { sessions };
+    }
+
     const discoveryId =
       profile.type === "cursor-cli"
         ? "cursor"
@@ -87,6 +117,15 @@ export class RunnerHost {
     return { sessions };
   }
 
+  private effectiveTransport(
+    backendId: string,
+    requestTransport?: RunRequest["transport"],
+  ): "acp" | "cli" {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return "acp";
+    return requestTransport ?? getBackendTransport(profile);
+  }
+
   async *executeRun(request: RunRequest): AsyncGenerator<AgentEvent> {
     while (this.active.size >= this.maxConcurrent) {
       await new Promise((r) => setTimeout(r, 100));
@@ -94,7 +133,8 @@ export class RunnerHost {
 
     const backendId = request.sessionKey.backendId;
     const backend = this.registry.get(backendId);
-    if (!backend) {
+    const profile = this.options.config.backends[backendId];
+    if (!backend || !profile) {
       yield {
         type: "error",
         message: `Unknown backend: ${backendId}`,
@@ -104,34 +144,111 @@ export class RunnerHost {
       return;
     }
 
+    const localAttachments = await materializeAttachments(
+      this.dataDir,
+      request.runId,
+      request.attachments,
+    );
+
+    const transport =
+      request.transport ?? getBackendTransport(profile);
+
     const ctx: RunContext = {
       runId: request.runId,
       cwd: request.sessionKey.cwd,
       prompt: request.prompt,
+      attachments: localAttachments.length ? localAttachments : undefined,
       resumeSessionId: request.resumeSessionId,
-      backendConfig: this.options.config.backends[backendId]!,
+      backendConfig: profile,
       model: request.model,
       effort: request.effort,
       claudePermissionMode: request.claudePermissionMode,
     };
 
+    if (transport === "acp") {
+      yield* this.executeAcpRun(request.runId, ctx);
+      return;
+    }
+
+    yield* this.executeCliRun(request.runId, ctx, backend);
+  }
+
+  private async *executeAcpRun(
+    runId: string,
+    ctx: RunContext,
+  ): AsyncGenerator<AgentEvent> {
+    const handleRef: { current?: { child: ChildProcess; cancel: () => void } } =
+      {};
+    const activeRun: ActiveRun = {
+      runId,
+      aborted: false,
+      // handleRef 在 runAcpSession 生成器体起始处赋值（首次 next() 即可用）
+      cancel: () => handleRef.current?.cancel(),
+    };
+    this.active.set(runId, activeRun);
+
+    let exitCode = 0;
+    try {
+      for await (const event of runAcpSession(
+        ctx,
+        {
+          permissionPolicy: this.acpPermissionPolicy,
+          isAborted: () => activeRun.aborted,
+        },
+        handleRef,
+      )) {
+        if (event.type === "error" && event.fatal) exitCode = 1;
+        yield event;
+      }
+    } catch (err) {
+      yield {
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+        fatal: true,
+      };
+      exitCode = 1;
+    } finally {
+      this.active.delete(runId);
+      yield { type: "done", exitCode };
+    }
+  }
+
+  private async *executeCliRun(
+    runId: string,
+    ctx: RunContext,
+    backend: NonNullable<ReturnType<BackendRegistry["get"]>>,
+  ): AsyncGenerator<AgentEvent> {
     const argv = backend.buildArgv(ctx);
     const command = argv[0]!;
     const args = argv.slice(1);
 
     const child = spawn(command, args, {
       cwd: ctx.cwd,
-      shell: true,
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
+    // 必须在 spawn 后同步挂上 close/error 监听：spawn 失败（如 ENOENT）时
+    // 无监听的 'error' 事件会以 uncaught exception 炸掉整个 Runner 进程
+    let spawnError = "";
+    child.on("error", (err) => {
+      spawnError = err.message;
+    });
+    const closed = waitForClose(child);
+
+    const childAlive = () =>
+      child.exitCode === null && child.signalCode === null;
     const activeRun: ActiveRun = {
-      runId: request.runId,
-      child,
+      runId,
       aborted: false,
+      cancel: () => {
+        if (childAlive()) child.kill("SIGTERM");
+        setTimeout(() => {
+          if (childAlive()) child.kill("SIGKILL");
+        }, 2000).unref();
+      },
     };
-    this.active.set(request.runId, activeRun);
+    this.active.set(runId, activeRun);
 
     let stderr = "";
     child.stderr?.on("data", (d) => {
@@ -148,9 +265,10 @@ export class RunnerHost {
           yield event;
         }
       }
-      exitCode = await waitForClose(child);
-      if (stderr && exitCode !== 0) {
-        yield { type: "error", message: stderr.trim(), fatal: false };
+      exitCode = await closed;
+      const failReason = spawnError || stderr.trim();
+      if (failReason && exitCode !== 0) {
+        yield { type: "error", message: failReason, fatal: false };
       }
     } catch (err) {
       yield {
@@ -160,7 +278,7 @@ export class RunnerHost {
       };
       exitCode = 1;
     } finally {
-      this.active.delete(request.runId);
+      this.active.delete(runId);
       yield { type: "done", exitCode };
     }
   }
@@ -215,6 +333,16 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        const keepalive = encoder.encode(": keepalive\n\n");
+        controller.enqueue(keepalive);
+        const timer = setInterval(() => {
+          try {
+            controller.enqueue(keepalive);
+          } catch {
+            clearInterval(timer);
+          }
+        }, 15_000);
+
         const send = (event: AgentEvent) => {
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
@@ -231,8 +359,10 @@ export function createRunnerApp(host: RunnerHost, token: string) {
             fatal: true,
           });
           send({ type: "done", exitCode: 1 });
+        } finally {
+          clearInterval(timer);
+          controller.close();
         }
-        controller.close();
       },
     });
     return new Response(stream, {
@@ -249,13 +379,18 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     const cwd = c.req.query("cwd");
     const all = c.req.query("all") === "true";
     const limit = Number(c.req.query("limit") ?? "20");
+    const transportRaw = c.req.query("transport");
+    const transport =
+      transportRaw === "acp" || transportRaw === "cli"
+        ? transportRaw
+        : undefined;
     if (!backend || !cwd) {
       return c.json({ error: "backend and cwd are required" }, 400);
     }
     const result = await host.listSessions(backend, cwd, {
       all,
       limit: Number.isFinite(limit) ? limit : 20,
-    });
+    }, transport);
     return c.json(result);
   });
 

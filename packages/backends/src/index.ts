@@ -1,10 +1,11 @@
-import { parseStreamJsonLine } from "@feishu-code-bridge/core";
+import { parseStreamJsonLine, appendAttachmentPaths } from "@feishu-code-bridge/core";
 import type {
   AgentEvent,
   BackendProfile,
   DoctorResult,
   RunContext,
 } from "@feishu-code-bridge/core";
+import { detectBackend } from "./acp/acp-doctor.js";
 
 export interface AgentBackend {
   readonly id: string;
@@ -75,6 +76,7 @@ abstract class BaseBackend implements AgentBackend {
 
 class CursorCliBackend extends BaseBackend {
   buildArgv(ctx: RunContext): string[] {
+    const prompt = appendAttachmentPaths(ctx.prompt, ctx.attachments);
     const args = [
       ...(this.profile.args ?? []),
       "-p",
@@ -84,6 +86,8 @@ class CursorCliBackend extends BaseBackend {
     ];
     if (this.profile.command === "agent") {
       args.push("--workspace", ctx.cwd);
+    } else if (ctx.cwd) {
+      args.unshift("--workspace", ctx.cwd);
     }
     const model = ctx.model ?? this.profile.model;
     if (model) {
@@ -92,13 +96,14 @@ class CursorCliBackend extends BaseBackend {
     if (ctx.resumeSessionId) {
       args.unshift("--resume", ctx.resumeSessionId);
     }
-    args.push(ctx.prompt);
+    args.push(prompt);
     return [this.profile.command, ...args];
   }
 }
 
 class ClaudeCodeBackend extends BaseBackend {
   buildArgv(ctx: RunContext): string[] {
+    const prompt = appendAttachmentPaths(ctx.prompt, ctx.attachments);
     const claudeArgs = [
       "-p",
       "--output-format",
@@ -122,7 +127,7 @@ class ClaudeCodeBackend extends BaseBackend {
     if (ctx.resumeSessionId) {
       claudeArgs.unshift("--resume", ctx.resumeSessionId);
     }
-    claudeArgs.push(ctx.prompt);
+    claudeArgs.push(prompt);
     if (this.profile.claudeArgsOption) {
       return [
         this.profile.command,
@@ -137,6 +142,7 @@ class ClaudeCodeBackend extends BaseBackend {
 
 class CodexBackend extends BaseBackend {
   buildArgv(ctx: RunContext): string[] {
+    const prompt = appendAttachmentPaths(ctx.prompt, ctx.attachments);
     const execArgs = ["exec", "--json", "-C", ctx.cwd];
     const model = ctx.model ?? this.profile.model;
     if (model) {
@@ -146,9 +152,9 @@ class CodexBackend extends BaseBackend {
       execArgs.push("--dangerously-bypass-approvals-and-sandbox");
     }
     if (ctx.resumeSessionId) {
-      execArgs.push("resume", ctx.resumeSessionId, ctx.prompt);
+      execArgs.push("resume", ctx.resumeSessionId, prompt);
     } else {
-      execArgs.push(ctx.prompt);
+      execArgs.push(prompt);
     }
     if (this.profile.codexArgsOption) {
       return [
@@ -164,7 +170,8 @@ class CodexBackend extends BaseBackend {
 
 class GenericSpawnBackend extends BaseBackend {
   buildArgv(ctx: RunContext): string[] {
-    return [this.profile.command, ...(this.profile.args ?? []), ctx.prompt];
+    const prompt = appendAttachmentPaths(ctx.prompt, ctx.attachments);
+    return [this.profile.command, ...(this.profile.args ?? []), prompt];
   }
 
   parseLine(line: string): AgentEvent[] {
@@ -176,9 +183,15 @@ class GenericSpawnBackend extends BaseBackend {
 
 export class BackendRegistry {
   private readonly backends = new Map<string, AgentBackend>();
+  private readonly profiles = new Map<string, BackendProfile>();
 
   register(id: string, profile: BackendProfile): void {
+    this.profiles.set(id, profile);
     this.backends.set(id, createBackend(id, profile));
+  }
+
+  getProfile(id: string): BackendProfile | undefined {
+    return this.profiles.get(id);
   }
 
   get(id: string): AgentBackend | undefined {
@@ -189,17 +202,26 @@ export class BackendRegistry {
     return [...this.backends.keys()];
   }
 
-  async doctor(): Promise<DoctorResult> {
+  async doctor(cwd: string): Promise<DoctorResult> {
     const all: DoctorResult["checks"] = [];
     let ok = true;
-    for (const backend of this.backends.values()) {
-      const result = await backend.detect();
+    for (const [id, profile] of this.profiles) {
+      const result = await detectBackend(id, profile, cwd);
       all.push(...result.checks);
       if (!result.ok) ok = false;
     }
     return { ok, checks: all };
   }
 }
+
+export {
+  getBackendTransport,
+  resolveAcpSpawn,
+  acpContinueMethod,
+  runAcpSession,
+  listAcpSessions,
+  mapSessionUpdate,
+} from "./acp/index.js";
 
 export {
   type CliSessionSummary,
