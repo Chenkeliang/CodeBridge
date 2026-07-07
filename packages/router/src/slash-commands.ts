@@ -203,6 +203,29 @@ export async function handleSlashCommand(
   }
 }
 
+/** 上一次 /resume 展示给用户的列表（按聊天/话题缓存），供 /resume <N> 按原序号定位 */
+const RESUME_LIST_CACHE_MAX = 500;
+const resumeListCache = new Map<string, CliSessionSummary[]>();
+
+function resumeCacheKey(ctx: SlashContext): string {
+  return `${ctx.chatId}|${ctx.topicId ?? ""}`;
+}
+
+function setResumeListCache(
+  ctx: SlashContext,
+  sessions: CliSessionSummary[],
+): void {
+  const cacheKey = resumeCacheKey(ctx);
+  if (
+    !resumeListCache.has(cacheKey) &&
+    resumeListCache.size >= RESUME_LIST_CACHE_MAX
+  ) {
+    const oldest = resumeListCache.keys().next().value;
+    if (oldest !== undefined) resumeListCache.delete(oldest);
+  }
+  resumeListCache.set(cacheKey, sessions);
+}
+
 async function handleResume(
   ctx: SlashContext,
   arg: string,
@@ -219,7 +242,9 @@ async function handleResume(
 
   if (/^\d+$/.test(arg)) {
     const index = Number(arg);
-    const sessions = await ctx.listCliSessions({ all: listAll });
+    const sessions =
+      resumeListCache.get(resumeCacheKey(ctx)) ??
+      (await ctx.listCliSessions({ all: listAll }));
     const picked = sessions[index - 1];
     if (!picked) {
       return {
@@ -293,6 +318,7 @@ async function handleResume(
     ? formatGroupedSessionLines(visible)
     : visible.map((s, i) => formatSessionLine(s, i, showCwd));
   const boundLine = rec?.cliSessionId ? rec.cliSessionId : undefined;
+  setResumeListCache(ctx, visible);
 
   return {
     type: "reply",
