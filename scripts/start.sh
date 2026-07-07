@@ -2,7 +2,7 @@
 # 飞书码桥 — 引导安装 / 一键启动
 # 用法:
 #   ./scripts/start.sh setup       # 交互式首次安装
-#   ./scripts/start.sh             # 检查依赖 → 停旧进程 → 后台启动
+#   ./scripts/start.sh             # 检查依赖 → 停旧进程 → 后台启动（含守护，挂掉自动拉起）
 #   ./scripts/start.sh fg          # 前台启动 Bridge（调试用）
 #   ./scripts/start.sh docker      # 宿主机 Runner + Docker Bridge
 #   ./scripts/start.sh stop        # 停止服务
@@ -22,6 +22,9 @@ RUNNER_PID="$PID_DIR/runner.pid"
 BRIDGE_PID="$PID_DIR/bridge.pid"
 RUNNER_LOG="$DATA_DIR/runner.log"
 BRIDGE_LOG="$DATA_DIR/bridge.log"
+WATCHDOG_PID="$PID_DIR/watchdog.pid"
+WATCHDOG_LOG="$DATA_DIR/watchdog.log"
+MANUAL_LOCK="$PID_DIR/manual.lock"
 RUNNER_PORT="${RUNNER_PORT:-19789}"
 LAUNCHD_RUNNER_LABEL="com.feishu-code-bridge.runner"
 LAUNCHD_BRIDGE_LABEL="com.feishu-code-bridge.bridge"
@@ -398,6 +401,61 @@ stop_pid_file() {
   return 1
 }
 
+# ---- 常驻守护：服务进程消失时 10s 内自动拉起 ----
+
+acquire_manual_lock() {
+  mkdir -p "$PID_DIR"
+  echo $$ >"$MANUAL_LOCK"
+  trap 'rm -f "$MANUAL_LOCK"' EXIT
+}
+
+manual_lock_active() {
+  [[ -f "$MANUAL_LOCK" ]] || return 1
+  local pid
+  pid="$(cat "$MANUAL_LOCK" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+start_watchdog_bg() {
+  if is_running "$WATCHDOG_PID"; then
+    info "守护已在运行 (pid $(cat "$WATCHDOG_PID"))"
+    return 0
+  fi
+  mkdir -p "$PID_DIR"
+  export DATA_DIR
+  nohup "$ROOT/scripts/start.sh" __watchdog >>"$WATCHDOG_LOG" 2>&1 &
+  echo $! >"$WATCHDOG_PID"
+  disown -h 2>/dev/null || true
+  info "守护已启动 (pid $(cat "$WATCHDOG_PID"))：服务挂掉 10s 内自动拉起，日志 $WATCHDOG_LOG"
+}
+
+stop_watchdog() {
+  if is_running "$WATCHDOG_PID"; then
+    kill "$(cat "$WATCHDOG_PID")" 2>/dev/null || true
+    info "已停止守护（服务挂掉不再自动拉起）"
+  fi
+  rm -f "$WATCHDOG_PID"
+}
+
+cmd_watchdog() {
+  echo "[watchdog] $(date '+%F %T') 守护启动 (pid $$)"
+  while true; do
+    sleep 10
+    # pid 文件被移除（stop）或被新守护替换 → 本进程退出
+    [[ "$(cat "$WATCHDOG_PID" 2>/dev/null || true)" == "$$" ]] || exit 0
+    # start.sh 正在人工操作（start/stop/restart）时暂停巡检，避免抢跑
+    if manual_lock_active; then continue; fi
+    if ! is_running "$RUNNER_PID"; then
+      echo "[watchdog] $(date '+%F %T') Runner 不在运行，自动拉起"
+      (start_runner_bg) || echo "[watchdog] Runner 拉起失败，下轮重试"
+    fi
+    if ! is_running "$BRIDGE_PID"; then
+      echo "[watchdog] $(date '+%F %T') Bridge 不在运行，自动拉起"
+      (start_bridge_bg) || echo "[watchdog] Bridge 拉起失败，下轮重试"
+    fi
+  done
+}
+
 stop_port_listener() {
   local port="$1"
   if ! has_cmd lsof; then
@@ -418,16 +476,21 @@ stop_port_listener() {
   fi
 }
 
-stop_orphan_processes() {
+stop_runner_orphans() {
   pkill -f "packages/runner-host/dist/cli.js" 2>/dev/null || true
-  pkill -f "apps/bridge/dist/cli.js start" 2>/dev/null || true
   sleep 0.3
   pkill -9 -f "packages/runner-host/dist/cli.js" 2>/dev/null || true
+}
+
+stop_orphan_processes() {
+  stop_runner_orphans
+  pkill -f "apps/bridge/dist/cli.js start" 2>/dev/null || true
   pkill -9 -f "apps/bridge/dist/cli.js start" 2>/dev/null || true
 }
 
 cmd_stop() {
   local stopped=0
+  acquire_manual_lock
   stop_pid_file "Runner" "$RUNNER_PID" && stopped=1 || true
   stop_pid_file "Bridge" "$BRIDGE_PID" && stopped=1 || true
   stop_port_listener "$RUNNER_PORT"
@@ -578,6 +641,7 @@ cmd_install_launchd() {
   ensure_built
   need_cmd node || exit 1
   info "安装 launchd 自启（$component）…"
+  stop_watchdog
   cmd_stop 2>/dev/null || true
   [[ "$component" == "runner" || "$component" == "all" ]] && install_launchd_runner
   [[ "$component" == "bridge" || "$component" == "all" ]] && install_launchd_bridge
@@ -624,6 +688,11 @@ cmd_status() {
   else
     echo "Bridge: 未运行"
   fi
+  if is_running "$WATCHDOG_PID"; then
+    echo "守护:   运行中 (pid $(cat "$WATCHDOG_PID")，服务挂掉 10s 内自动拉起)"
+  else
+    echo "守护:   未运行（服务挂掉不会自动拉起，$0 start 会一并启动）"
+  fi
   echo ""
   if launchd_loaded "$LAUNCHD_RUNNER_LABEL" || launchd_loaded "$LAUNCHD_BRIDGE_LABEL"; then
     warn "launchd 自启: 已加载（与 start.sh 手动模式冲突时请 $0 uninstall-launchd）"
@@ -643,7 +712,7 @@ cmd_doctor() {
 
 start_runner_bg() {
   mkdir -p "$PID_DIR" "$(dirname "$RUNNER_LOG")"
-  stop_orphan_processes
+  stop_runner_orphans
   stop_port_listener "$RUNNER_PORT"
   info "启动 Runner → $RUNNER_LOG"
   cd "$ROOT"
@@ -705,6 +774,7 @@ run_preflight() {
 
 cmd_start() {
   local mode="${1:-bg}"
+  acquire_manual_lock
   ensure_no_launchd_conflict
   need_cmd node || exit 1
   need_cmd pnpm || exit 1
@@ -721,9 +791,11 @@ cmd_start() {
   start_runner_bg
 
   if [[ "$mode" == "fg" ]]; then
+    stop_watchdog
     start_bridge_fg
   else
     start_bridge_bg
+    start_watchdog_bg
     echo ""
     info "服务已在后台运行"
     echo "  Runner  log: $RUNNER_LOG"
@@ -743,6 +815,7 @@ cmd_docker() {
   check_config_ready
   run_preflight
 
+  stop_watchdog
   cmd_stop
 
   local token app_id app_secret
@@ -784,8 +857,10 @@ main() {
     start|"") cmd_start "${arg:-bg}" ;;
     fg|foreground) cmd_start fg ;;
     docker) cmd_docker ;;
-    stop) cmd_stop ;;
+    stop) stop_watchdog; cmd_stop ;;
+    # restart 不停守护：中途被打断（如 agent 重启时杀掉自身宿主）也能被守护拉回
     restart) cmd_stop; cmd_start "${arg:-bg}" ;;
+    __watchdog) cmd_watchdog ;;
     install-launchd) cmd_install_launchd "${arg:-all}" ;;
     uninstall-launchd) cmd_uninstall_launchd "${arg:-all}" ;;
     status) cmd_status ;;
