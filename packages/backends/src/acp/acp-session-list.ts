@@ -52,13 +52,21 @@ export async function listAcpSessions(
   backendId: string,
   profile: BackendProfile,
   cwd: string,
-  options?: { limit?: number },
+  options?: { limit?: number; all?: boolean },
 ): Promise<CliSessionSummary[]> {
   const limit = options?.limit ?? 20;
   try {
-    const result = await withAcpConnection(profile, cwd, (agent) =>
-      agent.request(methods.agent.session.list, { cwd }),
-    );
+    const listParams = options?.all ? {} : { cwd };
+    const result = (await withAcpConnection(profile, cwd, (agent) =>
+      agent.request(methods.agent.session.list, listParams),
+    )) as {
+      sessions?: Array<{
+        sessionId: string;
+        cwd?: string;
+        title?: string;
+        updatedAt?: string;
+      }>;
+    };
     return (result.sessions ?? []).slice(0, limit).map((s) => ({
       id: s.sessionId,
       backend: backendId,

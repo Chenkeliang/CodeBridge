@@ -123,6 +123,7 @@ export class RunnerHost {
     if (transport === "acp") {
       const sessions = await listAcpSessions(backendId, profile, cwd, {
         limit: options?.limit ?? 20,
+        all: options?.all ?? false,
       });
       return { sessions };
     }

@@ -14,6 +14,7 @@ import {
   formatPermissionHelp,
 } from "./model-effort.js";
 import {
+  compactProjectPath,
   formatSessionListFooter,
   formatSessionListHeader,
   formatSessionLine,
@@ -288,7 +289,9 @@ async function handleResume(
     listAll || new Set(sessions.map((s) => s.cwd)).size > 1;
   const displayLimit = 15;
   const visible = sessions.slice(0, displayLimit);
-  const lines = visible.map((s, i) => formatSessionLine(s, i, showCwd));
+  const lines = listAll
+    ? formatGroupedSessionLines(visible)
+    : visible.map((s, i) => formatSessionLine(s, i, showCwd));
   const boundLine = rec?.cliSessionId ? rec.cliSessionId : undefined;
 
   return {
@@ -308,6 +311,21 @@ async function handleResume(
       formatSessionListFooter(boundLine),
     ].join("\n"),
   };
+}
+
+function formatGroupedSessionLines(sessions: CliSessionSummary[]): string[] {
+  const lines: string[] = [];
+  let currentCwd = "";
+  for (let i = 0; i < sessions.length; i++) {
+    const session = sessions[i]!;
+    if (session.cwd !== currentCwd) {
+      currentCwd = session.cwd;
+      if (lines.length) lines.push("");
+      lines.push(`**目录：${compactProjectPath(currentCwd)}**`);
+    }
+    lines.push(formatSessionLine(session, i, false));
+  }
+  return lines;
 }
 
 function handleModel(ctx: SlashContext, arg: string): SlashResult {
