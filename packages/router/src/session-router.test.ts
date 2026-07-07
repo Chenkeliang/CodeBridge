@@ -97,6 +97,24 @@ describe("SessionRouter resolveRunOptions", () => {
     expect(opts.transport).toBe("cli");
   });
 
+  it("topic binding inherits chat-level binding instead of global defaults", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const router = new SessionRouter(dataDir);
+    const config = defaultConfig();
+    router.initFromConfig(config);
+    router.setBinding("chat1", { backendId: "claude", cwd: "/tmp/proj" });
+
+    const topicBinding = router.getBinding("chat1", "om_root_1");
+    expect(topicBinding.backendId).toBe("claude");
+    expect(topicBinding.cwd).toBe("/tmp/proj");
+
+    // 话题内显式覆盖只影响该话题，不回写会话级
+    router.setBinding("chat1", { backendId: "codex" }, "om_root_1");
+    expect(router.getBinding("chat1", "om_root_1").backendId).toBe("codex");
+    expect(router.getBinding("chat1").backendId).toBe("claude");
+  });
+
   it("bindCliSession on a fresh chat stamps the given transport instead of undefined", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
     tmpDirs.push(dataDir);

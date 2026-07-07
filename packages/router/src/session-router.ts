@@ -53,6 +53,9 @@ export class SessionRouter {
     const key = this.bindingKey(chatId, topicId);
     const stored = this.bindings.read()[key];
     if (stored) return { ...stored };
+    // 话题级绑定缺省时继承所在会话的绑定（backend/cwd/model 等）；
+    // 不落盘，话题内显式 setBinding 时才写入话题级覆盖
+    if (topicId) return this.getBinding(chatId);
     const config: ChatBinding = {
       backendId: this.config?.defaultBackend ?? "cursor",
       cwd: this.defaultCwd,

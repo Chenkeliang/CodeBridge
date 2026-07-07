@@ -18,11 +18,17 @@ import {
   handleSlashCommand,
 } from "@feishu-code-bridge/router";
 import { registerFeishuExtraEvents } from "./feishu-extra-events.js";
+import { ChainTopicTracker } from "./chain-topics.js";
 import {
   downloadInboundImages,
   resolveInboundPrompt,
 } from "./feishu-inbound-media.js";
 import { resolveOutboundFile } from "./feishu-outbound-file.js";
+import { buildInboundPromptPrefix } from "./feishu-inbound-context.js";
+import {
+  shouldAcceptGroupMessage,
+  topicActiveForMessage,
+} from "./feishu-mention-gate.js";
 
 export interface FeishuMessage {
   messageId: string;
@@ -31,6 +37,10 @@ export interface FeishuMessage {
   senderId: string;
   content: string;
   threadId?: string;
+  /** 回复串的串首消息 id（普通群回复时有值） */
+  rootId?: string;
+  /** 被直接回复（引用）的消息 id */
+  replyToMessageId?: string;
   mentionedBot?: boolean;
   attachments?: RunAttachment[];
 }
@@ -49,6 +59,10 @@ export class FeishuBridge {
   private readonly chatStreamAbort = new Map<string, AbortController>();
   /** chat|topic → 最近一条入站消息 id（出站消息回贴话题用） */
   private readonly lastInboundMessageId = new Map<string, string>();
+  /** 普通群回复串 → 会话 topic 映射 */
+  private readonly chainTopics = new ChainTopicTracker();
+  /** bot 已参与过的话题（内存；重启后由 sessions.json 续上） */
+  private readonly botParticipatedTopics = new Set<string>();
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
@@ -71,8 +85,9 @@ export class FeishuBridge {
   private applyPolicyToChannel() {
     if (!this.channel) return;
     const policy = this.config.feishu.policy;
+    // 群 @ 策略由 Bridge 按话题/session 判断；SDK 层关闭以免话题内续聊被拦截
     this.channel.updatePolicy?.({
-      requireMention: policy?.requireMention ?? true,
+      requireMention: false,
       dmMode: policy?.dmMode ?? "open",
       dmAllowlist: policy?.dmAllowlist,
       groupAllowlist: policy?.groupAllowlist,
@@ -88,7 +103,7 @@ export class FeishuBridge {
       domain: feishu.domain,
       loggerLevel: LoggerLevel.info,
       policy: {
-        requireMention: feishu.policy?.requireMention ?? true,
+        requireMention: false,
         dmMode: (feishu.policy?.dmMode === "disabled"
         ? "disabled"
         : feishu.policy?.dmMode) ?? "open",
@@ -173,6 +188,8 @@ export class FeishuBridge {
     senderId: string;
     content: string;
     threadId?: string;
+    rootId?: string;
+    replyToMessageId?: string;
     mentionedBot?: boolean;
     resources?: ResourceDescriptor[];
   }): Promise<void> {
@@ -212,9 +229,26 @@ export class FeishuBridge {
       senderId: msg.senderId,
       content: msg.content,
       threadId: msg.threadId,
+      rootId: msg.rootId,
+      replyToMessageId: msg.replyToMessageId,
       mentionedBot: msg.mentionedBot,
       attachments,
     });
+  }
+
+  /**
+   * 消息所属会话 topic：话题群直接用 thread_id；普通群把「回复串」映射为
+   * topic——群根发起的对话延续群级会话，回复陌生消息（如告警推送）的串
+   * 自动成为独立话题、开启全新 session。
+   */
+  private resolveTopicId(msg: FeishuMessage): string | undefined {
+    if (msg.threadId) return msg.threadId;
+    if (msg.chatType !== "group") return undefined;
+    if (!msg.rootId) {
+      this.chainTopics.recordGroupRoot(msg.messageId);
+      return undefined;
+    }
+    return this.chainTopics.resolve(msg.rootId);
   }
 
   private async handleMessage(msg: FeishuMessage): Promise<void> {
@@ -226,43 +260,59 @@ export class FeishuBridge {
     }
 
     const policy = this.config.feishu.policy;
+    const topicId = this.resolveTopicId(msg);
+
     if (
       !isDm &&
-      resolveRequireMention(policy, msg.chatId) &&
-      !msg.mentionedBot
+      !shouldAcceptGroupMessage({
+        chatId: msg.chatId,
+        mentionedBot: msg.mentionedBot,
+        topicId,
+        requireMention: resolveRequireMention(policy, msg.chatId),
+        topicActive: topicActiveForMessage(
+          msg,
+          topicId,
+          Boolean(
+            this.orchestrator.router.getSessionRecord(
+              this.orchestrator.router.buildSessionKey(msg.chatId, topicId),
+            )?.cliSessionId,
+          ),
+          this.botParticipatedTopics,
+        ),
+      })
     ) {
       return;
     }
 
     // 记录话题/会话最近一条入站消息，供出站 API 回贴到正确的话题
     this.lastInboundMessageId.set(
-      this.chatKey(msg.chatId, msg.threadId),
+      this.chatKey(msg.chatId, topicId),
       msg.messageId,
     );
 
     const slash = await handleSlashCommand({
       chatId: msg.chatId,
-      topicId: msg.threadId,
+      topicId,
       senderId: msg.senderId,
       text: msg.content,
       config: this.config,
       router: this.orchestrator.router,
       listCliSessions: (options) =>
-        this.orchestrator.listCliSessions(msg.chatId, msg.threadId, options),
+        this.orchestrator.listCliSessions(msg.chatId, topicId, options),
       bindCliSession: (sessionId) =>
-        this.orchestrator.bindCliSession(msg.chatId, msg.threadId, sessionId),
+        this.orchestrator.bindCliSession(msg.chatId, topicId, sessionId),
       cancelActiveRun: () =>
-        this.orchestrator.cancelActiveForChat(msg.chatId, msg.threadId),
+        this.orchestrator.cancelActiveForChat(msg.chatId, topicId),
       hasActiveRun: () =>
-        this.orchestrator.hasActiveRun(msg.chatId, msg.threadId),
+        this.orchestrator.hasActiveRun(msg.chatId, topicId),
     });
 
     if (slash?.type === "reply") {
       const cmd = msg.content.trim().split(/\s+/)[0]?.toLowerCase();
-      this.abortChatStream(msg.chatId, msg.threadId);
+      this.abortChatStream(msg.chatId, topicId);
       if (cmd !== "/stop" && cmd !== "/cancel") {
         void this.orchestrator
-          .cancelActiveForChat(msg.chatId, msg.threadId)
+          .cancelActiveForChat(msg.chatId, topicId)
           .catch(() => {});
       }
       try {
@@ -311,7 +361,28 @@ export class FeishuBridge {
       prompt?.trim() ||
       resolveInboundPrompt("", msg.attachments?.length ?? 0);
 
-    void this.streamAgentReply(msg, agentPrompt).catch((err) => {
+    // 话题根消息 + 引用回复注入 prompt；拉取失败降级，不阻断
+    let contextPrefix: string | undefined;
+    if (this.channel) {
+      try {
+        contextPrefix = await buildInboundPromptPrefix(
+          this.channel,
+          msg,
+          topicId,
+          this.config.feishu.appId,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.options.onLog?.(`话题/引用上下文拉取失败: ${message}`);
+      }
+    }
+    const finalPrompt = contextPrefix
+      ? `${contextPrefix}\n\n${agentPrompt}`
+      : agentPrompt;
+
+    if (topicId) this.botParticipatedTopics.add(topicId);
+
+    void this.streamAgentReply(msg, finalPrompt, topicId).catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
       this.options.onLog?.(`Agent 回复失败: ${message}`);
       void this.sendMarkdown(
@@ -329,13 +400,14 @@ export class FeishuBridge {
   private async streamAgentReply(
     msg: FeishuMessage,
     prompt: string,
+    topicId: string | undefined,
   ): Promise<void> {
     if (!this.channel) return;
 
-    const key = this.chatKey(msg.chatId, msg.threadId);
-    this.abortChatStream(msg.chatId, msg.threadId);
+    const key = this.chatKey(msg.chatId, topicId);
+    this.abortChatStream(msg.chatId, topicId);
     void this.orchestrator
-      .cancelActiveForChat(msg.chatId, msg.threadId)
+      .cancelActiveForChat(msg.chatId, topicId)
       .catch(() => {});
 
     const streamAbort = new AbortController();
@@ -361,7 +433,7 @@ export class FeishuBridge {
             try {
               for await (const event of this.orchestrator.runAgent(
                 msg.chatId,
-                msg.threadId,
+                topicId,
                 prompt,
                 msg.attachments,
               )) {
