@@ -15,6 +15,7 @@ import {
 } from "./model-effort.js";
 import {
   compactProjectPath,
+  formatElapsed,
   formatSessionListFooter,
   formatSessionListHeader,
   formatSessionLine,
@@ -34,6 +35,7 @@ export interface SlashContext {
   bindCliSession?: (sessionId: string) => void;
   cancelActiveRun?: () => Promise<boolean>;
   hasActiveRun?: () => boolean;
+  activeRunElapsedMs?: () => number | undefined;
 }
 
 export type SlashResult =
@@ -109,6 +111,11 @@ export async function handleSlashCommand(
       );
       const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
       const profile = ctx.config.backends[key.backendId];
+      const elapsedMs = ctx.activeRunElapsedMs?.();
+      const runnerActive =
+        elapsedMs !== undefined
+          ? `是（已运行 ${formatElapsed(elapsedMs)}，请稍候再追问；需要中断请发 \`/stop\`）`
+          : "否";
       return {
         type: "reply",
         text: [
@@ -121,7 +128,7 @@ export async function handleSlashCommand(
           `**cliSessionId**: ${rec?.cliSessionId ?? "(none)"}`,
           `**sessionTransport**: ${rec?.transport ?? "-"}`,
           `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
-          `**runnerActive**: ${ctx.hasActiveRun?.() ? "是（后台仍在收尾，请稍候再追问）" : "否"}`,
+          `**runnerActive**: ${runnerActive}`,
         ].join("\n"),
       };
     }

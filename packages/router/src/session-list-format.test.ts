@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cleanSessionPreview,
   compactProjectPath,
+  formatElapsed,
   formatSessionLine,
   isNoisePreview,
 } from "./session-list-format.js";
@@ -27,6 +28,20 @@ describe("cleanSessionPreview", () => {
       ),
     ).toBe(true);
     expect(cleanSessionPreview("fix login bug")).toBe("fix login bug");
+  });
+});
+
+describe("formatElapsed", () => {
+  it("秒级", () => {
+    expect(formatElapsed(45_000)).toBe("45 秒");
+  });
+
+  it("分秒级", () => {
+    expect(formatElapsed(3 * 60_000 + 20_000)).toBe("3 分 20 秒");
+  });
+
+  it("小时分钟级", () => {
+    expect(formatElapsed(60 * 60_000 + 5 * 60_000)).toBe("1 小时 5 分");
   });
 });
 

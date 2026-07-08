@@ -18,7 +18,7 @@ export class RunOrchestrator {
   private readonly client: RunnerClient;
   private readonly activeChatRuns = new Map<
     string,
-    { runId: string; controller: AbortController }
+    { runId: string; controller: AbortController; startedAt: number }
   >();
 
   constructor(private readonly options: OrchestratorOptions) {
@@ -41,6 +41,12 @@ export class RunOrchestrator {
 
   hasActiveRun(chatId: string, topicId?: string): boolean {
     return this.activeChatRuns.has(this.chatRunKey(chatId, topicId));
+  }
+
+  /** 活跃任务已运行的毫秒数；无活跃任务时返回 undefined */
+  activeRunElapsedMs(chatId: string, topicId?: string): number | undefined {
+    const active = this.activeChatRuns.get(this.chatRunKey(chatId, topicId));
+    return active ? Date.now() - active.startedAt : undefined;
   }
 
   async cancelActiveForChat(
@@ -75,7 +81,7 @@ export class RunOrchestrator {
     const runId = this.router.newRunId();
     const chatKey = this.chatRunKey(chatId, topicId);
     const controller = new AbortController();
-    this.activeChatRuns.set(chatKey, { runId, controller });
+    this.activeChatRuns.set(chatKey, { runId, controller, startedAt: Date.now() });
 
     const logPath = path.join(
       this.options.dataDir,
