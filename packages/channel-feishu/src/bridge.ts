@@ -361,6 +361,17 @@ export class FeishuBridge {
       prompt?.trim() ||
       resolveInboundPrompt("", msg.attachments?.length ?? 0);
 
+    // 已有任务在跑时，新消息不静默杀掉重开——长任务（尤其带后台子任务的）会被
+    // 直接中断且无法恢复。改为提示用户等待或显式 /stop。
+    if (this.orchestrator.hasActiveRun(msg.chatId, topicId)) {
+      await this.sendMarkdown(
+        msg.chatId,
+        "⏳ 当前还有任务在执行中，请稍候；需要中断请发送 `/stop`。",
+        msg.messageId,
+      ).catch(() => {});
+      return;
+    }
+
     // 话题根消息 + 引用回复注入 prompt；拉取失败降级，不阻断
     let contextPrefix: string | undefined;
     if (this.channel) {
