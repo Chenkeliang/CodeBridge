@@ -76,6 +76,14 @@ export const ConfigSchema = z.object({
       acpPermissionPolicy: z
         .enum(["auto_allow", "prompt_deny"])
         .default("auto_allow"),
+      /** 主轮 stop 后续读后台子 agent 输出（drain）总开关 */
+      acpDrainBackgroundWork: z.boolean().default(true),
+      /** drain probe 短窗：主轮 stop 后这么久无真实后台活动则判无后台（ms） */
+      acpPostStopProbeMs: z.number().int().positive().default(8_000),
+      /** drain quiet 长窗：确认有后台后这么久无新活动视为后台结束（ms） */
+      acpPostStopQuietMs: z.number().int().positive().default(75_000),
+      /** drain 独立硬上限：后台跑这么久仍未结束则停止跟踪（ms） */
+      acpPostStopMaxMs: z.number().int().positive().default(20 * 60_000),
     })
     .optional(),
   /** Bridge 本地出站 API（供 Agent 内的 fcb 命令把文件/消息发回飞书） */

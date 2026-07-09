@@ -53,6 +53,18 @@ const stopMessage = {
   response: { stopReason: "end_turn" },
 } as unknown as ActiveSessionMessage;
 
+/** 一次 tool 调用的 session_update（映射为 tool_start，并把本轮标记为“起过 tool”） */
+const toolCall = {
+  kind: "session_update",
+  update: { sessionUpdate: "tool_call", title: "bg", kind: "think" },
+} as unknown as ActiveSessionMessage;
+
+/** 后台工具的进行中进度 ping：映射为空事件，但 drain 期应算作活动、刷新静默计时 */
+const toolProgress = {
+  kind: "session_update",
+  update: { sessionUpdate: "tool_call_update", status: "in_progress" },
+} as unknown as ActiveSessionMessage;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function collect(
@@ -143,5 +155,150 @@ describe("runActivePromptTurn", () => {
     const last = events[events.length - 1];
     expect(last).toMatchObject({ type: "error", fatal: true });
     expect((last as { message: string }).message).toMatch(/无新事件|stall/);
+  });
+
+  it("does not drain when the turn had no tool call (stop returns immediately)", async () => {
+    const queue = new FakeUpdateQueue();
+    queue.enqueue(textChunk("hi"));
+    queue.enqueue(stopMessage);
+    const start = Date.now();
+    const events = await collect(
+      runActivePromptTurn(fakeActiveSession(queue), [], {
+        permissionPolicy: "auto_allow",
+        isAborted: () => false,
+        // 大 probe 窗；若错误地进入 drain 会明显拖慢
+        postStopProbeMs: 5_000,
+      }),
+    );
+    expect(events).toEqual([{ type: "text_delta", text: "hi" }]);
+    expect(Date.now() - start).toBeLessThan(400);
+  });
+
+  it("drains past stop and delivers background events after a tool call", async () => {
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      postStopProbeMs: 1_000,
+      postStopQuietMs: 200,
+      postStopMaxMs: 60_000,
+    });
+    const done = collect(gen);
+
+    queue.enqueue(toolCall); // 主轮起过 tool
+    await sleep(20);
+    queue.enqueue(stopMessage); // 主轮结束 → 进 drain
+    await sleep(60);
+    queue.enqueue(textChunk("bg result")); // stop 后的后台活动，probe 内确认
+    // 之后静默；quiet 200ms 到点收尾
+
+    const events = await done;
+    expect(events.some((e) => e.type === "tool_start" && e.name === "bg")).toBe(
+      true,
+    );
+    expect(
+      events.some((e) => e.type === "text_delta" && e.text === "bg result"),
+    ).toBe(true);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("returns cleanly when a tool-using turn has no background (probe expires, no error)", async () => {
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      postStopProbeMs: 150,
+    });
+    const done = collect(gen);
+
+    queue.enqueue(toolCall);
+    await sleep(20);
+    queue.enqueue(stopMessage); // 进 drain，但之后无任何后台活动
+    // probe 150ms 到点 → 干净返回
+
+    const events = await done;
+    expect(events.some((e) => e.type === "tool_start")).toBe(true);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("force-ends drain with a non-fatal error at the hard cap", async () => {
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      postStopProbeMs: 1_000,
+      postStopQuietMs: 5_000, // quiet 不会触发
+      postStopMaxMs: 120, // 独立硬上限先到点
+    });
+    const done = collect(gen);
+
+    queue.enqueue(toolCall);
+    await sleep(20);
+    queue.enqueue(stopMessage);
+    await sleep(30);
+    queue.enqueue(textChunk("bg")); // 确认 drain
+
+    const events = await done;
+    const last = events[events.length - 1];
+    expect(last).toMatchObject({ type: "error", fatal: false });
+  });
+
+  it("aborts promptly during drain", async () => {
+    let aborted = false;
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => aborted,
+      postStopProbeMs: 5_000,
+      postStopQuietMs: 5_000,
+    });
+    const done = collect(gen);
+
+    queue.enqueue(toolCall);
+    await sleep(20);
+    queue.enqueue(stopMessage);
+    await sleep(30);
+    queue.enqueue(textChunk("bg")); // 确认 drain，进入长 quiet 窗
+    await sleep(30);
+    aborted = true; // drain 中途 abort
+
+    const start = Date.now();
+    const events = await done;
+    expect(Date.now() - start).toBeLessThan(400); // 不等满 5s quiet
+    expect(events.some((e) => e.type === "text_delta" && e.text === "bg")).toBe(
+      true,
+    );
+  });
+
+  it("keeps draining when in-progress tool_call_update pings arrive (refreshes quiet)", async () => {
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      postStopProbeMs: 1_000, // probe 宽松，不参与本用例竞争
+      postStopQuietMs: 250,
+      postStopMaxMs: 60_000,
+    });
+    const done = collect(gen);
+
+    queue.enqueue(toolCall); // 主轮起过 tool
+    await sleep(20);
+    queue.enqueue(stopMessage); // → drain
+    await sleep(20);
+    queue.enqueue(textChunk("bg1")); // 确认 drain，起算静默
+    await sleep(150); // < quiet(250)，仍存活
+    queue.enqueue(toolProgress); // 进行中进度：须刷新静默，否则下面 bg2 会被 quiet 切掉
+    await sleep(200); // 距 bg1 已 >quiet，但距 toolProgress 仍 <quiet
+    queue.enqueue(textChunk("bg2"));
+    // 之后静默；quiet 250ms 到点收尾
+
+    const events = await done;
+    const texts = events
+      .filter((e) => e.type === "text_delta")
+      .map((e) => (e as { text: string }).text);
+    expect(texts).toContain("bg1");
+    // 若 in-progress tool_call_update 不算活动，bg2 会在 quiet 到点后丢失
+    expect(texts).toContain("bg2");
+    expect(events.some((e) => e.type === "error")).toBe(false);
   });
 });

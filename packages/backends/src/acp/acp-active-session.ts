@@ -19,6 +19,7 @@ export interface OpenActiveSessionOptions {
 function attachActiveSession(
   agent: ClientConnection["agent"],
   sessionId: string,
+  response?: unknown,
 ): ActiveSession {
   const attach = (
     agent as unknown as {
@@ -28,7 +29,15 @@ function attachActiveSession(
   if (typeof attach !== "function") {
     throw new Error("ACP SDK 缺少 attachSession，无法续聊");
   }
-  return attach.call(agent, { sessionId });
+  // claude 的 session/resume 会回传 configOptions（实测 keys: sessionId/modes/configOptions）。
+  // 用完整响应 attach，让 newSessionResponse.configOptions 非空、与新建会话对称，后续
+  // applySessionConfigOptions 才能在续聊时重设 model/effort/permission（续聊到新适配器进程
+  // model 会退回默认）。cursor 的 session/load 响应为空则退回仅带 sessionId。
+  const full =
+    response && typeof response === "object" && "configOptions" in response
+      ? { ...(response as Record<string, unknown>), sessionId }
+      : { sessionId };
+  return attach.call(agent, full);
 }
 
 /** 与 Zed 一致：new / load / resume 后均使用 ActiveSession */
@@ -66,13 +75,13 @@ export async function openActiveSession(
       acpContinueMethod(backendConfig) === "session/load"
         ? methods.agent.session.load
         : methods.agent.session.resume;
-    await raceWithAbort(
+    const response = await raceWithAbort(
       agent.request(loadMethod, params),
       isAborted,
       loadTimeoutMs,
       "ACP session 续聊超时",
     );
-    return attachActiveSession(agent, sessionId);
+    return attachActiveSession(agent, sessionId, response);
   } catch (err) {
     if (isAborted()) throw err;
     const reason = err instanceof Error ? err.message : String(err);
