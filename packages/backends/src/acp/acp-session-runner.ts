@@ -20,6 +20,10 @@ import { openActiveSession } from "./acp-active-session.js";
 import { raceWithAbort } from "./acp-race.js";
 import { createHeadlessClientApp } from "./headless-client.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
+import {
+  applySessionConfigOptions,
+  resolveDesiredConfig,
+} from "./acp-config-options.js";
 
 export interface AcpRunHandle {
   child: ChildProcess;
@@ -68,26 +72,6 @@ function childToStream(child: ChildProcess) {
     Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
     Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
   );
-}
-
-/**
- * ACP 主进程的启动环境。配置的 model 走 ACP 时之前没被传下去（openActiveSession 只
- * buildSession(cwd).start()），会话会跑 claude 自己的默认模型。适配器读 `ANTHROPIC_MODEL`
- * 作为主进程 model（优先级最高），这里注入它，镜像 CLI 路径的 `ctx.model ?? profile.model`。
- * 只管主进程；子 agent 的模型交给 CLI 自己决定。extraEnv 放最后，允许显式覆盖。
- */
-export function buildAcpChildEnv(ctx: RunContext): NodeJS.ProcessEnv {
-  // ANTHROPIC_MODEL 是 claude-agent-acp 专属的 model 杠杆，只给 claude 注入；cursor/codex 的
-  // ACP 进程各有自己的 model 传递方式，不该被洒上一个它们不认、甚至会误解的同名 env。
-  const model =
-    ctx.backendConfig.type === "claude-code"
-      ? (ctx.model ?? ctx.backendConfig.model)
-      : undefined;
-  return {
-    ...process.env,
-    ...(model ? { ANTHROPIC_MODEL: model } : {}),
-    ...ctx.extraEnv,
-  };
 }
 
 async function waitMs(ms: number, isAborted: () => boolean): Promise<void> {
@@ -272,7 +256,7 @@ export async function* runAcpSession(
   const spawnProfile = resolveAcpSpawn(ctx.backendConfig);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
     cwd: ctx.cwd,
-    env: buildAcpChildEnv(ctx),
+    env: { ...process.env, ...ctx.extraEnv },
     stdio: ["pipe", "pipe", "pipe"],
   });
 
@@ -356,6 +340,19 @@ export async function* runAcpSession(
         message: `ACP 续聊原会话失败，已自动新建会话：${resumeFallbackReason}`,
         fatal: false,
       };
+    }
+
+    // 用 ACP 标准 session/set_config_option 应用 model/effort/permission（Zed 同款机制）。
+    // 每轮都重设：续聊到新适配器进程时 model 会退回适配器默认（实测 Fable 5）。
+    const desired = resolveDesiredConfig(ctx, options.permissionPolicy);
+    const { warnings } = await applySessionConfigOptions(
+      connection.agent,
+      sessionId,
+      active.newSessionResponse.configOptions ?? [],
+      desired,
+    );
+    for (const warning of warnings) {
+      yield { type: "error", message: warning, fatal: false };
     }
 
     const blocks = await buildPromptBlocks(ctx);

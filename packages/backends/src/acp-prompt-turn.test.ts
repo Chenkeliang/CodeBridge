@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveSession, ActiveSessionMessage } from "@agentclientprotocol/sdk";
 import type { AgentEvent } from "@feishu-code-bridge/core";
-import type { RunContext } from "@feishu-code-bridge/core";
-import {
-  buildAcpChildEnv,
-  runActivePromptTurn,
-} from "./acp/acp-session-runner.js";
+import { runActivePromptTurn } from "./acp/acp-session-runner.js";
 
 /** 复刻 SDK AsyncQueue 语义：enqueue 交给最早注册的 waiter（FIFO） */
 class FakeUpdateQueue {
@@ -304,57 +300,5 @@ describe("runActivePromptTurn", () => {
     // 若 in-progress tool_call_update 不算活动，bg2 会在 quiet 到点后丢失
     expect(texts).toContain("bg2");
     expect(events.some((e) => e.type === "error")).toBe(false);
-  });
-});
-
-describe("buildAcpChildEnv", () => {
-  const ctx = (over: Partial<RunContext>): RunContext =>
-    ({
-      runId: "r",
-      cwd: "/x",
-      prompt: "p",
-      backendConfig: { type: "claude-code" },
-      ...over,
-    }) as unknown as RunContext;
-
-  it("ctx.model 优先", () => {
-    const env = buildAcpChildEnv(
-      ctx({
-        model: "sonnet",
-        backendConfig: { type: "claude-code", model: "opus" } as never,
-      }),
-    );
-    expect(env.ANTHROPIC_MODEL).toBe("sonnet");
-  });
-
-  it("回退到 backendConfig.model", () => {
-    const env = buildAcpChildEnv(
-      ctx({ backendConfig: { type: "claude-code", model: "opus" } as never }),
-    );
-    expect(env.ANTHROPIC_MODEL).toBe("opus");
-  });
-
-  it("两者都无则不设 ANTHROPIC_MODEL", () => {
-    const env = buildAcpChildEnv(
-      ctx({ backendConfig: { type: "claude-code" } as never }),
-    );
-    expect(env.ANTHROPIC_MODEL).toBeUndefined();
-  });
-
-  it("非 claude 后端不注入 ANTHROPIC_MODEL", () => {
-    const env = buildAcpChildEnv(
-      ctx({
-        model: "sonnet",
-        backendConfig: { type: "cursor-cli", model: "composer-2.5" } as never,
-      }),
-    );
-    expect(env.ANTHROPIC_MODEL).toBeUndefined();
-  });
-
-  it("extraEnv 可覆盖", () => {
-    const env = buildAcpChildEnv(
-      ctx({ model: "sonnet", extraEnv: { ANTHROPIC_MODEL: "haiku" } }),
-    );
-    expect(env.ANTHROPIC_MODEL).toBe("haiku");
   });
 });
