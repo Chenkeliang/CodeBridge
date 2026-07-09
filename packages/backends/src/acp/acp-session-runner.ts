@@ -35,6 +35,14 @@ export interface AcpRunOptions {
   promptTimeoutMs?: number;
   noOutputTimeoutMs?: number;
   stallTimeoutMs?: number;
+  /** 主轮 stop 后，本轮起过 tool 时进入 drain；这么久内无“真实后台活动”视为无后台，返回 */
+  postStopProbeMs?: number;
+  /** drain 确认有后台后，这么久无新的真实活动视为后台真正结束 */
+  postStopQuietMs?: number;
+  /** drain 阶段独立硬上限（与主轮 20min deadline 各自计时） */
+  postStopMaxMs?: number;
+  /** drain 总开关，默认 true */
+  drainBackgroundWork?: boolean;
 }
 
 async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
@@ -62,6 +70,26 @@ function childToStream(child: ChildProcess) {
   );
 }
 
+/**
+ * ACP 主进程的启动环境。配置的 model 走 ACP 时之前没被传下去（openActiveSession 只
+ * buildSession(cwd).start()），会话会跑 claude 自己的默认模型。适配器读 `ANTHROPIC_MODEL`
+ * 作为主进程 model（优先级最高），这里注入它，镜像 CLI 路径的 `ctx.model ?? profile.model`。
+ * 只管主进程；子 agent 的模型交给 CLI 自己决定。extraEnv 放最后，允许显式覆盖。
+ */
+export function buildAcpChildEnv(ctx: RunContext): NodeJS.ProcessEnv {
+  // ANTHROPIC_MODEL 是 claude-agent-acp 专属的 model 杠杆，只给 claude 注入；cursor/codex 的
+  // ACP 进程各有自己的 model 传递方式，不该被洒上一个它们不认、甚至会误解的同名 env。
+  const model =
+    ctx.backendConfig.type === "claude-code"
+      ? (ctx.model ?? ctx.backendConfig.model)
+      : undefined;
+  return {
+    ...process.env,
+    ...(model ? { ANTHROPIC_MODEL: model } : {}),
+    ...ctx.extraEnv,
+  };
+}
+
 async function waitMs(ms: number, isAborted: () => boolean): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < ms) {
@@ -77,6 +105,13 @@ const ACP_NO_OUTPUT_TIMEOUT_MS = 120 * 1000;
 /** 已有输出后这么久没有新事件，视为 mid-turn 卡死（如 tool 调用卡死） */
 const ACP_STALL_TIMEOUT_MS = 10 * 60 * 1000;
 const ACP_INIT_TIMEOUT_MS = 30_000;
+// 后台子 agent（run_in_background）的 Task 工具在“启动即返回”时就 completed，stop 时并无
+// 未闭合 tool_call；后台工作作为独立任务在 stop 之后继续产出 session_update。因此靠“探测”
+// 判定是否真有后台：主轮起过 tool 才进 drain，probe 短窗内出现真实活动则切 quiet 长窗直到静默。
+// 实测：首个后台事件约在 stop 后 +0.8s；后台过程内可静默十几秒（如 sub-agent 跑 sleep）。
+const ACP_POST_STOP_PROBE_MS = 8 * 1000;
+const ACP_POST_STOP_QUIET_MS = 75 * 1000;
+const ACP_POST_STOP_MAX_MS = 20 * 60 * 1000;
 
 function isActivityEvent(event: AgentEvent): boolean {
   return (
@@ -102,6 +137,10 @@ export async function* runActivePromptTurn(
   const promptTimeoutMs = options.promptTimeoutMs ?? ACP_PROMPT_TIMEOUT_MS;
   const noOutputTimeoutMs = options.noOutputTimeoutMs ?? ACP_NO_OUTPUT_TIMEOUT_MS;
   const stallTimeoutMs = options.stallTimeoutMs ?? ACP_STALL_TIMEOUT_MS;
+  const postStopProbeMs = options.postStopProbeMs ?? ACP_POST_STOP_PROBE_MS;
+  const postStopQuietMs = options.postStopQuietMs ?? ACP_POST_STOP_QUIET_MS;
+  const postStopMaxMs = options.postStopMaxMs ?? ACP_POST_STOP_MAX_MS;
+  const drainEnabled = options.drainBackgroundWork ?? true;
 
   let sawOutput = false;
   const promptStartedAt = Date.now();
@@ -112,42 +151,70 @@ export async function* runActivePromptTurn(
   const stallTimeout = (): boolean =>
     sawOutput && Date.now() - lastActivityAt >= stallTimeoutMs;
 
-  let sawStop = false;
-  const deadline = Date.now() + promptTimeoutMs;
+  // "main" = 主 prompt 轮；"drain" = 主轮 stop 后续读后台子 agent 的 between-turn 输出。
+  // 只有本轮起过 tool（后台必经 Task 工具）才在 stop 后进 drain；纯对话轮 stop 即返回、零延迟。
+  let phase: "main" | "drain" = "main";
+  let sawToolCall = false;
+  let drainStartAt = 0;
+  let lastDrainActivityAt = 0;
+  let drainConfirmed = false;
+  const mainDeadline = promptStartedAt + promptTimeoutMs;
   // 必须跨迭代复用同一个 nextUpdate()：每次调用都会在 SDK AsyncQueue 里注册一个
   // waiter，被 race 抛弃的 waiter 仍排在 FIFO 前面，会把后续事件全部吞掉。
   let pending: Promise<ActiveSessionMessage> | null = null;
 
-  while (!options.isAborted() && !sawStop) {
-    if (Date.now() > deadline) {
-      yield {
-        type: "error",
-        message: withStderr("ACP 响应超时（20 分钟无结束信号）", options),
-        fatal: true,
-      };
-      break;
-    }
-    if (noOutputTimeout()) {
-      yield {
-        type: "error",
-        message: withStderr(
-          "ACP 长时间无任何输出（可能 agent 未登录、模型不可用或看图任务过慢）。",
-          options,
-        ),
-        fatal: true,
-      };
-      break;
-    }
-    if (stallTimeout()) {
-      yield {
-        type: "error",
-        message: withStderr(
-          "ACP 超过 10 分钟无新事件（可能 tool 调用卡死）",
-          options,
-        ),
-        fatal: true,
-      };
-      break;
+  while (!options.isAborted()) {
+    if (phase === "main") {
+      if (Date.now() > mainDeadline) {
+        yield {
+          type: "error",
+          message: withStderr("ACP 响应超时（20 分钟无结束信号）", options),
+          fatal: true,
+        };
+        break;
+      }
+      if (noOutputTimeout()) {
+        yield {
+          type: "error",
+          message: withStderr(
+            "ACP 长时间无任何输出（可能 agent 未登录、模型不可用或看图任务过慢）。",
+            options,
+          ),
+          fatal: true,
+        };
+        break;
+      }
+      if (stallTimeout()) {
+        yield {
+          type: "error",
+          message: withStderr(
+            "ACP 超过 10 分钟无新事件（可能 tool 调用卡死）",
+            options,
+          ),
+          fatal: true,
+        };
+        break;
+      }
+    } else {
+      // drain 阶段：未确认前用 probe 短窗探后台；确认后用 quiet 长窗等静默；独立硬上限兜底。
+      // stall/noOutput 这类主轮 watchdog 不进入 drain：drain 期的静默是预期的（如 sub-agent 跑 sleep）。
+      if (!drainConfirmed && Date.now() - drainStartAt >= postStopProbeMs) {
+        break; // 探不到真实后台活动 → 本轮无后台，干净返回
+      }
+      if (drainConfirmed && Date.now() - lastDrainActivityAt >= postStopQuietMs) {
+        break; // 后台真正静默 → 结束
+      }
+      if (Date.now() - drainStartAt >= postStopMaxMs) {
+        yield {
+          type: "error",
+          message: withStderr(
+            "ACP 后台任务超过 20 分钟仍未结束，已停止跟踪并终止该会话进程。",
+            options,
+          ),
+          fatal: false, // 主答已成功，这里只是停止跟踪，不算失败
+        };
+        break;
+      }
     }
 
     pending ??= active.nextUpdate();
@@ -159,7 +226,19 @@ export async function* runActivePromptTurn(
     pending = null;
 
     if (next.message.kind === "session_update") {
-      for (const event of mapSessionUpdate(next.message.update)) {
+      const update = next.message.update;
+      if (update.sessionUpdate === "tool_call") sawToolCall = true;
+      const events = mapSessionUpdate(update);
+      // drain 活动信号：映射出真实事件，或后台工具的进行中进度（in-progress tool_call_update
+      // 映射为空却代表后台工具仍在跑，须刷新静默计时，否则单个长工具会被 quiet 窗误切）。
+      // session_info_update / usage_update 这类噪音仍不算，避免普通轮次被尾随噪音误判为有后台。
+      const isDrainActivity =
+        events.length > 0 || update.sessionUpdate === "tool_call_update";
+      if (phase === "drain" && isDrainActivity) {
+        drainConfirmed = true;
+        lastDrainActivityAt = Date.now();
+      }
+      for (const event of events) {
         if (isActivityEvent(event)) {
           sawOutput = true;
           lastActivityAt = Date.now();
@@ -167,9 +246,22 @@ export async function* runActivePromptTurn(
         yield event;
       }
     } else if (next.message.kind === "stop") {
-      sawStop = true;
+      if (phase !== "main") break; // drain 期再遇 stop（仅将来加 nudge 时可达）→ 结束
+      if (drainEnabled && sawToolCall) {
+        phase = "drain";
+        drainStartAt = Date.now();
+        lastDrainActivityAt = drainStartAt;
+        drainConfirmed = false;
+        // 不 break，继续循环续读后台事件
+      } else {
+        break; // 无 tool（不可能有后台）或 drain 关闭 → 今天的即时返回行为
+      }
     }
   }
+
+  // abort/超时退出时 pending 里可能仍挂着一个 nextUpdate() waiter；drain 变长后 /stop 中途
+  // 更易命中它稍后因 dispose() reject，防御性吞掉，避免 unhandledRejection。
+  pending?.catch(() => {});
 }
 
 export async function* runAcpSession(
@@ -180,7 +272,7 @@ export async function* runAcpSession(
   const spawnProfile = resolveAcpSpawn(ctx.backendConfig);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
     cwd: ctx.cwd,
-    env: { ...process.env, ...ctx.extraEnv },
+    env: buildAcpChildEnv(ctx),
     stdio: ["pipe", "pipe", "pipe"],
   });
 

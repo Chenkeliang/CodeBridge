@@ -52,6 +52,12 @@ export class RunnerHost {
   private readonly maxConcurrent: number;
   private readonly dataDir: string;
   private readonly acpPermissionPolicy: AcpPermissionPolicy;
+  private readonly acpDrainOptions: {
+    drainBackgroundWork?: boolean;
+    postStopProbeMs?: number;
+    postStopQuietMs?: number;
+    postStopMaxMs?: number;
+  };
   private readonly fcbBinDir: Promise<string | undefined>;
 
   constructor(private readonly options: RunnerHostOptions) {
@@ -59,6 +65,13 @@ export class RunnerHost {
     this.dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
     this.acpPermissionPolicy =
       options.config.runnerHost?.acpPermissionPolicy ?? "auto_allow";
+    const rh = options.config.runnerHost;
+    this.acpDrainOptions = {
+      drainBackgroundWork: rh?.acpDrainBackgroundWork,
+      postStopProbeMs: rh?.acpPostStopProbeMs,
+      postStopQuietMs: rh?.acpPostStopQuietMs,
+      postStopMaxMs: rh?.acpPostStopMaxMs,
+    };
     for (const [id, profile] of Object.entries(options.config.backends)) {
       this.registry.register(id, profile);
     }
@@ -228,6 +241,7 @@ export class RunnerHost {
         {
           permissionPolicy: this.acpPermissionPolicy,
           isAborted: () => activeRun.aborted,
+          ...this.acpDrainOptions,
         },
         handleRef,
       )) {
