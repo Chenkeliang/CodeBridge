@@ -312,11 +312,12 @@ export class FeishuBridge {
 
     if (slash?.type === "reply") {
       const cmd = msg.content.trim().split(/\s+/)[0]?.toLowerCase();
-      this.abortChatStream(msg.chatId, topicId);
-      if (cmd !== "/stop" && cmd !== "/cancel") {
-        void this.orchestrator
-          .cancelActiveForChat(msg.chatId, topicId)
-          .catch(() => {});
+      // 只有 /stop /cancel 打断正在跑的任务（其取消由各自 handler 通过 cancelActiveRun 完成，
+      // 这里补 abortChatStream 让卡片立即收尾）。其余 reply 命令（/status /model /effort
+      // /permission /help /cd /backend …）绝不打断运行中的任务——尤其 /status 是查进度用的。
+      // 之前这里无差别 abort + cancelActiveForChat，会把长任务连同一次 /status 查询一起杀掉。
+      if (cmd === "/stop" || cmd === "/cancel") {
+        this.abortChatStream(msg.chatId, topicId);
       }
       try {
         await this.sendMarkdown(msg.chatId, slash.text, msg.messageId);
