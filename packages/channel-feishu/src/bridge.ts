@@ -432,59 +432,110 @@ export class FeishuBridge {
     const streamAbort = new AbortController();
     this.chatStreamAbort.set(key, streamAbort);
 
+    const { present } = createFeishuStreamPresenter();
+    let resultBuffer = ""; // 结果区累积；卡片挂了就用它降级发普通消息
+    let agentConsumed = false; // 已消费过 agent 事件流？（避免降级时重复跑）
+    let cardBroken = false; // 飞书卡片流式失败（如 11310 cardid invalid）→ 降级
+
+    // 消费一次 agent 事件流：thinking / result 分别交给回调；result 同时累积进 buffer。
+    const consumeAgent = async (
+      onThinking: (t: string) => Promise<void>,
+      onResult: (t: string) => Promise<void>,
+    ): Promise<void> => {
+      agentConsumed = true;
+      try {
+        for await (const event of this.orchestrator.runAgent(
+          msg.chatId,
+          topicId,
+          prompt,
+          msg.attachments,
+        )) {
+          if (streamAbort.signal.aborted) return;
+          const part = present(event);
+          if (!part) continue;
+          if (part.zone === "thinking") {
+            await onThinking(part.text);
+          } else {
+            resultBuffer += part.text;
+            await onResult(part.text);
+          }
+        }
+      } catch (err) {
+        if (streamAbort.signal.aborted) return;
+        if (err instanceof Error && err.name === "AbortError") {
+          await onResult("\n\n⏹ 已停止\n");
+          return;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        resultBuffer += `\n❌ ${message}\n`;
+        await onResult(`\n❌ ${message}\n`);
+      }
+    };
+
     try {
       await this.channel.stream(
         msg.chatId,
         {
           markdown: async (s) => {
             if (streamAbort.signal.aborted) return;
-            await s.append("_思考中…_");
-            const { present } = createFeishuStreamPresenter();
-            let resultStarted = false;
-            const appendToResult = async (chunk: string) => {
-              if (streamAbort.signal.aborted) return;
-              if (!resultStarted) {
-                await s.append("\n\n---\n\n");
-                resultStarted = true;
+            // 每个卡片写操作包一层：首次失败即标记 cardBroken 并降级
+            // （后续不再碰卡片、只让 consumeAgent 继续累积 resultBuffer）。
+            const safeAppend = async (text: string): Promise<void> => {
+              if (cardBroken || streamAbort.signal.aborted) return;
+              try {
+                await s.append(text);
+              } catch (err) {
+                cardBroken = true;
+                this.options.onLog?.(
+                  `卡片流式失败，降级为普通消息：${err instanceof Error ? err.message : String(err)}`,
+                );
               }
-              await s.append(chunk);
             };
-            try {
-              for await (const event of this.orchestrator.runAgent(
-                msg.chatId,
-                topicId,
-                prompt,
-                msg.attachments,
-              )) {
-                if (streamAbort.signal.aborted) return;
-                const part = present(event);
-                if (!part) continue;
-                if (part.zone === "thinking") {
-                  await s.append(part.text);
-                } else {
-                  await appendToResult(part.text);
+            await safeAppend("_思考中…_");
+            let resultStarted = false;
+            await consumeAgent(
+              (t) => safeAppend(t),
+              async (t) => {
+                if (!resultStarted) {
+                  await safeAppend("\n\n---\n\n");
+                  resultStarted = true;
                 }
-              }
-            } catch (err) {
-              if (streamAbort.signal.aborted) return;
-              if (err instanceof Error && err.name === "AbortError") {
-                await appendToResult("\n\n⏹ 已停止\n");
-                return;
-              }
-              const message =
-                err instanceof Error ? err.message : String(err);
-              await appendToResult(`\n❌ ${message}\n`);
-            }
+                await safeAppend(t);
+              },
+            );
           },
         },
         { replyTo: msg.messageId },
       );
     } catch (err) {
-      if (!streamAbort.signal.aborted) throw err;
+      // channel.stream 本身抛（多为建卡阶段就失败，markdown 回调没跑起来）→ 降级
+      if (!streamAbort.signal.aborted) {
+        cardBroken = true;
+        this.options.onLog?.(
+          `卡片建卡失败，降级为普通消息：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     } finally {
       if (this.chatStreamAbort.get(key) === streamAbort) {
         this.chatStreamAbort.delete(key);
       }
+    }
+
+    // 降级：卡片坏了 → 把结果发普通文本消息。若 agent 还没跑过（建卡即失败），补跑一次非流式。
+    if (cardBroken && !streamAbort.signal.aborted) {
+      if (!agentConsumed) {
+        await consumeAgent(
+          async () => {},
+          async () => {},
+        );
+      }
+      if (streamAbort.signal.aborted) return;
+      const text = resultBuffer.trim() || "（本次无输出）";
+      await this.sendMarkdown(msg.chatId, text, msg.messageId).catch((err) => {
+        this.options.onLog?.(
+          `降级普通消息发送失败：${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     }
   }
 
