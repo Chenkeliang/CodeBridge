@@ -52,7 +52,10 @@ export class RunnerHost {
   private readonly maxConcurrent: number;
   private readonly dataDir: string;
   private readonly acpPermissionPolicy: AcpPermissionPolicy;
-  private readonly acpDrainOptions: {
+  private readonly acpRunOptions: {
+    promptTimeoutMs?: number;
+    noOutputTimeoutMs?: number;
+    stallTimeoutMs?: number;
     drainBackgroundWork?: boolean;
     postStopProbeMs?: number;
     postStopQuietMs?: number;
@@ -66,7 +69,10 @@ export class RunnerHost {
     this.acpPermissionPolicy =
       options.config.runnerHost?.acpPermissionPolicy ?? "auto_allow";
     const rh = options.config.runnerHost;
-    this.acpDrainOptions = {
+    this.acpRunOptions = {
+      promptTimeoutMs: rh?.acpPromptTimeoutMs,
+      noOutputTimeoutMs: rh?.acpNoOutputTimeoutMs,
+      stallTimeoutMs: rh?.acpStallTimeoutMs,
       drainBackgroundWork: rh?.acpDrainBackgroundWork,
       postStopProbeMs: rh?.acpPostStopProbeMs,
       postStopQuietMs: rh?.acpPostStopQuietMs,
@@ -241,7 +247,7 @@ export class RunnerHost {
         {
           permissionPolicy: this.acpPermissionPolicy,
           isAborted: () => activeRun.aborted,
-          ...this.acpDrainOptions,
+          ...this.acpRunOptions,
         },
         handleRef,
       )) {

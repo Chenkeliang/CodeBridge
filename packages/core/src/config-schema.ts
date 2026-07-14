@@ -76,6 +76,24 @@ export const ConfigSchema = z.object({
       acpPermissionPolicy: z
         .enum(["auto_allow", "prompt_deny"])
         .default("auto_allow"),
+      /** 一轮无结束信号的总超时（ms），到点判 fatal */
+      acpPromptTimeoutMs: z
+        .number()
+        .int()
+        .positive()
+        .default(40 * 60_000),
+      /** 从发 prompt 起完全无任何输出的超时（ms） */
+      acpNoOutputTimeoutMs: z
+        .number()
+        .int()
+        .positive()
+        .default(10 * 60_000),
+      /** 已有输出后无新事件的 stall 超时（ms），到点判 fatal（疑似工具卡死） */
+      acpStallTimeoutMs: z
+        .number()
+        .int()
+        .positive()
+        .default(30 * 60_000),
       /** 主轮 stop 后续读后台子 agent 输出（drain）总开关 */
       acpDrainBackgroundWork: z.boolean().default(true),
       /** drain probe 短窗：主轮 stop 后这么久无真实后台活动则判无后台（ms） */

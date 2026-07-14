@@ -82,12 +82,12 @@ async function waitMs(ms: number, isAborted: () => boolean): Promise<void> {
   }
 }
 
-/** 防止 ACP prompt 永不结束导致 Runner SSE / 飞书会话队列假死 */
-const ACP_PROMPT_TIMEOUT_MS = 20 * 60 * 1000;
-/** 从发 prompt 起这么久仍无任何输出，视为卡住（常见于 session/load 或看图） */
-const ACP_NO_OUTPUT_TIMEOUT_MS = 120 * 1000;
-/** 已有输出后这么久没有新事件，视为 mid-turn 卡死（如 tool 调用卡死） */
-const ACP_STALL_TIMEOUT_MS = 10 * 60 * 1000;
+/** 防止 ACP prompt 永不结束导致 Runner SSE / 飞书会话队列假死；可经 config 覆盖 */
+const ACP_PROMPT_TIMEOUT_MS = 40 * 60 * 1000;
+/** 从发 prompt 起这么久仍无任何输出，视为卡住（常见于 session/load 或看图）；可经 config 覆盖 */
+const ACP_NO_OUTPUT_TIMEOUT_MS = 10 * 60 * 1000;
+/** 已有输出后这么久没有新事件，视为 mid-turn 卡死（如 tool 调用卡死）；可经 config 覆盖 */
+const ACP_STALL_TIMEOUT_MS = 30 * 60 * 1000;
 const ACP_INIT_TIMEOUT_MS = 30_000;
 // 后台子 agent（run_in_background）的 Task 工具在“启动即返回”时就 completed，stop 时并无
 // 未闭合 tool_call；后台工作作为独立任务在 stop 之后继续产出 session_update。因此靠“探测”
@@ -152,7 +152,10 @@ export async function* runActivePromptTurn(
       if (Date.now() > mainDeadline) {
         yield {
           type: "error",
-          message: withStderr("ACP 响应超时（20 分钟无结束信号）", options),
+          message: withStderr(
+            `ACP 响应超时（${Math.round(promptTimeoutMs / 60000)} 分钟无结束信号）`,
+            options,
+          ),
           fatal: true,
         };
         break;
@@ -172,7 +175,7 @@ export async function* runActivePromptTurn(
         yield {
           type: "error",
           message: withStderr(
-            "ACP 超过 10 分钟无新事件（可能 tool 调用卡死）",
+            `ACP 超过 ${Math.round(stallTimeoutMs / 60000)} 分钟无新事件（可能 tool 调用卡死）`,
             options,
           ),
           fatal: true,
