@@ -52,6 +52,33 @@ export interface FeishuBridgeOptions {
   onLog?: (msg: string) => void;
 }
 
+/** 降级时单条普通消息的最大字符数；结果超过就用 chunkMarkdown 分条发，避免撞飞书消息长度上限 */
+const FEISHU_MSG_CHUNK_CHARS = 12000;
+
+/** 把长文本按行切成 ≤ maxLen 的块，用于超长结果分条普通消息发送（避免又撞长度上限） */
+export function chunkMarkdown(text: string, maxLen: number): string[] {
+  const chunks: string[] = [];
+  let cur = "";
+  for (const line of text.split("\n")) {
+    let seg = line;
+    while (seg.length > maxLen) {
+      if (cur) {
+        chunks.push(cur);
+        cur = "";
+      }
+      chunks.push(seg.slice(0, maxLen));
+      seg = seg.slice(maxLen);
+    }
+    if (cur && cur.length + seg.length + 1 > maxLen) {
+      chunks.push(cur);
+      cur = "";
+    }
+    cur += cur ? `\n${seg}` : seg;
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
 export class FeishuBridge {
   private channel?: LarkChannel;
   private orchestrator: RunOrchestrator;
@@ -433,7 +460,7 @@ export class FeishuBridge {
     this.chatStreamAbort.set(key, streamAbort);
 
     const { present } = createFeishuStreamPresenter();
-    let resultBuffer = ""; // 结果区累积；卡片挂了就用它降级发普通消息
+    let resultBuffer = ""; // 结果区累积；卡片挂了/被截断就用它降级发普通消息
     let agentConsumed = false; // 已消费过 agent 事件流？（避免降级时重复跑）
     let cardBroken = false; // 飞书卡片流式失败（如 11310 cardid invalid）→ 降级
 
@@ -478,8 +505,9 @@ export class FeishuBridge {
         {
           markdown: async (s) => {
             if (streamAbort.signal.aborted) return;
-            // 每个卡片写操作包一层：首次失败即标记 cardBroken 并降级
-            // （后续不再碰卡片、只让 consumeAgent 继续累积 resultBuffer）。
+            // 卡片写操作包一层：只有真报错才标记 cardBroken 并降级——之后不再碰卡片，
+            // 让 consumeAgent 继续累积 resultBuffer，收尾时用普通消息补发完整结果。
+            // 不主动截断超长卡片：卡片正常（哪怕很长）就一直流，不发普通消息。
             const safeAppend = async (text: string): Promise<void> => {
               if (cardBroken || streamAbort.signal.aborted) return;
               try {
@@ -521,7 +549,8 @@ export class FeishuBridge {
       }
     }
 
-    // 降级：卡片坏了 → 把结果发普通文本消息。若 agent 还没跑过（建卡即失败），补跑一次非流式。
+    // 降级：仅当卡片真的报错(cardBroken)时 → 把完整结果用普通消息补发（超长自动分条）。
+    // 卡片正常（哪怕很长）就不发普通消息。若 agent 还没跑过（建卡即失败），补跑一次非流式。
     if (cardBroken && !streamAbort.signal.aborted) {
       if (!agentConsumed) {
         await consumeAgent(
@@ -531,11 +560,14 @@ export class FeishuBridge {
       }
       if (streamAbort.signal.aborted) return;
       const text = resultBuffer.trim() || "（本次无输出）";
-      await this.sendMarkdown(msg.chatId, text, msg.messageId).catch((err) => {
-        this.options.onLog?.(
-          `降级普通消息发送失败：${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+      for (const chunk of chunkMarkdown(text, FEISHU_MSG_CHUNK_CHARS)) {
+        if (streamAbort.signal.aborted) return;
+        await this.sendMarkdown(msg.chatId, chunk, msg.messageId).catch((err) => {
+          this.options.onLog?.(
+            `降级普通消息发送失败：${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
     }
   }
 
