@@ -162,8 +162,8 @@ export function defaultConfig(): AppConfig {
         transport: "acp",
         command: "codex",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.0"],
-        model: "gpt-5.3-codex",
+        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
+        // 不钉 model：OpenAI 轮换模型名很快，钉了必过期；用适配器默认，会话内 /model 切
         allowBypassApprovals: false,
         allowBypassApprovalsViaConfig: true,
       },

@@ -24,11 +24,11 @@ describe("acp-spawn-profiles", () => {
         type: "codex",
         command: "codex",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.0"],
+        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
       }),
     ).toEqual({
       command: "npx",
-      args: ["-y", "@agentclientprotocol/codex-acp@1.1.0"],
+      args: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
     });
   });
 

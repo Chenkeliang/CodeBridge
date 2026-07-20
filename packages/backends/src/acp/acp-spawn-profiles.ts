@@ -13,7 +13,7 @@ const DEFAULTS: Record<BackendProfile["type"], AcpSpawnProfile> = {
   },
   codex: {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp@1.1.0"],
+    args: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
   },
   "generic-spawn": { command: "npx", args: [] },
 };
