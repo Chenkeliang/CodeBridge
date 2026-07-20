@@ -221,6 +221,7 @@ export {
   runAcpSession,
   listAcpConfigOptions,
   listAcpSessions,
+  killProcessTree,
   mapSessionUpdate,
 } from "./acp/index.js";
 

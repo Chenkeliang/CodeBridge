@@ -17,3 +17,4 @@ export {
   probeAcpInitialize,
 } from "./acp-session-list.js";
 export { detectBackend } from "./acp-doctor.js";
+export { killProcessTree } from "./acp-kill.js";

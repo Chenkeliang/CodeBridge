@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   BackendRegistry,
   getBackendTransport,
+  killProcessTree,
   listAcpConfigOptions,
   listAcpSessions,
   listSessionsForBackend,
@@ -299,6 +300,7 @@ export class RunnerHost {
       cwd: ctx.cwd,
       env: { ...process.env, ...ctx.extraEnv },
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true, // 自成进程组：SIGKILL 兜底时连 agent 的孙进程一起杀，不留孤儿
     });
 
     // 必须在 spawn 后同步挂上 close/error 监听：spawn 失败（如 ENOENT）时
@@ -315,9 +317,9 @@ export class RunnerHost {
       runId,
       aborted: false,
       cancel: () => {
-        if (childAlive()) child.kill("SIGTERM");
+        if (childAlive()) killProcessTree(child, "SIGTERM");
         setTimeout(() => {
-          if (childAlive()) child.kill("SIGKILL");
+          if (childAlive()) killProcessTree(child, "SIGKILL");
         }, 2000).unref();
       },
     };

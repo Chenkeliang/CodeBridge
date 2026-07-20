@@ -19,6 +19,7 @@ import { mapSessionUpdate } from "./acp-event-mapper.js";
 import { openActiveSession } from "./acp-active-session.js";
 import { raceWithAbort } from "./acp-race.js";
 import { createHeadlessClientApp } from "./headless-client.js";
+import { killProcessTree } from "./acp-kill.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
 import {
   applySessionConfigOptions,
@@ -261,6 +262,7 @@ export async function* runAcpSession(
     cwd: ctx.cwd,
     env: { ...process.env, ...ctx.extraEnv },
     stdio: ["pipe", "pipe", "pipe"],
+    detached: true, // 自成进程组，killProcessTree 可 -pid 全组兜底（SIGKILL 不转发）
   });
 
   let stderr = "";
@@ -280,9 +282,9 @@ export async function* runAcpSession(
   const childAlive = () =>
     child.exitCode === null && child.signalCode === null;
   const killChild = () => {
-    if (childAlive()) child.kill("SIGTERM");
+    if (childAlive()) killProcessTree(child, "SIGTERM");
     setTimeout(() => {
-      if (childAlive()) child.kill("SIGKILL");
+      if (childAlive()) killProcessTree(child, "SIGKILL");
     }, 2000).unref();
   };
 

@@ -12,6 +12,7 @@ import type {
   BackendProfile,
 } from "@feishu-code-bridge/core";
 import type { CliSessionSummary } from "../session-discovery.js";
+import { killProcessTree } from "./acp-kill.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
 import { mapSessionConfigOptions } from "./acp-config-options.js";
 
@@ -35,6 +36,7 @@ async function withAcpConnection<T>(
     cwd,
     env: { ...process.env },
     stdio: ["pipe", "pipe", "pipe"],
+    detached: true, // 自成进程组，退出时全组一起杀，避免适配器的孙进程残留
   });
   const app = client({ name: "feishu-code-bridge" });
   const stream = childToStream(child);
@@ -48,7 +50,7 @@ async function withAcpConnection<T>(
     return await op(connection.agent);
   } finally {
     connection.close();
-    if (!child.killed) child.kill("SIGTERM");
+    if (!child.killed) killProcessTree(child, "SIGTERM");
   }
 }
 
@@ -130,9 +132,10 @@ export async function probeAcpInitialize(
       cwd,
       env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
     });
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
+      killProcessTree(child, "SIGTERM");
       resolve({ ok: false, message: "ACP initialize timeout" });
     }, timeoutMs);
 
@@ -163,7 +166,7 @@ export async function probeAcpInitialize(
         });
       } finally {
         clearTimeout(timer);
-        if (!child.killed) child.kill("SIGTERM");
+        if (!child.killed) killProcessTree(child, "SIGTERM");
       }
     })();
   });
