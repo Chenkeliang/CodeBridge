@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   BackendRegistry,
   getBackendTransport,
+  listAcpConfigOptions,
   listAcpSessions,
   listSessionsForBackend,
   runAcpSession,
@@ -13,6 +14,7 @@ import type {
   AgentEvent,
   AcpPermissionPolicy,
   AppConfig,
+  BackendConfigOption,
   RunContext,
   RunRequest,
 } from "@feishu-code-bridge/core";
@@ -161,6 +163,23 @@ export class RunnerHost {
       cursorCommand: profile.command,
     });
     return { sessions };
+  }
+
+  /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（cli transport 返回空，走静态提示） */
+  async listConfigOptions(
+    backendId: string,
+    cwd: string,
+    requestTransport?: RunRequest["transport"],
+  ): Promise<{ options: BackendConfigOption[]; error?: string }> {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) {
+      return { options: [], error: `Unknown backend: ${backendId}` };
+    }
+    const transport = this.effectiveTransport(backendId, requestTransport);
+    if (transport !== "acp") {
+      return { options: [] };
+    }
+    return { options: await listAcpConfigOptions(profile, cwd) };
   }
 
   private effectiveTransport(
@@ -445,6 +464,21 @@ export function createRunnerApp(host: RunnerHost, token: string) {
       all,
       limit: Number.isFinite(limit) ? limit : 20,
     }, transport);
+    return c.json(result);
+  });
+
+  app.get("/config-options", async (c) => {
+    const backend = c.req.query("backend");
+    const cwd = c.req.query("cwd");
+    const transportRaw = c.req.query("transport");
+    const transport =
+      transportRaw === "acp" || transportRaw === "cli"
+        ? transportRaw
+        : undefined;
+    if (!backend || !cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    const result = await host.listConfigOptions(backend, cwd, transport);
     return c.json(result);
   });
 

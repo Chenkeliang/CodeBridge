@@ -7,9 +7,13 @@ import {
   client,
   type ClientConnection,
 } from "@agentclientprotocol/sdk";
-import type { BackendProfile } from "@feishu-code-bridge/core";
+import type {
+  BackendConfigOption,
+  BackendProfile,
+} from "@feishu-code-bridge/core";
 import type { CliSessionSummary } from "../session-discovery.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
+import { mapSessionConfigOptions } from "./acp-config-options.js";
 
 function childToStream(child: ReturnType<typeof spawn>) {
   if (!child.stdin || !child.stdout) {
@@ -74,6 +78,42 @@ export async function listAcpSessions(
       preview: s.title ?? "(no preview)",
       updatedAt: s.updatedAt ?? new Date().toISOString(),
     }));
+  } catch {
+    return [];
+  }
+}
+
+const ACP_CONFIG_OPTIONS_TIMEOUT_MS = 15_000;
+
+/**
+ * 拉取 ACP 适配器 advertise 的会话配置项（/model 动态列表用）：短暂 spawn 适配器，
+ * initialize + session/new 读 configOptions 后立即销毁。不发 prompt，无推理成本；
+ * claude 适配器对未发过 prompt 的会话不持久化（实测 resume 报 Resource not found）。
+ * 超时/失败返回 []（调用方回退静态提示），与 listAcpSessions 的容错约定一致。
+ */
+export async function listAcpConfigOptions(
+  profile: BackendProfile,
+  cwd: string,
+  timeoutMs = ACP_CONFIG_OPTIONS_TIMEOUT_MS,
+): Promise<BackendConfigOption[]> {
+  try {
+    return await withAcpConnection(profile, cwd, (agent) => {
+      // 超时放在 op 内：reject 后 withAcpConnection 的 finally 负责 close + kill
+      const timeout = new Promise<never>((_, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("ACP config options timeout")),
+          timeoutMs,
+        );
+        timer.unref?.();
+      });
+      const fetchOptions = (async () => {
+        const active = await agent.buildSession(cwd).start();
+        const options = active.newSessionResponse.configOptions ?? [];
+        active.dispose();
+        return mapSessionConfigOptions(options);
+      })();
+      return Promise.race([fetchOptions, timeout]);
+    });
   } catch {
     return [];
   }

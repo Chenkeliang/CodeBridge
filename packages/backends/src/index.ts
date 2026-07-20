@@ -219,6 +219,7 @@ export {
   resolveAcpSpawn,
   acpContinueMethod,
   runAcpSession,
+  listAcpConfigOptions,
   listAcpSessions,
   mapSessionUpdate,
 } from "./acp/index.js";

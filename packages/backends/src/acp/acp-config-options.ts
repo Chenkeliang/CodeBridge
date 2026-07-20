@@ -4,7 +4,11 @@ import {
   type SessionConfigOption,
   type SessionConfigSelectOption,
 } from "@agentclientprotocol/sdk";
-import type { AcpPermissionPolicy, RunContext } from "@feishu-code-bridge/core";
+import type {
+  AcpPermissionPolicy,
+  BackendConfigOption,
+  RunContext,
+} from "@feishu-code-bridge/core";
 
 type Agent = ClientConnection["agent"];
 
@@ -69,6 +73,31 @@ export function resolveDesiredConfig(
       (permissionPolicy === "prompt_deny" ? "default" : "bypassPermissions");
   }
   return desired;
+}
+
+/**
+ * 把 SDK 的 configOptions（含分组 select）映射为跨包共享的精简形态，供 /model 等
+ * 动态列表展示。仅保留 select 型选项；boolean 型（实验性）对列表场景无意义，跳过。
+ */
+export function mapSessionConfigOptions(
+  options: SessionConfigOption[],
+): BackendConfigOption[] {
+  const out: BackendConfigOption[] = [];
+  for (const option of options) {
+    if (option.type !== "select") continue;
+    out.push({
+      id: option.id,
+      name: option.name,
+      category: option.category ?? undefined,
+      currentValue: option.currentValue,
+      values: flattenSelectOptions(option).map((v) => ({
+        value: v.value,
+        name: v.name || undefined,
+        description: v.description ?? undefined,
+      })),
+    });
+  }
+  return out;
 }
 
 /** desired 里想设的项与 advertise 选项的 category 映射 */

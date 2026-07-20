@@ -329,6 +329,8 @@ export class FeishuBridge {
         this.orchestrator.listCliSessions(msg.chatId, topicId, options),
       bindCliSession: (sessionId) =>
         this.orchestrator.bindCliSession(msg.chatId, topicId, sessionId),
+      listConfigOptions: () =>
+        this.orchestrator.listConfigOptions(msg.chatId, topicId),
       cancelActiveRun: () =>
         this.orchestrator.cancelActiveForChat(msg.chatId, topicId),
       hasActiveRun: () =>

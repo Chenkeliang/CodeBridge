@@ -1,6 +1,6 @@
 import path from "node:path";
 import { appendJsonl } from "@feishu-code-bridge/core";
-import type { AgentEvent, AppConfig, BackendTransport, RunAttachment, RunRequest, SessionRecord } from "@feishu-code-bridge/core";
+import type { AgentEvent, AppConfig, BackendConfigOption, BackendTransport, RunAttachment, RunRequest, SessionRecord } from "@feishu-code-bridge/core";
 import {
   RunnerClient,
   type CliSessionSummary,
@@ -231,7 +231,45 @@ export class RunOrchestrator {
     );
     this.router.bindCliSession(chatId, cliSessionId, runOpts.transport, topicId);
   }
+
+  /** /model 动态列表：适配器 advertise 的配置项，按 backend|cwd 缓存（拉一次要短暂 spawn 适配器） */
+  private readonly configOptionsCache = new Map<
+    string,
+    { at: number; options: BackendConfigOption[] }
+  >();
+
+  async listConfigOptions(
+    chatId: string,
+    topicId?: string,
+  ): Promise<BackendConfigOption[]> {
+    const key = this.router.buildSessionKey(chatId, topicId);
+    const runOpts = this.router.resolveRunOptions(
+      chatId,
+      topicId,
+      this.options.config,
+    );
+    if (runOpts.transport !== "acp") return [];
+    const cacheKey = `${key.backendId}|${key.cwd}`;
+    const cached = this.configOptionsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < CONFIG_OPTIONS_CACHE_MS) {
+      return cached.options;
+    }
+    const result = await this.client.listConfigOptions(key.backendId, key.cwd, {
+      transport: runOpts.transport,
+    });
+    if (result.error) throw new Error(result.error);
+    // 空结果不缓存：多半是适配器未就绪/超时，下次 /model 再试
+    if (result.options.length > 0) {
+      this.configOptionsCache.set(cacheKey, {
+        at: Date.now(),
+        options: result.options,
+      });
+    }
+    return result.options;
+  }
 }
+
+const CONFIG_OPTIONS_CACHE_MS = 10 * 60 * 1000;
 
 export function agentEventToMarkdown(event: AgentEvent): string {
   switch (event.type) {

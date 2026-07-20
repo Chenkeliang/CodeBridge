@@ -90,6 +90,26 @@ export type ClaudePermissionMode =
 export type BackendTransport = "acp" | "cli";
 export type AcpPermissionPolicy = "auto_allow" | "prompt_deny";
 
+/** ACP 适配器 advertise 的会话配置项里的一个可选值（select 分组已展平） */
+export interface BackendConfigOptionValue {
+  value: string;
+  name?: string;
+  description?: string;
+}
+
+/**
+ * ACP 适配器 advertise 的一个会话配置项（session/new 响应 configOptions 的精简形态）。
+ * category: "model" | "thought_level" | "mode" 等；/model 动态列表取 category === "model"。
+ */
+export interface BackendConfigOption {
+  id: string;
+  name: string;
+  category?: string;
+  /** 适配器当前默认选中的值 */
+  currentValue?: string;
+  values: BackendConfigOptionValue[];
+}
+
 export interface BackendProfile {
   type: "cursor-cli" | "claude-code" | "codex" | "generic-spawn";
   /** Agent 传输：acp（默认）或 cli（stream-json spawn 回退） */

@@ -1,3 +1,5 @@
+import type { BackendConfigOption } from "@feishu-code-bridge/core";
+
 /** Per-backend model hints for `/model` (not exhaustive; CLI aliases change). */
 export const MODEL_HINTS: Record<string, string[]> = {
   cursor: [
@@ -14,10 +16,10 @@ export const MODEL_HINTS: Record<string, string[]> = {
     "（别名指向当前最新版本；完整列表：`claude --help`）",
   ],
   codex: [
+    "gpt-5.5",
+    "gpt-5.4",
     "gpt-5.3-codex",
-    "gpt-5.3-codex-high",
-    "gpt-5.2-codex",
-    "（或 `~/.codex/config.toml` / `codex exec -m` 支持的名称）",
+    "（以 `/model` 动态列表为准；OpenAI 会上下架模型名）",
   ],
 };
 
@@ -38,6 +40,30 @@ export function backendSupportsEffort(backendId: string): boolean {
 
 export function backendSupportsPermissionMode(backendId: string): boolean {
   return backendId === "claude";
+}
+
+/**
+ * /model 动态列表：用 ACP 适配器 advertise 的真实模型选项渲染（value 才是 /model 接受的名字；
+ * 有别名/展示名和描述就带上）。静态 MODEL_HINTS 仅在动态拉取失败时兜底。
+ */
+export function formatDynamicModelHelp(
+  backendId: string,
+  option: BackendConfigOption,
+  current?: string,
+): string {
+  const lines = [`**${backendId}** 可用 model（适配器实时列表）：`];
+  for (const v of option.values) {
+    const label =
+      v.name && v.name.toLowerCase() !== v.value.toLowerCase()
+        ? `\`${v.value}\` — ${v.name}`
+        : `\`${v.value}\``;
+    const desc = v.description ? `：${v.description}` : "";
+    const isDefault = option.currentValue === v.value ? "（适配器默认）" : "";
+    lines.push(`- ${label}${isDefault}${desc}`);
+  }
+  if (current) lines.push("", `当前会话: \`${current}\``);
+  lines.push("", "用法: `/model <名称>` | `/model default` 恢复配置默认");
+  return lines.join("\n");
 }
 
 export function formatModelHelp(backendId: string, current?: string): string {

@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import type { AppConfig } from "@feishu-code-bridge/core";
+import type { AppConfig, BackendConfigOption } from "@feishu-code-bridge/core";
 import type { CliSessionSummary } from "@feishu-code-bridge/runner-client";
 import {
   formatFullCommandHelp,
@@ -9,6 +9,7 @@ import {
   EFFORT_LEVELS,
   backendSupportsEffort,
   backendSupportsPermissionMode,
+  formatDynamicModelHelp,
   formatEffortHelp,
   formatModelHelp,
   formatPermissionHelp,
@@ -33,6 +34,8 @@ export interface SlashContext {
     options?: { all?: boolean; limit?: number },
   ) => Promise<CliSessionSummary[]>;
   bindCliSession?: (sessionId: string) => void;
+  /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（含真实模型列表） */
+  listConfigOptions?: () => Promise<BackendConfigOption[]>;
   cancelActiveRun?: () => Promise<boolean>;
   hasActiveRun?: () => boolean;
   activeRunElapsedMs?: () => number | undefined;
@@ -361,7 +364,10 @@ function formatGroupedSessionLines(sessions: CliSessionSummary[]): string[] {
   return lines;
 }
 
-function handleModel(ctx: SlashContext, arg: string): SlashResult {
+async function handleModel(
+  ctx: SlashContext,
+  arg: string,
+): Promise<SlashResult> {
   const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
   const backendId = binding.backendId;
   const profile = ctx.config.backends[backendId];
@@ -372,6 +378,21 @@ function handleModel(ctx: SlashContext, arg: string): SlashResult {
       ctx.topicId,
       ctx.config,
     );
+    // 优先动态拉取适配器 advertise 的真实模型列表（ACP）；失败/为空回退静态提示
+    if (ctx.listConfigOptions) {
+      try {
+        const options = await ctx.listConfigOptions();
+        const model = options.find((o) => o.category === "model");
+        if (model && model.values.length > 0) {
+          return {
+            type: "reply",
+            text: formatDynamicModelHelp(backendId, model, runOpts.model),
+          };
+        }
+      } catch {
+        // 适配器未就绪等，回退静态提示
+      }
+    }
     return {
       type: "reply",
       text: formatModelHelp(backendId, runOpts.model),

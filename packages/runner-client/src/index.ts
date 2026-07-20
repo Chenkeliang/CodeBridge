@@ -1,4 +1,8 @@
-import type { AgentEvent, RunRequest } from "@feishu-code-bridge/core";
+import type {
+  AgentEvent,
+  BackendConfigOption,
+  RunRequest,
+} from "@feishu-code-bridge/core";
 import type { CliSessionSummary } from "@feishu-code-bridge/backends";
 
 export interface RunnerClientOptions {
@@ -39,6 +43,23 @@ export class RunnerClient {
     }
     return res.json() as Promise<{
       sessions: CliSessionSummary[];
+      error?: string;
+    }>;
+  }
+
+  async listConfigOptions(
+    backend: string,
+    cwd: string,
+    options?: { transport?: RunRequest["transport"] },
+  ): Promise<{ options: BackendConfigOption[]; error?: string }> {
+    const params = new URLSearchParams({ backend, cwd });
+    if (options?.transport) params.set("transport", options.transport);
+    const res = await this.fetch(`/config-options?${params}`);
+    if (!res.ok) {
+      throw new Error(`Runner error: ${res.status} ${await res.text()}`);
+    }
+    return res.json() as Promise<{
+      options: BackendConfigOption[];
       error?: string;
     }>;
   }

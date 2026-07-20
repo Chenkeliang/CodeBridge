@@ -3,6 +3,7 @@ import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import type { RunContext } from "@feishu-code-bridge/core";
 import {
   applySessionConfigOptions,
+  mapSessionConfigOptions,
   matchConfigValue,
   resolveDesiredConfig,
 } from "./acp/acp-config-options.js";
@@ -213,5 +214,53 @@ describe("applySessionConfigOptions", () => {
       model: "sonnet",
     });
     expect(warnings.some((w) => w.includes("失败"))).toBe(true);
+  });
+});
+
+describe("mapSessionConfigOptions", () => {
+  it("映射 select 选项为共享精简形态（含 currentValue/描述）", () => {
+    const mapped = mapSessionConfigOptions([modelOption, effortOption]);
+    expect(mapped).toHaveLength(2);
+    expect(mapped[0]).toMatchObject({
+      id: "model",
+      category: "model",
+      currentValue: "claude-fable-5[1m]",
+    });
+    expect(mapped[0]!.values.map((v) => v.value)).toContain("sonnet");
+  });
+
+  it("展平分组 select", () => {
+    const grouped = {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "a",
+      options: [
+        {
+          group: "g1",
+          name: "Group 1",
+          options: [
+            { value: "a", name: "A" },
+            { value: "b", name: "B", description: "desc-b" },
+          ],
+        },
+      ],
+    } as unknown as Parameters<typeof mapSessionConfigOptions>[0][number];
+    const mapped = mapSessionConfigOptions([grouped]);
+    expect(mapped[0]!.values).toEqual([
+      { value: "a", name: "A", description: undefined },
+      { value: "b", name: "B", description: "desc-b" },
+    ]);
+  });
+
+  it("跳过 boolean 型选项", () => {
+    const bool = {
+      id: "x",
+      name: "X",
+      type: "boolean",
+      currentValue: true,
+    } as unknown as Parameters<typeof mapSessionConfigOptions>[0][number];
+    expect(mapSessionConfigOptions([bool])).toEqual([]);
   });
 });
