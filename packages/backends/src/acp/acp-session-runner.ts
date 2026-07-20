@@ -162,7 +162,7 @@ export async function* runActivePromptTurn(
   let lastMarkerValue: number | undefined;
   let lastMarkerCheckAt = 0;
   const DRAIN_MARKER_INTERVAL_MS = 500;
-  const mainDeadline = promptStartedAt + promptTimeoutMs;
+  let mainDeadline = promptStartedAt + promptTimeoutMs;
   // 必须跨迭代复用同一个 nextUpdate()：每次调用都会在 SDK AsyncQueue 里注册一个
   // waiter，被 race 抛弃的 waiter 仍排在 FIFO 前面，会把后续事件全部吞掉。
   let pending: Promise<ActiveSessionMessage> | null = null;
@@ -173,6 +173,10 @@ export async function* runActivePromptTurn(
       if (isActivityEvent(oob)) {
         sawOutput = true;
         lastActivityAt = Date.now();
+      }
+      if (oob.type === "permission_request") {
+        // 等人回复不该撞总超时：至少留出比权限超时（8 分钟）更长的余量
+        mainDeadline = Math.max(mainDeadline, Date.now() + 10 * 60 * 1000);
       }
       yield oob;
     }

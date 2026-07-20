@@ -270,6 +270,34 @@ describe("runActivePromptTurn", () => {
     );
   });
 
+  it("yields out-of-band events (permission_request) and counts them as activity", async () => {
+    const queue = new FakeUpdateQueue();
+    const oob: AgentEvent[] = [
+      { type: "permission_request", requestId: "r1", title: "Bash: rm x" },
+    ];
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      // 无输出超时设很短：若 permission_request 不算活动，会先炸 no-output fatal
+      noOutputTimeoutMs: 150,
+      pollOutOfBandEvents: () => oob.splice(0),
+    });
+    const done = collect(gen);
+    await sleep(400); // 远超 noOutputTimeoutMs，靠 oob 活动撑住
+    queue.enqueue(textChunk("ok"));
+    queue.enqueue(stopMessage);
+    const events = await done;
+    expect(events[0]).toEqual({
+      type: "permission_request",
+      requestId: "r1",
+      title: "Bash: rm x",
+    });
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events.some((e) => e.type === "text_delta" && e.text === "ok")).toBe(
+      true,
+    );
+  });
+
   it("disk-activity marker growth keeps drain alive while the wire is silent", async () => {
     let marker = 100;
     const queue = new FakeUpdateQueue();

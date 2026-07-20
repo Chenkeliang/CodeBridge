@@ -69,10 +69,13 @@ export class RunnerHost {
     postStopMaxMs?: number;
   };
   private readonly fcbBinDir: Promise<string | undefined>;
-  /** prompt_feishu：每个 run 最多一个挂起的权限请求（claude 请求权限时会阻塞该工具） */
+  /**
+   * prompt_feishu：每个 run 的挂起权限请求队列（FIFO）。claude 通常一次只挂一个，
+   * 但并行工具可能并发请求——用队列而非单槽，避免互相覆盖、/approve 只回给最早的那个。
+   */
   private readonly pendingPermissions = new Map<
     string,
-    { requestId: string; resolve: (approve: boolean) => void }
+    Array<{ requestId: string; resolve: (approve: boolean) => void }>
   >();
 
   constructor(private readonly options: RunnerHostOptions) {
@@ -271,13 +274,20 @@ export class RunnerHost {
 
     // prompt_feishu 权限模式：权限请求经带外队列进 SSE，等 /approve /deny 或超时拒绝
     const oobEvents: AgentEvent[] = [];
+    const removePending = (requestId: string) => {
+      const queue = this.pendingPermissions.get(runId);
+      if (!queue) return;
+      const idx = queue.findIndex((p) => p.requestId === requestId);
+      if (idx >= 0) queue.splice(idx, 1);
+      if (queue.length === 0) this.pendingPermissions.delete(runId);
+    };
     const requestDecision =
       this.acpPermissionPolicy === "prompt_feishu"
         ? (info: { title: string }) =>
             new Promise<boolean>((resolve) => {
               const requestId = crypto.randomUUID();
               const timer = setTimeout(() => {
-                this.pendingPermissions.delete(runId);
+                removePending(requestId); // 只摘自己，不动同 run 的其它挂起请求
                 oobEvents.push({
                   type: "error",
                   message: `权限请求「${info.title}」超过 ${Math.round(PERMISSION_PROMPT_TIMEOUT_MS / 60000)} 分钟未回复，已自动拒绝。`,
@@ -286,14 +296,16 @@ export class RunnerHost {
                 resolve(false);
               }, PERMISSION_PROMPT_TIMEOUT_MS);
               timer.unref();
-              this.pendingPermissions.set(runId, {
+              const queue = this.pendingPermissions.get(runId) ?? [];
+              queue.push({
                 requestId,
                 resolve: (approve: boolean) => {
                   clearTimeout(timer);
-                  this.pendingPermissions.delete(runId);
+                  removePending(requestId);
                   resolve(approve);
                 },
               });
+              this.pendingPermissions.set(runId, queue);
               oobEvents.push({
                 type: "permission_request",
                 requestId,
@@ -326,16 +338,19 @@ export class RunnerHost {
       };
       exitCode = 1;
     } finally {
-      // run 结束仍挂着的权限请求：解除阻塞（按拒绝处理），避免 handler 悬挂
-      this.pendingPermissions.get(runId)?.resolve(false);
+      // run 结束仍挂着的权限请求：全部解除阻塞（按拒绝处理），避免 handler 悬挂
+      for (const pending of [...(this.pendingPermissions.get(runId) ?? [])]) {
+        pending.resolve(false);
+      }
+      this.pendingPermissions.delete(runId);
       this.active.delete(runId);
       yield { type: "done", exitCode };
     }
   }
 
-  /** /approve /deny：回应当前 run 挂起的权限请求 */
+  /** /approve /deny：回应当前 run 最早挂起的权限请求（FIFO） */
   resolvePermission(runId: string, approve: boolean): boolean {
-    const pending = this.pendingPermissions.get(runId);
+    const pending = this.pendingPermissions.get(runId)?.[0];
     if (!pending) return false;
     pending.resolve(approve);
     return true;

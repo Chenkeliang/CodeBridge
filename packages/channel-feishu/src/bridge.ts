@@ -88,11 +88,13 @@ export class FeishuBridge {
   private config: AppConfig;
   /** 中断同会话内仍在进行的流式回复（斜杠命令需抢占） */
   private readonly chatStreamAbort = new Map<string, AbortController>();
-  /** 忙时排队的消息（chatKey → 待发文本 + 最后一条消息作回复锚点），本轮结束自动派发 */
+  /** 忙时排队的消息（chatKey → 待发文本 + 累积附件 + 最后一条消息作回复锚点），本轮结束自动派发 */
   private readonly pendingPrompts = new Map<
     string,
-    { texts: string[]; lastMsg: FeishuMessage }
+    { texts: string[]; attachments: RunAttachment[]; lastMsg: FeishuMessage }
   >();
+  /** 正在派发（run 尚未在 orchestrator 注册）的 chatKey：堵住 busy-guard 的注册空窗 */
+  private readonly dispatching = new Set<string>();
   /** chat|topic → 最近一条入站消息 id（出站消息回贴话题用） */
   private readonly lastInboundMessageId = new Map<string, string>();
   /** 普通群回复串 → 会话 topic 映射 */
@@ -326,6 +328,13 @@ export class FeishuBridge {
       msg.messageId,
     );
 
+    // /stop /cancel：必须在 handler await 之前「同步」清空排队——handler 里的 abort 会让
+    // 正在跑的 run 就地收尾并触发 finally 的自动派发，清晚了排队消息会抢在清空前被发出去。
+    const inboundCmd = msg.content.trim().split(/\s+/)[0]?.toLowerCase();
+    if (inboundCmd === "/stop" || inboundCmd === "/cancel") {
+      this.pendingPrompts.delete(this.chatKey(msg.chatId, topicId));
+    }
+
     const slash = await handleSlashCommand({
       chatId: msg.chatId,
       topicId,
@@ -357,8 +366,7 @@ export class FeishuBridge {
       // 之前这里无差别 abort + cancelActiveForChat，会把长任务连同一次 /status 查询一起杀掉。
       if (cmd === "/stop" || cmd === "/cancel") {
         this.abortChatStream(msg.chatId, topicId);
-        // 用户主动中断 = 排队的后续消息也一并作废
-        this.pendingPrompts.delete(this.chatKey(msg.chatId, topicId));
+        // 排队清空已在 handler await 之前同步完成（见 dispatch 前置逻辑）
       }
       try {
         await this.sendMarkdown(msg.chatId, slash.text, msg.messageId);
@@ -408,27 +416,40 @@ export class FeishuBridge {
 
     // 已有任务在跑时，新消息不打断——排队暂存，本轮结束后自动作为下一条 prompt 发送
     //（借鉴 codeg 的 pending_prompt）。/stop 中断当前任务并清空队列。
+    const busyKey = this.chatKey(msg.chatId, topicId);
     const activeElapsedMs = this.orchestrator.activeRunElapsedMs(
       msg.chatId,
       topicId,
     );
-    if (activeElapsedMs !== undefined) {
-      const key = this.chatKey(msg.chatId, topicId);
-      const entry = this.pendingPrompts.get(key) ?? { texts: [], lastMsg: msg };
+    // dispatching 覆盖「已派发但 run 尚未在 orchestrator 注册」的空窗，否则此刻来的消息
+    // 会绕过排队直接起第二个 run、互相 cancel
+    if (activeElapsedMs !== undefined || this.dispatching.has(busyKey)) {
+      const entry =
+        this.pendingPrompts.get(busyKey) ??
+        ({ texts: [], attachments: [], lastMsg: msg } as {
+          texts: string[];
+          attachments: RunAttachment[];
+          lastMsg: FeishuMessage;
+        });
+      const elapsedText =
+        activeElapsedMs !== undefined
+          ? `已运行 ${formatElapsed(activeElapsedMs)}`
+          : "刚启动";
       if (entry.texts.length >= PENDING_PROMPTS_MAX) {
         await this.sendMarkdown(
           msg.chatId,
-          `⏳ 排队消息已达 ${PENDING_PROMPTS_MAX} 条上限，本条未入队；请等当前任务（已运行 ${formatElapsed(activeElapsedMs)}）结束，或发送 \`/stop\` 中断。`,
+          `⏳ 排队消息已达 ${PENDING_PROMPTS_MAX} 条上限，本条未入队；请等当前任务（${elapsedText}）结束，或发送 \`/stop\` 中断。`,
           msg.messageId,
         ).catch(() => {});
         return;
       }
       entry.texts.push(agentPrompt);
+      entry.attachments.push(...(msg.attachments ?? []));
       entry.lastMsg = msg;
-      this.pendingPrompts.set(key, entry);
+      this.pendingPrompts.set(busyKey, entry);
       await this.sendMarkdown(
         msg.chatId,
-        `⏳ 当前任务进行中（已运行 ${formatElapsed(activeElapsedMs)}），消息已排队（第 ${entry.texts.length} 条），本轮结束后自动发送；\`/status\` 查进度，\`/stop\` 中断并清空队列。`,
+        `⏳ 当前任务进行中（${elapsedText}），消息已排队（第 ${entry.texts.length} 条），本轮结束后自动发送；\`/status\` 查进度，\`/stop\` 中断并清空队列。`,
         msg.messageId,
       ).catch(() => {});
       return;
@@ -443,6 +464,8 @@ export class FeishuBridge {
     agentPrompt: string,
     topicId: string | undefined,
   ): Promise<void> {
+    // 首个同步语句就占位：busy-guard 从此刻起把本会话视为忙，堵住注册空窗
+    this.dispatching.add(this.chatKey(msg.chatId, topicId));
     // 话题根消息 + 引用回复注入 prompt；拉取失败降级，不阻断
     let contextPrefix: string | undefined;
     if (this.channel) {
@@ -479,6 +502,8 @@ export class FeishuBridge {
         });
       })
       .finally(() => {
+        // 同一同步帧内完成「摘牌 → 派发下一条（重新挂牌）」，busy 判定无空隙
+        this.dispatching.delete(this.chatKey(msg.chatId, topicId));
         this.flushPendingPrompts(msg.chatId, topicId);
       });
   }
@@ -493,12 +518,17 @@ export class FeishuBridge {
     }
     this.pendingPrompts.delete(key);
     const combined = entry.texts.join("\n\n");
+    // 排队期间收到的全部附件（如图片）合并带上，别只剩最后一条消息的
+    const merged: FeishuMessage = {
+      ...entry.lastMsg,
+      attachments: entry.attachments.length ? entry.attachments : undefined,
+    };
     void this.sendMarkdown(
       chatId,
       `▶️ 上一任务已结束，自动发送排队的 ${entry.texts.length} 条消息`,
       entry.lastMsg.messageId,
     ).catch(() => {});
-    void this.dispatchToAgent(entry.lastMsg, combined, topicId);
+    void this.dispatchToAgent(merged, combined, topicId);
   }
 
   private async streamAgentReply(
