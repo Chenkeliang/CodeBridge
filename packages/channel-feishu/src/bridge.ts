@@ -339,6 +339,8 @@ export class FeishuBridge {
         this.orchestrator.bindCliSession(msg.chatId, topicId, sessionId),
       listConfigOptions: () =>
         this.orchestrator.listConfigOptions(msg.chatId, topicId),
+      resolvePermission: (approve) =>
+        this.orchestrator.resolveActivePermission(msg.chatId, topicId, approve),
       cancelActiveRun: () =>
         this.orchestrator.cancelActiveForChat(msg.chatId, topicId),
       hasActiveRun: () =>
@@ -534,6 +536,15 @@ export class FeishuBridge {
           msg.attachments,
         )) {
           if (streamAbort.signal.aborted) return;
+          if (event.type === "permission_request") {
+            // 独立消息比卡片内文字更醒目；等待期 runner 会在超时后自动拒绝
+            void this.sendMarkdown(
+              msg.chatId,
+              `🔐 Agent 请求权限：**${event.title}**\n回复 \`/approve\` 允许，\`/deny\` 拒绝（8 分钟未回复自动拒绝）。`,
+              msg.messageId,
+            ).catch(() => {});
+            continue;
+          }
           const part = present(event);
           if (!part) continue;
           if (part.zone === "thinking") {

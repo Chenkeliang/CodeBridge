@@ -10,6 +10,21 @@ import type { AcpPermissionPolicy } from "@feishu-code-bridge/core";
 
 export interface HeadlessClientOptions {
   permissionPolicy: AcpPermissionPolicy;
+  /**
+   * prompt_feishu 模式的决策等待器：把权限请求交给外界（飞书 /approve /deny），
+   * resolve true=允许 false=拒绝（含超时）。未提供时 prompt_feishu 退化为拒绝。
+   */
+  requestDecision?: (info: { title: string }) => Promise<boolean>;
+}
+
+/** 从权限请求里提取给用户看的操作描述 */
+export function permissionRequestTitle(
+  params: RequestPermissionRequest,
+): string {
+  const toolCall = params.toolCall as
+    | { title?: string; kind?: string }
+    | undefined;
+  return toolCall?.title || toolCall?.kind || "工具操作";
 }
 
 export function pickAllowOption(
@@ -37,9 +52,20 @@ export function createHeadlessClientApp(
   options: HeadlessClientOptions,
 ): ClientApp {
   return client({ name: "feishu-code-bridge" })
-    .onRequest(methods.client.session.requestPermission, (ctx) => {
+    .onRequest(methods.client.session.requestPermission, async (ctx) => {
       if (options.permissionPolicy === "auto_allow") {
         return pickAllowOption(ctx.params);
+      }
+      if (
+        options.permissionPolicy === "prompt_feishu" &&
+        options.requestDecision
+      ) {
+        const approved = await options.requestDecision({
+          title: permissionRequestTitle(ctx.params),
+        });
+        return approved
+          ? pickAllowOption(ctx.params)
+          : { outcome: { outcome: "cancelled" } };
       }
       return { outcome: { outcome: "cancelled" } };
     });

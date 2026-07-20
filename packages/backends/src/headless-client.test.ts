@@ -3,7 +3,10 @@ import type {
   PermissionOption,
   RequestPermissionRequest,
 } from "@agentclientprotocol/sdk";
-import { pickAllowOption } from "./acp/headless-client.js";
+import {
+  permissionRequestTitle,
+  pickAllowOption,
+} from "./acp/headless-client.js";
 
 function makeRequest(
   options: PermissionOption[],
@@ -61,5 +64,30 @@ describe("pickAllowOption", () => {
     const result = pickAllowOption(makeRequest([]));
 
     expect(result).toEqual({ outcome: { outcome: "cancelled" } });
+  });
+});
+
+describe("permissionRequestTitle", () => {
+  it("prefers toolCall.title, falls back to kind then generic", () => {
+    expect(
+      permissionRequestTitle({
+        sessionId: "s",
+        toolCall: { toolCallId: "c", title: "Bash: rm -rf build" },
+        options: [],
+      } as unknown as RequestPermissionRequest),
+    ).toBe("Bash: rm -rf build");
+    expect(
+      permissionRequestTitle({
+        sessionId: "s",
+        toolCall: { toolCallId: "c", kind: "execute" },
+        options: [],
+      } as unknown as RequestPermissionRequest),
+    ).toBe("execute");
+    expect(
+      permissionRequestTitle({
+        sessionId: "s",
+        options: [],
+      } as unknown as RequestPermissionRequest),
+    ).toBe("工具操作");
   });
 });

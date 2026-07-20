@@ -68,6 +68,18 @@ export class RunnerClient {
     await this.fetch(`/runs/${runId}/cancel`, { method: "POST" });
   }
 
+  /** prompt_feishu：回应 run 挂起的权限请求（/approve /deny） */
+  async resolvePermission(runId: string, approve: boolean): Promise<boolean> {
+    const res = await this.fetch(`/runs/${runId}/permission`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approve }),
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { resolved?: boolean };
+    return body.resolved === true;
+  }
+
   async *run(
     request: RunRequest,
     options?: { signal?: AbortSignal },

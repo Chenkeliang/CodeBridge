@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -40,6 +41,9 @@ interface ActiveRun {
   cancel: () => void;
 }
 
+/** prompt_feishu：权限请求等待用户回复的超时（到点自动拒绝）。需小于 noOutput 超时。 */
+const PERMISSION_PROMPT_TIMEOUT_MS = 8 * 60 * 1000;
+
 function resolveDoctorCwd(config: AppConfig): string {
   const home = os.homedir();
   const raw =
@@ -65,6 +69,11 @@ export class RunnerHost {
     postStopMaxMs?: number;
   };
   private readonly fcbBinDir: Promise<string | undefined>;
+  /** prompt_feishu：每个 run 最多一个挂起的权限请求（claude 请求权限时会阻塞该工具） */
+  private readonly pendingPermissions = new Map<
+    string,
+    { requestId: string; resolve: (approve: boolean) => void }
+  >();
 
   constructor(private readonly options: RunnerHostOptions) {
     this.maxConcurrent = options.maxConcurrentRuns ?? 4;
@@ -260,6 +269,39 @@ export class RunnerHost {
     };
     this.active.set(runId, activeRun);
 
+    // prompt_feishu 权限模式：权限请求经带外队列进 SSE，等 /approve /deny 或超时拒绝
+    const oobEvents: AgentEvent[] = [];
+    const requestDecision =
+      this.acpPermissionPolicy === "prompt_feishu"
+        ? (info: { title: string }) =>
+            new Promise<boolean>((resolve) => {
+              const requestId = crypto.randomUUID();
+              const timer = setTimeout(() => {
+                this.pendingPermissions.delete(runId);
+                oobEvents.push({
+                  type: "error",
+                  message: `权限请求「${info.title}」超过 ${Math.round(PERMISSION_PROMPT_TIMEOUT_MS / 60000)} 分钟未回复，已自动拒绝。`,
+                  fatal: false,
+                });
+                resolve(false);
+              }, PERMISSION_PROMPT_TIMEOUT_MS);
+              timer.unref();
+              this.pendingPermissions.set(runId, {
+                requestId,
+                resolve: (approve: boolean) => {
+                  clearTimeout(timer);
+                  this.pendingPermissions.delete(runId);
+                  resolve(approve);
+                },
+              });
+              oobEvents.push({
+                type: "permission_request",
+                requestId,
+                title: info.title,
+              });
+            })
+        : undefined;
+
     let exitCode = 0;
     try {
       for await (const event of runAcpSession(
@@ -268,6 +310,8 @@ export class RunnerHost {
           permissionPolicy: this.acpPermissionPolicy,
           isAborted: () => activeRun.aborted,
           ...this.acpRunOptions,
+          requestDecision,
+          pollOutOfBandEvents: () => oobEvents.splice(0),
         },
         handleRef,
       )) {
@@ -282,9 +326,19 @@ export class RunnerHost {
       };
       exitCode = 1;
     } finally {
+      // run 结束仍挂着的权限请求：解除阻塞（按拒绝处理），避免 handler 悬挂
+      this.pendingPermissions.get(runId)?.resolve(false);
       this.active.delete(runId);
       yield { type: "done", exitCode };
     }
+  }
+
+  /** /approve /deny：回应当前 run 挂起的权限请求 */
+  resolvePermission(runId: string, approve: boolean): boolean {
+    const pending = this.pendingPermissions.get(runId);
+    if (!pending) return false;
+    pending.resolve(approve);
+    return true;
   }
 
   private async *executeCliRun(
@@ -397,6 +451,17 @@ export function createRunnerApp(host: RunnerHost, token: string) {
   );
 
   app.get("/doctor", async (c) => c.json(await host.doctor()));
+
+  app.post("/runs/:id/permission", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      approve?: boolean;
+    };
+    if (typeof body.approve !== "boolean") {
+      return c.json({ error: "approve (boolean) is required" }, 400);
+    }
+    const resolved = host.resolvePermission(c.req.param("id"), body.approve);
+    return c.json({ resolved });
+  });
 
   app.post("/runs/:id/cancel", (c) => {
     const ok = host.cancel(c.req.param("id"));

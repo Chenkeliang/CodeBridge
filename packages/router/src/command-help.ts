@@ -7,6 +7,8 @@ export const SLASH_COMMANDS: CommandHelpItem[] = [
   { command: "/help", summary: "查看全部命令" },
   { command: "/menu", summary: "快捷命令面板（同 /help）" },
   { command: "/stop", summary: "停止当前正在执行的 Agent 任务" },
+  { command: "/approve", summary: "允许 Agent 挂起的权限请求（prompt_feishu 模式）" },
+  { command: "/deny", summary: "拒绝 Agent 挂起的权限请求" },
   { command: "/status", summary: "当前 backend / cwd / model" },
   { command: "/new", summary: "新建 CLI session" },
   { command: "/resume", summary: "列出本机 session" },

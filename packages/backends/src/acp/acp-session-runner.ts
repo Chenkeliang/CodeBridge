@@ -54,6 +54,13 @@ export interface AcpRunOptions {
    * 变化即视为后台仍在工作、刷新静默计时。wire 静默但磁盘在写时避免误切。
    */
   drainActivityMarker?: () => number | undefined;
+  /** prompt_feishu 权限模式：把权限请求交给外界决策（runner 的 broker 注入） */
+  requestDecision?: (info: { title: string }) => Promise<boolean>;
+  /**
+   * 带外事件源（可选）：每个轮询 tick 取一批插入事件流。权限请求这类发生在
+   * 连接回调里的事件没法直接 yield，经它汇入 SSE。
+   */
+  pollOutOfBandEvents?: () => AgentEvent[];
 }
 
 async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
@@ -109,7 +116,9 @@ function isActivityEvent(event: AgentEvent): boolean {
     event.type === "text_delta" ||
     event.type === "thought_delta" ||
     event.type === "tool_start" ||
-    event.type === "tool_end"
+    event.type === "tool_end" ||
+    // 等用户 /approve 期间 wire 必然静默，权限请求本身算活动，免得 watchdog 误杀
+    event.type === "permission_request"
   );
 }
 
@@ -159,6 +168,14 @@ export async function* runActivePromptTurn(
   let pending: Promise<ActiveSessionMessage> | null = null;
 
   while (!options.isAborted()) {
+    // 带外事件（如权限请求）：发生在连接回调里，经队列汇入本事件流
+    for (const oob of options.pollOutOfBandEvents?.() ?? []) {
+      if (isActivityEvent(oob)) {
+        sawOutput = true;
+        lastActivityAt = Date.now();
+      }
+      yield oob;
+    }
     if (phase === "main") {
       if (Date.now() > mainDeadline) {
         yield {
@@ -334,6 +351,7 @@ export async function* runAcpSession(
   try {
     const app = createHeadlessClientApp({
       permissionPolicy: options.permissionPolicy,
+      requestDecision: options.requestDecision,
     });
 
     const stream = childToStream(child);

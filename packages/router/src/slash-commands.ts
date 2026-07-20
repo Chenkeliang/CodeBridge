@@ -39,6 +39,8 @@ export interface SlashContext {
   cancelActiveRun?: () => Promise<boolean>;
   hasActiveRun?: () => boolean;
   activeRunElapsedMs?: () => number | undefined;
+  /** prompt_feishu：回应当前 run 挂起的权限请求（true=允许 false=拒绝） */
+  resolvePermission?: (approve: boolean) => Promise<boolean>;
 }
 
 export type SlashResult =
@@ -91,6 +93,23 @@ export async function handleSlashCommand(
             : "当前没有正在运行的任务。",
         };
       }
+
+    case "/approve":
+    case "/deny": {
+      if (!ctx.resolvePermission) {
+        return { type: "reply", text: "Runner 未就绪，无法回应权限请求。" };
+      }
+      const approve = lower === "/approve";
+      const resolved = await ctx.resolvePermission(approve);
+      return {
+        type: "reply",
+        text: resolved
+          ? approve
+            ? "✅ 已允许，任务继续。"
+            : "⛔ 已拒绝该操作，任务继续（agent 会收到拒绝结果）。"
+          : "当前没有等待回应的权限请求。",
+      };
+    }
 
     case "/resume":
       return handleResume(ctx, arg);

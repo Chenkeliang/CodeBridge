@@ -232,6 +232,17 @@ export class RunOrchestrator {
     this.router.bindCliSession(chatId, cliSessionId, runOpts.transport, topicId);
   }
 
+  /** prompt_feishu：把 /approve /deny 转给当前 run 挂起的权限请求 */
+  async resolveActivePermission(
+    chatId: string,
+    topicId: string | undefined,
+    approve: boolean,
+  ): Promise<boolean> {
+    const active = this.activeChatRuns.get(this.chatRunKey(chatId, topicId));
+    if (!active) return false;
+    return this.client.resolvePermission(active.runId, approve);
+  }
+
   /** /model 动态列表：适配器 advertise 的配置项，按 backend|cwd 缓存（拉一次要短暂 spawn 适配器） */
   private readonly configOptionsCache = new Map<
     string,

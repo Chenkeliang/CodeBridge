@@ -58,6 +58,8 @@ export type AgentEvent =
   | { type: "tool_end"; name: string; output?: unknown }
   | { type: "session"; sessionId: string }
   | { type: "error"; message: string; fatal?: boolean }
+  /** prompt_feishu 权限模式：agent 请求权限，等待用户 /approve 或 /deny */
+  | { type: "permission_request"; requestId: string; title: string }
   | { type: "done"; exitCode: number };
 
 export interface DoctorResult {
@@ -88,7 +90,11 @@ export type ClaudePermissionMode =
   | "plan";
 
 export type BackendTransport = "acp" | "cli";
-export type AcpPermissionPolicy = "auto_allow" | "prompt_deny";
+export type AcpPermissionPolicy =
+  | "auto_allow"
+  | "prompt_deny"
+  /** 危险操作在飞书里等 /approve；超时自动拒绝 */
+  | "prompt_feishu";
 
 /** ACP 适配器 advertise 的会话配置项里的一个可选值（select 分组已展平） */
 export interface BackendConfigOptionValue {

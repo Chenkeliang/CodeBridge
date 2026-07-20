@@ -73,8 +73,9 @@ export const ConfigSchema = z.object({
     .object({
       listen: z.string().default("127.0.0.1:19789"),
       maxConcurrentRuns: z.number().int().positive().default(4),
+      /** auto_allow=全放行；prompt_deny=一律拒绝；prompt_feishu=在飞书里等 /approve /deny（超时拒绝） */
       acpPermissionPolicy: z
-        .enum(["auto_allow", "prompt_deny"])
+        .enum(["auto_allow", "prompt_deny", "prompt_feishu"])
         .default("auto_allow"),
       /** 一轮无结束信号的总超时（ms），到点判 fatal */
       acpPromptTimeoutMs: z
