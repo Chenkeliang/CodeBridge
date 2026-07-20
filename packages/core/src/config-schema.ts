@@ -152,7 +152,7 @@ export function defaultConfig(): AppConfig {
         transport: "acp",
         command: "claude",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.55.0"],
+        acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.59.0"],
         model: "sonnet",
         effort: "medium",
         claudePermissionMode: "bypassPermissions",

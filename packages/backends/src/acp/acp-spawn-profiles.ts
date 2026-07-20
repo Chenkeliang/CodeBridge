@@ -9,7 +9,7 @@ const DEFAULTS: Record<BackendProfile["type"], AcpSpawnProfile> = {
   "cursor-cli": { command: "cursor-agent", args: ["acp"] },
   "claude-code": {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.55.0"],
+    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.59.0"],
   },
   codex: {
     command: "npx",
