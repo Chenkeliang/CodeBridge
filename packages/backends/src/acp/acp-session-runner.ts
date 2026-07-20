@@ -18,6 +18,7 @@ import type {
 import { mapSessionUpdate } from "./acp-event-mapper.js";
 import { openActiveSession } from "./acp-active-session.js";
 import { raceWithAbort } from "./acp-race.js";
+import { createClaudeSessionActivityMarker } from "./acp-claude-activity.js";
 import { createHeadlessClientApp } from "./headless-client.js";
 import { killProcessTree } from "./acp-kill.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
@@ -48,6 +49,11 @@ export interface AcpRunOptions {
   postStopMaxMs?: number;
   /** drain 总开关，默认 true */
   drainBackgroundWork?: boolean;
+  /**
+   * drain 磁盘活动标记（可选）：返回单调递增的数值（如会话文件合计字节数），
+   * 变化即视为后台仍在工作、刷新静默计时。wire 静默但磁盘在写时避免误切。
+   */
+  drainActivityMarker?: () => number | undefined;
 }
 
 async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
@@ -143,6 +149,10 @@ export async function* runActivePromptTurn(
   let drainStartAt = 0;
   let lastDrainActivityAt = 0;
   let drainConfirmed = false;
+  // 磁盘活动标记：节流读取（stat 很便宜但没必要每 40ms 一次）
+  let lastMarkerValue: number | undefined;
+  let lastMarkerCheckAt = 0;
+  const DRAIN_MARKER_INTERVAL_MS = 500;
   const mainDeadline = promptStartedAt + promptTimeoutMs;
   // 必须跨迭代复用同一个 nextUpdate()：每次调用都会在 SDK AsyncQueue 里注册一个
   // waiter，被 race 抛弃的 waiter 仍排在 FIFO 前面，会把后续事件全部吞掉。
@@ -186,6 +196,22 @@ export async function* runActivePromptTurn(
     } else {
       // drain 阶段：未确认前用 probe 短窗探后台；确认后用 quiet 长窗等静默；独立硬上限兜底。
       // stall/noOutput 这类主轮 watchdog 不进入 drain：drain 期的静默是预期的（如 sub-agent 跑 sleep）。
+      // 磁盘活动标记：后台子 agent 写盘但 wire 静默时（transcript 在长、事件没来），
+      // 标记增长同样算活动——既能在 probe 窗内确认后台，也能刷新 quiet 计时防误切。
+      if (
+        options.drainActivityMarker &&
+        Date.now() - lastMarkerCheckAt >= DRAIN_MARKER_INTERVAL_MS
+      ) {
+        lastMarkerCheckAt = Date.now();
+        const marker = options.drainActivityMarker();
+        if (marker !== undefined && marker !== lastMarkerValue) {
+          if (lastMarkerValue !== undefined) {
+            drainConfirmed = true;
+            lastDrainActivityAt = Date.now();
+          }
+          lastMarkerValue = marker;
+        }
+      }
       if (!drainConfirmed && Date.now() - drainStartAt >= postStopProbeMs) {
         break; // 探不到真实后台活动 → 本轮无后台，干净返回
       }
@@ -364,6 +390,12 @@ export async function* runAcpSession(
     yield* runActivePromptTurn(active, blocks, {
       ...options,
       readStderr: () => stderr,
+      // claude 的后台子 agent 写盘不走 wire，用会话文件增长作 drain 的补充活动信号
+      drainActivityMarker:
+        options.drainActivityMarker ??
+        (ctx.backendConfig.type === "claude-code"
+          ? createClaudeSessionActivityMarker(ctx.cwd, sessionId)
+          : undefined),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

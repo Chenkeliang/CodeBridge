@@ -270,6 +270,57 @@ describe("runActivePromptTurn", () => {
     );
   });
 
+  it("disk-activity marker growth keeps drain alive while the wire is silent", async () => {
+    let marker = 100;
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      postStopProbeMs: 5_000, // probe 不参与本用例
+      postStopQuietMs: 900,
+      postStopMaxMs: 60_000,
+      drainActivityMarker: () => marker,
+    });
+    const done = collect(gen);
+
+    queue.enqueue(toolCall);
+    await sleep(20);
+    queue.enqueue(stopMessage); // → drain；首读只记基线
+    // wire 全程静默，但磁盘每 600ms 在长（< quiet 900ms 就刷新一次）
+    const grow = setInterval(() => {
+      marker += 50;
+    }, 600);
+    await sleep(2200); // 若磁盘增长不算活动，quiet 900ms 早就到点了
+    clearInterval(grow);
+    queue.enqueue(textChunk("late bg result")); // 后台最终结果此刻才走 wire
+    const events = await done;
+    expect(
+      events.some((e) => e.type === "text_delta" && e.text === "late bg result"),
+    ).toBe(true);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("unchanged disk marker does not keep drain alive (quiet expires normally)", async () => {
+    const queue = new FakeUpdateQueue();
+    const start = Date.now();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      postStopProbeMs: 300,
+      postStopQuietMs: 5_000,
+      postStopMaxMs: 60_000,
+      drainActivityMarker: () => 42, // 恒定：不该确认 drain、也不该刷新
+    });
+    const done = collect(gen);
+    queue.enqueue(toolCall);
+    await sleep(20);
+    queue.enqueue(stopMessage);
+    const events = await done;
+    // probe 300ms 到点干净返回，恒定 marker 没把它拖成 5s quiet
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
   it("keeps draining when in-progress tool_call_update pings arrive (refreshes quiet)", async () => {
     const queue = new FakeUpdateQueue();
     const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
