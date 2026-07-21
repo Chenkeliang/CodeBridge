@@ -77,6 +77,11 @@ export interface AcpRunOptions {
    * waiter 无法注销，被抛弃的 waiter 会吞掉下一条消息，必须原样接力。
    */
   updateCarrier?: { pending: Promise<ActiveSessionMessage> | null };
+  /**
+   * 本轮结束后资源不可入池的信号（如 drain 硬上限放弃了仍在跑的后台任务）：
+   * fatal 标志驱动退出码/用户提示，不能复用它表达“别复用这个进程”。
+   */
+  markUnpoolable?: () => void;
 }
 
 async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
@@ -155,8 +160,11 @@ export async function* runActivePromptTurn(
 
   // 池复用：发新 prompt 之前先排干队列里已排队的消息——上一轮 drain 退出后仍到达的
   // 后台产出（内容合法，照常 yield）与可能残留的陈旧 stop（丢弃，否则会被误判为新轮结束）。
+  // 有总时限：残余后台若持续以 <15ms 间隔产出，无上限的排干会把新 prompt 无限推迟、
+  // 且外部 /stop 也打不断（实测复现过）。到时限就带着残余进主循环，主循环本就能消化。
   if (options.updateCarrier) {
-    for (;;) {
+    const preDrainDeadline = Date.now() + 1_500;
+    while (!options.isAborted() && Date.now() < preDrainDeadline) {
       carrier.pending ??= active.nextUpdate();
       const got = await Promise.race([
         carrier.pending.then(
@@ -175,6 +183,7 @@ export async function* runActivePromptTurn(
       }
       // kind === "stop"：陈旧的上一轮结束信号，丢弃
     }
+    if (options.isAborted()) return;
   }
 
   void active.prompt(blocks);
@@ -282,6 +291,8 @@ export async function* runActivePromptTurn(
         break; // 后台真正静默 → 结束
       }
       if (Date.now() - drainStartAt >= postStopMaxMs) {
+        // 放弃仍在跑的后台任务：进程不可入池（否则失控任务借池续命，文案也成谎话）
+        options.markUnpoolable?.();
         yield {
           type: "error",
           message: withStderr(
@@ -298,11 +309,20 @@ export async function* runActivePromptTurn(
     // waiter，被 race 抛弃的 waiter 仍排在 FIFO 前面，会把后续事件全部吞掉。
     carrier.pending ??= active.nextUpdate();
     const next = await Promise.race([
-      carrier.pending.then((message) => ({ message })),
+      carrier.pending.then(
+        (message) => ({ message }) as const,
+        (err) => {
+          // /stop 拆资源会同步 fail 队列，rejection 必然抢在 isAborted 轮询前；
+          // 已中止时按干净退出处理，不把 dispose 噪音当成 fatal 错误往上抛。
+          if (options.isAborted()) return "aborted" as const;
+          throw err;
+        },
+      ),
       waitMs(40, options.isAborted).then(() => null),
     ]);
     if (!next) continue;
     carrier.pending = null;
+    if (next === "aborted") break;
 
     if (next.message.kind === "session_update") {
       const update = next.message.update;
@@ -488,6 +508,8 @@ export async function* runAcpSession(
 
   // healthy 只在轮子完整走完且无 fatal/abort 时为真；其余一律拆除（不归还池）
   let healthy = false;
+  // drain 硬上限等路径会标记本轮资源不可入池（进程还活着但已不可信）
+  let poolable = true;
   let resumeFallbackReason: string | undefined;
 
   try {
@@ -507,8 +529,16 @@ export async function* runAcpSession(
         void r.connection.agent
           .notify(methods.agent.session.cancel, { sessionId: r.sessionId })
           .catch(() => {});
-        // 中断即弃进程（含池条目语义：本轮资源已检出，不会再归还）
-        teardownResources(r);
+        // 只杀进程，不在此处 dispose/close：同步 fail 队列会抢在 isAborted 轮询前
+        // 把循环炸成伪 fatal（"Active session disposed"）。dispose/close 交给 finally
+        // 的 teardown（本轮已中止，healthy=false 必走拆除）。
+        killProcessTree(r.child, "SIGTERM");
+        const child = r.child;
+        setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            killProcessTree(child, "SIGKILL");
+          }
+        }, 2000).unref();
       },
     };
 
@@ -541,6 +571,9 @@ export async function* runAcpSession(
     let sawFatal = false;
     for await (const event of runActivePromptTurn(r.active, blocks, {
       ...options,
+      markUnpoolable: () => {
+        poolable = false;
+      },
       readStderr: r.readStderr,
       // 池模式跨轮接力 pending waiter；复用轮先排干队列残留
       updateCarrier: pool?.enabled ? r.carrier : undefined,
@@ -570,7 +603,7 @@ export async function* runAcpSession(
     if (resources) {
       // 防跨轮死闭包：轮末即解绑，池空闲期的权限请求直接按拒绝处理
       resources.runtime.requestDecision = undefined;
-      if (healthy && pool?.enabled) {
+      if (healthy && poolable && pool?.enabled) {
         pool.release(resources);
       } else {
         teardownResources(resources);

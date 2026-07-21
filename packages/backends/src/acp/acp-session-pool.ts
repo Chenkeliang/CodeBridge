@@ -47,8 +47,15 @@ export function resourcesAlive(r: AcpSessionResources): boolean {
   return r.child.exitCode === null && r.child.signalCode === null;
 }
 
-/** 完整拆除一个会话：dispose 路由、关连接、杀整棵进程树（2s 后 SIGKILL 兜底） */
-export function teardownResources(r: AcpSessionResources): void {
+/**
+ * 完整拆除一个会话：dispose 路由、关连接、杀整棵进程树。默认 SIGTERM + 2s SIGKILL
+ * 兜底；shutdown 路径传 SIGKILL 直杀——runner 马上 process.exit，unref 的兜底定时器
+ * 活不到触发，等宽限毫无意义。
+ */
+export function teardownResources(
+  r: AcpSessionResources,
+  signal: NodeJS.Signals = "SIGTERM",
+): void {
   try {
     r.active.dispose();
   } catch {
@@ -59,13 +66,15 @@ export function teardownResources(r: AcpSessionResources): void {
   } catch {
     // 已关闭
   }
-  killProcessTree(r.child, "SIGTERM");
-  const child = r.child;
-  setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) {
-      killProcessTree(child, "SIGKILL");
-    }
-  }, 2000).unref();
+  killProcessTree(r.child, signal);
+  if (signal !== "SIGKILL") {
+    const child = r.child;
+    setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        killProcessTree(child, "SIGKILL");
+      }
+    }, 2000).unref();
+  }
 }
 
 /**
@@ -163,7 +172,8 @@ export class AcpSessionPool {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     for (const [id, entry] of [...this.idle.entries()]) {
       this.idle.delete(id);
-      teardownResources(entry.resources);
+      // runner 即将退出：直接 SIGKILL（空闲进程无在途工作，宽限期定时器也活不到）
+      teardownResources(entry.resources, "SIGKILL");
     }
   }
 }

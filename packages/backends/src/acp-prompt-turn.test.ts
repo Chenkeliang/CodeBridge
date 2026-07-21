@@ -270,6 +270,88 @@ describe("runActivePromptTurn", () => {
     );
   });
 
+  it("drain hard-cap marks the session unpoolable", async () => {
+    let unpoolable = false;
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      postStopProbeMs: 1_000,
+      postStopQuietMs: 5_000,
+      postStopMaxMs: 120,
+      markUnpoolable: () => {
+        unpoolable = true;
+      },
+    });
+    const done = collect(gen);
+    queue.enqueue(toolCall);
+    await sleep(20);
+    queue.enqueue(stopMessage);
+    await sleep(30);
+    queue.enqueue(textChunk("bg")); // 确认 drain，等硬上限到点
+    const events = await done;
+    expect(events[events.length - 1]).toMatchObject({
+      type: "error",
+      fatal: false,
+    });
+    expect(unpoolable).toBe(true);
+  });
+
+  it("pre-drain has a hard deadline and stays interruptible by /stop", async () => {
+    // 场景 1：残余后台以 <15ms 间隔持续产出，1.5s 时限后仍要把新 prompt 发出去
+    {
+      const queue = new FakeUpdateQueue();
+      let promptCalled = false;
+      const active = {
+        prompt: () => {
+          promptCalled = true;
+          return new Promise(() => {});
+        },
+        nextUpdate: () => queue.next(),
+      } as unknown as ActiveSession;
+      const feed = setInterval(() => queue.enqueue(textChunk("x")), 8);
+      const gen = runActivePromptTurn(active, [], {
+        permissionPolicy: "auto_allow",
+        isAborted: () => false,
+        updateCarrier: { pending: null },
+        noOutputTimeoutMs: 60_000,
+      });
+      const done = collect(gen);
+      await sleep(2_000); // > 1.5s 预排干时限
+      clearInterval(feed);
+      expect(promptCalled).toBe(true);
+      queue.enqueue(stopMessage);
+      await done;
+    }
+    // 场景 2：/stop 能打断预排干（旧实现里打不断）
+    {
+      const queue = new FakeUpdateQueue();
+      let aborted = false;
+      let promptCalled = false;
+      const active = {
+        prompt: () => {
+          promptCalled = true;
+          return new Promise(() => {});
+        },
+        nextUpdate: () => queue.next(),
+      } as unknown as ActiveSession;
+      const feed = setInterval(() => queue.enqueue(textChunk("x")), 8);
+      const gen = runActivePromptTurn(active, [], {
+        permissionPolicy: "auto_allow",
+        isAborted: () => aborted,
+        updateCarrier: { pending: null },
+      });
+      const done = collect(gen);
+      await sleep(200);
+      aborted = true;
+      const start = Date.now();
+      await done;
+      clearInterval(feed);
+      expect(Date.now() - start).toBeLessThan(400);
+      expect(promptCalled).toBe(false); // 中止后不再发新 prompt
+    }
+  });
+
   it("pre-drain with carrier: stale queued stop is dropped, stale content is yielded, new turn runs to its own end", async () => {
     const queue = new FakeUpdateQueue();
     // 上一轮 drain 退出后残留在队列里的：迟到后台内容 + 陈旧 stop
