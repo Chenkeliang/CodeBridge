@@ -61,6 +61,7 @@ cd feishu-code-bridge
 | `/help` `/menu` | 全部命令 |
 | `/status` | 当前 backend / cwd / model |
 | `/stop` | 停止正在执行的 Agent 任务 |
+| `/approve` `/deny` | 回应挂起的权限请求（prompt_feishu 模式） |
 | `/new` | 新建 CLI session |
 | `/resume` | 列出本机 session（按 cwd 含子目录） |
 | `/resume 2` | 绑定第 2 条 |
@@ -68,10 +69,12 @@ cd feishu-code-bridge
 | `/resume all` | 跨目录列出全部 |
 | `/backend cursor\|claude\|codex` | 切换 Agent |
 | `/cd <path>` | 切换项目目录 |
-| `/ws list\|save\|use` | 命名工作区 |
+| `/ws list\|save\|use\|remove` | 命名工作区 |
 | `/model` `/effort` `/permission` | 模型 / Claude effort / 权限模式 |
+| `/thinking on\|off` | 卡片是否显示思考/工具过程（默认 on） |
 | `/transport acp\|cli\|default` | 切换 ACP / CLI 传输（会话级覆盖） |
 | `/clone` `/pull` | 本机 git 操作 |
+| `/config` | 查看配置摘要 |
 
 各 backend 的 session 目录：
 

@@ -67,6 +67,7 @@ Other commands:
 | `/help` `/menu` | List all commands |
 | `/status` | Current backend, cwd, model |
 | `/stop` | Cancel the running agent task |
+| `/approve` `/deny` | Answer a pending permission request (prompt_feishu mode) |
 | `/new` | Start a fresh CLI session |
 | `/resume` | List local CLI sessions (scoped by cwd) |
 | `/resume 2` | Bind session #2 to this chat |
@@ -74,10 +75,12 @@ Other commands:
 | `/resume all` | List sessions across all projects |
 | `/backend cursor\|claude\|codex` | Switch agent |
 | `/cd <path>` | Change project directory |
-| `/ws list\|save\|use` | Named workspaces |
+| `/ws list\|save\|use\|remove` | Named workspaces |
 | `/model` `/effort` `/permission` | Model / Claude effort / permission mode |
+| `/thinking on\|off` | Show/hide the thinking & tool-call process on the card (default on) |
 | `/transport acp\|cli\|default` | Switch ACP / CLI transport (per-chat override) |
 | `/clone <url>` `/pull` | Git on the host |
+| `/config` | Show config summary |
 
 Session storage paths:
 
