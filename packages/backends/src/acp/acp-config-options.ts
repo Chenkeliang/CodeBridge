@@ -67,10 +67,13 @@ export function resolveDesiredConfig(
     effort: ctx.effort ?? bc.effort,
   };
   if (bc.type === "claude-code") {
+    // prompt_deny / prompt_feishu 都需要适配器真的「发问」（default 模式）：
+    // prompt_deny 由客户端 handler 拒，prompt_feishu 转发飞书等 /approve。
+    // 只有 auto_allow 才对齐 CLI 的 bypassPermissions（不问直接放行）。
     desired.permissionMode =
       ctx.claudePermissionMode ??
       bc.claudePermissionMode ??
-      (permissionPolicy === "prompt_deny" ? "default" : "bypassPermissions");
+      (permissionPolicy === "auto_allow" ? "bypassPermissions" : "default");
   }
   return desired;
 }

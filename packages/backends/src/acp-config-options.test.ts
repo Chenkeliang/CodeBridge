@@ -138,11 +138,15 @@ describe("resolveDesiredConfig", () => {
     ).toBe("plan");
   });
 
-  it("permission 无显式：auto_allow→bypassPermissions，prompt_deny→default", () => {
+  it("permission 无显式：auto_allow→bypassPermissions，prompt_deny/prompt_feishu→default", () => {
     expect(resolveDesiredConfig(ctx({}), "auto_allow").permissionMode).toBe(
       "bypassPermissions",
     );
     expect(resolveDesiredConfig(ctx({}), "prompt_deny").permissionMode).toBe(
+      "default",
+    );
+    // prompt_feishu 必须让适配器真的发问，否则 /approve 流程永远触发不了
+    expect(resolveDesiredConfig(ctx({}), "prompt_feishu").permissionMode).toBe(
       "default",
     );
   });
