@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import {
+  AcpSessionPool,
   BackendRegistry,
   getBackendTransport,
   killProcessTree,
@@ -69,6 +70,8 @@ export class RunnerHost {
     postStopMaxMs?: number;
   };
   private readonly fcbBinDir: Promise<string | undefined>;
+  /** 长驻 ACP 会话池：同会话消息复用适配器进程（kill switch: runnerHost.acpSessionPool） */
+  private readonly sessionPool: AcpSessionPool;
   /**
    * prompt_feishu：每个 run 的挂起权限请求队列（FIFO）。claude 通常一次只挂一个，
    * 但并行工具可能并发请求——用队列而非单槽，避免互相覆盖、/approve 只回给最早的那个。
@@ -93,6 +96,11 @@ export class RunnerHost {
       postStopQuietMs: rh?.acpPostStopQuietMs,
       postStopMaxMs: rh?.acpPostStopMaxMs,
     };
+    this.sessionPool = new AcpSessionPool({
+      enabled: rh?.acpSessionPool ?? true,
+      idleMs: rh?.acpSessionIdleMs ?? 10 * 60_000,
+      maxPooled: rh?.acpSessionPoolMax ?? 4,
+    });
     for (const [id, profile] of Object.entries(options.config.backends)) {
       this.registry.register(id, profile);
     }
@@ -322,6 +330,7 @@ export class RunnerHost {
           permissionPolicy: this.acpPermissionPolicy,
           isAborted: () => activeRun.aborted,
           ...this.acpRunOptions,
+          sessionPool: this.sessionPool,
           requestDecision,
           pollOutOfBandEvents: () => oobEvents.splice(0),
         },
@@ -346,6 +355,20 @@ export class RunnerHost {
       this.active.delete(runId);
       yield { type: "done", exitCode };
     }
+  }
+
+  /** runner 退出前清场：杀池内空闲进程 + 取消在飞 run（子进程 detached，不清就孤儿） */
+  shutdown(): void {
+    this.sessionPool.shutdown();
+    for (const run of [...this.active.values()]) {
+      run.aborted = true;
+      try {
+        run.cancel();
+      } catch {
+        // 尽力而为
+      }
+    }
+    this.active.clear();
   }
 
   /** /approve /deny：回应当前 run 最早挂起的权限请求（FIFO） */

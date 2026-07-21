@@ -26,6 +26,12 @@ import {
   applySessionConfigOptions,
   resolveDesiredConfig,
 } from "./acp-config-options.js";
+import {
+  resourcesAlive,
+  teardownResources,
+  type AcpSessionPool,
+  type AcpSessionResources,
+} from "./acp-session-pool.js";
 
 export interface AcpRunHandle {
   child: ChildProcess;
@@ -61,6 +67,16 @@ export interface AcpRunOptions {
    * 连接回调里的事件没法直接 yield，经它汇入 SSE。
    */
   pollOutOfBandEvents?: () => AgentEvent[];
+  /**
+   * 长驻会话池（可选）：命中即复用适配器进程，省每轮 spawn+initialize+resume。
+   * 未传 = 每轮 spawn/杀（旧行为）。
+   */
+  sessionPool?: AcpSessionPool;
+  /**
+   * 跨轮接力的 nextUpdate waiter（池模式必传池条目的 carrier）：SDK 队列 FIFO 且
+   * waiter 无法注销，被抛弃的 waiter 会吞掉下一条消息，必须原样接力。
+   */
+  updateCarrier?: { pending: Promise<ActiveSessionMessage> | null };
 }
 
 async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
@@ -132,6 +148,35 @@ export async function* runActivePromptTurn(
   blocks: ContentBlock[],
   options: AcpRunOptions,
 ): AsyncGenerator<AgentEvent> {
+  // 池模式跨轮接力同一个 carrier；非池模式局部（行为与旧版一致）
+  const carrier = options.updateCarrier ?? {
+    pending: null as Promise<ActiveSessionMessage> | null,
+  };
+
+  // 池复用：发新 prompt 之前先排干队列里已排队的消息——上一轮 drain 退出后仍到达的
+  // 后台产出（内容合法，照常 yield）与可能残留的陈旧 stop（丢弃，否则会被误判为新轮结束）。
+  if (options.updateCarrier) {
+    for (;;) {
+      carrier.pending ??= active.nextUpdate();
+      const got = await Promise.race([
+        carrier.pending.then(
+          (message) => ({ message }) as const,
+          () => "failed" as const,
+        ),
+        new Promise<"empty">((r) => setTimeout(() => r("empty"), 15)),
+      ]);
+      if (got === "empty") break;
+      carrier.pending = null;
+      if (got === "failed") break; // 队列已失效，让主循环去暴露真实错误
+      if (got.message.kind === "session_update") {
+        for (const event of mapSessionUpdate(got.message.update)) {
+          yield event;
+        }
+      }
+      // kind === "stop"：陈旧的上一轮结束信号，丢弃
+    }
+  }
+
   void active.prompt(blocks);
 
   const promptTimeoutMs = options.promptTimeoutMs ?? ACP_PROMPT_TIMEOUT_MS;
@@ -163,9 +208,6 @@ export async function* runActivePromptTurn(
   let lastMarkerCheckAt = 0;
   const DRAIN_MARKER_INTERVAL_MS = 500;
   let mainDeadline = promptStartedAt + promptTimeoutMs;
-  // 必须跨迭代复用同一个 nextUpdate()：每次调用都会在 SDK AsyncQueue 里注册一个
-  // waiter，被 race 抛弃的 waiter 仍排在 FIFO 前面，会把后续事件全部吞掉。
-  let pending: Promise<ActiveSessionMessage> | null = null;
 
   while (!options.isAborted()) {
     // 带外事件（如权限请求）：发生在连接回调里，经队列汇入本事件流
@@ -252,13 +294,15 @@ export async function* runActivePromptTurn(
       }
     }
 
-    pending ??= active.nextUpdate();
+    // 必须跨迭代复用同一个 nextUpdate()：每次调用都会在 SDK AsyncQueue 里注册一个
+    // waiter，被 race 抛弃的 waiter 仍排在 FIFO 前面，会把后续事件全部吞掉。
+    carrier.pending ??= active.nextUpdate();
     const next = await Promise.race([
-      pending.then((message) => ({ message })),
+      carrier.pending.then((message) => ({ message })),
       waitMs(40, options.isAborted).then(() => null),
     ]);
     if (!next) continue;
-    pending = null;
+    carrier.pending = null;
 
     if (next.message.kind === "session_update") {
       const update = next.message.update;
@@ -281,7 +325,7 @@ export async function* runActivePromptTurn(
         yield event;
       }
     } else if (next.message.kind === "stop") {
-      if (phase !== "main") break; // drain 期再遇 stop（仅将来加 nudge 时可达）→ 结束
+      if (phase !== "main") break; // drain 期再遇 stop → 结束
       if (drainEnabled && sawToolCall) {
         phase = "drain";
         drainStartAt = Date.now();
@@ -294,17 +338,41 @@ export async function* runActivePromptTurn(
     }
   }
 
-  // abort/超时退出时 pending 里可能仍挂着一个 nextUpdate() waiter；drain 变长后 /stop 中途
-  // 更易命中它稍后因 dispose() reject，防御性吞掉，避免 unhandledRejection。
-  pending?.catch(() => {});
+  if (!options.updateCarrier) {
+    // 非池模式：进程即将被杀，pending 稍后因 dispose() reject，防御性吞掉。
+    // 池模式绝不能走到这：pending 已存在共享 carrier 上，由下一轮接力消费。
+    carrier.pending?.catch(() => {});
+  }
 }
 
-export async function* runAcpSession(
+/** 复用匹配键：spawn 命令与关键 env 在进程启动时冻结，任一变化都不能复用 */
+export function buildSessionMatchKeys(ctx: RunContext): {
+  spawnKey: string;
+  envKey: string;
+} {
+  const profile = resolveAcpSpawn(ctx.backendConfig);
+  return {
+    spawnKey: `${profile.command} ${profile.args.join(" ")}`,
+    envKey: `${ctx.extraEnv?.FCB_CHAT_ID ?? ""}|${ctx.extraEnv?.FCB_TOPIC_ID ?? ""}`,
+  };
+}
+
+/**
+ * 冷启动一个 ACP 会话的全部资源：spawn 适配器 → 连接 → initialize → 建/续会话。
+ * 权限决策器经 runtime 盒子间接读取——连接上的 handler 无法换装，而 requestDecision
+ * 是 per-run 闭包，必须每轮重绑（否则池复用后第二轮权限请求会调到第一轮的死闭包）。
+ * 失败时自行清理（杀进程/关连接）并把 stderr 摘要附在错误里抛出。
+ */
+async function openAcpSessionResources(
   ctx: RunContext,
   options: AcpRunOptions,
-  outHandle: { current?: AcpRunHandle },
-): AsyncGenerator<AgentEvent> {
+  onSpawn: (child: ChildProcess, kill: () => void) => void,
+): Promise<{
+  resources: AcpSessionResources;
+  resumeFallbackReason?: string;
+}> {
   const spawnProfile = resolveAcpSpawn(ctx.backendConfig);
+  const { spawnKey, envKey } = buildSessionMatchKeys(ctx);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
     cwd: ctx.cwd,
     env: { ...process.env, ...ctx.extraEnv },
@@ -334,28 +402,19 @@ export async function* runAcpSession(
       if (childAlive()) killProcessTree(child, "SIGKILL");
     }, 2000).unref();
   };
+  onSpawn(child, killChild);
 
-  let sessionId = "";
   let connection: ClientConnection | undefined;
-  let active: ActiveSession | undefined;
-
-  const handle: AcpRunHandle = {
-    child,
-    cancel: () => {
-      if (sessionId && connection) {
-        void connection.agent
-          .notify(methods.agent.session.cancel, { sessionId })
-          .catch(() => {});
-      }
-      killChild();
-    },
-  };
-  outHandle.current = handle;
-
   try {
+    const runtime: AcpSessionResources["runtime"] = {
+      requestDecision: options.requestDecision,
+    };
     const app = createHeadlessClientApp({
       permissionPolicy: options.permissionPolicy,
-      requestDecision: options.requestDecision,
+      requestDecision: (info) =>
+        runtime.requestDecision
+          ? runtime.requestDecision(info)
+          : Promise.resolve(false),
     });
 
     const stream = childToStream(child);
@@ -378,15 +437,82 @@ export async function* runAcpSession(
     );
 
     let resumeFallbackReason: string | undefined;
-    active = await openActiveSession(connection, ctx, ctx.backendConfig, {
+    const active = await openActiveSession(connection, ctx, ctx.backendConfig, {
       isAborted: options.isAborted,
       onResumeFallback: (reason) => {
         resumeFallbackReason = reason;
       },
     });
-    sessionId = active.sessionId;
 
-    yield { type: "session", sessionId };
+    const resources: AcpSessionResources = {
+      sessionId: active.sessionId,
+      child,
+      connection,
+      active,
+      cwd: ctx.cwd,
+      spawnKey,
+      envKey,
+      readStderr: () => stderr,
+      carrier: { pending: null },
+      runtime,
+    };
+    return { resources, resumeFallbackReason };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const detail = stderr.trim();
+    try {
+      connection?.close();
+    } catch {
+      // 已关闭
+    }
+    killChild();
+    throw new Error(detail ? `${message}\n\n${detail}` : message);
+  }
+}
+
+export async function* runAcpSession(
+  ctx: RunContext,
+  options: AcpRunOptions,
+  outHandle: { current?: AcpRunHandle },
+): AsyncGenerator<AgentEvent> {
+  const pool = options.sessionPool;
+  const { spawnKey, envKey } = buildSessionMatchKeys(ctx);
+
+  let resources: AcpSessionResources | undefined;
+  if (pool?.enabled && ctx.resumeSessionId) {
+    resources =
+      pool.acquire(ctx.resumeSessionId, { cwd: ctx.cwd, spawnKey, envKey }) ??
+      undefined;
+  }
+  const reused = resources !== undefined;
+
+  // healthy 只在轮子完整走完且无 fatal/abort 时为真；其余一律拆除（不归还池）
+  let healthy = false;
+  let resumeFallbackReason: string | undefined;
+
+  try {
+    if (!resources) {
+      const opened = await openAcpSessionResources(ctx, options, (child, kill) => {
+        // spawn 后立刻可取消（initialize/续聊阶段 /stop 也要能杀掉）
+        outHandle.current = { child, cancel: kill };
+      });
+      resources = opened.resources;
+      resumeFallbackReason = opened.resumeFallbackReason;
+    }
+    const r = resources;
+
+    outHandle.current = {
+      child: r.child,
+      cancel: () => {
+        void r.connection.agent
+          .notify(methods.agent.session.cancel, { sessionId: r.sessionId })
+          .catch(() => {});
+        // 中断即弃进程（含池条目语义：本轮资源已检出，不会再归还）
+        teardownResources(r);
+      },
+    };
+
+    yield { type: "session", sessionId: r.sessionId };
     if (resumeFallbackReason) {
       yield {
         type: "error",
@@ -395,13 +521,16 @@ export async function* runAcpSession(
       };
     }
 
+    // 每轮重绑权限决策器（per-run 闭包；池复用时旧闭包已随上一轮失效）
+    r.runtime.requestDecision = options.requestDecision;
+
     // 用 ACP 标准 session/set_config_option 应用 model/effort/permission（Zed 同款机制）。
-    // 每轮都重设：续聊到新适配器进程时 model 会退回适配器默认（实测 Fable 5）。
+    // 每轮都重设：/model 等命令可在两轮之间改变绑定，池内进程的 currentValue 需要跟上。
     const desired = resolveDesiredConfig(ctx, options.permissionPolicy);
     const { warnings } = await applySessionConfigOptions(
-      connection.agent,
-      sessionId,
-      active.newSessionResponse.configOptions ?? [],
+      r.connection.agent,
+      r.sessionId,
+      r.active.newSessionResponse.configOptions ?? [],
       desired,
     );
     for (const warning of warnings) {
@@ -409,28 +538,45 @@ export async function* runAcpSession(
     }
 
     const blocks = await buildPromptBlocks(ctx);
-    yield* runActivePromptTurn(active, blocks, {
+    let sawFatal = false;
+    for await (const event of runActivePromptTurn(r.active, blocks, {
       ...options,
-      readStderr: () => stderr,
+      readStderr: r.readStderr,
+      // 池模式跨轮接力 pending waiter；复用轮先排干队列残留
+      updateCarrier: pool?.enabled ? r.carrier : undefined,
       // claude 的后台子 agent 写盘不走 wire，用会话文件增长作 drain 的补充活动信号
       drainActivityMarker:
         options.drainActivityMarker ??
         (ctx.backendConfig.type === "claude-code"
-          ? createClaudeSessionActivityMarker(ctx.cwd, sessionId)
+          ? createClaudeSessionActivityMarker(ctx.cwd, r.sessionId)
           : undefined),
-    });
+    })) {
+      if (event.type === "error" && event.fatal) sawFatal = true;
+      yield event;
+    }
+    healthy = !sawFatal && !options.isAborted() && resourcesAlive(r);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const detail = stderr.trim();
+    const detail = resources?.readStderr().trim() ?? "";
     yield {
       type: "error",
-      message: detail ? `${message}\n\n${detail}` : message,
+      message:
+        detail && !message.includes(detail)
+          ? `${message}\n\n${detail}`
+          : message,
       fatal: true,
     };
-    handle.cancel();
   } finally {
-    active?.dispose();
-    connection?.close();
-    killChild();
+    if (resources) {
+      // 防跨轮死闭包：轮末即解绑，池空闲期的权限请求直接按拒绝处理
+      resources.runtime.requestDecision = undefined;
+      if (healthy && pool?.enabled) {
+        pool.release(resources);
+      } else {
+        teardownResources(resources);
+      }
+    }
   }
+  // reused 变量供将来遥测（冷/热轮次统计），当前无消费者
+  void reused;
 }

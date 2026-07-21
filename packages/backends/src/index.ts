@@ -223,6 +223,8 @@ export {
   listAcpSessions,
   killProcessTree,
   mapSessionUpdate,
+  AcpSessionPool,
+  type AcpSessionPoolOptions,
 } from "./acp/index.js";
 
 export {

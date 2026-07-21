@@ -270,6 +270,64 @@ describe("runActivePromptTurn", () => {
     );
   });
 
+  it("pre-drain with carrier: stale queued stop is dropped, stale content is yielded, new turn runs to its own end", async () => {
+    const queue = new FakeUpdateQueue();
+    // 上一轮 drain 退出后残留在队列里的：迟到后台内容 + 陈旧 stop
+    queue.enqueue(textChunk("late bg"));
+    queue.enqueue(stopMessage);
+    const carrier = { pending: null };
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      updateCarrier: carrier,
+    });
+    const done = collect(gen);
+    await sleep(80); // 预排干完成、prompt 已发
+    queue.enqueue(textChunk("turn2 answer"));
+    queue.enqueue(stopMessage); // 本轮真正的结束
+    const events = await done;
+    const texts = events
+      .filter((e) => e.type === "text_delta")
+      .map((e) => (e as { text: string }).text);
+    // 陈旧内容照常送达，陈旧 stop 没有把新轮秒终结（否则收不到 turn2 answer）
+    expect(texts).toEqual(["late bg", "turn2 answer"]);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("carrier relays the leftover waiter across turns (no swallowed message)", async () => {
+    const queue = new FakeUpdateQueue();
+    const carrier = { pending: null };
+    // 轮 1：起过 tool → drain，probe 到点静默返回；返回时留下一个挂起的 waiter
+    const gen1 = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      postStopProbeMs: 120,
+      updateCarrier: carrier,
+    });
+    const done1 = collect(gen1);
+    await sleep(40); // 让预排干先空转结束（15ms 空窗），事件才进主循环
+    queue.enqueue(toolCall);
+    await sleep(20);
+    queue.enqueue(stopMessage);
+    await done1; // probe 120ms 到点返回
+    expect(carrier.pending).not.toBeNull(); // 挂起 waiter 已接力到 carrier
+
+    // 轮 2：同一 carrier 续用。若 waiter 被抛弃（旧行为），下一条消息会被僵尸 waiter 吞掉
+    const gen2 = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      updateCarrier: carrier,
+    });
+    const done2 = collect(gen2);
+    await sleep(60);
+    queue.enqueue(textChunk("turn2"));
+    queue.enqueue(stopMessage);
+    const events2 = await done2;
+    expect(
+      events2.some((e) => e.type === "text_delta" && e.text === "turn2"),
+    ).toBe(true);
+  });
+
   it("yields out-of-band events (permission_request) and counts them as activity", async () => {
     const queue = new FakeUpdateQueue();
     const oob: AgentEvent[] = [

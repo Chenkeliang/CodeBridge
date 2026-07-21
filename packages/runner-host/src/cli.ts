@@ -34,6 +34,19 @@ async function main() {
   const app = createRunnerApp(runnerHost, config.runner.token);
   console.log(`feishu-code-runner listening on http://${hostname}:${port}`);
   serve({ fetch: app.fetch, hostname, port });
+
+  // 适配器子进程是 detached（自成进程组），不会随 runner 死——退出前必须同步清场
+  //（池内空闲进程 + 在飞 run），否则每次 stop/重启都会留孤儿。start.sh 的
+  // SIGTERM→0.5s→SIGKILL 窗口内同步 kill 来得及。
+  const shutdown = () => {
+    try {
+      runnerHost.shutdown();
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 main().catch((err) => {

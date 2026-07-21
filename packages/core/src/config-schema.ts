@@ -103,6 +103,16 @@ export const ConfigSchema = z.object({
       acpPostStopQuietMs: z.number().int().positive().default(75_000),
       /** drain 独立硬上限：后台跑这么久仍未结束则停止跟踪（ms） */
       acpPostStopMaxMs: z.number().int().positive().default(20 * 60_000),
+      /** 长驻会话池总开关：同会话消息复用适配器进程，省每轮 2-4s 冷启动 */
+      acpSessionPool: z.boolean().default(true),
+      /** 池内空闲会话进程的回收时限（ms） */
+      acpSessionIdleMs: z
+        .number()
+        .int()
+        .positive()
+        .default(10 * 60_000),
+      /** 池内最多保留多少个空闲会话进程 */
+      acpSessionPoolMax: z.number().int().positive().default(4),
     })
     .optional(),
   /** Bridge 本地出站 API（供 Agent 内的 fcb 命令把文件/消息发回飞书） */
