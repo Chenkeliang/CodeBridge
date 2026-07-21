@@ -102,3 +102,53 @@ describe("/resume <N> after /resume all", () => {
     expect((picked as { text: string }).text).toContain("共 1 条");
   });
 });
+
+describe("/thinking", () => {
+  const baseCtx = () => makeCtx({ scopedSessions: [], allSessions: [] });
+
+  it("defaults to on, /thinking off then on flips the binding", async () => {
+    const ctx = baseCtx();
+    // 缺省：状态行须含 on 专属短语（不能只查 "on"——用法行本身含 on|off，会空断言）
+    const status0 = await handleSlashCommand({ ...ctx, text: "/thinking" });
+    expect((status0 as { text: string }).text).toContain("显示思考与工具调用过程");
+    expect(ctx.router.getBinding(ctx.chatId).showThinking ?? true).toBe(true);
+
+    const off = await handleSlashCommand({ ...ctx, text: "/thinking off" });
+    expect((off as { text: string }).text).toContain("只显示最终答案");
+    expect(ctx.router.getBinding(ctx.chatId).showThinking).toBe(false);
+
+    const status1 = await handleSlashCommand({ ...ctx, text: "/thinking" });
+    expect((status1 as { text: string }).text).toContain("卡片只显示最终答案");
+
+    const on = await handleSlashCommand({ ...ctx, text: "/thinking on" });
+    expect((on as { text: string }).text).toContain("显示思考");
+    expect(ctx.router.getBinding(ctx.chatId).showThinking).toBe(true);
+  });
+
+  it("accepts 关/开 synonyms and rejects garbage without touching the binding", async () => {
+    const ctx = baseCtx();
+    await handleSlashCommand({ ...ctx, text: "/thinking 关" });
+    expect(ctx.router.getBinding(ctx.chatId).showThinking).toBe(false);
+
+    const bad = await handleSlashCommand({ ...ctx, text: "/thinking maybe" });
+    expect((bad as { text: string }).text).toContain("无效参数");
+    expect(ctx.router.getBinding(ctx.chatId).showThinking).toBe(false); // 未被改动
+
+    await handleSlashCommand({ ...ctx, text: "/think 开" }); // /think 别名
+    expect(ctx.router.getBinding(ctx.chatId).showThinking).toBe(true);
+  });
+
+  it("survives a backend switch (display preference, not a run override)", async () => {
+    const ctx = baseCtx();
+    await handleSlashCommand({ ...ctx, text: "/thinking off" });
+    await handleSlashCommand({ ...ctx, text: "/backend claude" });
+    expect(ctx.router.getBinding(ctx.chatId).showThinking).toBe(false);
+  });
+
+  it("/status reflects the thinking state", async () => {
+    const ctx = baseCtx();
+    await handleSlashCommand({ ...ctx, text: "/thinking off" });
+    const status = await handleSlashCommand({ ...ctx, text: "/status" });
+    expect((status as { text: string }).text).toContain("只显示最终答案");
+  });
+});

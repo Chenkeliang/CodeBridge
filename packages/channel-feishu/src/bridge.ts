@@ -547,7 +547,12 @@ export class FeishuBridge {
     const streamAbort = new AbortController();
     this.chatStreamAbort.set(key, streamAbort);
 
-    const { present } = createFeishuStreamPresenter();
+    // /thinking off：思考/工具过程既不进 present（内容层），也不追加「思考中…」占位与
+    // 「---」分隔线（外壳层）；卡片只呈现最终答案。缺省 true。
+    const showThinking =
+      this.orchestrator.router.getBinding(msg.chatId, topicId).showThinking ??
+      true;
+    const { present } = createFeishuStreamPresenter({ showThinking });
     let resultBuffer = ""; // 结果区累积；卡片挂了/被截断就用它降级发普通消息
     let agentConsumed = false; // 已消费过 agent 事件流？（避免降级时重复跑）
     let cardBroken = false; // 飞书卡片流式失败（如 11310 cardid invalid）→ 降级
@@ -616,13 +621,14 @@ export class FeishuBridge {
                 );
               }
             };
-            await safeAppend("_思考中…_");
+            if (showThinking) await safeAppend("_思考中…_");
             let resultStarted = false;
             await consumeAgent(
               (t) => safeAppend(t),
               async (t) => {
                 if (!resultStarted) {
-                  await safeAppend("\n\n---\n\n");
+                  // 思考关时结果直接上卡片；分隔线只在思考区之上才有意义
+                  if (showThinking) await safeAppend("\n\n---\n\n");
                   resultStarted = true;
                 }
                 await safeAppend(t);

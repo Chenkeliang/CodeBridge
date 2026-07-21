@@ -19,6 +19,8 @@ export interface ChatBinding {
   effort?: string;
   claudePermissionMode?: ClaudePermissionMode;
   transport?: BackendTransport;
+  /** 卡片是否展示思考/工具过程；缺省=true（显示）。纯展示偏好，切 backend 不清除 */
+  showThinking?: boolean;
 }
 
 export interface ResolvedRunOptions {

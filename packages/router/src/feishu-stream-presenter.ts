@@ -7,14 +7,24 @@ export interface FeishuStreamPart {
   text: string;
 }
 
+export interface FeishuStreamPresenterOptions {
+  /** false 时丢弃思考/工具事件，卡片只呈现最终答案（/thinking off）；缺省 true */
+  showThinking?: boolean;
+}
+
 /** 飞书流式：思考区与结果区直通渲染，不做汇总或去重 */
-export function createFeishuStreamPresenter() {
+export function createFeishuStreamPresenter(
+  options: FeishuStreamPresenterOptions = {},
+) {
+  const showThinking = options.showThinking ?? true;
   const present = (event: AgentEvent): FeishuStreamPart | null => {
     switch (event.type) {
       case "tool_start":
-        return { zone: "thinking", text: `\n- \`${event.name}\`\n` };
+        return showThinking
+          ? { zone: "thinking", text: `\n- \`${event.name}\`\n` }
+          : null;
       case "thought_delta":
-        return { zone: "thinking", text: event.text };
+        return showThinking ? { zone: "thinking", text: event.text } : null;
       case "text_delta":
         return { zone: "result", text: event.text };
       case "error":

@@ -147,6 +147,7 @@ export async function handleSlashCommand(
           `**transport**: ${runOpts.transport}${binding.transport ? " _(会话覆盖)_" : profile?.transport ? " _(配置默认)_" : " _(默认 acp)_"}`,
           `**effort**: ${backendSupportsEffort(key.backendId) ? (runOpts.effort ?? "(CLI 默认)") : "_(不支持)_"}${binding.effort ? " _(会话覆盖)_" : profile?.effort ? " _(配置默认)_" : ""}`,
           `**permission**: ${backendSupportsPermissionMode(key.backendId) ? (runOpts.claudePermissionMode ?? "bypassPermissions") : "_(不支持)_"}${binding.claudePermissionMode ? " _(会话覆盖)_" : profile?.claudePermissionMode ? " _(配置默认)_" : ""}`,
+          `**thinking**: ${(binding.showThinking ?? true) ? "on（显示思考/工具过程）" : "off（只显示最终答案）"}`,
           `**cliSessionId**: ${rec?.cliSessionId ?? "(none)"}`,
           `**sessionTransport**: ${rec?.transport ?? "-"}`,
           `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
@@ -167,6 +168,10 @@ export async function handleSlashCommand(
     case "/permission":
     case "/perm":
       return handlePermission(ctx, arg);
+
+    case "/thinking":
+    case "/think":
+      return handleThinking(ctx, arg);
 
     case "/cd": {
       if (!arg) return { type: "reply", text: "用法: `/cd /path/to/project`" };
@@ -611,6 +616,39 @@ function handlePermission(ctx: SlashContext, arg: string): SlashResult {
   return {
     type: "reply",
     text: `已设置 Claude permission-mode: \`${mode}\`\n下一条消息生效。`,
+  };
+}
+
+function handleThinking(ctx: SlashContext, arg: string): SlashResult {
+  const current = ctx.router.getBinding(ctx.chatId, ctx.topicId).showThinking ?? true;
+  const a = arg.trim().toLowerCase();
+
+  if (!a || a === "list" || a === "status") {
+    return {
+      type: "reply",
+      text: [
+        `思考过程展示: ${current ? "**on**（显示思考与工具调用过程）" : "**off**（卡片只显示最终答案）"}`,
+        "",
+        "用法: `/thinking on|off`",
+      ].join("\n"),
+    };
+  }
+
+  const on = ["on", "开", "show", "true", "1"].includes(a);
+  const off = ["off", "关", "hide", "false", "0"].includes(a);
+  if (!on && !off) {
+    return {
+      type: "reply",
+      text: `无效参数: ${arg}\n用法: \`/thinking on|off\`（当前: ${current ? "on" : "off"}）`,
+    };
+  }
+
+  ctx.router.setBinding(ctx.chatId, { showThinking: on }, ctx.topicId);
+  return {
+    type: "reply",
+    text: on
+      ? "已开启思考过程展示：卡片会显示思考与工具调用过程，`---` 分隔线之后是最终答案。"
+      : "已关闭思考过程展示：卡片只显示最终答案（思考与工具过程不再进卡片）。下一条消息生效。",
   };
 }
 
