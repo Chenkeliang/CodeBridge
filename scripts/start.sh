@@ -640,7 +640,7 @@ cmd_install_launchd() {
   check_launchd_component "$component"
   ensure_built
   need_cmd node || exit 1
-  info "安装 launchd 自启（$component）…"
+  info "安装 launchd 自启（${component}）…"
   stop_watchdog
   cmd_stop 2>/dev/null || true
   [[ "$component" == "runner" || "$component" == "all" ]] && install_launchd_runner
@@ -657,7 +657,7 @@ cmd_install_launchd() {
 cmd_uninstall_launchd() {
   local component="${1:-all}"
   check_launchd_component "$component"
-  info "卸载 launchd 自启（$component）…"
+  info "卸载 launchd 自启（${component}）…"
   if [[ "$component" == "runner" || "$component" == "all" ]]; then
     launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
     rm -f "$LAUNCHD_RUNNER_PLIST"
