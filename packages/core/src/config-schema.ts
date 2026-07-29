@@ -18,17 +18,13 @@ export const FeishuPolicySchema = z.object({
 
 export const BackendProfileSchema = z.object({
   type: z.enum(["cursor-cli", "claude-code", "codex", "generic-spawn"]),
-  transport: z.enum(["acp", "cli"]).default("acp"),
-  command: z.string(),
-  args: z.array(z.string()).optional(),
+  // 兼容旧配置里的显式 `transport: acp`；CLI transport 已移除。
+  transport: z.literal("acp").optional(),
   acpCommand: z.string().optional(),
   acpArgs: z.array(z.string()).optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
-  allowBypassApprovals: z.boolean().optional(),
-  allowBypassApprovalsViaConfig: z.boolean().optional(),
-  claudeArgsOption: z.string().optional(),
-  /** Claude -p 非交互模式下的权限模式，默认 bypassPermissions 避免 dontAsk 拒绝 Bash */
+  /** Claude ACP mode 的兼容默认值，默认 bypassPermissions 避免 dontAsk 拒绝 Bash */
   claudePermissionMode: z
     .enum([
       "acceptEdits",
@@ -39,7 +35,6 @@ export const BackendProfileSchema = z.object({
       "plan",
     ])
     .optional(),
-  codexArgsOption: z.string().optional(),
 });
 
 export const AccessConfigSchema = z.object({
@@ -151,32 +146,20 @@ export function defaultConfig(): AppConfig {
     backends: {
       cursor: {
         type: "cursor-cli",
-        transport: "acp",
-        command: "cursor-agent",
-        args: ["--force", "--trust", "--approve-mcps"],
         acpCommand: "cursor-agent",
         acpArgs: ["acp"],
-        model: "composer-2.5",
       },
       claude: {
         type: "claude-code",
-        transport: "acp",
-        command: "claude",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.59.0"],
-        model: "sonnet",
-        effort: "medium",
+        acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.63.0"],
         claudePermissionMode: "bypassPermissions",
       },
       codex: {
         type: "codex",
-        transport: "acp",
-        command: "codex",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
+        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.7"],
         // 不钉 model：OpenAI 轮换模型名很快，钉了必过期；用适配器默认，会话内 /model 切
-        allowBypassApprovals: false,
-        allowBypassApprovalsViaConfig: true,
       },
     },
     workspaces: {

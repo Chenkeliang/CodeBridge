@@ -7,9 +7,9 @@
 ## 特性
 
 - 飞书 WebSocket 长连接，流式 Markdown 回复
-- 多 CLI backend：`cursor` / `claude` / `codex`
-- 会话路由：`/new`、`/resume`、`/stop`、`/backend`、`/cd`、`/ws`、`/model`、`/effort`、`/transport`
-- **恢复本机 CLI session**：`/resume` 列出终端已有 session，绑定后继续 `--resume`
+- 多 ACP backend：`cursor` / `claude` / `codex`
+- 会话路由：`/new`、`/resume`、`/stop`、`/backend`、`/cd`、`/ws`、`/model`、`/effort`
+- **恢复本机会话**：`/resume` 通过 ACP 适配器列出并继续已有 session
 - **飞书常置命令**：开放平台配置机器人「自定义菜单」，详见 [feishu-bot-menu.md](docs/zh-CN/feishu-bot-menu.md)
 - **引导式启动**：`./scripts/start.sh setup` 检查依赖、CLI、生成配置
 - Git 快捷：`/clone`、`/pull`（复用本机 git/SSH 凭据）
@@ -62,7 +62,7 @@ cd feishu-code-bridge
 | `/status` | 当前 backend / cwd / model |
 | `/stop` | 停止正在执行的 Agent 任务 |
 | `/approve` `/deny` | 回应挂起的权限请求（prompt_feishu 模式） |
-| `/new` | 新建 CLI session |
+| `/new` | 新建 ACP session |
 | `/resume` | 列出本机 session（按 cwd 含子目录） |
 | `/resume 2` | 绑定第 2 条 |
 | `/resume last` | 绑定最近一条 |
@@ -70,9 +70,8 @@ cd feishu-code-bridge
 | `/backend cursor\|claude\|codex` | 切换 Agent |
 | `/cd <path>` | 切换项目目录 |
 | `/ws list\|save\|use\|remove` | 命名工作区 |
-| `/model` `/effort` `/permission` | 模型 / Claude effort / 权限模式 |
+| `/model` `/effort` `/permission` | 从当前 ACP adapter 实时读取模型 / 推理强度 / mode 权限 |
 | `/thinking on\|off` | 卡片是否显示思考/工具过程（默认 on） |
-| `/transport acp\|cli\|default` | 切换 ACP / CLI 传输（会话级覆盖） |
 | `/clone` `/pull` | 本机 git 操作 |
 | `/config` | 查看配置摘要 |
 
@@ -84,17 +83,17 @@ cd feishu-code-bridge
 | **claude** | `~/.claude/projects/<encoded-cwd>/<id>.jsonl` |
 | **codex** | `~/.codex/sessions/**/rollout-<id>.jsonl` |
 
-绑定后，下一条普通消息会自动带 `--resume <id>` 发给对应 CLI。
+绑定后，下一条普通消息会通过 ACP `session/resume`（Cursor 为 `session/load`）继续。
 
 ## 并发与限制
 
-码桥分两层：**Runner（宿主机）** 负责起 CLI 进程；**Bridge / Orchestrator（飞书侧）** 负责把消息路由到 Runner。两层限制不同，不要混为一谈。
+码桥分两层：**Runner（宿主机）** 负责起 ACP Agent 进程；**Bridge / Orchestrator（飞书侧）** 负责把消息路由到 Runner。两层限制不同，不要混为一谈。
 
 | 场景 | 是否支持 | 限制来自哪一层 |
 |------|----------|----------------|
-| **不同飞书会话**同时跑任务（如私聊 + 群聊、两个群、两个话题） | ✅ | Runner 默认最多 **4** 个并发 CLI（`runnerHost.maxConcurrentRuns`） |
+| **不同飞书会话**同时跑任务（如私聊 + 群聊、两个群、两个话题） | ✅ | Runner 默认最多 **4** 个并发 Agent（`runnerHost.maxConcurrentRuns`） |
 | **不同 backend 并行**（如 A 会话跑 cursor、B 会话跑 claude） | ✅ | Runner 层；各会话独立 `chatId` |
-| **多个 CLI session 并存**（各自 `/resume` 绑定） | ✅ | 按 `chatId \| topicId \| backend \| cwd` 分别持久化到 `sessions.json` |
+| **多个 session 并存**（各自 `/resume` 绑定） | ✅ | 按 `chatId \| topicId \| backend \| cwd` 分别持久化到 `sessions.json` |
 | **同一会话**（同一 `chatId`，同一话题）发第二条消息 | ⚠️ 会取消上一条 | **飞书侧**：新消息触发 `/stop` 同类逻辑，同时只保留 1 个任务 |
 | **同一个群**里两人同时 @ 跑两个 Agent | ❌ | 群对应同一个 `chatId`，共享 binding（backend / cwd / model），且同时只能跑 1 个任务 |
 | **同一个群**里 cursor 和 claude **同时**跑 | ❌ | 一个群同一时刻只绑定一个 backend；可 `/backend` **切换**，不能并行 |
@@ -108,17 +107,17 @@ cd feishu-code-bridge
 
 本地可跑并发冒烟测试：`node scripts/test-concurrency-live.mjs`（向本机 Runner 并行发 cursor + claude）。
 
-## ACP 模式（默认）
+## ACP 模式
 
 Runner 通过 [Agent Client Protocol](https://agentclientprotocol.com) 与子进程 Agent 通信（stdio JSON-RPC），与 Zed External Agents 同一套机制。
 
 | 后端 | ACP 启动命令 |
 |------|-------------|
 | cursor | `cursor-agent acp` |
-| claude | `npx -y @agentclientprotocol/claude-agent-acp@0.55.0` |
-| codex | `npx -y @agentclientprotocol/codex-acp@1.1.0` |
+| claude | `npx -y @agentclientprotocol/claude-agent-acp@0.63.0` |
+| codex | `npx -y @agentclientprotocol/codex-acp@1.1.7` |
 
-`backends.<id>.transport`：`acp`（默认）或 `cli`（旧版 stream-json spawn 回退）。`runnerHost.acpPermissionPolicy` 控制无头权限（默认 `auto_allow`）。
+Runner 仅使用 ACP；旧版直接 spawn CLI 的 transport 已移除。`runnerHost.acpPermissionPolicy` 控制无头权限（默认 `auto_allow`）。
 
 续聊：Claude/Codex 用 `session/resume`；Cursor 用 `session/load`（不支持 resume）。
 

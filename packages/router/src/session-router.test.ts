@@ -60,41 +60,16 @@ describe("SessionRouter resolveRunOptions", () => {
       backendId: "claude",
       model: "opus",
       effort: "high",
+      mode: "default",
       claudePermissionMode: "dontAsk",
-      transport: "cli",
     });
     router.setBinding("chat1", { backendId: "cursor" });
     router.clearRunOverrides("chat1");
     const opts = router.resolveRunOptions("chat1", undefined, config);
-    expect(opts.model).toBe("composer-2.5");
+    expect(opts.model).toBeUndefined();
     expect(opts.effort).toBeUndefined();
+    expect(opts.mode).toBeUndefined();
     expect(opts.claudePermissionMode).toBeUndefined();
-    expect(opts.transport).toBe("acp");
-  });
-
-  it("merges transport from binding over profile default", () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
-    tmpDirs.push(dataDir);
-    const router = new SessionRouter(dataDir);
-    const config = defaultConfig();
-    config.backends.cursor!.transport = "acp";
-    router.initFromConfig(config);
-    router.setBinding("chat1", { transport: "cli" });
-    const opts = router.resolveRunOptions("chat1", undefined, config);
-    expect(opts.transport).toBe("cli");
-  });
-
-  it("clearTransport restores profile transport default", () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
-    tmpDirs.push(dataDir);
-    const router = new SessionRouter(dataDir);
-    const config = defaultConfig();
-    config.backends.cursor!.transport = "cli";
-    router.initFromConfig(config);
-    router.setBinding("chat1", { transport: "acp" });
-    router.clearTransport("chat1");
-    const opts = router.resolveRunOptions("chat1", undefined, config);
-    expect(opts.transport).toBe("cli");
   });
 
   it("topic binding inherits chat-level binding instead of global defaults", () => {
@@ -115,16 +90,36 @@ describe("SessionRouter resolveRunOptions", () => {
     expect(router.getBinding("chat1").backendId).toBe("claude");
   });
 
-  it("bindCliSession on a fresh chat stamps the given transport instead of undefined", () => {
+  it("bindSession stores the selected ACP session", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
     tmpDirs.push(dataDir);
     const router = new SessionRouter(dataDir);
     const config = defaultConfig();
     router.initFromConfig(config);
 
-    router.bindCliSession("chat1", "acp-session-123", "acp");
+    router.bindSession("chat1", "acp-session-123");
 
     const record = router.getSessionRecord(router.buildSessionKey("chat1"));
-    expect(record?.transport).toBe("acp");
+    expect(record?.sessionId).toBe("acp-session-123");
+  });
+
+  it("reads a legacy cliSessionId as the ACP session id", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const router = new SessionRouter(dataDir);
+    const config = defaultConfig();
+    router.initFromConfig(config);
+    const key = router.buildSessionKey("chat1");
+    fs.writeFileSync(
+      path.join(dataDir, "sessions.json"),
+      JSON.stringify({
+        [`${key.chatId}||${key.backendId}|${key.cwd}`]: {
+          cliSessionId: "legacy-session-123",
+          lastRunAt: "2026-07-01T00:00:00.000Z",
+        },
+      }),
+    );
+
+    expect(router.getSessionRecord(key)?.sessionId).toBe("legacy-session-123");
   });
 });

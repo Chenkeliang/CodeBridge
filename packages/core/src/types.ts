@@ -7,9 +7,7 @@ export interface SessionKey {
 }
 
 export interface SessionRecord {
-  cliSessionId?: string;
-  /** 创建该 session 时使用的 transport；CLI 与 ACP 的 sessionId 不互通 */
-  transport?: BackendTransport;
+  sessionId?: string;
   lastRunAt: string;
   lastRunId?: string;
 }
@@ -20,7 +18,7 @@ export interface LocalMediaPath {
   name?: string;
 }
 
-/** Bridge → Runner：图片以 base64 传输，Runner 落盘后再交给 CLI */
+/** Bridge → Runner：图片以 base64 传输，Runner 落盘后再交给 ACP Agent */
 export interface RunAttachment {
   name: string;
   mimeType: string;
@@ -35,9 +33,8 @@ export interface RunRequest {
   resumeSessionId?: string;
   model?: string;
   effort?: string;
+  mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
-  /** 会话级 transport 覆盖，优先于 config.backends[].transport */
-  transport?: BackendTransport;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -76,6 +73,7 @@ export interface RunContext {
   backendConfig: BackendProfile;
   model?: string;
   effort?: string;
+  mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
   /** 注入 Agent 子进程的额外环境变量（如 FCB_* 出站 API 凭据） */
   extraEnv?: Record<string, string>;
@@ -89,7 +87,6 @@ export type ClaudePermissionMode =
   | "dontAsk"
   | "plan";
 
-export type BackendTransport = "acp" | "cli";
 export type AcpPermissionPolicy =
   | "auto_allow"
   | "prompt_deny"
@@ -118,21 +115,13 @@ export interface BackendConfigOption {
 
 export interface BackendProfile {
   type: "cursor-cli" | "claude-code" | "codex" | "generic-spawn";
-  /** Agent 传输：acp（默认）或 cli（stream-json spawn 回退） */
-  transport?: BackendTransport;
-  command: string;
-  args?: string[];
-  /** ACP spawn 命令，默认同 command 或由 type 推断 */
+  /** ACP spawn 命令；已知 backend type 有内置默认值 */
   acpCommand?: string;
   acpArgs?: string[];
   model?: string;
   effort?: string;
-  allowBypassApprovals?: boolean;
-  allowBypassApprovalsViaConfig?: boolean;
-  claudeArgsOption?: string;
-  /** Claude --permission-mode；飞书非交互场景建议 bypassPermissions */
+  /** Claude ACP mode 的兼容默认值；飞书非交互场景建议 bypassPermissions */
   claudePermissionMode?: ClaudePermissionMode;
-  codexArgsOption?: string;
 }
 
 export function serializeSessionKey(key: SessionKey): string {

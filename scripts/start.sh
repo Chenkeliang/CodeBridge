@@ -111,7 +111,7 @@ print_usage_guide() {
   常用斜杠命令：
     /help          全部命令
     /status        当前 backend / 目录 / model
-    /resume        列出本机 CLI session 并续聊
+    /resume        列出本机 ACP session 并续聊
     /backend claude  切换 Agent
     /cd <path>     切换项目目录
     /ws save go    保存工作区
@@ -672,32 +672,41 @@ cmd_uninstall_launchd() {
 }
 
 cmd_status() {
+  local runner_launchd=0 bridge_launchd=0
+  launchd_loaded "$LAUNCHD_RUNNER_LABEL" && runner_launchd=1
+  launchd_loaded "$LAUNCHD_BRIDGE_LABEL" && bridge_launchd=1
   echo "配置: $CONFIG"
   echo "数据: $DATA_DIR"
-  if is_running "$RUNNER_PID"; then
+  if [[ "$runner_launchd" -eq 1 ]]; then
+    echo "Runner: launchd 管理中 (KeepAlive, log $RUNNER_LOG)"
+  elif is_running "$RUNNER_PID"; then
     echo "Runner: 运行中 (pid $(cat "$RUNNER_PID"), log $RUNNER_LOG)"
   elif has_cmd lsof && lsof -ti:"$RUNNER_PORT" >/dev/null 2>&1; then
     echo "Runner: 端口 ${RUNNER_PORT} 被占用但无 pid 文件（僵尸进程，请 $0 stop)"
   else
     echo "Runner: 未运行"
   fi
-  if is_running "$BRIDGE_PID"; then
+  if [[ "$bridge_launchd" -eq 1 ]]; then
+    echo "Bridge: launchd 管理中 (KeepAlive, log $BRIDGE_LOG)"
+  elif is_running "$BRIDGE_PID"; then
     echo "Bridge: 运行中 (pid $(cat "$BRIDGE_PID"), log $BRIDGE_LOG)"
   elif [[ -n "$(bridge_orphan_pids)" ]]; then
     echo "Bridge: 进程在运行但无 pid 文件（pid $(bridge_orphan_pids | tr '\n' ' ')，请 $0 stop)"
   else
     echo "Bridge: 未运行"
   fi
-  if is_running "$WATCHDOG_PID"; then
+  if [[ "$runner_launchd" -eq 1 || "$bridge_launchd" -eq 1 ]]; then
+    echo "守护:   launchd KeepAlive（服务退出自动拉起）"
+  elif is_running "$WATCHDOG_PID"; then
     echo "守护:   运行中 (pid $(cat "$WATCHDOG_PID")，服务挂掉 10s 内自动拉起)"
   else
     echo "守护:   未运行（服务挂掉不会自动拉起，$0 start 会一并启动）"
   fi
   echo ""
-  if launchd_loaded "$LAUNCHD_RUNNER_LABEL" || launchd_loaded "$LAUNCHD_BRIDGE_LABEL"; then
-    warn "launchd 自启: 已加载（与 start.sh 手动模式冲突时请 $0 uninstall-launchd）"
-    launchd_loaded "$LAUNCHD_RUNNER_LABEL" && echo "  · $LAUNCHD_RUNNER_LABEL"
-    launchd_loaded "$LAUNCHD_BRIDGE_LABEL" && echo "  · $LAUNCHD_BRIDGE_LABEL"
+  if [[ "$runner_launchd" -eq 1 || "$bridge_launchd" -eq 1 ]]; then
+    info "launchd 自启: 已加载（电脑重启后自动启动）"
+    [[ "$runner_launchd" -eq 1 ]] && echo "  · $LAUNCHD_RUNNER_LABEL"
+    [[ "$bridge_launchd" -eq 1 ]] && echo "  · $LAUNCHD_BRIDGE_LABEL"
     echo ""
   fi
   check_one_cli "Cursor" cursor-agent agent || true
@@ -807,6 +816,33 @@ cmd_start() {
   fi
 }
 
+cmd_restart() {
+  # launchd owns services installed with install-launchd; reload those jobs in
+  # place so restart never creates a second Runner on the same port.
+  if launchd_loaded "$LAUNCHD_RUNNER_LABEL" || launchd_loaded "$LAUNCHD_BRIDGE_LABEL"; then
+    need_cmd node || exit 1
+    need_cmd pnpm || exit 1
+    ensure_built
+    check_config_ready
+    local reloaded=0
+    if launchd_loaded "$LAUNCHD_RUNNER_LABEL"; then
+      launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
+      launchd_bootstrap "$LAUNCHD_RUNNER_PLIST"
+      reloaded=1
+    fi
+    if launchd_loaded "$LAUNCHD_BRIDGE_LABEL"; then
+      launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
+      launchd_bootstrap "$LAUNCHD_BRIDGE_PLIST"
+      reloaded=1
+    fi
+    [[ "$reloaded" -eq 1 ]] && info "launchd 服务已重启（电脑重启后仍会自动启动）"
+    return 0
+  fi
+
+  cmd_stop
+  cmd_start "${1:-bg}"
+}
+
 cmd_docker() {
   need_cmd docker || exit 1
   need_cmd curl || exit 1
@@ -858,8 +894,7 @@ main() {
     fg|foreground) cmd_start fg ;;
     docker) cmd_docker ;;
     stop) stop_watchdog; cmd_stop ;;
-    # restart 不停守护：中途被打断（如 agent 重启时杀掉自身宿主）也能被守护拉回
-    restart) cmd_stop; cmd_start "${arg:-bg}" ;;
+    restart) cmd_restart "${arg:-bg}" ;;
     __watchdog) cmd_watchdog ;;
     install-launchd) cmd_install_launchd "${arg:-all}" ;;
     uninstall-launchd) cmd_uninstall_launchd "${arg:-all}" ;;

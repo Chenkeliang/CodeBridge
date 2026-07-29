@@ -9,20 +9,14 @@ const DEFAULTS: Record<BackendProfile["type"], AcpSpawnProfile> = {
   "cursor-cli": { command: "cursor-agent", args: ["acp"] },
   "claude-code": {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.59.0"],
+    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.63.0"],
   },
   codex: {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
+    args: ["-y", "@agentclientprotocol/codex-acp@1.1.7"],
   },
   "generic-spawn": { command: "npx", args: [] },
 };
-
-export function getBackendTransport(
-  profile: BackendProfile,
-): "acp" | "cli" {
-  return profile.transport ?? "acp";
-}
 
 export function resolveAcpSpawn(profile: BackendProfile): AcpSpawnProfile {
   const defaults = DEFAULTS[profile.type] ?? DEFAULTS["generic-spawn"];

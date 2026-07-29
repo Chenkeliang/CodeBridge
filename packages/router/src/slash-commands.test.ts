@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultConfig } from "@feishu-code-bridge/core";
+import {
+  defaultConfig,
+  type BackendConfigOption,
+} from "@feishu-code-bridge/core";
 import type { CliSessionSummary } from "@feishu-code-bridge/runner-client";
 import { handleSlashCommand, type SlashContext } from "./slash-commands.js";
 import { SessionRouter } from "./session-router.js";
@@ -40,19 +43,224 @@ function makeCtx(overrides: {
     text: "",
     config,
     router,
-    listCliSessions: async (options) =>
+    listSessions: async (options) =>
       options?.all ? overrides.allSessions : overrides.scopedSessions,
-    bindCliSession: (sessionId) => bound.push(sessionId),
+    bindSession: (sessionId) => bound.push(sessionId),
   };
 }
 
+const cursorOptions: BackendConfigOption[] = [
+  {
+    id: "mode",
+    name: "Mode",
+    category: "mode",
+    currentValue: "agent",
+    values: [
+      { value: "agent", name: "Agent" },
+      { value: "plan", name: "Plan" },
+      { value: "ask", name: "Ask" },
+    ],
+  },
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    currentValue: "default[]",
+    values: [
+      { value: "default[]", name: "Auto" },
+      { value: "gpt-5.6-sol[reasoning=medium]", name: "gpt-5.6-sol" },
+    ],
+  },
+];
+
+const claudeOptions: BackendConfigOption[] = [
+  {
+    id: "mode",
+    name: "Mode",
+    category: "mode",
+    currentValue: "default",
+    values: [
+      { value: "default", name: "Manual" },
+      { value: "bypassPermissions", name: "Bypass Permissions" },
+    ],
+  },
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    currentValue: "opus[1m]",
+    values: [
+      { value: "opus[1m]", name: "Opus (1M context)" },
+      { value: "sonnet", name: "Sonnet" },
+    ],
+  },
+  {
+    id: "effort",
+    name: "Effort",
+    category: "thought_level",
+    currentValue: "xhigh",
+    values: [
+      { value: "medium", name: "Medium" },
+      { value: "xhigh", name: "Xhigh" },
+    ],
+  },
+];
+
+const codexOptions: BackendConfigOption[] = [
+  {
+    id: "mode",
+    name: "Mode",
+    category: "mode",
+    currentValue: "agent",
+    values: [
+      { value: "read-only", name: "Read-only" },
+      { value: "agent", name: "Agent" },
+      { value: "agent-full-access", name: "Agent (full access)" },
+    ],
+  },
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    currentValue: "gpt-5.6-sol",
+    values: [
+      { value: "gpt-5.6-sol", name: "GPT-5.6-Sol" },
+      { value: "gpt-5.6-terra", name: "GPT-5.6-Terra" },
+    ],
+  },
+  {
+    id: "reasoning_effort",
+    name: "Reasoning effort",
+    category: "thought_level",
+    currentValue: "xhigh",
+    values: [
+      { value: "medium", name: "Medium" },
+      { value: "ultra", name: "Ultra" },
+    ],
+  },
+];
+
+function capabilityCtx(
+  backendId: "cursor" | "claude" | "codex",
+  options: BackendConfigOption[],
+): SlashContext {
+  const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+  ctx.router.setBinding(ctx.chatId, { backendId });
+  ctx.listConfigOptions = async () => options;
+  return ctx;
+}
+
+describe("live ACP capabilities", () => {
+  it("lists live models and resolves display names to adapter values", async () => {
+    const ctx = capabilityCtx("cursor", cursorOptions);
+
+    const list = await handleSlashCommand({ ...ctx, text: "/model" });
+    expect((list as { text: string }).text).toContain("gpt-5.6-sol");
+    expect((list as { text: string }).text).not.toContain("composer-2.5-fast");
+
+    const set = await handleSlashCommand({ ...ctx, text: "/model gpt-5.6-sol" });
+    expect((set as { text: string }).text).toContain(
+      "gpt-5.6-sol[reasoning=medium]",
+    );
+    expect(ctx.router.getBinding(ctx.chatId).model).toBe(
+      "gpt-5.6-sol[reasoning=medium]",
+    );
+  });
+
+  it("rejects a model that is absent from the live adapter list", async () => {
+    const ctx = capabilityCtx("codex", codexOptions);
+
+    const result = await handleSlashCommand({
+      ...ctx,
+      text: "/model gpt-5.3-codex",
+    });
+
+    expect((result as { text: string }).text).toContain("不在适配器实时列表");
+    expect(ctx.router.getBinding(ctx.chatId).model).toBeUndefined();
+  });
+
+  it("supports live Codex effort including ultra", async () => {
+    const ctx = capabilityCtx("codex", codexOptions);
+
+    const list = await handleSlashCommand({ ...ctx, text: "/effort" });
+    expect((list as { text: string }).text).toContain("`ultra`");
+
+    await handleSlashCommand({ ...ctx, text: "/effort ultra" });
+    expect(ctx.router.getBinding(ctx.chatId).effort).toBe("ultra");
+  });
+
+  it.each([
+    ["cursor", cursorOptions, "ask"],
+    ["claude", claudeOptions, "bypassPermissions"],
+    ["codex", codexOptions, "agent-full-access"],
+  ] as const)("uses live %s ACP modes", async (backendId, options, mode) => {
+    const ctx = capabilityCtx(backendId, options);
+
+    const list = await handleSlashCommand({ ...ctx, text: "/permission" });
+    expect((list as { text: string }).text).toContain(`\`${mode}\``);
+    expect((list as { text: string }).text).toContain(
+      "Runner approval policy: `auto_allow`",
+    );
+
+    await handleSlashCommand({ ...ctx, text: `/permission ${mode}` });
+    expect(
+      (ctx.router.getBinding(ctx.chatId) as { mode?: string }).mode,
+    ).toBe(mode);
+  });
+
+  it("shows the effective configured Claude permission mode", async () => {
+    const ctx = capabilityCtx("claude", claudeOptions);
+
+    const permission = await handleSlashCommand({
+      ...ctx,
+      text: "/permission",
+    });
+    expect((permission as { text: string }).text).toContain(
+      "当前会话: `bypassPermissions`",
+    );
+
+    const status = await handleSlashCommand({ ...ctx, text: "/status" });
+    expect((status as { text: string }).text).toContain(
+      "**mode/permission**: bypassPermissions _(配置默认)_",
+    );
+  });
+
+  it("reports config-option failures without showing stale static models", async () => {
+    const ctx = capabilityCtx("claude", claudeOptions);
+    ctx.listConfigOptions = async () => {
+      throw new Error("adapter unavailable");
+    };
+
+    const result = await handleSlashCommand({ ...ctx, text: "/model" });
+
+    expect((result as { text: string }).text).toContain("adapter unavailable");
+    expect((result as { text: string }).text).not.toContain("可用 model 示例");
+  });
+});
+
 describe("/resume <N> after /resume all", () => {
+  it("reports ACP list failures instead of claiming there are no sessions", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    ctx.listSessions = async () => {
+      throw new Error("adapter unavailable");
+    };
+
+    const result = await handleSlashCommand({ ...ctx, text: "/resume" });
+
+    expect((result as { text: string }).text).toContain("ACP session 列表读取失败");
+    expect((result as { text: string }).text).toContain("adapter unavailable");
+    expect((result as { text: string }).text).not.toContain("未找到");
+  });
+
   it("picks from the previously displayed 'all' list, not a fresh scoped query", async () => {
-    const scoped = [makeSession("scoped-1", "/Users/keliang/Projects", "scoped only")];
+    const scopedCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-scoped-"));
+    const otherCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-other-"));
+    tmpDirs.push(scopedCwd, otherCwd);
+    const scoped = [makeSession("scoped-1", scopedCwd, "scoped only")];
     const all = [
-      makeSession("go-1", "/Users/keliang/go", "Meepo Branch Check"),
-      makeSession("proj-1", "/Users/keliang/Projects", "Topic Content Info"),
-      makeSession("proj-2", "/Users/keliang/Projects", "Test Conversation"),
+      makeSession("go-1", otherCwd, "Meepo Branch Check"),
+      makeSession("proj-1", scopedCwd, "Topic Content Info"),
+      makeSession("proj-2", scopedCwd, "Test Conversation"),
     ];
     const bound: string[] = [];
     const ctx = makeCtx({ scopedSessions: scoped, allSessions: all, bound });
@@ -61,9 +269,10 @@ describe("/resume <N> after /resume all", () => {
     expect(listing?.type).toBe("reply");
     expect((listing as { text: string }).text).toContain("proj-2");
 
-    const picked = await handleSlashCommand({ ...ctx, text: "/resume 3" });
-    expect((picked as { text: string }).text).toContain("proj-2");
-    expect(bound).toEqual(["proj-2"]);
+    const picked = await handleSlashCommand({ ...ctx, text: "/resume 1" });
+    expect((picked as { text: string }).text).toContain("go-1");
+    expect(bound).toEqual(["go-1"]);
+    expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(fs.realpathSync(otherCwd));
   });
 
   it("without a prior list, falls back to the scoped query", async () => {
@@ -100,6 +309,79 @@ describe("/resume <N> after /resume all", () => {
     await handleSlashCommand({ ...ctx, text: "/resume all" });
     const picked = await handleSlashCommand({ ...ctx, text: "/resume 5" });
     expect((picked as { text: string }).text).toContain("共 1 条");
+  });
+
+  it("does not bind a session whose working directory no longer exists", async () => {
+    const missing = path.join(os.tmpdir(), "fcb-missing-resume-directory");
+    const bound: string[] = [];
+    const ctx = makeCtx({
+      scopedSessions: [],
+      allSessions: [makeSession("missing-1", missing, "gone")],
+      bound,
+    });
+    const before = ctx.router.getBinding(ctx.chatId).cwd;
+
+    await handleSlashCommand({ ...ctx, text: "/resume all" });
+    const picked = await handleSlashCommand({ ...ctx, text: "/resume 1" });
+
+    expect((picked as { text: string }).text).toContain("不存在");
+    expect(bound).toEqual([]);
+    expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(before);
+  });
+});
+
+describe("/cd working-directory validation", () => {
+  it("rejects relative paths without changing the binding", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const before = ctx.router.getBinding(ctx.chatId).cwd;
+
+    const result = await handleSlashCommand({ ...ctx, text: "/cd mypy" });
+
+    expect((result as { text: string }).text).toContain("绝对路径");
+    expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(before);
+  });
+
+  it("rejects missing directories without changing the binding", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const before = ctx.router.getBinding(ctx.chatId).cwd;
+    const missing = path.join(os.tmpdir(), "fcb-directory-that-does-not-exist");
+
+    const result = await handleSlashCommand({
+      ...ctx,
+      text: `/cd ${missing}`,
+    });
+
+    expect((result as { text: string }).text).toContain("不存在");
+    expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(before);
+  });
+
+  it("stores the canonical path for an existing directory", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-cwd-target-"));
+    const link = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "fcb-cwd-link-")),
+      "project",
+    );
+    tmpDirs.push(target, path.dirname(link));
+    fs.symlinkSync(target, link);
+
+    const result = await handleSlashCommand({ ...ctx, text: `/cd ${link}` });
+
+    expect((result as { text: string }).text).toContain(fs.realpathSync(target));
+    expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(fs.realpathSync(target));
+  });
+});
+
+describe("/ws use working-directory validation", () => {
+  it("rejects a stale workspace without changing the binding", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const before = ctx.router.getBinding(ctx.chatId).cwd;
+    ctx.router.saveWorkspace("stale", "mypy");
+
+    const result = await handleSlashCommand({ ...ctx, text: "/ws use stale" });
+
+    expect((result as { text: string }).text).toContain("绝对路径");
+    expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(before);
   });
 });
 

@@ -7,7 +7,7 @@
 | 方式 | 是否可行 | 说明 |
 |------|----------|------|
 | **Slash 命令** | ✅ 已实现 | `/model`、`/effort`、`/permission`，按飞书会话记忆，写入 `chat-bindings.json` |
-| **配置文件默认值** | ✅ | `backends.*.model` / `effort`，全局默认 |
+| **配置文件默认值** | ✅ | 可选；不配置时跟随 ACP adapter 的实时默认值 |
 | **流式 Markdown 卡片** | ✅ 已有 | Agent 回复用 `channel.stream()` |
 | **交互式卡片按钮** | ⚠️ 未实现 | 飞书支持 [消息卡片](https://open.feishu.cn/document/ukTMukTMukTM/uczM3QjL3MzN04yNzcDN) + `card.action.trigger`；Channel SDK 文档称可「卡片按钮」场景，但码桥当前未做按钮选模型 |
 | **长连接 vs Webhook** | 注意 | 当前码桥用 **长连接**收消息；卡片回调历史上多走 Webhook，长连接对 `card.action.trigger` 的支持需以飞书控制台与 SDK 版本为准 |
@@ -16,21 +16,19 @@
 
 ---
 
-## CLI 支持矩阵
+## ACP 支持矩阵
 
 | Backend | model | effort |
 |---------|-------|--------|
-| **cursor** (`cursor-agent -m`) | ✅ | ❌ CLI 无此参数 |
-| **claude** (`--model`, `--effort`) | ✅ | ✅ `low` / `medium` / `high` / `xhigh` / `max` |
-| **codex** (`codex exec -m`) | ✅ | ❌ `codex exec` 无 `--effort` |
+| **cursor** | ✅ | 当前 adapter 未提供 |
+| **claude** | ✅ | ✅ `low` / `medium` / `high` / `xhigh` / `max` |
+| **codex** | ✅ | ✅ `low` / `medium` / `high` / `xhigh` / `max` / `ultra` |
 
-优先级：**会话 slash 覆盖** > **config.yaml 默认** > **CLI 自身默认**。
+优先级：**会话 slash 覆盖** > **config.yaml 默认** > **ACP 适配器默认**。
 
-### Claude 权限模式（飞书必看）
+### ACP mode / 权限（飞书必看）
 
-飞书通过 `claude -p` 非交互调用时，CLI 默认 `dontAsk` 会**直接拒绝 Bash**（无法跑 skill、curl、脚本）。
-
-码桥默认传入：
+`/permission`（别名 `/perm`）直接读取各 adapter 的 `mode`：Cursor 通常提供 `agent/plan/ask`，Claude 提供 permission mode，Codex 提供 `read-only/agent/agent-full-access`。Claude 仍兼容配置默认值：
 
 ```yaml
 backends:
@@ -38,25 +36,26 @@ backends:
     claudePermissionMode: bypassPermissions
 ```
 
-可选：`acceptEdits` / `auto` / `default` / `plan` / `dontAsk`（`claude --help` 查看）。仅在可信本机使用 `bypassPermissions`。
+具体选项始终以当前 `/permission` 实时结果为准。仅在可信本机使用 `bypassPermissions` 或 `agent-full-access`。
 
 ---
 
 ## 飞书命令
 
 ```
-/model                  # 查看当前 backend 的 model 提示
-/model composer-2.5     # Cursor Agent
-/model sonnet           # Claude（别名，指向当前最新 Sonnet）
-/model gpt-5.3-codex    # Codex
-/model default          # 清除会话覆盖，回到 yaml 默认
+/model                  # 实时读取当前 backend 的 model 列表
+/model <列表里的名称>   # 名称和值均可；写入前会按实时列表校验
+/model default          # 清除会话覆盖，回到 ACP adapter 默认
 
-/effort high            # 仅 Claude
+/effort                 # 实时读取 thought_level（Claude / Codex）
+/effort high
+/effort ultra           # Codex 当前支持
 /effort default         # 清除覆盖
 
-/permission             # 查看 Claude permission-mode
-/permission bypassPermissions
-/permission dontAsk       # 非交互下会拒绝 Bash
+/permission             # 实时读取当前 backend 的 mode/权限列表
+/permission ask         # Cursor 示例
+/permission bypassPermissions # Claude 示例
+/permission read-only   # Codex 示例
 /permission default     # 清除覆盖
 
 /status                 # 查看 backend / model / effort / permission / cwd
@@ -70,21 +69,19 @@ backends:
 backends:
   cursor:
     type: cursor-cli
-    command: cursor-agent
-    args: ["--force"]
-    model: composer-2.5      # Cursor Agent；也可用 auto 交给 CLI 选择
+    acpCommand: cursor-agent
+    acpArgs: ["acp"]
   claude:
     type: claude-code
-    command: claude
-    model: sonnet            # 别名：opus / sonnet / haiku
-    effort: medium
+    acpCommand: npx
+    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.63.0"]
     claudePermissionMode: bypassPermissions
   codex:
     type: codex
-    command: codex
-    model: gpt-5.3-codex     # Codex 5.3 标准档
+    acpCommand: npx
+    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.7"]
 ```
 
 会话绑定持久化：`~/.feishu-code-bridge/chat-bindings.json`（按 `chatId|topicId`）。
 
-修改 **yaml 里 backends 默认** 后需 **重启 Runner**；slash 设置的会话覆盖 **立即生效**，无需重启。
+不建议在 yaml 固定 model/effort，否则会覆盖 adapter 随版本更新的默认值。slash 设置的会话覆盖立即生效；`/model default`、`/effort default` 可恢复实时默认。

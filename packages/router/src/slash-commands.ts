@@ -1,18 +1,15 @@
 import { execSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import type { AppConfig, BackendConfigOption } from "@feishu-code-bridge/core";
 import type { CliSessionSummary } from "@feishu-code-bridge/runner-client";
 import {
   formatFullCommandHelp,
 } from "./command-help.js";
 import {
-  CLAUDE_PERMISSION_MODES,
-  EFFORT_LEVELS,
-  backendSupportsEffort,
-  backendSupportsPermissionMode,
   formatDynamicModelHelp,
-  formatEffortHelp,
-  formatModelHelp,
-  formatPermissionHelp,
+  formatDynamicOptionHelp,
+  matchBackendConfigValue,
 } from "./model-effort.js";
 import {
   compactProjectPath,
@@ -30,10 +27,10 @@ export interface SlashContext {
   text: string;
   config: AppConfig;
   router: SessionRouter;
-  listCliSessions?: (
+  listSessions?: (
     options?: { all?: boolean; limit?: number },
   ) => Promise<CliSessionSummary[]>;
-  bindCliSession?: (sessionId: string) => void;
+  bindSession?: (sessionId: string) => void;
   /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（含真实模型列表） */
   listConfigOptions?: () => Promise<BackendConfigOption[]>;
   cancelActiveRun?: () => Promise<boolean>;
@@ -49,6 +46,23 @@ export type SlashResult =
   | { type: "agent"; prompt: string }
   | { type: "config_updated"; text: string }
   | { type: "send_file"; path: string };
+
+function canonicalDirectory(raw: string):
+  | { cwd: string }
+  | { error: string } {
+  if (!path.isAbsolute(raw)) {
+    return { error: `工作目录必须使用绝对路径: ${raw}` };
+  }
+  try {
+    const cwd = fs.realpathSync(raw);
+    if (!fs.statSync(cwd).isDirectory()) {
+      return { error: `工作目录不是目录: ${raw}` };
+    }
+    return { cwd };
+  } catch {
+    return { error: `工作目录不存在或无法访问: ${raw}` };
+  }
+}
 
 export async function handleSlashCommand(
   ctx: SlashContext,
@@ -112,7 +126,15 @@ export async function handleSlashCommand(
     }
 
     case "/resume":
-      return handleResume(ctx, arg);
+      try {
+        return await handleResume(ctx, arg);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          type: "reply",
+          text: `ACP session 列表读取失败：${message}\n\n请运行 \`./scripts/start.sh doctor\` 检查 adapter。`,
+        };
+      }
 
     case "/send":
       if (!arg) {
@@ -143,13 +165,12 @@ export async function handleSlashCommand(
         text: [
           `**backend**: ${key.backendId}`,
           `**cwd**: ${key.cwd}`,
-          `**model**: ${runOpts.model ?? "(CLI 默认)"}${binding.model ? " _(会话覆盖)_" : profile?.model ? " _(配置默认)_" : ""}`,
-          `**transport**: ${runOpts.transport}${binding.transport ? " _(会话覆盖)_" : profile?.transport ? " _(配置默认)_" : " _(默认 acp)_"}`,
-          `**effort**: ${backendSupportsEffort(key.backendId) ? (runOpts.effort ?? "(CLI 默认)") : "_(不支持)_"}${binding.effort ? " _(会话覆盖)_" : profile?.effort ? " _(配置默认)_" : ""}`,
-          `**permission**: ${backendSupportsPermissionMode(key.backendId) ? (runOpts.claudePermissionMode ?? "bypassPermissions") : "_(不支持)_"}${binding.claudePermissionMode ? " _(会话覆盖)_" : profile?.claudePermissionMode ? " _(配置默认)_" : ""}`,
+          `**model**: ${runOpts.model ?? "(ACP 默认)"}${binding.model ? " _(会话覆盖)_" : profile?.model ? " _(配置默认)_" : ""}`,
+          "**transport**: acp",
+          `**effort**: ${runOpts.effort ?? "(ACP 默认)"}${binding.effort ? " _(会话覆盖)_" : profile?.effort ? " _(配置默认)_" : ""}`,
+          `**mode/permission**: ${runOpts.mode ?? "(ACP 默认)"}${binding.mode ? " _(会话覆盖)_" : profile?.claudePermissionMode ? " _(配置默认)_" : ""}`,
           `**thinking**: ${(binding.showThinking ?? true) ? "on（显示思考/工具过程）" : "off（只显示最终答案）"}`,
-          `**cliSessionId**: ${rec?.cliSessionId ?? "(none)"}`,
-          `**sessionTransport**: ${rec?.transport ?? "-"}`,
+          `**sessionId**: ${rec?.sessionId ?? "(none)"}`,
           `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
           `**runnerActive**: ${runnerActive}`,
         ].join("\n"),
@@ -163,7 +184,7 @@ export async function handleSlashCommand(
       return handleEffort(ctx, arg);
 
     case "/transport":
-      return handleTransport(ctx, arg);
+      return { type: "reply", text: "当前仅支持 ACP，无需切换 transport。" };
 
     case "/permission":
     case "/perm":
@@ -175,9 +196,13 @@ export async function handleSlashCommand(
 
     case "/cd": {
       if (!arg) return { type: "reply", text: "用法: `/cd /path/to/project`" };
-      ctx.router.setBinding(ctx.chatId, { cwd: arg }, ctx.topicId);
+      const resolved = canonicalDirectory(arg);
+      if ("error" in resolved) {
+        return { type: "reply", text: resolved.error };
+      }
+      ctx.router.setBinding(ctx.chatId, { cwd: resolved.cwd }, ctx.topicId);
       ctx.router.clearSession(ctx.chatId, ctx.topicId);
-      return { type: "reply", text: `已切换工作目录: ${arg}` };
+      return { type: "reply", text: `已切换工作目录: ${resolved.cwd}` };
     }
 
     case "/backend": {
@@ -195,7 +220,7 @@ export async function handleSlashCommand(
       const modelHint = profile?.model ? `，model 默认 \`${profile.model}\`` : "";
       return {
         type: "reply",
-        text: `已切换 backend: ${id}${modelHint}（已清除上一 backend 的 model/effort/transport 覆盖及续聊 session）`,
+        text: `已切换 backend: ${id}${modelHint}（已清除上一 backend 的 model/effort 覆盖及续聊 session）`,
       };
     }
 
@@ -264,10 +289,10 @@ async function handleResume(
   ctx: SlashContext,
   arg: string,
 ): Promise<SlashResult> {
-  if (!ctx.listCliSessions || !ctx.bindCliSession) {
+  if (!ctx.listSessions || !ctx.bindSession) {
     return {
       type: "reply",
-      text: "Runner 未就绪，无法列出 CLI session。请先启动 feishu-code-runner。",
+      text: "Runner 未就绪，无法列出 ACP session。请先启动 feishu-code-runner。",
     };
   }
 
@@ -278,7 +303,7 @@ async function handleResume(
     const index = Number(arg);
     const sessions =
       resumeListCache.get(resumeCacheKey(ctx)) ??
-      (await ctx.listCliSessions({ all: listAll }));
+      (await ctx.listSessions({ all: listAll }));
     const picked = sessions[index - 1];
     if (!picked) {
       return {
@@ -286,7 +311,12 @@ async function handleResume(
         text: `无效序号 ${index}。先发送 \`/resume\` 查看列表（共 ${sessions.length} 条）。`,
       };
     }
-    ctx.bindCliSession(picked.id);
+    const resolved = canonicalDirectory(picked.cwd);
+    if ("error" in resolved) {
+      return { type: "reply", text: resolved.error };
+    }
+    ctx.router.setBinding(ctx.chatId, { cwd: resolved.cwd }, ctx.topicId);
+    ctx.bindSession(picked.id);
     return {
       type: "reply",
       text: [
@@ -295,13 +325,13 @@ async function handleResume(
         `- cwd: ${picked.cwd}`,
         `- preview: ${picked.preview}`,
         "",
-        "下一条消息将带 `--resume` 继续该 CLI session。",
+        "下一条消息将通过 ACP 继续该 session。",
       ].join("\n"),
     };
   }
 
   if (arg.toLowerCase() === "last") {
-    const sessions = await ctx.listCliSessions();
+    const sessions = await ctx.listSessions();
     const picked = sessions[0];
     if (!picked) {
       return {
@@ -309,7 +339,12 @@ async function handleResume(
         text: `当前目录 \`${key.cwd}\` 下没有找到 **${key.backendId}** 本地 session。`,
       };
     }
-    ctx.bindCliSession(picked.id);
+    const resolved = canonicalDirectory(picked.cwd);
+    if ("error" in resolved) {
+      return { type: "reply", text: resolved.error };
+    }
+    ctx.router.setBinding(ctx.chatId, { cwd: resolved.cwd }, ctx.topicId);
+    ctx.bindSession(picked.id);
     return {
       type: "reply",
       text: [
@@ -317,7 +352,7 @@ async function handleResume(
         `- id: \`${picked.id}\``,
         `- preview: ${picked.preview}`,
         "",
-        "下一条消息将带 `--resume` 继续。",
+        "下一条消息将通过 ACP 继续该 session。",
       ].join("\n"),
     };
   }
@@ -329,11 +364,11 @@ async function handleResume(
     };
   }
 
-  const sessions = await ctx.listCliSessions({ all: listAll });
+  const sessions = await ctx.listSessions({ all: listAll });
   const rec = ctx.router.getSessionRecord(key);
   if (sessions.length === 0) {
-    const bound = rec?.cliSessionId
-      ? `\n当前已绑定: \`${rec.cliSessionId}\``
+    const bound = rec?.sessionId
+      ? `\n当前已绑定: \`${rec.sessionId}\``
       : "";
     const scopeHint = listAll
       ? "本机"
@@ -351,7 +386,7 @@ async function handleResume(
   const lines = listAll
     ? formatGroupedSessionLines(visible)
     : visible.map((s, i) => formatSessionLine(s, i, showCwd));
-  const boundLine = rec?.cliSessionId ? rec.cliSessionId : undefined;
+  const boundLine = rec?.sessionId ? rec.sessionId : undefined;
   setResumeListCache(ctx, visible);
 
   return {
@@ -396,226 +431,183 @@ async function handleModel(
   const backendId = binding.backendId;
   const profile = ctx.config.backends[backendId];
 
-  if (!arg || arg.toLowerCase() === "list") {
-    const runOpts = ctx.router.resolveRunOptions(
-      ctx.chatId,
-      ctx.topicId,
-      ctx.config,
-    );
-    // 优先动态拉取适配器 advertise 的真实模型列表（ACP）；失败/为空回退静态提示
-    if (ctx.listConfigOptions) {
-      try {
-        const options = await ctx.listConfigOptions();
-        const model = options.find((o) => o.category === "model");
-        if (model && model.values.length > 0) {
-          return {
-            type: "reply",
-            text: formatDynamicModelHelp(backendId, model, runOpts.model),
-          };
-        }
-      } catch {
-        // 适配器未就绪等，回退静态提示
-      }
-    }
-    return {
-      type: "reply",
-      text: formatModelHelp(backendId, runOpts.model),
-    };
-  }
-
   if (arg.toLowerCase() === "default") {
     ctx.router.clearModel(ctx.chatId, ctx.topicId);
-    const fallback = profile?.model ?? "(CLI 默认)";
+    const fallback = profile?.model ?? "(ACP 默认)";
     return {
       type: "reply",
       text: `已清除会话 model 覆盖，将使用: ${fallback}`,
     };
   }
 
-  ctx.router.setBinding(ctx.chatId, { model: arg }, ctx.topicId);
+  const loaded = await loadConfigOption(ctx, "model", "model");
+  if ("reply" in loaded) return loaded.reply;
+  const runOpts = ctx.router.resolveRunOptions(
+    ctx.chatId,
+    ctx.topicId,
+    ctx.config,
+  );
+  if (!arg || arg.toLowerCase() === "list") {
+    return {
+      type: "reply",
+      text: formatDynamicModelHelp(backendId, loaded.option, runOpts.model),
+    };
+  }
+  const value = matchBackendConfigValue(loaded.option, arg);
+  if (!value) return invalidLiveValue("model", arg, loaded.option);
+  ctx.router.setBinding(ctx.chatId, { model: value }, ctx.topicId);
   return {
     type: "reply",
-    text: `已设置 **${backendId}** model: \`${arg}\`\n下一条消息生效。`,
+    text: `已设置 **${backendId}** model: \`${value}\`\n下一条消息生效。`,
   };
 }
 
-function handleEffort(ctx: SlashContext, arg: string): SlashResult {
+async function handleEffort(
+  ctx: SlashContext,
+  arg: string,
+): Promise<SlashResult> {
   const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
   const backendId = binding.backendId;
   const profile = ctx.config.backends[backendId];
 
-  if (!backendSupportsEffort(backendId)) {
-    return {
-      type: "reply",
-      text: formatEffortHelp(backendId),
-    };
-  }
-
-  if (!arg || arg.toLowerCase() === "list") {
-    const runOpts = ctx.router.resolveRunOptions(
-      ctx.chatId,
-      ctx.topicId,
-      ctx.config,
-    );
-    return {
-      type: "reply",
-      text: formatEffortHelp(backendId, runOpts.effort),
-    };
-  }
-
   if (arg.toLowerCase() === "default") {
     ctx.router.clearEffort(ctx.chatId, ctx.topicId);
-    const fallback = profile?.effort ?? "(CLI 默认)";
+    const fallback = profile?.effort ?? "(ACP 默认)";
     return {
       type: "reply",
       text: `已清除会话 effort 覆盖，将使用: ${fallback}`,
     };
   }
 
-  const level = arg.toLowerCase();
-  if (!EFFORT_LEVELS.includes(level as (typeof EFFORT_LEVELS)[number])) {
-    return {
-      type: "reply",
-      text: `无效 effort: ${arg}\n可选: ${EFFORT_LEVELS.join(", ")}`,
-    };
-  }
-
-  ctx.router.setBinding(ctx.chatId, { effort: level }, ctx.topicId);
-  return {
-    type: "reply",
-    text: `已设置 Claude effort: \`${level}\`\n下一条消息生效。`,
-  };
-}
-
-const TRANSPORT_MODES = ["acp", "cli"] as const;
-
-function formatTransportHelp(current: string, source?: string): string {
-  const lines = [
-    `当前 transport: \`${current}\`${source ? ` ${source}` : ""}`,
-    "",
-    "**acp** — Agent Client Protocol（默认，推荐）",
-    "**cli** — 直接 spawn CLI（stream-json 回退）",
-    "",
-    "用法: `/transport acp|cli|default`",
-  ];
-  return lines.join("\n");
-}
-
-function handleTransport(ctx: SlashContext, arg: string): SlashResult {
-  const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
-  const profile = ctx.config.backends[binding.backendId];
+  const loaded = await loadConfigOption(ctx, "thought_level", "effort");
+  if ("reply" in loaded) return loaded.reply;
   const runOpts = ctx.router.resolveRunOptions(
     ctx.chatId,
     ctx.topicId,
     ctx.config,
   );
-  const source = binding.transport
-    ? "_(会话覆盖)_"
-    : profile?.transport
-      ? "_(配置默认)_"
-      : "_(默认 acp)_";
-
   if (!arg || arg.toLowerCase() === "list") {
     return {
       type: "reply",
-      text: formatTransportHelp(runOpts.transport, source),
+      text: formatDynamicOptionHelp(
+        backendId,
+        "effort",
+        "effort",
+        loaded.option,
+        runOpts.effort,
+      ),
     };
   }
-
-  if (arg.toLowerCase() === "default") {
-    const prevTransport = runOpts.transport;
-    ctx.router.clearTransport(ctx.chatId, ctx.topicId);
-    const fallback = profile?.transport ?? "acp";
-    if (fallback !== prevTransport) {
-      ctx.router.clearSession(ctx.chatId, ctx.topicId);
-    }
-    return {
-      type: "reply",
-      text:
-        fallback !== prevTransport
-          ? `已清除会话 transport 覆盖，将使用: ${fallback}\n已清除旧 session（CLI ↔ ACP 的续聊 ID 不通用）。`
-          : `已清除会话 transport 覆盖，将使用: ${fallback}`,
-    };
-  }
-
-  const mode = arg.toLowerCase();
-  if (!TRANSPORT_MODES.includes(mode as (typeof TRANSPORT_MODES)[number])) {
-    return {
-      type: "reply",
-      text: `无效 transport: ${arg}\n可选: ${TRANSPORT_MODES.join(", ")}`,
-    };
-  }
-
-  ctx.router.setBinding(
-    ctx.chatId,
-    { transport: mode as (typeof TRANSPORT_MODES)[number] },
-    ctx.topicId,
-  );
-  if (mode !== runOpts.transport) {
-    ctx.router.clearSession(ctx.chatId, ctx.topicId);
-  }
+  const value = matchBackendConfigValue(loaded.option, arg);
+  if (!value) return invalidLiveValue("effort", arg, loaded.option);
+  ctx.router.setBinding(ctx.chatId, { effort: value }, ctx.topicId);
   return {
     type: "reply",
-    text:
-      mode !== runOpts.transport
-        ? `已设置 transport: \`${mode}\`\n已清除旧 session（CLI ↔ ACP 的续聊 ID 不通用）。\n下一条消息生效。`
-        : `已设置 transport: \`${mode}\`\n下一条消息生效。`,
+    text: `已设置 **${backendId}** effort: \`${value}\`\n下一条消息生效。`,
   };
 }
 
-function handlePermission(ctx: SlashContext, arg: string): SlashResult {
+async function handlePermission(
+  ctx: SlashContext,
+  arg: string,
+): Promise<SlashResult> {
   const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
   const backendId = binding.backendId;
   const profile = ctx.config.backends[backendId];
 
-  if (!backendSupportsPermissionMode(backendId)) {
-    return {
-      type: "reply",
-      text: formatPermissionHelp(backendId),
-    };
-  }
-
-  if (!arg || arg.toLowerCase() === "list") {
-    const runOpts = ctx.router.resolveRunOptions(
-      ctx.chatId,
-      ctx.topicId,
-      ctx.config,
-    );
-    return {
-      type: "reply",
-      text: formatPermissionHelp(
-        backendId,
-        runOpts.claudePermissionMode ?? "bypassPermissions",
-      ),
-    };
-  }
-
   if (arg.toLowerCase() === "default") {
+    ctx.router.clearMode(ctx.chatId, ctx.topicId);
     ctx.router.clearClaudePermissionMode(ctx.chatId, ctx.topicId);
+    const policy = ctx.config.runnerHost?.acpPermissionPolicy ?? "auto_allow";
     const fallback =
-      profile?.claudePermissionMode ?? "bypassPermissions（码桥默认）";
+      profile?.claudePermissionMode ??
+      (backendId === "claude"
+        ? policy === "auto_allow"
+          ? "bypassPermissions（Runner auto_allow）"
+          : "default（由 Runner 处理权限请求）"
+        : "ACP 适配器默认 mode");
     return {
       type: "reply",
       text: `已清除会话 permission 覆盖，将使用: ${fallback}`,
     };
   }
 
-  const mode = arg.trim();
-  if (!(CLAUDE_PERMISSION_MODES as readonly string[]).includes(mode)) {
+  const loaded = await loadConfigOption(ctx, "mode", "mode/permission");
+  if ("reply" in loaded) return loaded.reply;
+  const runOpts = ctx.router.resolveRunOptions(
+    ctx.chatId,
+    ctx.topicId,
+    ctx.config,
+  );
+  if (!arg || arg.toLowerCase() === "list") {
+    const help = formatDynamicOptionHelp(
+      backendId,
+      "mode/permission",
+      "permission",
+      loaded.option,
+      runOpts.mode,
+    );
+    const policy = ctx.config.runnerHost?.acpPermissionPolicy ?? "auto_allow";
     return {
       type: "reply",
-      text: `无效 permission-mode: ${arg}\n可选: ${CLAUDE_PERMISSION_MODES.join(", ")}`,
+      text: `${help}\n\nRunner approval policy: \`${policy}\`（控制 ACP 权限请求如何批准；与 adapter mode 共同生效）`,
     };
   }
-
-  ctx.router.setBinding(
-    ctx.chatId,
-    { claudePermissionMode: mode as (typeof CLAUDE_PERMISSION_MODES)[number] },
-    ctx.topicId,
-  );
+  const value = matchBackendConfigValue(loaded.option, arg);
+  if (!value) return invalidLiveValue("mode/permission", arg, loaded.option);
+  ctx.router.setBinding(ctx.chatId, { mode: value }, ctx.topicId);
   return {
     type: "reply",
-    text: `已设置 Claude permission-mode: \`${mode}\`\n下一条消息生效。`,
+    text: `已设置 **${backendId}** mode/permission: \`${value}\`\n下一条消息生效。`,
+  };
+}
+
+async function loadConfigOption(
+  ctx: SlashContext,
+  category: string,
+  label: string,
+): Promise<{ option: BackendConfigOption } | { reply: SlashResult }> {
+  const backendId = ctx.router.getBinding(ctx.chatId, ctx.topicId).backendId;
+  if (!ctx.listConfigOptions) {
+    return {
+      reply: { type: "reply", text: "Runner 未就绪，无法读取 ACP 实时能力。" },
+    };
+  }
+  try {
+    const options = await ctx.listConfigOptions();
+    const option = options.find(
+      (candidate) =>
+        candidate.category === category && candidate.values.length > 0,
+    );
+    if (!option) {
+      return {
+        reply: {
+          type: "reply",
+          text: `**${backendId}** ACP 适配器未提供 ${label} 配置项。`,
+        },
+      };
+    }
+    return { option };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      reply: {
+        type: "reply",
+        text: `ACP 实时能力读取失败：${message}`,
+      },
+    };
+  }
+}
+
+function invalidLiveValue(
+  label: string,
+  input: string,
+  option: BackendConfigOption,
+): SlashResult {
+  const values = option.values.map((value) => value.name ?? value.value);
+  return {
+    type: "reply",
+    text: `${label} \`${input}\` 不在适配器实时列表中。\n可选: ${values.join(", ")}`,
   };
 }
 
@@ -672,9 +664,13 @@ function handleWs(ctx: SlashContext, rest: string[]): SlashResult {
     const map = ctx.router.listWorkspaceNames();
     const cwd = map[name];
     if (!cwd) return { type: "reply", text: `未找到工作区: ${name}` };
-    ctx.router.setBinding(ctx.chatId, { cwd }, ctx.topicId);
+    const resolved = canonicalDirectory(cwd);
+    if ("error" in resolved) {
+      return { type: "reply", text: resolved.error };
+    }
+    ctx.router.setBinding(ctx.chatId, { cwd: resolved.cwd }, ctx.topicId);
     ctx.router.clearSession(ctx.chatId, ctx.topicId);
-    return { type: "reply", text: `已切换工作区: ${name} (${cwd})` };
+    return { type: "reply", text: `已切换工作区: ${name} (${resolved.cwd})` };
   }
   if (sub === "remove" && name) {
     ctx.router.removeWorkspace(name);

@@ -1,5 +1,4 @@
 export {
-  getBackendTransport,
   resolveAcpSpawn,
   acpContinueMethod,
   type AcpSpawnProfile,

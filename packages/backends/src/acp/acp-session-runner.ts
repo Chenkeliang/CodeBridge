@@ -389,7 +389,6 @@ async function openAcpSessionResources(
   onSpawn: (child: ChildProcess, kill: () => void) => void,
 ): Promise<{
   resources: AcpSessionResources;
-  resumeFallbackReason?: string;
 }> {
   const spawnProfile = resolveAcpSpawn(ctx.backendConfig);
   const { spawnKey, envKey } = buildSessionMatchKeys(ctx);
@@ -456,12 +455,8 @@ async function openAcpSessionResources(
       "ACP initialize 超时",
     );
 
-    let resumeFallbackReason: string | undefined;
     const active = await openActiveSession(connection, ctx, ctx.backendConfig, {
       isAborted: options.isAborted,
-      onResumeFallback: (reason) => {
-        resumeFallbackReason = reason;
-      },
     });
 
     const resources: AcpSessionResources = {
@@ -476,7 +471,7 @@ async function openAcpSessionResources(
       carrier: { pending: null },
       runtime,
     };
-    return { resources, resumeFallbackReason };
+    return { resources };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const detail = stderr.trim();
@@ -510,7 +505,6 @@ export async function* runAcpSession(
   let healthy = false;
   // drain 硬上限等路径会标记本轮资源不可入池（进程还活着但已不可信）
   let poolable = true;
-  let resumeFallbackReason: string | undefined;
 
   try {
     if (!resources) {
@@ -519,7 +513,6 @@ export async function* runAcpSession(
         outHandle.current = { child, cancel: kill };
       });
       resources = opened.resources;
-      resumeFallbackReason = opened.resumeFallbackReason;
     }
     const r = resources;
 
@@ -543,14 +536,6 @@ export async function* runAcpSession(
     };
 
     yield { type: "session", sessionId: r.sessionId };
-    if (resumeFallbackReason) {
-      yield {
-        type: "error",
-        message: `ACP 续聊原会话失败，已自动新建会话：${resumeFallbackReason}`,
-        fatal: false,
-      };
-    }
-
     // 每轮重绑权限决策器（per-run 闭包；池复用时旧闭包已随上一轮失效）
     r.runtime.requestDecision = options.requestDecision;
 
