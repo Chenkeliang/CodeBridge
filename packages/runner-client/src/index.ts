@@ -28,7 +28,7 @@ export class RunnerClient {
   async listSessions(
     backend: string,
     cwd: string,
-    options?: { all?: boolean; limit?: number; transport?: RunRequest["transport"] },
+    options?: { all?: boolean; limit?: number },
   ): Promise<{ sessions: CliSessionSummary[]; error?: string }> {
     const params = new URLSearchParams({
       backend,
@@ -36,7 +36,6 @@ export class RunnerClient {
       limit: String(options?.limit ?? 20),
     });
     if (options?.all) params.set("all", "true");
-    if (options?.transport) params.set("transport", options.transport);
     const res = await this.fetch(`/sessions?${params}`);
     if (!res.ok) {
       throw new Error(`Runner error: ${res.status} ${await res.text()}`);
@@ -50,10 +49,8 @@ export class RunnerClient {
   async listConfigOptions(
     backend: string,
     cwd: string,
-    options?: { transport?: RunRequest["transport"] },
   ): Promise<{ options: BackendConfigOption[]; error?: string }> {
     const params = new URLSearchParams({ backend, cwd });
-    if (options?.transport) params.set("transport", options.transport);
     const res = await this.fetch(`/config-options?${params}`);
     if (!res.ok) {
       throw new Error(`Runner error: ${res.status} ${await res.text()}`);
@@ -154,7 +151,7 @@ export class RunnerClient {
     const message = err instanceof Error ? err.message : String(err);
     if (message === "terminated" || message.includes("other side closed")) {
       return new Error(
-        "Runner 连接意外断开（常见于 Runner 僵尸进程）。请执行 `./scripts/start.sh stop && ./scripts/start.sh start` 重启后重试；或发送 `/transport cli` 切换传输。",
+        "Runner 连接意外断开（常见于 Runner 僵尸进程）。请执行 `./scripts/start.sh restart` 重启后重试。",
       );
     }
     return err instanceof Error ? err : new Error(message);

@@ -313,7 +313,7 @@ export class FeishuBridge {
           Boolean(
             this.orchestrator.router.getSessionRecord(
               this.orchestrator.router.buildSessionKey(msg.chatId, topicId),
-            )?.cliSessionId,
+            )?.sessionId,
           ),
           this.botParticipatedTopics,
         ),
@@ -342,10 +342,10 @@ export class FeishuBridge {
       text: msg.content,
       config: this.config,
       router: this.orchestrator.router,
-      listCliSessions: (options) =>
-        this.orchestrator.listCliSessions(msg.chatId, topicId, options),
-      bindCliSession: (sessionId) =>
-        this.orchestrator.bindCliSession(msg.chatId, topicId, sessionId),
+      listSessions: (options) =>
+        this.orchestrator.listSessions(msg.chatId, topicId, options),
+      bindSession: (sessionId) =>
+        this.orchestrator.bindSession(msg.chatId, topicId, sessionId),
       listConfigOptions: () =>
         this.orchestrator.listConfigOptions(msg.chatId, topicId),
       resolvePermission: (approve) =>

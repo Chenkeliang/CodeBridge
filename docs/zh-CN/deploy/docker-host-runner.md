@@ -50,4 +50,4 @@ curl -H "Authorization: Bearer $RUNNER_TOKEN" http://127.0.0.1:19789/health
 
 - `RUNNER_TOKEN` 使用长随机字符串
 - Runner 不要绑定 `0.0.0.0`（除非明确知情）
-- Codex `allowBypassApprovals` 默认为 `false`
+- Agent 权限由 ACP 适配器和 `runnerHost.acpPermissionPolicy` 共同控制

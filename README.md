@@ -9,9 +9,9 @@ Message your Feishu bot to run coding agents on your Mac/Linux host: stream repl
 ## Features
 
 - **Feishu WebSocket** long connection with streaming markdown replies
-- **Multi-backend**: `cursor` / `claude` / `codex` via **ACP** (default) or CLI spawn fallback
-- **Session routing**: `/new`, `/resume`, `/backend`, `/cd`, `/ws`, `/model`, `/effort`, `/permission`, `/transport`, `/stop`
-- **Resume local CLI sessions**: pick an existing Cursor / Claude / Codex session from disk and continue with `--resume`
+- **Multi-backend**: `cursor` / `claude` / `codex` via **ACP**
+- **Session routing**: `/new`, `/resume`, `/backend`, `/cd`, `/ws`, `/model`, `/effort`, `/permission`, `/stop`
+- **Resume local sessions**: pick an existing Cursor / Claude / Codex session through its ACP adapter
 - **Pinned bot menu**: configure Feishu custom menu items for one-tap commands ([guide](docs/zh-CN/feishu-bot-menu.md))
 - **Git shortcuts**: `/clone`, `/pull` (uses host git + SSH credentials)
 - **Group chat policy**: @mention required by default; trusted groups can opt out
@@ -26,7 +26,7 @@ Feishu  →  Bridge (Channel SDK)  →  HTTP/SSE  →  Runner (host)  →  curso
 | Component | Role |
 |-----------|------|
 | **Bridge** | Feishu bot, slash commands, streaming UI |
-| **Runner** | Spawns ACP agents or CLI processes, streams events, exposes `/runs` API |
+| **Runner** | Spawns ACP agents, streams events, exposes `/runs` API |
 
 ## Quick start
 
@@ -68,17 +68,16 @@ Other commands:
 | `/status` | Current backend, cwd, model |
 | `/stop` | Cancel the running agent task |
 | `/approve` `/deny` | Answer a pending permission request (prompt_feishu mode) |
-| `/new` | Start a fresh CLI session |
-| `/resume` | List local CLI sessions (scoped by cwd) |
+| `/new` | Start a fresh ACP session |
+| `/resume` | List local sessions through ACP (scoped by cwd) |
 | `/resume 2` | Bind session #2 to this chat |
 | `/resume last` | Bind the most recent session |
 | `/resume all` | List sessions across all projects |
 | `/backend cursor\|claude\|codex` | Switch agent |
 | `/cd <path>` | Change project directory |
 | `/ws list\|save\|use\|remove` | Named workspaces |
-| `/model` `/effort` `/permission` | Model / Claude effort / permission mode |
+| `/model` `/effort` `/permission` | Live ACP model / reasoning effort / mode capabilities |
 | `/thinking on\|off` | Show/hide the thinking & tool-call process on the card (default on) |
-| `/transport acp\|cli\|default` | Switch ACP / CLI transport (per-chat override) |
 | `/clone <url>` `/pull` | Git on the host |
 | `/config` | Show config summary |
 
@@ -92,13 +91,13 @@ Session storage paths:
 
 ## Concurrency & limits
 
-Two layers matter: **Runner (host)** spawns CLI processes; **Bridge / Orchestrator (Feishu)** routes chat messages to Runner. Limits differ.
+Two layers matter: **Runner (host)** spawns ACP agents; **Bridge / Orchestrator (Feishu)** routes chat messages to Runner. Limits differ.
 
 | Scenario | Supported? | Layer |
 |----------|------------|-------|
-| **Different Feishu chats** running tasks at once (DM + group, two groups, two topics) | ✅ | Runner default **4** concurrent CLIs (`runnerHost.maxConcurrentRuns`) |
+| **Different Feishu chats** running tasks at once (DM + group, two groups, two topics) | ✅ | Runner default **4** concurrent agents (`runnerHost.maxConcurrentRuns`) |
 | **Different backends in parallel** (chat A → cursor, chat B → claude) | ✅ | Runner; separate `chatId` per chat |
-| **Multiple CLI sessions** (each chat binds its own `/resume` target) | ✅ | Persisted per `chatId \| topicId \| backend \| cwd` in `sessions.json` |
+| **Multiple sessions** (each chat binds its own `/resume` target) | ✅ | Persisted per `chatId \| topicId \| backend \| cwd` in `sessions.json` |
 | **Second message in the same chat** (same `chatId` + topic) | ⚠️ Cancels the first | **Feishu side**: one active run per chat; new message aborts the previous |
 | **Two people @ the bot in one group** at the same time | ❌ | One `chatId` → shared binding (backend / cwd / model) and only one active run |
 | **cursor + claude in parallel in one group** | ❌ | One backend bound per chat at a time; use `/backend` to **switch**, not run both |
@@ -112,26 +111,23 @@ Two layers matter: **Runner (host)** spawns CLI processes; **Bridge / Orchestrat
 
 Smoke test: `node scripts/test-concurrency-live.mjs` (parallel cursor + claude against local Runner).
 
-## ACP mode (default)
+## ACP mode
 
 Runner talks to agents over the [Agent Client Protocol](https://agentclientprotocol.com) (stdio JSON-RPC), same model as Zed External Agents.
 
 | Backend | ACP spawn command |
 |---------|-------------------|
 | **cursor** | `cursor-agent acp` |
-| **claude** | `npx -y @agentclientprotocol/claude-agent-acp@0.55.0` |
-| **codex** | `npx -y @agentclientprotocol/codex-acp@1.1.0` |
+| **claude** | `npx -y @agentclientprotocol/claude-agent-acp@0.63.0` |
+| **codex** | `npx -y @agentclientprotocol/codex-acp@1.1.7` |
 
-Config (`backends.<id>.transport`):
-
-- `acp` — default; use Registry-style agents above
-- `cli` — legacy `stream-json` spawn (`cursor-agent -p`, `claude -p`, `codex exec`)
+Runner uses ACP only; the legacy direct CLI spawn transport has been removed.
 
 `runnerHost.acpPermissionPolicy`: `auto_allow` (headless Feishu) or `prompt_deny`.
 
 **Resume**: Claude/Codex use `session/resume`; Cursor uses `session/load` (no `session/resume`).
 
-**Doctor** reports `acp-initialize` and `cli-version` separately — a broken native CLI does not block ACP.
+**Doctor** reports each backend's `acp-initialize` result.
 
 ```bash
 node scripts/acp-probe.mjs                    # direct JSON-RPC probe (no Runner)
@@ -167,7 +163,7 @@ Monorepo packages: `core`, `backends`, `runner-host`, `runner-client`, `router`,
 ## Security
 
 - Runner listens on `127.0.0.1` by default; protect `runner.token`
-- Codex `allowBypassApprovals` is **off** by default — see [SECURITY.md](SECURITY.md)
+- Agent permissions are controlled by ACP policy — see [SECURITY.md](SECURITY.md)
 - Do not commit real `appSecret` or tokens
 
 ## License

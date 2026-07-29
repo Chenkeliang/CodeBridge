@@ -17,11 +17,11 @@ const AGENTS = {
   cursor: { command: "cursor-agent", args: ["acp"] },
   claude: {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.55.0"],
+    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.63.0"],
   },
   codex: {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp@1.1.0"],
+    args: ["-y", "@agentclientprotocol/codex-acp@1.1.7"],
   },
 };
 

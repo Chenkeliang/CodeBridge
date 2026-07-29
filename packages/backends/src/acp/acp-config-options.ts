@@ -50,12 +50,10 @@ export function matchConfigValue(
 }
 
 /**
- * 由 RunContext + 全局 permission 策略解析本轮想要的三项配置，镜像 CLI 路径
- * （`backends/src/index.ts` 的 `ctx.X ?? profile.X`）：
+ * 由 RunContext + 全局 permission 策略解析本轮想要的三项 ACP 配置：
  * - model/effort：有则设、无则不设（尊重适配器默认）；
- * - permission-mode：仅 claude 后端。显式（`/permission` 或配置）优先；否则按全局 acpPermissionPolicy
- *   给默认——`auto_allow` 对齐 CLI 的 `bypassPermissions`，`prompt_deny` 退回会提示的 `default`，
- *   让客户端 requestPermission 处理器仍能拒，避免与全局策略冲突。
+ * - mode：三个后端都接受 `/permission` 的显式会话覆盖；Claude 未覆盖时再使用兼容配置或
+ *   acpPermissionPolicy 推导默认值，让 requestPermission 处理器与全局策略保持一致。
  */
 export function resolveDesiredConfig(
   ctx: RunContext,
@@ -65,12 +63,13 @@ export function resolveDesiredConfig(
   const desired: DesiredSessionConfig = {
     model: ctx.model ?? bc.model,
     effort: ctx.effort ?? bc.effort,
+    permissionMode: ctx.mode,
   };
   if (bc.type === "claude-code") {
     // prompt_deny / prompt_feishu 都需要适配器真的「发问」（default 模式）：
     // prompt_deny 由客户端 handler 拒，prompt_feishu 转发飞书等 /approve。
-    // 只有 auto_allow 才对齐 CLI 的 bypassPermissions（不问直接放行）。
-    desired.permissionMode =
+    // 只有 auto_allow 才使用 bypassPermissions（不问直接放行）。
+    desired.permissionMode ??=
       ctx.claudePermissionMode ??
       bc.claudePermissionMode ??
       (permissionPolicy === "auto_allow" ? "bypassPermissions" : "default");
@@ -115,7 +114,7 @@ const CATEGORY_BY_FIELD = {
  * 想要的 model/effort/permission 应用到会话上。适配器 advertise 的选项来自
  * `newSessionResponse.configOptions`（新建 + claude 续聊均带）。每次运行都要重设：续聊到新
  * 适配器进程时 model 会退回适配器默认（实测 Fable 5）。匹配不到的项只收集非致命 warning、不中断
- * ——非 claude 后端没有 thought_level/mode 就自然跳过。
+ * ——适配器没有对应 category 时就自然跳过。
  */
 export async function applySessionConfigOptions(
   agent: Agent,

@@ -5,7 +5,6 @@ import {
   serializeSessionKey,
   type AppConfig,
   type BackendProfile,
-  type BackendTransport,
   type ClaudePermissionMode,
   type SessionKey,
   type SessionRecord,
@@ -17,8 +16,8 @@ export interface ChatBinding {
   topicId?: string;
   model?: string;
   effort?: string;
+  mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
-  transport?: BackendTransport;
   /** 卡片是否展示思考/工具过程；缺省=true（显示）。纯展示偏好，切 backend 不清除 */
   showThinking?: boolean;
 }
@@ -26,8 +25,8 @@ export interface ChatBinding {
 export interface ResolvedRunOptions {
   model?: string;
   effort?: string;
+  mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
-  transport: BackendTransport;
 }
 
 export class SessionRouter {
@@ -106,23 +105,23 @@ export class SessionRouter {
     });
   }
 
-  clearTransport(chatId: string, topicId?: string): void {
+  clearMode(chatId: string, topicId?: string): void {
     const key = this.bindingKey(chatId, topicId);
     this.bindings.update((all) => {
       const current = all[key];
       if (!current) return all;
       const next = { ...current };
-      delete next.transport;
+      delete next.mode;
       return { ...all, [key]: next };
     });
   }
 
-  /** 切换 backend 时清除 model/effort/permission/transport 会话覆盖 */
+  /** 切换 backend 时清除 model/effort/permission 会话覆盖 */
   clearRunOverrides(chatId: string, topicId?: string): void {
     this.clearModel(chatId, topicId);
     this.clearEffort(chatId, topicId);
+    this.clearMode(chatId, topicId);
     this.clearClaudePermissionMode(chatId, topicId);
-    this.clearTransport(chatId, topicId);
   }
 
   resolveRunOptions(
@@ -137,13 +136,11 @@ export class SessionRouter {
     const rawEffort = binding.effort ?? profile?.effort;
     const rawPermission =
       binding.claudePermissionMode ?? profile?.claudePermissionMode;
-    const transport: BackendTransport =
-      binding.transport ?? profile?.transport ?? "acp";
     return {
       model: rawModel,
       effort: rawEffort,
+      mode: binding.mode ?? rawPermission,
       claudePermissionMode: rawPermission,
-      transport,
     };
   }
 
@@ -170,7 +167,14 @@ export class SessionRouter {
   }
 
   getSessionRecord(key: SessionKey): SessionRecord | undefined {
-    return this.sessions.read()[serializeSessionKey(key)];
+    const record = this.sessions.read()[serializeSessionKey(key)] as
+      | (SessionRecord & { cliSessionId?: string })
+      | undefined;
+    if (!record) return undefined;
+    return {
+      ...record,
+      sessionId: record.sessionId ?? record.cliSessionId,
+    };
   }
 
   saveSessionRecord(key: SessionKey, record: SessionRecord): void {
@@ -178,17 +182,15 @@ export class SessionRouter {
     this.sessions.update((all) => ({ ...all, [id]: record }));
   }
 
-  bindCliSession(
+  bindSession(
     chatId: string,
-    cliSessionId: string,
-    transport: BackendTransport,
+    sessionId: string,
     topicId?: string,
   ): void {
     const key = this.buildSessionKey(chatId, topicId);
     const existing = this.getSessionRecord(key);
     this.saveSessionRecord(key, {
-      cliSessionId,
-      transport,
+      sessionId,
       lastRunAt: new Date().toISOString(),
       lastRunId: existing?.lastRunId,
     });

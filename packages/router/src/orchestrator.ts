@@ -1,6 +1,6 @@
 import path from "node:path";
 import { appendJsonl } from "@feishu-code-bridge/core";
-import type { AgentEvent, AppConfig, BackendConfigOption, BackendTransport, RunAttachment, RunRequest, SessionRecord } from "@feishu-code-bridge/core";
+import type { AgentEvent, AppConfig, BackendConfigOption, RunAttachment, RunRequest } from "@feishu-code-bridge/core";
 import {
   RunnerClient,
   type CliSessionSummary,
@@ -77,7 +77,7 @@ export class RunOrchestrator {
       topicId,
       this.options.config,
     );
-    const resumeSessionId = this.resumeSessionId(existing, runOpts.transport);
+    const resumeSessionId = existing?.sessionId;
     const runId = this.router.newRunId();
     const chatKey = this.chatRunKey(chatId, topicId);
     const controller = new AbortController();
@@ -106,11 +106,11 @@ export class RunOrchestrator {
       resumeSessionId,
       model: runOpts.model,
       effort: runOpts.effort,
+      mode: runOpts.mode,
       claudePermissionMode: runOpts.claudePermissionMode,
-      transport: runOpts.transport,
     };
 
-    let cliSessionId = resumeSessionId ?? existing?.cliSessionId;
+    let sessionId = resumeSessionId ?? existing?.sessionId;
     let stopped = false;
     let loggedDone = false;
 
@@ -120,7 +120,7 @@ export class RunOrchestrator {
       appendJsonl(logPath, {
         event: "done",
         runId,
-        cliSessionId,
+        sessionId,
         stopped: controller.signal.aborted || stopped,
         ts: new Date().toISOString(),
       });
@@ -128,10 +128,9 @@ export class RunOrchestrator {
 
     const persistSession = (id?: string) => {
       if (!id) return;
-      cliSessionId = id;
+      sessionId = id;
       this.router.saveSessionRecord(sessionKey, {
-        cliSessionId: id,
-        transport: runOpts.transport,
+        sessionId: id,
         lastRunAt: new Date().toISOString(),
         lastRunId: runId,
       });
@@ -171,12 +170,13 @@ export class RunOrchestrator {
       yield { type: "done", exitCode: 130 };
     }
 
-    this.router.saveSessionRecord(sessionKey, {
-      cliSessionId,
-      transport: runOpts.transport,
-      lastRunAt: new Date().toISOString(),
-      lastRunId: runId,
-    });
+    if (sessionId) {
+      this.router.saveSessionRecord(sessionKey, {
+        sessionId,
+        lastRunAt: new Date().toISOString(),
+        lastRunId: runId,
+      });
+    }
   }
 
   async doctor() {
@@ -187,49 +187,25 @@ export class RunOrchestrator {
     return this.client.health();
   }
 
-  /** CLI 与 ACP 的 sessionId 不互通；无 transport 标记的旧记录按 CLI 处理 */
-  private resumeSessionId(
-    existing: SessionRecord | undefined,
-    transport: BackendTransport,
-  ): string | undefined {
-    if (!existing?.cliSessionId) return undefined;
-    const recorded = existing.transport ?? "cli";
-    return recorded === transport ? existing.cliSessionId : undefined;
-  }
-
-  async listCliSessions(
+  async listSessions(
     chatId: string,
     topicId?: string,
     options?: { all?: boolean; limit?: number },
   ): Promise<CliSessionSummary[]> {
     const key = this.router.buildSessionKey(chatId, topicId);
-    const runOpts = this.router.resolveRunOptions(
-      chatId,
-      topicId,
-      this.options.config,
-    );
-    const result = await this.client.listSessions(
-      key.backendId,
-      key.cwd,
-      { ...options, transport: runOpts.transport },
-    );
+    const result = await this.client.listSessions(key.backendId, key.cwd, options);
     if (result.error) {
       throw new Error(result.error);
     }
     return result.sessions;
   }
 
-  bindCliSession(
+  bindSession(
     chatId: string,
     topicId: string | undefined,
-    cliSessionId: string,
+    sessionId: string,
   ): void {
-    const runOpts = this.router.resolveRunOptions(
-      chatId,
-      topicId,
-      this.options.config,
-    );
-    this.router.bindCliSession(chatId, cliSessionId, runOpts.transport, topicId);
+    this.router.bindSession(chatId, sessionId, topicId);
   }
 
   /** prompt_feishu：把 /approve /deny 转给当前 run 挂起的权限请求 */
@@ -243,44 +219,16 @@ export class RunOrchestrator {
     return this.client.resolvePermission(active.runId, approve);
   }
 
-  /** /model 动态列表：适配器 advertise 的配置项，按 backend|cwd 缓存（拉一次要短暂 spawn 适配器） */
-  private readonly configOptionsCache = new Map<
-    string,
-    { at: number; options: BackendConfigOption[] }
-  >();
-
   async listConfigOptions(
     chatId: string,
     topicId?: string,
   ): Promise<BackendConfigOption[]> {
     const key = this.router.buildSessionKey(chatId, topicId);
-    const runOpts = this.router.resolveRunOptions(
-      chatId,
-      topicId,
-      this.options.config,
-    );
-    if (runOpts.transport !== "acp") return [];
-    const cacheKey = `${key.backendId}|${key.cwd}`;
-    const cached = this.configOptionsCache.get(cacheKey);
-    if (cached && Date.now() - cached.at < CONFIG_OPTIONS_CACHE_MS) {
-      return cached.options;
-    }
-    const result = await this.client.listConfigOptions(key.backendId, key.cwd, {
-      transport: runOpts.transport,
-    });
+    const result = await this.client.listConfigOptions(key.backendId, key.cwd);
     if (result.error) throw new Error(result.error);
-    // 空结果不缓存：多半是适配器未就绪/超时，下次 /model 再试
-    if (result.options.length > 0) {
-      this.configOptionsCache.set(cacheKey, {
-        at: Date.now(),
-        options: result.options,
-      });
-    }
     return result.options;
   }
 }
-
-const CONFIG_OPTIONS_CACHE_MS = 10 * 60 * 1000;
 
 export function agentEventToMarkdown(event: AgentEvent): string {
   switch (event.type) {

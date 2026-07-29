@@ -1,15 +1,13 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   AcpSessionPool,
   BackendRegistry,
-  getBackendTransport,
-  killProcessTree,
   listAcpConfigOptions,
   listAcpSessions,
-  listSessionsForBackend,
   runAcpSession,
   type CliSessionSummary,
 } from "@feishu-code-bridge/backends";
@@ -52,6 +50,21 @@ function resolveDoctorCwd(config: AppConfig): string {
     config.workspaces?.root ??
     path.join(home, "Projects");
   return raw.startsWith("~") ? path.join(home, raw.slice(1)) : raw;
+}
+
+function resolveRunCwd(raw: string): { cwd: string } | { error: string } {
+  if (!path.isAbsolute(raw)) {
+    return { error: `工作目录必须使用绝对路径: ${raw}` };
+  }
+  try {
+    const cwd = fs.realpathSync(raw);
+    if (!fs.statSync(cwd).isDirectory()) {
+      return { error: `工作目录不是目录: ${raw}` };
+    }
+    return { cwd };
+  } catch {
+    return { error: `工作目录不存在或无法访问: ${raw}` };
+  }
 }
 
 export class RunnerHost {
@@ -153,63 +166,56 @@ export class RunnerHost {
     backendId: string,
     cwd: string,
     options?: { limit?: number; all?: boolean },
-    requestTransport?: RunRequest["transport"],
   ): Promise<{ sessions: CliSessionSummary[]; error?: string }> {
     const profile = this.options.config.backends[backendId];
     if (!profile) {
       return { sessions: [], error: `Unknown backend: ${backendId}` };
     }
 
-    const transport = this.effectiveTransport(backendId, requestTransport);
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) {
+      return { sessions: [], error: resolvedCwd.error };
+    }
+    cwd = resolvedCwd.cwd;
 
-    if (transport === "acp") {
+    try {
       const sessions = await listAcpSessions(backendId, profile, cwd, {
         limit: options?.limit ?? 20,
         all: options?.all ?? false,
       });
       return { sessions };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        sessions: [],
+        error: `ACP session/list failed for ${backendId}: ${message}`,
+      };
     }
-
-    const discoveryId =
-      profile.type === "cursor-cli"
-        ? "cursor"
-        : profile.type === "claude-code"
-          ? "claude"
-          : profile.type === "codex"
-            ? "codex"
-            : backendId;
-    const sessions = listSessionsForBackend(discoveryId, cwd, {
-      limit: options?.limit ?? 20,
-      all: options?.all ?? false,
-      cursorCommand: profile.command,
-    });
-    return { sessions };
   }
 
-  /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（cli transport 返回空，走静态提示） */
+  /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项 */
   async listConfigOptions(
     backendId: string,
     cwd: string,
-    requestTransport?: RunRequest["transport"],
   ): Promise<{ options: BackendConfigOption[]; error?: string }> {
     const profile = this.options.config.backends[backendId];
     if (!profile) {
       return { options: [], error: `Unknown backend: ${backendId}` };
     }
-    const transport = this.effectiveTransport(backendId, requestTransport);
-    if (transport !== "acp") {
-      return { options: [] };
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) {
+      return { options: [], error: resolvedCwd.error };
     }
-    return { options: await listAcpConfigOptions(profile, cwd) };
-  }
-
-  private effectiveTransport(
-    backendId: string,
-    requestTransport?: RunRequest["transport"],
-  ): "acp" | "cli" {
-    const profile = this.options.config.backends[backendId];
-    if (!profile) return "acp";
-    return requestTransport ?? getBackendTransport(profile);
+    cwd = resolvedCwd.cwd;
+    try {
+      return { options: await listAcpConfigOptions(profile, cwd) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        options: [],
+        error: `ACP config options failed for ${backendId}: ${message}`,
+      };
+    }
   }
 
   async *executeRun(request: RunRequest): AsyncGenerator<AgentEvent> {
@@ -218,14 +224,20 @@ export class RunnerHost {
     }
 
     const backendId = request.sessionKey.backendId;
-    const backend = this.registry.get(backendId);
     const profile = this.options.config.backends[backendId];
-    if (!backend || !profile) {
+    if (!profile) {
       yield {
         type: "error",
         message: `Unknown backend: ${backendId}`,
         fatal: true,
       };
+      yield { type: "done", exitCode: 1 };
+      return;
+    }
+
+    const resolvedCwd = resolveRunCwd(request.sessionKey.cwd);
+    if ("error" in resolvedCwd) {
+      yield { type: "error", message: resolvedCwd.error, fatal: true };
       yield { type: "done", exitCode: 1 };
       return;
     }
@@ -236,29 +248,22 @@ export class RunnerHost {
       request.attachments,
     );
 
-    const transport =
-      request.transport ?? getBackendTransport(profile);
-
     const ctx: RunContext = {
       runId: request.runId,
-      cwd: request.sessionKey.cwd,
+      cwd: resolvedCwd.cwd,
       prompt: request.prompt,
       attachments: localAttachments.length ? localAttachments : undefined,
       resumeSessionId: request.resumeSessionId,
       backendConfig: profile,
       model: request.model,
       effort: request.effort,
+      mode: request.mode,
       claudePermissionMode: request.claudePermissionMode,
       extraEnv: await this.buildAgentEnv(request),
     };
 
     try {
-      if (transport === "acp") {
-        yield* this.executeAcpRun(request.runId, ctx);
-        return;
-      }
-
-      yield* this.executeCliRun(request.runId, ctx, backend);
+      yield* this.executeAcpRun(request.runId, ctx);
     } finally {
       if (localAttachments.length > 0) {
         await cleanupAttachments(this.dataDir, request.runId);
@@ -379,98 +384,6 @@ export class RunnerHost {
     return true;
   }
 
-  private async *executeCliRun(
-    runId: string,
-    ctx: RunContext,
-    backend: NonNullable<ReturnType<BackendRegistry["get"]>>,
-  ): AsyncGenerator<AgentEvent> {
-    const argv = backend.buildArgv(ctx);
-    const command = argv[0]!;
-    const args = argv.slice(1);
-
-    const child = spawn(command, args, {
-      cwd: ctx.cwd,
-      env: { ...process.env, ...ctx.extraEnv },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true, // 自成进程组：SIGKILL 兜底时连 agent 的孙进程一起杀，不留孤儿
-    });
-
-    // 必须在 spawn 后同步挂上 close/error 监听：spawn 失败（如 ENOENT）时
-    // 无监听的 'error' 事件会以 uncaught exception 炸掉整个 Runner 进程
-    let spawnError = "";
-    child.on("error", (err) => {
-      spawnError = err.message;
-    });
-    const closed = waitForClose(child);
-
-    const childAlive = () =>
-      child.exitCode === null && child.signalCode === null;
-    const activeRun: ActiveRun = {
-      runId,
-      aborted: false,
-      cancel: () => {
-        if (childAlive()) killProcessTree(child, "SIGTERM");
-        setTimeout(() => {
-          if (childAlive()) killProcessTree(child, "SIGKILL");
-        }, 2000).unref();
-      },
-    };
-    this.active.set(runId, activeRun);
-
-    let stderr = "";
-    child.stderr?.on("data", (d) => {
-      stderr += d.toString();
-    });
-
-    const lineReader = readLines(child.stdout!);
-    let exitCode = 0;
-
-    try {
-      for await (const line of lineReader) {
-        if (activeRun.aborted) break;
-        for (const event of backend.parseLine(line)) {
-          yield event;
-        }
-      }
-      exitCode = await closed;
-      const failReason = spawnError || stderr.trim();
-      if (failReason && exitCode !== 0) {
-        yield { type: "error", message: failReason, fatal: false };
-      }
-    } catch (err) {
-      yield {
-        type: "error",
-        message: err instanceof Error ? err.message : String(err),
-        fatal: true,
-      };
-      exitCode = 1;
-    } finally {
-      this.active.delete(runId);
-      yield { type: "done", exitCode };
-    }
-  }
-}
-
-async function* readLines(
-  stream: NodeJS.ReadableStream,
-): AsyncGenerator<string> {
-  let buffer = "";
-  for await (const chunk of stream) {
-    buffer += chunk.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      yield line;
-    }
-  }
-  if (buffer.trim()) yield buffer;
-}
-
-function waitForClose(child: ChildProcess): Promise<number> {
-  return new Promise((resolve) => {
-    child.on("close", (code) => resolve(code ?? 1));
-    child.on("error", () => resolve(1));
-  });
 }
 
 export function createRunnerApp(host: RunnerHost, token: string) {
@@ -557,33 +470,23 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     const cwd = c.req.query("cwd");
     const all = c.req.query("all") === "true";
     const limit = Number(c.req.query("limit") ?? "20");
-    const transportRaw = c.req.query("transport");
-    const transport =
-      transportRaw === "acp" || transportRaw === "cli"
-        ? transportRaw
-        : undefined;
     if (!backend || !cwd) {
       return c.json({ error: "backend and cwd are required" }, 400);
     }
     const result = await host.listSessions(backend, cwd, {
       all,
       limit: Number.isFinite(limit) ? limit : 20,
-    }, transport);
+    });
     return c.json(result);
   });
 
   app.get("/config-options", async (c) => {
     const backend = c.req.query("backend");
     const cwd = c.req.query("cwd");
-    const transportRaw = c.req.query("transport");
-    const transport =
-      transportRaw === "acp" || transportRaw === "cli"
-        ? transportRaw
-        : undefined;
     if (!backend || !cwd) {
       return c.json({ error: "backend and cwd are required" }, 400);
     }
-    const result = await host.listConfigOptions(backend, cwd, transport);
+    const result = await host.listConfigOptions(backend, cwd);
     return c.json(result);
   });
 

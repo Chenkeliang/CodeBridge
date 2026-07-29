@@ -12,8 +12,6 @@ export const ACP_LOAD_TIMEOUT_MS = 60_000;
 export interface OpenActiveSessionOptions {
   isAborted?: () => boolean;
   loadTimeoutMs?: number;
-  /** 续聊失败静默回退新会话前的通知钩子，避免用户无感丢失上下文 */
-  onResumeFallback?: (reason: string) => void;
 }
 
 function attachActiveSession(
@@ -70,22 +68,15 @@ export async function openActiveSession(
     mcpServers: [] as [],
   };
 
-  try {
-    const loadMethod =
-      acpContinueMethod(backendConfig) === "session/load"
-        ? methods.agent.session.load
-        : methods.agent.session.resume;
-    const response = await raceWithAbort(
-      agent.request(loadMethod, params),
-      isAborted,
-      loadTimeoutMs,
-      "ACP session 续聊超时",
-    );
-    return attachActiveSession(agent, sessionId, response);
-  } catch (err) {
-    if (isAborted()) throw err;
-    const reason = err instanceof Error ? err.message : String(err);
-    options.onResumeFallback?.(reason);
-    return startNewSession();
-  }
+  const loadMethod =
+    acpContinueMethod(backendConfig) === "session/load"
+      ? methods.agent.session.load
+      : methods.agent.session.resume;
+  const response = await raceWithAbort(
+    agent.request(loadMethod, params),
+    isAborted,
+    loadTimeoutMs,
+    "ACP session 续聊超时",
+  );
+  return attachActiveSession(agent, sessionId, response);
 }

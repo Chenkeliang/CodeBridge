@@ -159,6 +159,27 @@ describe("resolveDesiredConfig", () => {
       ).permissionMode,
     ).toBeUndefined();
   });
+
+  it("applies an explicit ACP mode for Cursor and Codex", () => {
+    expect(
+      resolveDesiredConfig(
+        ctx({
+          mode: "ask",
+          backendConfig: { type: "cursor-cli" } as never,
+        } as never),
+        "auto_allow",
+      ).permissionMode,
+    ).toBe("ask");
+    expect(
+      resolveDesiredConfig(
+        ctx({
+          mode: "agent-full-access",
+          backendConfig: { type: "codex" } as never,
+        } as never),
+        "auto_allow",
+      ).permissionMode,
+    ).toBe("agent-full-access");
+  });
 });
 
 describe("applySessionConfigOptions", () => {

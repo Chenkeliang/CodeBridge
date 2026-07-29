@@ -22,11 +22,10 @@ export const SLASH_COMMANDS: CommandHelpItem[] = [
   { command: "/ws use <名>", summary: "切换到已保存工作区" },
   { command: "/ws remove <名>", summary: "删除命名工作区" },
   { command: "/model [名|default]", summary: "切换模型" },
-  { command: "/transport [acp|cli|default]", summary: "切换 ACP / CLI 传输" },
-  { command: "/effort [级|default]", summary: "Claude effort" },
+  { command: "/effort [级|default]", summary: "ACP 实时推理强度（Claude/Codex）" },
   {
     command: "/permission [模式|default]",
-    summary: "Claude 权限模式（bypassPermissions 等，别名 /perm）",
+    summary: "ACP 实时 mode/权限（支持 Cursor/Claude/Codex，别名 /perm）",
   },
   {
     command: "/thinking [on|off]",
