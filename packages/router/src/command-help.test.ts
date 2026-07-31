@@ -9,6 +9,8 @@ describe("command-help", () => {
   it("includes core slash commands", () => {
     const text = formatFullCommandHelp();
     expect(text).toContain("/resume");
+    expect(text).toContain("/session close <sessionId>");
+    expect(text).toContain("/session delete <sessionId>");
     expect(text).toContain("/backend");
   });
 

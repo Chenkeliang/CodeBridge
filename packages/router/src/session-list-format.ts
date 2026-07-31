@@ -89,14 +89,15 @@ export function formatSessionLine(
   const preview = cleanSessionPreview(session.preview);
 
   if (!showCwd) {
-    return [`**${index + 1}.** \`${id}\` · ${when}`, `　${preview}`].join(
-      "\n",
-    );
+    return [
+      `**${index + 1}.** \`${id}\` · ${when}${session.additionalDirectories?.length ? ` · roots +${session.additionalDirectories.length}` : ""}`,
+      `　${preview}`,
+    ].join("\n");
   }
 
   const project = compactProjectPath(session.cwd);
   return [
-    `**${index + 1}.** \`${id}\` · ${when} · ${project}`,
+    `**${index + 1}.** \`${id}\` · ${when} · ${project}${session.additionalDirectories?.length ? ` · roots +${session.additionalDirectories.length}` : ""}`,
     `　${preview}`,
   ].join("\n");
 }

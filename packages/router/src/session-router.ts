@@ -18,6 +18,7 @@ export interface ChatBinding {
   effort?: string;
   mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
+  additionalDirectories?: string[];
   /** 卡片是否展示思考/工具过程；缺省=true（显示）。纯展示偏好，切 backend 不清除 */
   showThinking?: boolean;
 }
@@ -27,6 +28,7 @@ export interface ResolvedRunOptions {
   effort?: string;
   mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
+  additionalDirectories?: string[];
 }
 
 export class SessionRouter {
@@ -141,6 +143,7 @@ export class SessionRouter {
       effort: rawEffort,
       mode: binding.mode ?? rawPermission,
       claudePermissionMode: rawPermission,
+      additionalDirectories: binding.additionalDirectories,
     };
   }
 

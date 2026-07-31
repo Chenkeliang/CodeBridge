@@ -35,6 +35,7 @@ export interface RunRequest {
   effort?: string;
   mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
+  additionalDirectories?: string[];
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -48,11 +49,74 @@ export interface RunState {
   prompt?: string;
 }
 
+export interface AgentPlanEntry {
+  content: string;
+  priority: "high" | "medium" | "low";
+  status: "pending" | "in_progress" | "completed";
+}
+
+export interface AgentToolLocation {
+  path: string;
+  line?: number | null;
+}
+
+export interface AgentAvailableCommand {
+  name: string;
+  description: string;
+  input?: { hint: string } | null;
+}
+
 export type AgentEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "thought_delta"; text: string }
-  | { type: "tool_start"; name: string; input?: unknown }
-  | { type: "tool_end"; name: string; output?: unknown }
+  | { type: "text_delta"; text: string; messageId?: string }
+  | { type: "thought_delta"; text: string; messageId?: string }
+  | {
+      type: "tool_start";
+      toolCallId?: string;
+      name: string;
+      kind?: string;
+      status?: string;
+      input?: unknown;
+      content?: unknown[];
+      locations?: AgentToolLocation[];
+    }
+  | {
+      type: "tool_update";
+      toolCallId: string;
+      name?: string;
+      status?: string;
+      content?: unknown[];
+      locations?: AgentToolLocation[];
+      output?: unknown;
+    }
+  | {
+      type: "tool_end";
+      toolCallId?: string;
+      name?: string;
+      status?: string;
+      content?: unknown[];
+      locations?: AgentToolLocation[];
+      output?: unknown;
+    }
+  | { type: "plan"; entries: AgentPlanEntry[] }
+  | { type: "plan_update"; plan: unknown }
+  | { type: "plan_removed"; planId: string }
+  | {
+      type: "available_commands_update";
+      availableCommands: AgentAvailableCommand[];
+    }
+  | { type: "current_mode_update"; currentModeId: string }
+  | { type: "config_option_update"; configOptions: BackendConfigOption[] }
+  | {
+      type: "session_info_update";
+      title?: string | null;
+      updatedAt?: string | null;
+    }
+  | {
+      type: "usage_update";
+      used: number;
+      size: number;
+      cost?: { amount: number; currency: string } | null;
+    }
   | { type: "session"; sessionId: string }
   | { type: "error"; message: string; fatal?: boolean }
   /** prompt_feishu 权限模式：agent 请求权限，等待用户 /approve 或 /deny */
@@ -75,6 +139,7 @@ export interface RunContext {
   effort?: string;
   mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
+  additionalDirectories?: string[];
   /** 注入 Agent 子进程的额外环境变量（如 FCB_* 出站 API 凭据） */
   extraEnv?: Record<string, string>;
 }
@@ -107,6 +172,7 @@ export interface BackendConfigOptionValue {
 export interface BackendConfigOption {
   id: string;
   name: string;
+  type?: "select" | "boolean";
   category?: string;
   /** 适配器当前默认选中的值 */
   currentValue?: string;

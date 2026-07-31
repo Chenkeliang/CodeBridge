@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
   client,
   type ClientConnection,
+  type InitializeResponse,
   type ListSessionsRequest,
   type ListSessionsResponse,
 } from "@agentclientprotocol/sdk";
@@ -18,6 +19,10 @@ import type { CliSessionSummary } from "../session-discovery.js";
 import { killProcessTree } from "./acp-kill.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
 import { mapSessionConfigOptions } from "./acp-config-options.js";
+import { ACP_CLIENT_CAPABILITIES } from "./headless-client.js";
+import { raceWithAbort } from "./acp-race.js";
+
+const ACP_SESSION_DELETE_TIMEOUT_MS = 30_000;
 
 function childToStream(child: ReturnType<typeof spawn>) {
   if (!child.stdin || !child.stdout) {
@@ -32,7 +37,10 @@ function childToStream(child: ReturnType<typeof spawn>) {
 async function withAcpConnection<T>(
   profile: BackendProfile,
   cwd: string,
-  op: (agent: ClientConnection["agent"]) => Promise<T>,
+  op: (
+    agent: ClientConnection["agent"],
+    initializeResponse: InitializeResponse,
+  ) => Promise<T>,
 ): Promise<T> {
   const spawnProfile = resolveAcpSpawn(profile);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
@@ -48,19 +56,53 @@ async function withAcpConnection<T>(
   const stream = childToStream(child);
   const connection = app.connect(stream);
   try {
-    await Promise.race([
+    const initializeResponse = await Promise.race([
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: {},
+        clientCapabilities: ACP_CLIENT_CAPABILITIES,
         clientInfo: { name: "feishu-code-bridge", version: "0.1.0" },
       }),
       spawnError,
     ]);
-    return await Promise.race([op(connection.agent), spawnError]);
+    return await Promise.race([
+      op(connection.agent, initializeResponse),
+      spawnError,
+    ]);
   } finally {
     connection.close();
     if (!child.killed) killProcessTree(child, "SIGTERM");
   }
+}
+
+export function hasAcpSessionCapability(
+  response: unknown,
+  capability: "close" | "delete" | "resume",
+): boolean {
+  const sessionCapabilities = (response as {
+    agentCapabilities?: {
+      sessionCapabilities?: Record<string, unknown> | null;
+    } | null;
+  })?.agentCapabilities?.sessionCapabilities;
+  return sessionCapabilities?.[capability] != null;
+}
+
+export async function deleteAcpSession(
+  profile: BackendProfile,
+  cwd: string,
+  sessionId: string,
+  timeoutMs = ACP_SESSION_DELETE_TIMEOUT_MS,
+): Promise<void> {
+  return withAcpConnection(profile, cwd, async (agent, initializeResponse) => {
+    if (!hasAcpSessionCapability(initializeResponse, "delete")) {
+      throw new Error("ACP agent 未声明 session/delete 支持");
+    }
+    await raceWithAbort(
+      agent.request(methods.agent.session.delete, { sessionId }),
+      () => false,
+      timeoutMs,
+      "ACP session/delete 超时",
+    );
+  });
 }
 
 export async function listAcpSessions(
@@ -107,6 +149,9 @@ export async function collectAcpSessions(
       id: session.sessionId,
       backend: backendId,
       cwd: session.cwd,
+      ...(session.additionalDirectories?.length
+        ? { additionalDirectories: session.additionalDirectories }
+        : {}),
       preview: session.title ?? "(no preview)",
       updatedAt: session.updatedAt ?? "1970-01-01T00:00:00.000Z",
     }))
@@ -175,7 +220,7 @@ export async function probeAcpInitialize(
         const init = await Promise.race([
           connection.agent.request(methods.agent.initialize, {
             protocolVersion: PROTOCOL_VERSION,
-            clientCapabilities: {},
+            clientCapabilities: ACP_CLIENT_CAPABILITIES,
             clientInfo: { name: "feishu-code-bridge", version: "0.1.0" },
           }),
           spawnError,

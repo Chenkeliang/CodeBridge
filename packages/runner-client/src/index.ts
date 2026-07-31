@@ -61,8 +61,45 @@ export class RunnerClient {
     }>;
   }
 
+  async closeSession(
+    backend: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.sessionLifecycle("close", backend, cwd, sessionId);
+  }
+
+  async deleteSession(
+    backend: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.sessionLifecycle("delete", backend, cwd, sessionId);
+  }
+
   async cancel(runId: string): Promise<void> {
     await this.fetch(`/runs/${runId}/cancel`, { method: "POST" });
+  }
+
+  async steer(
+    runId: string,
+    prompt: string,
+  ): Promise<{ ok: boolean; outcome?: string; error?: string }> {
+    const res = await this.fetch(`/runs/${runId}/steer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      outcome?: string;
+      error?: string;
+    };
+    return {
+      ok: res.ok && body.ok === true,
+      outcome: body.outcome,
+      error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
+    };
   }
 
   /** prompt_feishu：回应 run 挂起的权限请求（/approve /deny） */
@@ -155,6 +192,28 @@ export class RunnerClient {
       );
     }
     return err instanceof Error ? err : new Error(message);
+  }
+
+  private async sessionLifecycle(
+    action: "close" | "delete",
+    backend: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const suffix = action === "close" ? "/close" : "";
+    const res = await this.fetch(`/sessions/${encodeURIComponent(sessionId)}${suffix}`, {
+      method: action === "close" ? "POST" : "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ backend, cwd }),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+    };
+    return {
+      ok: res.ok && body.ok === true,
+      error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
+    };
   }
 
   private fetch(path: string, init?: RequestInit): Promise<Response> {

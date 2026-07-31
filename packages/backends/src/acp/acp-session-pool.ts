@@ -3,8 +3,13 @@ import type {
   ActiveSession,
   ActiveSessionMessage,
   ClientConnection,
+  SessionConfigOption,
 } from "@agentclientprotocol/sdk";
+import { methods } from "@agentclientprotocol/sdk";
 import { killProcessTree } from "./acp-kill.js";
+import { raceWithAbort } from "./acp-race.js";
+
+const ACP_SESSION_CLOSE_TIMEOUT_MS = 30_000;
 
 /** 每轮由 runner 重绑的会话运行时：per-run 闭包绝不能跨轮沿用（否则第二轮权限请求会调到第一轮的死闭包） */
 export interface AcpSessionRuntime {
@@ -26,6 +31,10 @@ export interface AcpSessionResources {
   cwd: string;
   spawnKey: string;
   envKey: string;
+  additionalDirectoriesKey: string;
+  supportsSteering: boolean;
+  supportsClose: boolean;
+  configOptions: SessionConfigOption[];
   /** stderr 尾部缓冲，跨轮累积 */
   readStderr: () => string;
   /** 跨轮接力的 nextUpdate waiter */
@@ -110,7 +119,12 @@ export class AcpSessionPool {
 
   acquire(
     sessionId: string,
-    match: { cwd: string; spawnKey: string; envKey: string },
+    match: {
+      cwd: string;
+      spawnKey: string;
+      envKey: string;
+      additionalDirectoriesKey: string;
+    },
   ): AcpSessionResources | null {
     if (!this.options.enabled) return null;
     const entry = this.idle.get(sessionId);
@@ -121,7 +135,8 @@ export class AcpSessionPool {
       !resourcesAlive(r) ||
       r.cwd !== match.cwd ||
       r.spawnKey !== match.spawnKey ||
-      r.envKey !== match.envKey
+      r.envKey !== match.envKey ||
+      r.additionalDirectoriesKey !== match.additionalDirectoriesKey
     ) {
       teardownResources(r);
       return null;
@@ -154,6 +169,48 @@ export class AcpSessionPool {
       teardownResources(evicted.resources);
     }
     this.idle.set(r.sessionId, { resources: r, lastUsedAt: Date.now() });
+  }
+
+  remove(sessionId: string): boolean {
+    const entry = this.idle.get(sessionId);
+    if (!entry) return false;
+    this.idle.delete(sessionId);
+    teardownResources(entry.resources);
+    return true;
+  }
+
+  async close(
+    sessionId: string,
+    timeoutMs = ACP_SESSION_CLOSE_TIMEOUT_MS,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const entry = this.idle.get(sessionId);
+    if (!entry) return { ok: false, error: "not_owned" };
+    this.idle.delete(sessionId);
+    try {
+      if (!entry.resources.supportsClose) {
+        return {
+          ok: false,
+          error: "ACP agent 未声明 session/close 支持",
+        };
+      }
+      await raceWithAbort(
+        entry.resources.connection.agent.request(
+          methods.agent.session.close,
+          { sessionId },
+        ),
+        () => false,
+        timeoutMs,
+        "ACP session/close 超时",
+      );
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      teardownResources(entry.resources);
+    }
   }
 
   sweep(now = Date.now()): void {

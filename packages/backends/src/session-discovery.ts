@@ -4,6 +4,7 @@ export interface CliSessionSummary {
   id: string;
   backend: string;
   cwd: string;
+  additionalDirectories?: string[];
   preview: string;
   updatedAt: string;
 }

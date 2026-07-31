@@ -26,6 +26,23 @@ describe("SessionRouter resolveRunOptions", () => {
     expect(opts.effort).toBe("high");
   });
 
+  it("preserves additionalDirectories in resolved run options", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const router = new SessionRouter(dataDir);
+    const config = defaultConfig();
+    router.initFromConfig(config);
+    router.setBinding(
+      "chat1",
+      { additionalDirectories: ["/tmp/shared", "/tmp/docs"] } as never,
+    );
+    expect(
+      (router.resolveRunOptions("chat1", undefined, config) as unknown as {
+        additionalDirectories?: string[];
+      }).additionalDirectories,
+    ).toEqual(["/tmp/shared", "/tmp/docs"]);
+  });
+
   it("falls back to profile when binding cleared", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
     tmpDirs.push(dataDir);

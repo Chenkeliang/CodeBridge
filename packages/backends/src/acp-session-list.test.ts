@@ -6,6 +6,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import {
   collectAcpSessions,
+  hasAcpSessionCapability,
   listAcpConfigOptions,
   probeAcpInitialize,
 } from "./acp/acp-session-list.js";
@@ -23,6 +24,7 @@ describe("collectAcpSessions", () => {
           {
             sessionId: "root",
             cwd: path.resolve("/workspace"),
+            additionalDirectories: [path.resolve("/shared")],
             title: "root session",
             updatedAt: "2026-07-28T00:00:00.000Z",
           },
@@ -50,6 +52,7 @@ describe("collectAcpSessions", () => {
 
     expect(requests).toEqual([{}]);
     expect(sessions.map((session) => session.id)).toEqual(["child", "root"]);
+    expect(sessions[1]?.additionalDirectories).toEqual([path.resolve("/shared")]);
   });
 
   it("follows pagination and sorts all results before applying the limit", async () => {
@@ -105,6 +108,19 @@ describe("collectAcpSessions", () => {
     await expect(
       collectAcpSessions("claude", "/workspace", requestPage),
     ).rejects.toThrow("adapter unavailable");
+  });
+});
+
+describe("ACP session lifecycle capabilities", () => {
+  it("gates close/delete from initialize capabilities", () => {
+    const response = {
+      agentCapabilities: {
+        sessionCapabilities: { close: {}, delete: {} },
+      },
+    };
+    expect(hasAcpSessionCapability(response, "close")).toBe(true);
+    expect(hasAcpSessionCapability(response, "delete")).toBe(true);
+    expect(hasAcpSessionCapability(response, "resume")).toBe(false);
   });
 });
 

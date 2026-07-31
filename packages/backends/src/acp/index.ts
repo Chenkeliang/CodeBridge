@@ -11,6 +11,7 @@ export {
   type AcpRunOptions,
 } from "./acp-session-runner.js";
 export {
+  deleteAcpSession,
   listAcpConfigOptions,
   listAcpSessions,
   probeAcpInitialize,

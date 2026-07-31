@@ -2,6 +2,7 @@ import {
   client,
   methods,
   type ClientApp,
+  type ClientCapabilities,
   type PermissionOptionKind,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
@@ -16,6 +17,14 @@ export interface HeadlessClientOptions {
    */
   requestDecision?: (info: { title: string }) => Promise<boolean>;
 }
+
+export const ACP_CLIENT_CAPABILITIES: ClientCapabilities = {
+  fs: { readTextFile: false, writeTextFile: false },
+  plan: {},
+  // Standard select config options are supported. Boolean options stay
+  // unadvertised until the bridge has a typed config setter/UI for them.
+  session: { configOptions: {} },
+};
 
 /** 从权限请求里提取给用户看的操作描述 */
 export function permissionRequestTitle(

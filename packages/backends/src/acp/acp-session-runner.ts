@@ -9,6 +9,7 @@ import {
   type ActiveSessionMessage,
   type ClientConnection,
   type ContentBlock,
+  type SessionConfigOption,
 } from "@agentclientprotocol/sdk";
 import type {
   AgentEvent,
@@ -19,7 +20,10 @@ import { mapSessionUpdate } from "./acp-event-mapper.js";
 import { openActiveSession } from "./acp-active-session.js";
 import { raceWithAbort } from "./acp-race.js";
 import { createClaudeSessionActivityMarker } from "./acp-claude-activity.js";
-import { createHeadlessClientApp } from "./headless-client.js";
+import {
+  ACP_CLIENT_CAPABILITIES,
+  createHeadlessClientApp,
+} from "./headless-client.js";
 import { killProcessTree } from "./acp-kill.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
 import {
@@ -36,6 +40,7 @@ import {
 export interface AcpRunHandle {
   child: ChildProcess;
   cancel: () => void;
+  steer?: (prompt: string) => Promise<unknown>;
 }
 
 export interface AcpRunOptions {
@@ -82,6 +87,30 @@ export interface AcpRunOptions {
    * fatal 标志驱动退出码/用户提示，不能复用它表达“别复用这个进程”。
    */
   markUnpoolable?: () => void;
+  /** session/update config_option_update 的原始快照回写（池复用跨轮保留） */
+  onConfigOptionsUpdate?: (options: SessionConfigOption[]) => void;
+  /** 预排干队列后、发新 prompt 前执行的配置应用钩子 */
+  beforePrompt?: () => Promise<AgentEvent[]>;
+}
+
+export function supportsAcpSteering(response: unknown): boolean {
+  const meta = (response as {
+    _meta?: { steering?: { supported?: unknown } } | null;
+  })?._meta;
+  return meta?.steering?.supported === true;
+}
+
+export function steerAcpSession(
+  agent: {
+    request: (method: string, params: unknown) => Promise<unknown>;
+  },
+  sessionId: string,
+  prompt: string,
+): Promise<unknown> {
+  return agent.request("_session/steering", {
+    sessionId,
+    prompt: [{ type: "text", text: prompt }],
+  });
 }
 
 async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
@@ -137,7 +166,10 @@ function isActivityEvent(event: AgentEvent): boolean {
     event.type === "text_delta" ||
     event.type === "thought_delta" ||
     event.type === "tool_start" ||
+    event.type === "tool_update" ||
     event.type === "tool_end" ||
+    event.type === "plan" ||
+    event.type === "plan_update" ||
     // 等用户 /approve 期间 wire 必然静默，权限请求本身算活动，免得 watchdog 误杀
     event.type === "permission_request"
   );
@@ -177,14 +209,25 @@ export async function* runActivePromptTurn(
       carrier.pending = null;
       if (got === "failed") break; // 队列已失效，让主循环去暴露真实错误
       if (got.message.kind === "session_update") {
+        if (got.message.update.sessionUpdate === "config_option_update") {
+          options.onConfigOptionsUpdate?.(got.message.update.configOptions);
+        }
         for (const event of mapSessionUpdate(got.message.update)) {
           yield event;
         }
       }
       // kind === "stop"：陈旧的上一轮结束信号，丢弃
+      // 队列可能持续有已就绪消息；让出一个 macrotask，保证 /stop 的 abort
+      // 以及进程信号能在预排干阶段被观察到，不被连续 resolved Promise 饿死。
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
-    if (options.isAborted()) return;
+  if (options.isAborted()) return;
   }
+
+  for (const event of (await options.beforePrompt?.()) ?? []) {
+    yield event;
+  }
+  if (options.isAborted()) return;
 
   void active.prompt(blocks);
 
@@ -327,12 +370,15 @@ export async function* runActivePromptTurn(
     if (next.message.kind === "session_update") {
       const update = next.message.update;
       if (update.sessionUpdate === "tool_call") sawToolCall = true;
+      if (update.sessionUpdate === "config_option_update") {
+        options.onConfigOptionsUpdate?.(update.configOptions);
+      }
       const events = mapSessionUpdate(update);
       // drain 活动信号：映射出真实事件，或后台工具的进行中进度（in-progress tool_call_update
       // 映射为空却代表后台工具仍在跑，须刷新静默计时，否则单个长工具会被 quiet 窗误切）。
       // session_info_update / usage_update 这类噪音仍不算，避免普通轮次被尾随噪音误判为有后台。
       const isDrainActivity =
-        events.length > 0 || update.sessionUpdate === "tool_call_update";
+        events.some(isActivityEvent) || update.sessionUpdate === "tool_call_update";
       if (phase === "drain" && isDrainActivity) {
         drainConfirmed = true;
         lastDrainActivityAt = Date.now();
@@ -369,11 +415,13 @@ export async function* runActivePromptTurn(
 export function buildSessionMatchKeys(ctx: RunContext): {
   spawnKey: string;
   envKey: string;
+  additionalDirectoriesKey: string;
 } {
   const profile = resolveAcpSpawn(ctx.backendConfig);
   return {
     spawnKey: `${profile.command} ${profile.args.join(" ")}`,
     envKey: `${ctx.extraEnv?.FCB_CHAT_ID ?? ""}|${ctx.extraEnv?.FCB_TOPIC_ID ?? ""}`,
+    additionalDirectoriesKey: (ctx.additionalDirectories ?? []).join("\0"),
   };
 }
 
@@ -391,7 +439,7 @@ async function openAcpSessionResources(
   resources: AcpSessionResources;
 }> {
   const spawnProfile = resolveAcpSpawn(ctx.backendConfig);
-  const { spawnKey, envKey } = buildSessionMatchKeys(ctx);
+  const { spawnKey, envKey, additionalDirectoriesKey } = buildSessionMatchKeys(ctx);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
     cwd: ctx.cwd,
     env: { ...process.env, ...ctx.extraEnv },
@@ -439,12 +487,10 @@ async function openAcpSessionResources(
     const stream = childToStream(child);
     connection = app.connect(stream);
 
-    await raceWithAbort(
+    const initializeResponse = await raceWithAbort(
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-        },
+        clientCapabilities: ACP_CLIENT_CAPABILITIES,
         clientInfo: {
           name: "feishu-code-bridge",
           version: "0.1.0",
@@ -457,6 +503,9 @@ async function openAcpSessionResources(
 
     const active = await openActiveSession(connection, ctx, ctx.backendConfig, {
       isAborted: options.isAborted,
+      supportsAdditionalDirectories:
+        initializeResponse.agentCapabilities?.sessionCapabilities
+          ?.additionalDirectories != null,
     });
 
     const resources: AcpSessionResources = {
@@ -467,6 +516,11 @@ async function openAcpSessionResources(
       cwd: ctx.cwd,
       spawnKey,
       envKey,
+      additionalDirectoriesKey,
+      supportsSteering: supportsAcpSteering(initializeResponse),
+      supportsClose:
+        initializeResponse.agentCapabilities?.sessionCapabilities?.close != null,
+      configOptions: [...(active.newSessionResponse.configOptions ?? [])],
       readStderr: () => stderr,
       carrier: { pending: null },
       runtime,
@@ -491,12 +545,17 @@ export async function* runAcpSession(
   outHandle: { current?: AcpRunHandle },
 ): AsyncGenerator<AgentEvent> {
   const pool = options.sessionPool;
-  const { spawnKey, envKey } = buildSessionMatchKeys(ctx);
+  const { spawnKey, envKey, additionalDirectoriesKey } = buildSessionMatchKeys(ctx);
 
   let resources: AcpSessionResources | undefined;
   if (pool?.enabled && ctx.resumeSessionId) {
     resources =
-      pool.acquire(ctx.resumeSessionId, { cwd: ctx.cwd, spawnKey, envKey }) ??
+      pool.acquire(ctx.resumeSessionId, {
+        cwd: ctx.cwd,
+        spawnKey,
+        envKey,
+        additionalDirectoriesKey,
+      }) ??
       undefined;
   }
   const reused = resources !== undefined;
@@ -518,6 +577,12 @@ export async function* runAcpSession(
 
     outHandle.current = {
       child: r.child,
+      ...(r.supportsSteering
+        ? {
+            steer: (prompt: string) =>
+              steerAcpSession(r.connection.agent, r.sessionId, prompt),
+          }
+        : {}),
       cancel: () => {
         void r.connection.agent
           .notify(methods.agent.session.cancel, { sessionId: r.sessionId })
@@ -539,19 +604,6 @@ export async function* runAcpSession(
     // 每轮重绑权限决策器（per-run 闭包；池复用时旧闭包已随上一轮失效）
     r.runtime.requestDecision = options.requestDecision;
 
-    // 用 ACP 标准 session/set_config_option 应用 model/effort/permission（Zed 同款机制）。
-    // 每轮都重设：/model 等命令可在两轮之间改变绑定，池内进程的 currentValue 需要跟上。
-    const desired = resolveDesiredConfig(ctx, options.permissionPolicy);
-    const { warnings } = await applySessionConfigOptions(
-      r.connection.agent,
-      r.sessionId,
-      r.active.newSessionResponse.configOptions ?? [],
-      desired,
-    );
-    for (const warning of warnings) {
-      yield { type: "error", message: warning, fatal: false };
-    }
-
     const blocks = await buildPromptBlocks(ctx);
     let sawFatal = false;
     for await (const event of runActivePromptTurn(r.active, blocks, {
@@ -568,6 +620,26 @@ export async function* runAcpSession(
         (ctx.backendConfig.type === "claude-code"
           ? createClaudeSessionActivityMarker(ctx.cwd, r.sessionId)
           : undefined),
+      onConfigOptionsUpdate: (configOptions) => {
+        r.configOptions = [...configOptions];
+      },
+      beforePrompt: async () => {
+        // 预排干会先消费跨轮残留的 config_option_update，之后再应用本轮 model/effort/mode；
+        // 这样池复用时使用的是最新能力快照，而非首次 session/new 的旧列表。
+        const desired = resolveDesiredConfig(ctx, options.permissionPolicy);
+        const result = await applySessionConfigOptions(
+          r.connection.agent,
+          r.sessionId,
+          r.configOptions,
+          desired,
+        );
+        r.configOptions = [...result.configOptions];
+        return result.warnings.map((message) => ({
+          type: "error" as const,
+          message,
+          fatal: false,
+        }));
+      },
     })) {
       if (event.type === "error" && event.fatal) sawFatal = true;
       yield event;

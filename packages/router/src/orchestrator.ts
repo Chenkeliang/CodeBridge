@@ -18,7 +18,12 @@ export class RunOrchestrator {
   private readonly client: RunnerClient;
   private readonly activeChatRuns = new Map<
     string,
-    { runId: string; controller: AbortController; startedAt: number }
+    {
+      runId: string;
+      controller: AbortController;
+      startedAt: number;
+      finished?: Promise<void>;
+    }
   >();
 
   constructor(private readonly options: OrchestratorOptions) {
@@ -58,8 +63,18 @@ export class RunOrchestrator {
     if (!active) return false;
     active.controller.abort();
     await this.client.cancel(active.runId).catch(() => {});
-    this.activeChatRuns.delete(key);
+    await active.finished;
     return true;
+  }
+
+  async steerActiveForChat(
+    chatId: string,
+    topicId: string | undefined,
+    prompt: string,
+  ): Promise<{ ok: boolean; outcome?: string; error?: string }> {
+    const active = this.activeChatRuns.get(this.chatRunKey(chatId, topicId));
+    if (!active) return { ok: false, error: "当前没有正在运行的任务" };
+    return this.client.steer(active.runId, prompt);
   }
 
   async *runAgent(
@@ -81,7 +96,16 @@ export class RunOrchestrator {
     const runId = this.router.newRunId();
     const chatKey = this.chatRunKey(chatId, topicId);
     const controller = new AbortController();
-    this.activeChatRuns.set(chatKey, { runId, controller, startedAt: Date.now() });
+    let resolveFinished!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
+    this.activeChatRuns.set(chatKey, {
+      runId,
+      controller,
+      startedAt: Date.now(),
+      finished,
+    });
 
     const logPath = path.join(
       this.options.dataDir,
@@ -108,11 +132,13 @@ export class RunOrchestrator {
       effort: runOpts.effort,
       mode: runOpts.mode,
       claudePermissionMode: runOpts.claudePermissionMode,
+      additionalDirectories: runOpts.additionalDirectories,
     };
 
     let sessionId = resumeSessionId ?? existing?.sessionId;
     let stopped = false;
     let loggedDone = false;
+    let finalSessionPersisted = false;
 
     const logDone = () => {
       if (loggedDone) return;
@@ -136,46 +162,59 @@ export class RunOrchestrator {
       });
     };
 
-    try {
-      for await (const event of this.client.run(request, {
-        signal: controller.signal,
-      })) {
-        if (controller.signal.aborted) {
-          stopped = true;
-          break;
-        }
-        this.options.onEvent?.(runId, event);
-        if (event.type === "session") {
-          persistSession(event.sessionId);
-        }
-        yield event;
-        if (event.type === "done") break;
-      }
-    } catch (err) {
-      if (controller.signal.aborted) {
-        stopped = true;
-      } else {
-        const message =
-          err instanceof Error ? err.message : String(err);
-        yield { type: "error", message, fatal: true };
-        yield { type: "done", exitCode: 1 };
-      }
-    } finally {
-      this.activeChatRuns.delete(chatKey);
-      logDone();
-    }
-
-    if (stopped) {
-      yield { type: "error", message: "任务已停止", fatal: false };
-      yield { type: "done", exitCode: 130 };
-    }
-
-    if (sessionId) {
+    const persistFinalSession = () => {
+      if (finalSessionPersisted || !sessionId) return;
+      finalSessionPersisted = true;
       this.router.saveSessionRecord(sessionKey, {
         sessionId,
         lastRunAt: new Date().toISOString(),
         lastRunId: runId,
       });
+    };
+
+    try {
+      try {
+        for await (const event of this.client.run(request, {
+          signal: controller.signal,
+        })) {
+          if (controller.signal.aborted) {
+            stopped = true;
+            break;
+          }
+          this.options.onEvent?.(runId, event);
+          if (event.type === "session") {
+            persistSession(event.sessionId);
+          }
+          yield event;
+          if (event.type === "done") break;
+        }
+      } catch (err) {
+        if (controller.signal.aborted) {
+          stopped = true;
+        } else {
+          const message =
+            err instanceof Error ? err.message : String(err);
+          yield { type: "error", message, fatal: true };
+          yield { type: "done", exitCode: 1 };
+        }
+      }
+
+      // Persist before yielding stop notifications so /session delete cannot
+      // race with a late write from this generator.
+      persistFinalSession();
+      if (stopped) {
+        yield { type: "error", message: "任务已停止", fatal: false };
+        yield { type: "done", exitCode: 130 };
+      }
+    } finally {
+      // If the consumer closes the stream before the stop notifications are
+      // consumed, still persist the latest session before resolving finished.
+      persistFinalSession();
+      if (this.activeChatRuns.get(chatKey)?.runId === runId) {
+        this.activeChatRuns.delete(chatKey);
+      }
+      logDone();
+      resolveFinished();
     }
   }
 
@@ -228,6 +267,48 @@ export class RunOrchestrator {
     if (result.error) throw new Error(result.error);
     return result.options;
   }
+
+  async closeSession(
+    chatId: string,
+    topicId: string | undefined,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.manageSession("close", chatId, topicId, sessionId);
+  }
+
+  async deleteSession(
+    chatId: string,
+    topicId: string | undefined,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.manageSession("delete", chatId, topicId, sessionId);
+  }
+
+  private async manageSession(
+    action: "close" | "delete",
+    chatId: string,
+    topicId: string | undefined,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const key = this.router.buildSessionKey(chatId, topicId);
+    if (
+      this.hasActiveRun(chatId, topicId) &&
+      this.router.getSessionRecord(key)?.sessionId === sessionId
+    ) {
+      return {
+        ok: false,
+        error: "当前 ACP session 正在运行，请先 /stop 后重试",
+      };
+    }
+    const result =
+      action === "close"
+        ? await this.client.closeSession(key.backendId, key.cwd, sessionId)
+        : await this.client.deleteSession(key.backendId, key.cwd, sessionId);
+    if (result.ok && this.router.getSessionRecord(key)?.sessionId === sessionId) {
+      this.router.clearSession(chatId, topicId);
+    }
+    return result;
+  }
 }
 
 export function agentEventToMarkdown(event: AgentEvent): string {
@@ -236,8 +317,10 @@ export function agentEventToMarkdown(event: AgentEvent): string {
       return event.text;
     case "tool_start":
       return `\n🔧 \`${event.name}\` …\n`;
+    case "tool_update":
+      return `\n↳ \`${event.name ?? "tool"}\`${event.status ? ` (${event.status})` : ""}\n`;
     case "tool_end":
-      return `\n✓ \`${event.name}\`\n`;
+      return `\n✓ \`${event.name ?? "tool"}\`\n`;
     case "error":
       return `\n❌ ${event.message}\n`;
     case "done":

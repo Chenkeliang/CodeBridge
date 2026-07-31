@@ -12,6 +12,7 @@ export const ACP_LOAD_TIMEOUT_MS = 60_000;
 export interface OpenActiveSessionOptions {
   isAborted?: () => boolean;
   loadTimeoutMs?: number;
+  supportsAdditionalDirectories?: boolean;
 }
 
 function attachActiveSession(
@@ -48,14 +49,29 @@ export async function openActiveSession(
   const agent = connection.agent;
   const isAborted = options.isAborted ?? (() => false);
   const loadTimeoutMs = options.loadTimeoutMs ?? ACP_LOAD_TIMEOUT_MS;
+  const additionalDirectories = ctx.additionalDirectories?.length
+    ? ctx.additionalDirectories
+    : undefined;
 
-  const startNewSession = () =>
-    raceWithAbort(
-      agent.buildSession(ctx.cwd).start(),
+  if (additionalDirectories && !options.supportsAdditionalDirectories) {
+    throw new Error("ACP agent 未声明 additionalDirectories 支持，无法扩展工作目录。");
+  }
+
+  const startNewSession = () => {
+    const builder = additionalDirectories
+      ? agent.buildSession({
+          cwd: ctx.cwd,
+          additionalDirectories,
+          mcpServers: [],
+        })
+      : agent.buildSession(ctx.cwd);
+    return raceWithAbort(
+      builder.start(),
       isAborted,
       loadTimeoutMs,
       "ACP session 创建超时",
     );
+  };
 
   if (!ctx.resumeSessionId) {
     return startNewSession();
@@ -65,6 +81,7 @@ export async function openActiveSession(
   const params = {
     sessionId,
     cwd: ctx.cwd,
+    ...(additionalDirectories ? { additionalDirectories } : {}),
     mcpServers: [] as [],
   };
 
