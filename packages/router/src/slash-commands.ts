@@ -31,11 +31,16 @@ export interface SlashContext {
     options?: { all?: boolean; limit?: number },
   ) => Promise<CliSessionSummary[]>;
   bindSession?: (sessionId: string) => void;
+  closeSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
+  deleteSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（含真实模型列表） */
   listConfigOptions?: () => Promise<BackendConfigOption[]>;
   cancelActiveRun?: () => Promise<boolean>;
   hasActiveRun?: () => boolean;
   activeRunElapsedMs?: () => number | undefined;
+  steerActiveRun?: (
+    prompt: string,
+  ) => Promise<{ ok: boolean; outcome?: string; error?: string }>;
   /** prompt_feishu：回应当前 run 挂起的权限请求（true=允许 false=拒绝） */
   resolvePermission?: (approve: boolean) => Promise<boolean>;
 }
@@ -108,6 +113,25 @@ export async function handleSlashCommand(
         };
       }
 
+    case "/steer": {
+      if (!arg) {
+        return {
+          type: "reply",
+          text: "用法：`/steer <补充指令>`（注入当前正在执行的 ACP turn）",
+        };
+      }
+      if (!ctx.steerActiveRun) {
+        return { type: "reply", text: "Runner 未就绪，无法发送 steering。" };
+      }
+      const result = await ctx.steerActiveRun(arg);
+      return {
+        type: "reply",
+        text: result.ok
+          ? `已发送 steering：${result.outcome ?? "accepted"}`
+          : `Steering 失败：${result.error ?? "当前 Agent 不支持或没有运行中的任务"}`,
+      };
+    }
+
     case "/approve":
     case "/deny": {
       if (!ctx.resolvePermission) {
@@ -135,6 +159,37 @@ export async function handleSlashCommand(
           text: `ACP session 列表读取失败：${message}\n\n请运行 \`./scripts/start.sh doctor\` 检查 adapter。`,
         };
       }
+
+    case "/session": {
+      const [action, sessionId, ...extra] = arg.split(/\s+/).filter(Boolean);
+      if (
+        (action !== "close" && action !== "delete") ||
+        !sessionId ||
+        extra.length > 0
+      ) {
+        const operation = action === "delete" ? "delete" : "close";
+        return {
+          type: "reply",
+          text: `用法：\`/session ${operation} <sessionId>\``,
+        };
+      }
+      const callback =
+        action === "close" ? ctx.closeSession : ctx.deleteSession;
+      if (!callback) {
+        return { type: "reply", text: "Runner 未就绪，无法管理 ACP session。" };
+      }
+      const result = await callback(sessionId);
+      if (!result.ok) {
+        return {
+          type: "reply",
+          text: `${action === "close" ? "关闭" : "删除"} ACP session 失败：${result.error ?? "未知错误"}`,
+        };
+      }
+      return {
+        type: "reply",
+        text: `已${action === "close" ? "关闭" : "删除"} ACP session：\`${sessionId}\``,
+      };
+    }
 
     case "/send":
       if (!arg) {
@@ -169,6 +224,7 @@ export async function handleSlashCommand(
           "**transport**: acp",
           `**effort**: ${runOpts.effort ?? "(ACP 默认)"}${binding.effort ? " _(会话覆盖)_" : profile?.effort ? " _(配置默认)_" : ""}`,
           `**mode/permission**: ${runOpts.mode ?? "(ACP 默认)"}${binding.mode ? " _(会话覆盖)_" : profile?.claudePermissionMode ? " _(配置默认)_" : ""}`,
+          `**additionalDirectories**: ${binding.additionalDirectories?.length ? binding.additionalDirectories.join(", ") : "(none)"}`,
           `**thinking**: ${(binding.showThinking ?? true) ? "on（显示思考/工具过程）" : "off（只显示最终答案）"}`,
           `**sessionId**: ${rec?.sessionId ?? "(none)"}`,
           `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
@@ -204,6 +260,10 @@ export async function handleSlashCommand(
       ctx.router.clearSession(ctx.chatId, ctx.topicId);
       return { type: "reply", text: `已切换工作目录: ${resolved.cwd}` };
     }
+
+    case "/root":
+    case "/roots":
+      return handleAdditionalDirectories(ctx, arg);
 
     case "/backend": {
       const id = arg === "default" || !arg ? ctx.config.defaultBackend : arg;
@@ -262,6 +322,82 @@ export async function handleSlashCommand(
   }
 }
 
+function handleAdditionalDirectories(
+  ctx: SlashContext,
+  arg: string,
+): SlashResult {
+  const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
+  const directories = binding.additionalDirectories ?? [];
+  const [operation, ...pathParts] = arg.split(/\s+/).filter(Boolean);
+  const op = operation?.toLowerCase();
+
+  if (!arg || op === "list") {
+    return {
+      type: "reply",
+      text: directories.length
+        ? ["**ACP 附加目录**", ...directories.map((dir, i) => `${i + 1}. ${dir}`)].join(
+            "\n",
+          )
+        : "当前没有 ACP 附加目录。用法：`/root add /absolute/path`",
+    };
+  }
+
+  if (op !== "add" && op !== "remove" && op !== "rm") {
+    return {
+      type: "reply",
+      text: "用法：`/roots`、`/root add /absolute/path`、`/root remove /absolute/path`",
+    };
+  }
+
+  const rawPath = pathParts.join(" ").trim();
+  if (!rawPath) {
+    return {
+      type: "reply",
+      text: `用法：\`/root ${op} /absolute/path\``,
+    };
+  }
+
+  let target: string;
+  if (op === "add") {
+    const resolved = canonicalDirectory(rawPath);
+    if ("error" in resolved) return { type: "reply", text: resolved.error };
+    if (resolved.cwd === binding.cwd) {
+      return { type: "reply", text: "附加目录不能与当前工作目录相同。" };
+    }
+    target = resolved.cwd;
+    if (directories.includes(target)) {
+      return { type: "reply", text: `附加目录已存在：${target}` };
+    }
+    ctx.router.setBinding(
+      ctx.chatId,
+      { additionalDirectories: [...directories, target] },
+      ctx.topicId,
+    );
+    return {
+      type: "reply",
+      text: `已添加 ACP 附加目录：${target}\n下一条消息生效；这不会绕过 macOS TCC 授权。`,
+    };
+  }
+
+  if (!path.isAbsolute(rawPath)) {
+    return { type: "reply", text: `附加目录必须使用绝对路径: ${rawPath}` };
+  }
+  try {
+    target = fs.realpathSync(rawPath);
+  } catch {
+    target = path.resolve(rawPath);
+  }
+  if (!directories.includes(target)) {
+    return { type: "reply", text: `附加目录不存在于当前会话：${target}` };
+  }
+  ctx.router.setBinding(
+    ctx.chatId,
+    { additionalDirectories: directories.filter((dir) => dir !== target) },
+    ctx.topicId,
+  );
+  return { type: "reply", text: `已移除 ACP 附加目录：${target}` };
+}
+
 /** 上一次 /resume 展示给用户的列表（按聊天/话题缓存），供 /resume <N> 按原序号定位 */
 const RESUME_LIST_CACHE_MAX = 500;
 const resumeListCache = new Map<string, CliSessionSummary[]>();
@@ -315,7 +451,14 @@ async function handleResume(
     if ("error" in resolved) {
       return { type: "reply", text: resolved.error };
     }
-    ctx.router.setBinding(ctx.chatId, { cwd: resolved.cwd }, ctx.topicId);
+    ctx.router.setBinding(
+      ctx.chatId,
+      {
+        cwd: resolved.cwd,
+        additionalDirectories: picked.additionalDirectories ?? [],
+      },
+      ctx.topicId,
+    );
     ctx.bindSession(picked.id);
     return {
       type: "reply",
@@ -323,6 +466,9 @@ async function handleResume(
         `已绑定 **${key.backendId}** session 到当前飞书会话：`,
         `- id: \`${picked.id}\``,
         `- cwd: ${picked.cwd}`,
+        ...(picked.additionalDirectories?.length
+          ? [`- additionalDirectories: ${picked.additionalDirectories.join(", ")}`]
+          : []),
         `- preview: ${picked.preview}`,
         "",
         "下一条消息将通过 ACP 继续该 session。",
@@ -343,7 +489,14 @@ async function handleResume(
     if ("error" in resolved) {
       return { type: "reply", text: resolved.error };
     }
-    ctx.router.setBinding(ctx.chatId, { cwd: resolved.cwd }, ctx.topicId);
+    ctx.router.setBinding(
+      ctx.chatId,
+      {
+        cwd: resolved.cwd,
+        additionalDirectories: picked.additionalDirectories ?? [],
+      },
+      ctx.topicId,
+    );
     ctx.bindSession(picked.id);
     return {
       type: "reply",
@@ -351,6 +504,9 @@ async function handleResume(
         `已绑定最近一条 **${key.backendId}** session：`,
         `- id: \`${picked.id}\``,
         `- preview: ${picked.preview}`,
+        ...(picked.additionalDirectories?.length
+          ? [`- additionalDirectories: ${picked.additionalDirectories.join(", ")}`]
+          : []),
         "",
         "下一条消息将通过 ACP 继续该 session。",
       ].join("\n"),

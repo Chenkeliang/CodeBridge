@@ -48,4 +48,132 @@ describe("createFeishuStreamPresenter", () => {
     const { present } = createFeishuStreamPresenter({});
     expect(present({ type: "thought_delta", text: "x" })?.zone).toBe("thinking");
   });
+
+  it("renders tool progress and completion in the thinking zone", () => {
+    const { present } = createFeishuStreamPresenter();
+    expect(
+      present({
+        type: "tool_update",
+        toolCallId: "t1",
+        name: "Bash",
+        status: "in_progress",
+      }),
+    ).toEqual({ zone: "thinking", text: "\n  ↳ `Bash`（in_progress）\n" });
+    expect(
+      present({ type: "tool_end", toolCallId: "t1", name: "Bash" }),
+    ).toEqual({ zone: "thinking", text: "\n✓ `Bash`\n" });
+  });
+
+  it("retains a tool name across partial ACP updates and marks failures", () => {
+    const { present } = createFeishuStreamPresenter();
+    present({
+      type: "tool_start",
+      toolCallId: "t1",
+      name: "Bash",
+      status: "in_progress",
+    });
+    expect(
+      present({
+        type: "tool_update",
+        toolCallId: "t1",
+        status: "pending",
+      } as never),
+    ).toEqual({ zone: "thinking", text: "\n  ↳ `Bash`（pending）\n" });
+    expect(
+      present({
+        type: "tool_end",
+        toolCallId: "t1",
+        status: "failed",
+      } as never),
+    ).toEqual({ zone: "thinking", text: "\n✗ `Bash`（failed）\n" });
+  });
+
+  it("renders an ACP plan and usage update without dropping them", () => {
+    const { present } = createFeishuStreamPresenter();
+    const plan = present({
+      type: "plan",
+      entries: [
+        { content: "Inspect", priority: "high", status: "in_progress" },
+        { content: "Implement", priority: "medium", status: "pending" },
+      ],
+    });
+    expect(plan?.zone).toBe("thinking");
+    expect(plan?.text).toContain("Inspect");
+    expect(plan?.text).toContain("Implement");
+    expect(
+      present({
+        type: "usage_update",
+        used: 1200,
+        size: 8000,
+        cost: { amount: 0.03, currency: "USD" },
+      }),
+    ).toBeNull();
+    const usage = present({ type: "done", exitCode: 0 })?.text;
+    expect(usage).toContain("1,200/8,000");
+    expect(usage).toContain("0.03 USD");
+  });
+
+  it("renders and deduplicates ACP session metadata updates", () => {
+    const { present } = createFeishuStreamPresenter();
+    expect(
+      present({ type: "current_mode_update", currentModeId: "plan" })?.text,
+    ).toContain("mode: `plan`");
+    expect(
+      present({ type: "current_mode_update", currentModeId: "plan" }),
+    ).toBeNull();
+    expect(
+      present({
+        type: "config_option_update",
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            currentValue: "gpt-5.6-sol",
+            values: [],
+          },
+        ],
+      })?.text,
+    ).toContain("Model=`gpt-5.6-sol`");
+    expect(
+      present({
+        type: "available_commands_update",
+        availableCommands: [{ name: "compact", description: "Compact context" }],
+      })?.text,
+    ).toContain("/compact");
+    expect(
+      present({ type: "session_info_update", title: "Refactor ACP" })?.text,
+    ).toContain("Refactor ACP");
+  });
+
+  it("does not show tool progress, plan, or usage when thinking is off", () => {
+    const { present } = createFeishuStreamPresenter({ showThinking: false });
+    expect(
+      present({
+        type: "tool_update",
+        toolCallId: "t1",
+        name: "Bash",
+        status: "in_progress",
+      }),
+    ).toBeNull();
+    expect(
+      present({ type: "plan", entries: [] }),
+    ).toBeNull();
+    expect(
+      present({ type: "usage_update", used: 1, size: 2 }),
+    ).toBeNull();
+  });
+
+  it("clears plan dedupe state when ACP removes a plan", () => {
+    const { present } = createFeishuStreamPresenter();
+    const plan = {
+      type: "plan" as const,
+      entries: [
+        { content: "Inspect", priority: "high" as const, status: "pending" as const },
+      ],
+    };
+    expect(present(plan)).not.toBeNull();
+    expect(present(plan)).toBeNull();
+    expect(present({ type: "plan_removed", planId: "p1" })).toBeNull();
+    expect(present(plan)).not.toBeNull();
+  });
 });

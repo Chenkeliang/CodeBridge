@@ -32,6 +32,7 @@ export {
   resolveAcpSpawn,
   acpContinueMethod,
   runAcpSession,
+  deleteAcpSession,
   listAcpConfigOptions,
   listAcpSessions,
   killProcessTree,

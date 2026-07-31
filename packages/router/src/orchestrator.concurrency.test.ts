@@ -45,9 +45,113 @@ describe("RunOrchestrator session persistence", () => {
     const key = orchestrator.router.buildSessionKey("chat1");
     expect(orchestrator.router.getSessionRecord(key)).toBeUndefined();
   });
+
+  it("waits for the stopped stream to finish before cancellation resolves", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    tmpDirs.push(dataDir);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    (orchestrator as unknown as { client: unknown }).client = {
+      run: async function* () {
+        yield { type: "session", sessionId: "s1" } as const;
+        yield { type: "text_delta", text: "late event" } as const;
+      },
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const stream = orchestrator.runAgent("chat1", undefined, "hi");
+    await expect(stream.next()).resolves.toEqual({
+      done: false,
+      value: { type: "session", sessionId: "s1" },
+    });
+
+    let cancelResolved = false;
+    const cancelPromise = orchestrator.cancelActiveForChat("chat1").then((result) => {
+      cancelResolved = true;
+      return result;
+    });
+    await expect(stream.next()).resolves.toEqual({
+      done: false,
+      value: { type: "error", message: "任务已停止", fatal: false },
+    });
+    await Promise.resolve();
+    expect(cancelResolved).toBe(false);
+
+    await expect(stream.next()).resolves.toEqual({
+      done: false,
+      value: { type: "done", exitCode: 130 },
+    });
+    await expect(stream.next()).resolves.toEqual({ done: true, value: undefined });
+    await expect(cancelPromise).resolves.toBe(true);
+  });
 });
 
 describe("RunOrchestrator ACP capabilities", () => {
+  it("steers the active chat run", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    tmpDirs.push(dataDir);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    (orchestrator as unknown as { client: { steer: typeof vi.fn } }).client = {
+      steer: vi.fn().mockResolvedValue({ ok: true, outcome: "injected" }),
+    };
+    const activeRuns = (orchestrator as unknown as {
+      activeChatRuns: Map<string, unknown>;
+    }).activeChatRuns;
+    activeRuns.set("chat1|", {
+      runId: "r1",
+      controller: new AbortController(),
+      startedAt: Date.now(),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ok: true, outcome: "injected" }), {
+          status: 200,
+        }),
+      ),
+    );
+    const api = orchestrator as unknown as {
+      steerActiveForChat?: (
+        chatId: string,
+        topicId: string | undefined,
+        prompt: string,
+      ) => Promise<{ ok: boolean; outcome?: string }>;
+    };
+
+    expect(typeof api.steerActiveForChat).toBe("function");
+    expect(await api.steerActiveForChat!("chat1", undefined, "focus")).toEqual({
+      ok: true,
+      outcome: "injected",
+      error: undefined,
+    });
+  });
+
+  it("passes session additionalDirectories to Runner", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-"));
+    tmpDirs.push(dataDir, cwd);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    orchestrator.router.setBinding("chat1", {
+      cwd,
+      additionalDirectories: ["/tmp/shared"],
+    } as never);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        ['data: {"type":"done","exitCode":0}', ""].join("\n"),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    for await (const _event of orchestrator.runAgent("chat1", undefined, "hi")) {
+      // consume the stream
+    }
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+      additionalDirectories?: string[];
+    };
+    expect(body.additionalDirectories).toEqual(["/tmp/shared"]);
+  });
+
   it("refreshes config options on every request", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-"));
@@ -74,6 +178,69 @@ describe("RunOrchestrator ACP capabilities", () => {
     await orchestrator.listConfigOptions("chat1");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes a session through the current backend/cwd and clears its binding", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-"));
+    tmpDirs.push(dataDir, cwd);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    orchestrator.router.setBinding("chat1", { backendId: "claude", cwd });
+    orchestrator.bindSession("chat1", undefined, "s1");
+    const closeSession = vi.fn().mockResolvedValue({ ok: true });
+    (orchestrator as unknown as { client: unknown }).client = { closeSession };
+
+    await expect(orchestrator.closeSession("chat1", undefined, "s1")).resolves.toEqual({
+      ok: true,
+    });
+    expect(closeSession).toHaveBeenCalledWith("claude", cwd, "s1");
+    expect(
+      orchestrator.router.getSessionRecord(orchestrator.router.buildSessionKey("chat1")),
+    ).toBeUndefined();
+  });
+
+  it("keeps the current binding when session deletion fails", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    tmpDirs.push(dataDir);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    orchestrator.bindSession("chat1", undefined, "s1");
+    (orchestrator as unknown as { client: unknown }).client = {
+      deleteSession: vi.fn().mockResolvedValue({ ok: false, error: "unsupported" }),
+    };
+
+    await expect(orchestrator.deleteSession("chat1", undefined, "s1")).resolves.toEqual({
+      ok: false,
+      error: "unsupported",
+    });
+    expect(
+      orchestrator.router.getSessionRecord(orchestrator.router.buildSessionKey("chat1"))
+        ?.sessionId,
+    ).toBe("s1");
+  });
+
+  it("refuses to delete the current session while its chat run is active", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    tmpDirs.push(dataDir);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    orchestrator.bindSession("chat1", undefined, "s1");
+    const deleteSession = vi.fn().mockResolvedValue({ ok: true });
+    (orchestrator as unknown as { client: unknown }).client = {
+      cancel: vi.fn().mockResolvedValue(undefined),
+      deleteSession,
+    };
+    (orchestrator as unknown as { activeChatRuns: Map<string, unknown> })
+      .activeChatRuns.set("chat1|", {
+        runId: "r1",
+        controller: new AbortController(),
+        startedAt: Date.now(),
+      });
+    expect(await orchestrator.cancelActiveForChat("chat1")).toBe(true);
+
+    await expect(orchestrator.deleteSession("chat1", undefined, "s1")).resolves.toEqual({
+      ok: false,
+      error: "当前 ACP session 正在运行，请先 /stop 后重试",
+    });
+    expect(deleteSession).not.toHaveBeenCalled();
   });
 });
 

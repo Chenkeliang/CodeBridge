@@ -59,10 +59,41 @@ const toolCall = {
   update: { sessionUpdate: "tool_call", title: "bg", kind: "think" },
 } as unknown as ActiveSessionMessage;
 
-/** 后台工具的进行中进度 ping：映射为空事件，但 drain 期应算作活动、刷新静默计时 */
+/** 后台工具的进行中进度 ping */
 const toolProgress = {
   kind: "session_update",
-  update: { sessionUpdate: "tool_call_update", status: "in_progress" },
+  update: {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    title: "bg",
+    status: "in_progress",
+  },
+} as unknown as ActiveSessionMessage;
+
+const usageNoise = {
+  kind: "session_update",
+  update: {
+    sessionUpdate: "usage_update",
+    used: 10,
+    size: 100,
+  },
+} as unknown as ActiveSessionMessage;
+
+const configOptionsUpdate = {
+  kind: "session_update",
+  update: {
+    sessionUpdate: "config_option_update",
+    configOptions: [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "new-model",
+        options: [{ value: "new-model", name: "New model" }],
+      },
+    ],
+  },
 } as unknown as ActiveSessionMessage;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -155,6 +186,28 @@ describe("runActivePromptTurn", () => {
     const last = events[events.length - 1];
     expect(last).toMatchObject({ type: "error", fatal: true });
     expect((last as { message: string }).message).toMatch(/无新事件|stall/);
+  });
+
+  it("counts in-progress tool updates as main-turn activity", async () => {
+    const queue = new FakeUpdateQueue();
+    const gen = runActivePromptTurn(fakeActiveSession(queue), [], {
+      permissionPolicy: "auto_allow",
+      isAborted: () => false,
+      stallTimeoutMs: 150,
+      promptTimeoutMs: 5_000,
+    });
+    const done = collect(gen);
+    queue.enqueue(textChunk("started"));
+    await sleep(100);
+    queue.enqueue(toolProgress);
+    await sleep(100);
+    queue.enqueue(toolProgress);
+    await sleep(100);
+    queue.enqueue(textChunk("finished"));
+    queue.enqueue(stopMessage);
+    const events = await done;
+    expect(events.some((event) => event.type === "tool_update")).toBe(true);
+    expect(events.some((event) => event.type === "error")).toBe(false);
   });
 
   it("does not drain when the turn had no tool call (stop returns immediately)", async () => {
@@ -297,6 +350,51 @@ describe("runActivePromptTurn", () => {
     expect(unpoolable).toBe(true);
   });
 
+  it("does not treat trailing usage updates as background drain activity", async () => {
+    const queue = new FakeUpdateQueue();
+    const startedAt = Date.now();
+    const done = collect(
+      runActivePromptTurn(fakeActiveSession(queue), [], {
+        permissionPolicy: "auto_allow",
+        isAborted: () => false,
+        postStopProbeMs: 120,
+        postStopQuietMs: 1_000,
+        postStopMaxMs: 2_000,
+      }),
+    );
+    queue.enqueue(toolCall);
+    await sleep(20);
+    queue.enqueue(stopMessage);
+    await sleep(30);
+    queue.enqueue(usageNoise);
+
+    const events = await done;
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(events).toContainEqual({ type: "usage_update", used: 10, size: 100 });
+  });
+
+  it("publishes config option updates so pooled sessions can refresh their snapshot", async () => {
+    const queue = new FakeUpdateQueue();
+    let updated: unknown;
+    const done = collect(
+      runActivePromptTurn(fakeActiveSession(queue), [], {
+        permissionPolicy: "auto_allow",
+        isAborted: () => false,
+        onConfigOptionsUpdate: (options) => {
+          updated = options;
+        },
+      }),
+    );
+    queue.enqueue(configOptionsUpdate);
+    queue.enqueue(stopMessage);
+
+    await done;
+    expect(updated).toEqual(
+      (configOptionsUpdate as unknown as { update: { configOptions: unknown } })
+        .update.configOptions,
+    );
+  });
+
   it("pre-drain has a hard deadline and stays interruptible by /stop", async () => {
     // 场景 1：残余后台以 <15ms 间隔持续产出，1.5s 时限后仍要把新 prompt 发出去
     {
@@ -374,6 +472,36 @@ describe("runActivePromptTurn", () => {
     // 陈旧内容照常送达，陈旧 stop 没有把新轮秒终结（否则收不到 turn2 answer）
     expect(texts).toEqual(["late bg", "turn2 answer"]);
     expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("applies queued config updates before preparing the next pooled prompt", async () => {
+    const queue = new FakeUpdateQueue();
+    queue.enqueue(configOptionsUpdate);
+    queue.enqueue(stopMessage);
+    let snapshot: unknown;
+    let beforePromptSnapshot: unknown;
+    const done = collect(
+      runActivePromptTurn(fakeActiveSession(queue), [], {
+        permissionPolicy: "auto_allow",
+        isAborted: () => false,
+        updateCarrier: { pending: null },
+        onConfigOptionsUpdate: (options) => {
+          snapshot = options;
+        },
+        beforePrompt: async () => {
+          beforePromptSnapshot = snapshot;
+          return [];
+        },
+      }),
+    );
+    await sleep(60);
+    queue.enqueue(stopMessage);
+    await done;
+
+    expect(beforePromptSnapshot).toEqual(
+      (configOptionsUpdate as unknown as { update: { configOptions: unknown } })
+        .update.configOptions,
+    );
   });
 
   it("carrier relays the leftover waiter across turns (no swallowed message)", async () => {

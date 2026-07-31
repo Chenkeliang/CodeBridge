@@ -28,6 +28,8 @@ function makeCtx(overrides: {
   scopedSessions: CliSessionSummary[];
   allSessions: CliSessionSummary[];
   bound?: string[];
+  closeSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
+  deleteSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
 }): SlashContext {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-slash-"));
   tmpDirs.push(dataDir);
@@ -46,8 +48,51 @@ function makeCtx(overrides: {
     listSessions: async (options) =>
       options?.all ? overrides.allSessions : overrides.scopedSessions,
     bindSession: (sessionId) => bound.push(sessionId),
+    closeSession: overrides.closeSession,
+    deleteSession: overrides.deleteSession,
   };
 }
+
+describe("/session lifecycle", () => {
+  it("requires an explicit id for close and delegates it", async () => {
+    const closed: string[] = [];
+    const ctx = makeCtx({
+      scopedSessions: [],
+      allSessions: [],
+      closeSession: async (id) => {
+        closed.push(id);
+        return { ok: true };
+      },
+    });
+
+    await expect(handleSlashCommand({ ...ctx, text: "/session close" })).resolves.toEqual({
+      type: "reply",
+      text: "用法：`/session close <sessionId>`",
+    });
+    await expect(
+      handleSlashCommand({ ...ctx, text: "/session close s1" }),
+    ).resolves.toEqual({
+      type: "reply",
+      text: "已关闭 ACP session：`s1`",
+    });
+    expect(closed).toEqual(["s1"]);
+  });
+
+  it("deletes an explicit id and reports adapter failures", async () => {
+    const ctx = makeCtx({
+      scopedSessions: [],
+      allSessions: [],
+      deleteSession: async () => ({ ok: false, error: "ACP agent 未声明 session/delete 支持" }),
+    });
+
+    await expect(
+      handleSlashCommand({ ...ctx, text: "/session delete s1" }),
+    ).resolves.toEqual({
+      type: "reply",
+      text: "删除 ACP session 失败：ACP agent 未声明 session/delete 支持",
+    });
+  });
+});
 
 const cursorOptions: BackendConfigOption[] = [
   {
@@ -275,6 +320,26 @@ describe("/resume <N> after /resume all", () => {
     expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(fs.realpathSync(otherCwd));
   });
 
+  it("restores additionalDirectories advertised by the selected ACP session", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-scoped-"));
+    const shared = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-shared-"));
+    tmpDirs.push(cwd, shared);
+    const ctx = makeCtx({
+      scopedSessions: [
+        {
+          ...makeSession("s1", cwd, "with roots"),
+          additionalDirectories: [shared],
+        },
+      ],
+      allSessions: [],
+    });
+
+    const picked = await handleSlashCommand({ ...ctx, text: "/resume 1" });
+
+    expect(ctx.router.getBinding(ctx.chatId).additionalDirectories).toEqual([shared]);
+    expect((picked as { text: string }).text).toContain(shared);
+  });
+
   it("without a prior list, falls back to the scoped query", async () => {
     const scoped = [
       makeSession("scoped-1", "/Users/keliang/Projects", "first"),
@@ -369,6 +434,72 @@ describe("/cd working-directory validation", () => {
 
     expect((result as { text: string }).text).toContain(fs.realpathSync(target));
     expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(fs.realpathSync(target));
+  });
+});
+
+describe("/root additional directories", () => {
+  it("adds, lists, and removes a canonical additional directory", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-root-target-"));
+    tmpDirs.push(target);
+
+    const added = await handleSlashCommand({
+      ...ctx,
+      text: `/root add ${target}`,
+    });
+    expect((added as { text: string }).text).toContain(fs.realpathSync(target));
+    expect(ctx.router.getBinding(ctx.chatId).additionalDirectories).toEqual([
+      fs.realpathSync(target),
+    ]);
+    const status = await handleSlashCommand({ ...ctx, text: "/status" });
+    expect((status as { text: string }).text).toContain(
+      `**additionalDirectories**: ${fs.realpathSync(target)}`,
+    );
+
+    const listed = await handleSlashCommand({ ...ctx, text: "/roots" });
+    expect((listed as { text: string }).text).toContain(fs.realpathSync(target));
+
+    const removed = await handleSlashCommand({
+      ...ctx,
+      text: `/root remove ${target}`,
+    });
+    expect((removed as { text: string }).text).toContain("已移除");
+    expect(ctx.router.getBinding(ctx.chatId).additionalDirectories).toEqual([]);
+  });
+
+  it("rejects relative and missing additional directories", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const relative = await handleSlashCommand({
+      ...ctx,
+      text: "/root add shared",
+    });
+    expect((relative as { text: string }).text).toContain("绝对路径");
+
+    const missing = path.join(os.tmpdir(), "fcb-root-missing");
+    const result = await handleSlashCommand({
+      ...ctx,
+      text: `/root add ${missing}`,
+    });
+    expect((result as { text: string }).text).toContain("不存在");
+    expect(ctx.router.getBinding(ctx.chatId).additionalDirectories).toBeUndefined();
+  });
+});
+
+describe("/steer", () => {
+  it("forwards an in-flight steering prompt to Runner", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const prompts: string[] = [];
+    ctx.steerActiveRun = async (prompt) => {
+      prompts.push(prompt);
+      return { ok: true, outcome: "injected" };
+    };
+
+    const result = await handleSlashCommand({
+      ...ctx,
+      text: "/steer focus on tests",
+    });
+    expect((result as { text: string }).text).toContain("injected");
+    expect(prompts).toEqual(["focus on tests"]);
   });
 });
 

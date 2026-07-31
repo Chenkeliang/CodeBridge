@@ -1,4 +1,3 @@
-import type { ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +5,7 @@ import path from "node:path";
 import {
   AcpSessionPool,
   BackendRegistry,
+  deleteAcpSession,
   listAcpConfigOptions,
   listAcpSessions,
   runAcpSession,
@@ -36,8 +36,10 @@ export interface RunnerHostOptions {
 
 interface ActiveRun {
   runId: string;
+  sessionId?: string;
   aborted: boolean;
   cancel: () => void;
+  steer?: (prompt: string) => Promise<unknown>;
 }
 
 /** prompt_feishu：权限请求等待用户回复的超时（到点自动拒绝）。需小于 noOutput 超时。 */
@@ -65,6 +67,27 @@ function resolveRunCwd(raw: string): { cwd: string } | { error: string } {
   } catch {
     return { error: `工作目录不存在或无法访问: ${raw}` };
   }
+}
+
+function resolveAdditionalDirectories(
+  raw: string[] | undefined,
+  cwd: string,
+): { directories?: string[] } | { error: string } {
+  if (!raw?.length) return {};
+  const directories: string[] = [];
+  for (const value of raw) {
+    if (!path.isAbsolute(value)) {
+      return { error: `附加目录必须使用绝对路径: ${value}` };
+    }
+    const resolved = resolveRunCwd(value);
+    if ("error" in resolved) {
+      return { error: `附加目录 ${value} 无效：${resolved.error}` };
+    }
+    if (resolved.cwd !== cwd && !directories.includes(resolved.cwd)) {
+      directories.push(resolved.cwd);
+    }
+  }
+  return directories.length ? { directories } : {};
 }
 
 export class RunnerHost {
@@ -158,8 +181,32 @@ export class RunnerHost {
     if (!run) return false;
     run.aborted = true;
     run.cancel();
-    this.active.delete(runId);
     return true;
+  }
+
+  async steer(
+    runId: string,
+    prompt: string,
+  ): Promise<{ ok: boolean; outcome?: string; error?: string }> {
+    const run = this.active.get(runId);
+    if (!run) return { ok: false, error: "当前没有正在运行的任务" };
+    if (!run.steer) return { ok: false, error: "当前 ACP Agent 未声明 steering 支持" };
+    try {
+      const response = await run.steer(prompt);
+      const outcome =
+        response &&
+        typeof response === "object" &&
+        "outcome" in response &&
+        typeof response.outcome === "string"
+          ? response.outcome
+          : "accepted";
+      return { ok: true, outcome };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async listSessions(
@@ -190,6 +237,64 @@ export class RunnerHost {
         sessions: [],
         error: `ACP session/list failed for ${backendId}: ${message}`,
       };
+    }
+  }
+
+  async closeSession(
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.manageSession("close", backendId, cwd, sessionId);
+  }
+
+  async deleteSession(
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.manageSession("delete", backendId, cwd, sessionId);
+  }
+
+  private async manageSession(
+    action: "close" | "delete",
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+      return {
+        ok: false,
+        error: `ACP session ${sessionId} 正在运行，请先 /stop 后重试`,
+      };
+    }
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { ok: false, error: `Unknown backend: ${backendId}` };
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) return { ok: false, error: resolvedCwd.error };
+    try {
+      if (action === "close") {
+        const result = await this.sessionPool.close(sessionId);
+        if (result.error === "not_owned") {
+          return {
+            ok: false,
+            error: "Runner 当前未持有该 ACP session；历史 session 请使用 /session delete",
+          };
+        }
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: `ACP session/close failed for ${backendId}: ${result.error ?? "未知错误"}`,
+          };
+        }
+        return result;
+      }
+      await deleteAcpSession(profile, resolvedCwd.cwd, sessionId);
+      this.sessionPool.remove(sessionId);
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: `ACP session/${action} failed for ${backendId}: ${message}` };
     }
   }
 
@@ -242,6 +347,16 @@ export class RunnerHost {
       return;
     }
 
+    const resolvedAdditional = resolveAdditionalDirectories(
+      request.additionalDirectories,
+      resolvedCwd.cwd,
+    );
+    if ("error" in resolvedAdditional) {
+      yield { type: "error", message: resolvedAdditional.error, fatal: true };
+      yield { type: "done", exitCode: 1 };
+      return;
+    }
+
     const localAttachments = await materializeAttachments(
       this.dataDir,
       request.runId,
@@ -252,6 +367,7 @@ export class RunnerHost {
       runId: request.runId,
       cwd: resolvedCwd.cwd,
       prompt: request.prompt,
+      additionalDirectories: resolvedAdditional.directories,
       attachments: localAttachments.length ? localAttachments : undefined,
       resumeSessionId: request.resumeSessionId,
       backendConfig: profile,
@@ -275,13 +391,18 @@ export class RunnerHost {
     runId: string,
     ctx: RunContext,
   ): AsyncGenerator<AgentEvent> {
-    const handleRef: { current?: { child: ChildProcess; cancel: () => void } } =
-      {};
+    const handleRef: Parameters<typeof runAcpSession>[2] = {};
     const activeRun: ActiveRun = {
       runId,
+      sessionId: ctx.resumeSessionId,
       aborted: false,
       // handleRef 在 runAcpSession 生成器体起始处赋值（首次 next() 即可用）
       cancel: () => handleRef.current?.cancel(),
+      steer: async (prompt: string) => {
+        const steer = handleRef.current?.steer;
+        if (!steer) throw new Error("当前 ACP Agent 未声明 steering 支持或仍在初始化");
+        return steer(prompt);
+      },
     };
     this.active.set(runId, activeRun);
 
@@ -341,6 +462,7 @@ export class RunnerHost {
         },
         handleRef,
       )) {
+        if (event.type === "session") activeRun.sessionId = event.sessionId;
         if (event.type === "error" && event.fatal) exitCode = 1;
         yield event;
       }
@@ -419,6 +541,15 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     return c.json({ ok });
   });
 
+  app.post("/runs/:id/steer", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { prompt?: string };
+    if (!body.prompt?.trim()) {
+      return c.json({ error: "prompt is required" }, 400);
+    }
+    const result = await host.steer(c.req.param("id"), body.prompt.trim());
+    return c.json(result, result.ok ? 200 : 409);
+  });
+
   app.post("/runs", async (c) => {
     const body = (await c.req.json()) as RunRequest;
     const encoder = new TextEncoder();
@@ -478,6 +609,30 @@ export function createRunnerApp(host: RunnerHost, token: string) {
       limit: Number.isFinite(limit) ? limit : 20,
     });
     return c.json(result);
+  });
+
+  app.post("/sessions/:id/close", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      backend?: string;
+      cwd?: string;
+    };
+    if (!body.backend || !body.cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    const result = await host.closeSession(body.backend, body.cwd, c.req.param("id"));
+    return c.json(result, result.ok ? 200 : 409);
+  });
+
+  app.delete("/sessions/:id", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      backend?: string;
+      cwd?: string;
+    };
+    if (!body.backend || !body.cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    const result = await host.deleteSession(body.backend, body.cwd, c.req.param("id"));
+    return c.json(result, result.ok ? 200 : 409);
   });
 
   app.get("/config-options", async (c) => {

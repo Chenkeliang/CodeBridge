@@ -41,15 +41,61 @@ describe("openActiveSession", () => {
     expect(result).toBe(active);
   });
 
+  it("passes additionalDirectories when creating a supported session", async () => {
+    const active = { sessionId: "sess-new", dispose: () => {} };
+    let request: unknown;
+    const agent = {
+      buildSession: (value: unknown) => {
+        request = value;
+        return { start: async () => active };
+      },
+    };
+    const profile = defaultConfig().backends.claude!;
+    await openActiveSession(
+      { agent } as unknown as ClientConnection,
+      {
+        runId: "r1",
+        cwd: "/tmp/project",
+        additionalDirectories: ["/tmp/shared"],
+        prompt: "hi",
+        backendConfig: profile,
+      },
+      profile,
+      { supportsAdditionalDirectories: true },
+    );
+    expect(request).toEqual({
+      cwd: "/tmp/project",
+      additionalDirectories: ["/tmp/shared"],
+      mcpServers: [],
+    });
+  });
+
+  it("rejects requested additionalDirectories when the agent did not advertise support", async () => {
+    const profile = defaultConfig().backends.cursor!;
+    await expect(
+      openActiveSession(
+        { agent: {} } as unknown as ClientConnection,
+        {
+          runId: "r1",
+          cwd: "/tmp/project",
+          additionalDirectories: ["/tmp/shared"],
+          prompt: "hi",
+          backendConfig: profile,
+        },
+        profile,
+      ),
+    ).rejects.toThrow(/additionalDirectories/);
+  });
+
   it("attaches ActiveSession after session/load", async () => {
-    const calls: string[] = [];
+    const calls: Array<{ method: string; params?: unknown }> = [];
     const active = { sessionId: "sess-loaded", dispose: () => {} };
     const agent = {
-      request: async (method: string) => {
-        calls.push(method);
+      request: async (method: string, params: unknown) => {
+        calls.push({ method, params });
       },
       attachSession: () => {
-        calls.push("attachSession");
+        calls.push({ method: "attachSession" });
         return active;
       },
       buildSession: () => ({
@@ -66,12 +112,25 @@ describe("openActiveSession", () => {
         cwd: "/tmp",
         prompt: "hi",
         resumeSessionId: "sess-loaded",
+        additionalDirectories: ["/tmp/shared"],
         backendConfig: profile,
       },
       profile,
+      { supportsAdditionalDirectories: true },
     );
 
-    expect(calls).toEqual(["session/load", "attachSession"]);
+    expect(calls).toEqual([
+      {
+        method: "session/load",
+        params: {
+          sessionId: "sess-loaded",
+          cwd: "/tmp",
+          additionalDirectories: ["/tmp/shared"],
+          mcpServers: [],
+        },
+      },
+      { method: "attachSession" },
+    ]);
     expect(result).toBe(active);
   });
 

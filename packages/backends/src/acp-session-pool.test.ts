@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import {
   AcpSessionPool,
@@ -44,6 +44,10 @@ function fakeResources(sessionId: string, over?: Partial<AcpSessionResources>): 
     cwd: "/w",
     spawnKey: "npx adapter",
     envKey: "chat|topic",
+    additionalDirectoriesKey: "",
+    supportsSteering: false,
+    supportsClose: false,
+    configOptions: [],
     readStderr: () => "",
     carrier: { pending: null },
     runtime: {},
@@ -59,7 +63,12 @@ function fakeResources(sessionId: string, over?: Partial<AcpSessionResources>): 
   };
 }
 
-const MATCH = { cwd: "/w", spawnKey: "npx adapter", envKey: "chat|topic" };
+const MATCH = {
+  cwd: "/w",
+  spawnKey: "npx adapter",
+  envKey: "chat|topic",
+  additionalDirectoriesKey: "",
+};
 
 describe("AcpSessionPool", () => {
   it("release 后 acquire 命中同一对象；检出期间再 acquire 落空（并发认领走旁路）", () => {
@@ -83,6 +92,14 @@ describe("AcpSessionPool", () => {
     expect(a.closed()).toBe(true);
     expect(pool.size()).toBe(0);
     pool.shutdown();
+  });
+
+  it("additionalDirectories 变化时不复用旧会话进程", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1", { additionalDirectoriesKey: "/shared" });
+    pool.release(a.resources);
+    expect(pool.acquire("s1", MATCH)).toBeNull();
+    expect(a.disposed()).toBe(true);
   });
 
   it("死进程条目 acquire 时被剔除", () => {
@@ -146,6 +163,54 @@ describe("AcpSessionPool", () => {
     expect(pool.size()).toBe(0);
     expect(a.disposed()).toBe(true);
     expect(b.disposed()).toBe(true);
+  });
+
+  it("remove 拆除指定的空闲 session", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1");
+    pool.release(a.resources);
+    expect(pool.remove("s1")).toBe(true);
+    expect(pool.size()).toBe(0);
+    expect(a.disposed()).toBe(true);
+    pool.shutdown();
+  });
+
+  it("close 在拥有会话的池内 ACP 连接上执行并拆除资源", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1", {
+      supportsClose: true,
+      connection: { agent: { request } } as unknown as AcpSessionResources["connection"],
+    });
+    pool.release(a.resources);
+
+    await expect(pool.close("s1")).resolves.toEqual({ ok: true });
+    expect(request).toHaveBeenCalledWith(
+      expect.anything(),
+      { sessionId: "s1" },
+    );
+    expect(pool.size()).toBe(0);
+    expect(a.disposed()).toBe(true);
+    pool.shutdown();
+  });
+
+  it("close 超时后拆除池内资源而不是永久挂起", async () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1", {
+      supportsClose: true,
+      connection: {
+        agent: { request: () => new Promise(() => {}) },
+      } as unknown as AcpSessionResources["connection"],
+    });
+    pool.release(a.resources);
+
+    await expect(pool.close("s1", 20)).resolves.toEqual({
+      ok: false,
+      error: "ACP session/close 超时",
+    });
+    expect(pool.size()).toBe(0);
+    expect(a.disposed()).toBe(true);
+    pool.shutdown();
   });
 
   it("disabled：acquire 恒 null，release 直接拆除（kill switch 行为=旧版）", () => {

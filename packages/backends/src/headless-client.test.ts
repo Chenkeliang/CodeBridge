@@ -7,6 +7,7 @@ import {
   permissionRequestTitle,
   pickAllowOption,
 } from "./acp/headless-client.js";
+import * as headlessClient from "./acp/headless-client.js";
 
 function makeRequest(
   options: PermissionOption[],
@@ -89,5 +90,18 @@ describe("permissionRequestTitle", () => {
         options: [],
       } as unknown as RequestPermissionRequest),
     ).toBe("工具操作");
+  });
+});
+
+describe("ACP client capabilities", () => {
+  it("advertises plan updates and standard config options", () => {
+    expect(
+      (headlessClient as unknown as { ACP_CLIENT_CAPABILITIES?: unknown })
+        .ACP_CLIENT_CAPABILITIES,
+    ).toEqual({
+      fs: { readTextFile: false, writeTextFile: false },
+      plan: {},
+      session: { configOptions: {} },
+    });
   });
 });

@@ -346,6 +346,10 @@ export class FeishuBridge {
         this.orchestrator.listSessions(msg.chatId, topicId, options),
       bindSession: (sessionId) =>
         this.orchestrator.bindSession(msg.chatId, topicId, sessionId),
+      closeSession: (sessionId) =>
+        this.orchestrator.closeSession(msg.chatId, topicId, sessionId),
+      deleteSession: (sessionId) =>
+        this.orchestrator.deleteSession(msg.chatId, topicId, sessionId),
       listConfigOptions: () =>
         this.orchestrator.listConfigOptions(msg.chatId, topicId),
       resolvePermission: (approve) =>
@@ -356,6 +360,8 @@ export class FeishuBridge {
         this.orchestrator.hasActiveRun(msg.chatId, topicId),
       activeRunElapsedMs: () =>
         this.orchestrator.activeRunElapsedMs(msg.chatId, topicId),
+      steerActiveRun: (prompt) =>
+        this.orchestrator.steerActiveForChat(msg.chatId, topicId, prompt),
     });
 
     if (slash?.type === "reply") {

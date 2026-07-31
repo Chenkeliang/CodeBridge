@@ -58,12 +58,14 @@ const ctx = (over: Partial<RunContext>): RunContext =>
     ...over,
   }) as unknown as RunContext;
 
-function fakeAgent() {
+function fakeAgent(
+  responseOptions: SessionConfigOption[] = [modelOption, effortOption, modeOption],
+) {
   const calls: Array<{ method: unknown; params: Record<string, unknown> }> = [];
   const agent = {
     request: async (method: unknown, params: Record<string, unknown>) => {
       calls.push({ method, params });
-      return { configOptions: [] };
+      return { configOptions: responseOptions };
     },
   } as unknown as Parameters<typeof applySessionConfigOptions>[0];
   return { agent, calls };
@@ -208,7 +210,7 @@ describe("applySessionConfigOptions", () => {
   });
 
   it("缺失 category 收 warning、不中断", async () => {
-    const { agent, calls } = fakeAgent();
+    const { agent, calls } = fakeAgent([modelOption]);
     const { warnings } = await applySessionConfigOptions(
       agent,
       "s1",
@@ -239,6 +241,19 @@ describe("applySessionConfigOptions", () => {
       model: "sonnet",
     });
     expect(warnings.some((w) => w.includes("失败"))).toBe(true);
+  });
+
+  it("returns the full config snapshot from set_config_option responses", async () => {
+    const updated = [{ ...modelOption, currentValue: "sonnet" }];
+    const agent = {
+      request: async () => ({ configOptions: updated }),
+    } as unknown as Parameters<typeof applySessionConfigOptions>[0];
+
+    const result = await applySessionConfigOptions(agent, "s1", [modelOption], {
+      model: "sonnet",
+    });
+
+    expect(result.configOptions).toEqual(updated);
   });
 });
 
@@ -279,13 +294,25 @@ describe("mapSessionConfigOptions", () => {
     ]);
   });
 
-  it("跳过 boolean 型选项", () => {
+  it("映射 boolean 型选项", () => {
     const bool = {
       id: "x",
       name: "X",
       type: "boolean",
       currentValue: true,
     } as unknown as Parameters<typeof mapSessionConfigOptions>[0][number];
-    expect(mapSessionConfigOptions([bool])).toEqual([]);
+    expect(mapSessionConfigOptions([bool])).toEqual([
+      {
+        id: "x",
+        name: "X",
+        type: "boolean",
+        category: undefined,
+        currentValue: "true",
+        values: [
+          { value: "true", name: "On" },
+          { value: "false", name: "Off" },
+        ],
+      },
+    ]);
   });
 });

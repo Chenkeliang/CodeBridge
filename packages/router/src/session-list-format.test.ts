@@ -52,6 +52,7 @@ describe("formatSessionLine", () => {
         id: "e4e50b15-aaaa-bbbb-cccc-ddddeeeeffff",
         backend: "claude",
         cwd: "/tmp/workspace/src/gitlab.example.com/rock/goblin-sorting",
+        additionalDirectories: ["/tmp/shared"],
         preview: "检查分拣拦截逻辑",
         updatedAt: "2026-06-29T06:38:38.000Z",
       },
@@ -61,6 +62,7 @@ describe("formatSessionLine", () => {
     expect(text).toContain("**5.**");
     expect(text).toContain("rock/goblin-sorting");
     expect(text).toContain("检查分拣拦截逻辑");
+    expect(text).toContain("roots +1");
     expect(text.split("\n")).toHaveLength(2);
   });
 });

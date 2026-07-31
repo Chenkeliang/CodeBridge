@@ -86,10 +86,24 @@ export function mapSessionConfigOptions(
 ): BackendConfigOption[] {
   const out: BackendConfigOption[] = [];
   for (const option of options) {
-    if (option.type !== "select") continue;
+    if (option.type === "boolean") {
+      out.push({
+        id: option.id,
+        name: option.name,
+        type: "boolean",
+        category: option.category ?? undefined,
+        currentValue: String(option.currentValue),
+        values: [
+          { value: "true", name: "On" },
+          { value: "false", name: "Off" },
+        ],
+      });
+      continue;
+    }
     out.push({
       id: option.id,
       name: option.name,
+      type: "select",
       category: option.category ?? undefined,
       currentValue: option.currentValue,
       values: flattenSelectOptions(option).map((v) => ({
@@ -121,12 +135,13 @@ export async function applySessionConfigOptions(
   sessionId: string,
   configOptions: SessionConfigOption[],
   desired: DesiredSessionConfig,
-): Promise<{ warnings: string[] }> {
+): Promise<{ warnings: string[]; configOptions: SessionConfigOption[] }> {
   const warnings: string[] = [];
+  let currentOptions = configOptions;
   for (const [field, category] of Object.entries(CATEGORY_BY_FIELD)) {
     const wanted = desired[field as keyof DesiredSessionConfig];
     if (!wanted) continue;
-    const option = configOptions.find((o) => o.category === category);
+    const option = currentOptions.find((o) => o.category === category);
     if (!option) {
       warnings.push(`ACP 会话未提供 ${field} 选项，${field}=${wanted} 未生效。`);
       continue;
@@ -137,15 +152,16 @@ export async function applySessionConfigOptions(
       continue;
     }
     try {
-      await agent.request(methods.agent.session.setConfigOption, {
+      const response = await agent.request(methods.agent.session.setConfigOption, {
         sessionId,
         configId: option.id,
         value,
       });
+      currentOptions = response.configOptions;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       warnings.push(`ACP 设置 ${field}=${value} 失败：${msg}`);
     }
   }
-  return { warnings };
+  return { warnings, configOptions: currentOptions };
 }
