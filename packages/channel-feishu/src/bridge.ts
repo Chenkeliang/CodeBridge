@@ -607,13 +607,18 @@ export class FeishuBridge {
         {
           markdown: async (s) => {
             if (streamAbort.signal.aborted) return;
+            let cardContent = "";
             // 卡片写操作包一层：只有真报错才标记 cardBroken 并降级——之后不再碰卡片，
             // 让 consumeAgent 继续累积 resultBuffer，收尾时用普通消息补发完整结果。
             // 不主动截断超长卡片：卡片正常（哪怕很长）就一直流，不发普通消息。
             const safeAppend = async (text: string): Promise<void> => {
               if (cardBroken || streamAbort.signal.aborted) return;
+              cardContent += text;
               try {
-                await s.append(text);
+                // 飞书 SDK 会把 append 参数同时猜作 delta/累计快照，并对首尾重叠去重；
+                // 直接传 ACP delta 会把跨 chunk 的 88、ee 等合法重复字符吞掉。
+                // 传完整累计内容会稳定命中 SDK 的 snapshot 分支，保留原文。
+                await s.append(cardContent);
               } catch (err) {
                 cardBroken = true;
                 this.options.onLog?.(
