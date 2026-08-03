@@ -1,9 +1,9 @@
 {
-  "name": "@feishu-code-bridge/bridge",
+  "name": "@codebridge/bridge",
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "feishu-code-bridge": "./dist/cli.js"
+    "codebridge": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -11,10 +11,10 @@
     "start": "node dist/cli.js start"
   },
   "dependencies": {
-    "@feishu-code-bridge/channel-feishu": "workspace:*",
-    "@feishu-code-bridge/channel-telegram": "workspace:*",
-    "@feishu-code-bridge/core": "workspace:*",
-    "@feishu-code-bridge/memory-plugin": "workspace:*",
+    "@codebridge/channel-feishu": "workspace:*",
+    "@codebridge/channel-telegram": "workspace:*",
+    "@codebridge/core": "workspace:*",
+    "@codebridge/memory-plugin": "workspace:*",
     "@hono/node-server": "^1.19.14",
     "commander": "^12.1.0",
     "hono": "^4.12.27"

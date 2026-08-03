@@ -1,6 +1,6 @@
 import os from "node:os";
 import { describe, expect, it } from "vitest";
-import { defaultConfig, type AgentEvent } from "@feishu-code-bridge/core";
+import { defaultConfig, type AgentEvent } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "./bridge.js";
 
 type StreamController = {

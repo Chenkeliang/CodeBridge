@@ -4,15 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-export const RUNNER_BUNDLE_ID = "com.feishu-code-bridge.runner";
-export const RUNNER_APP_NAME = "Feishu Code Runner.app";
+export const RUNNER_BUNDLE_ID = "com.codebridge.runner";
+export const RUNNER_APP_NAME = "CodeBridge Runner.app";
 
 export function runnerAppInfo(home = os.homedir()) {
   const appPath = path.join(home, "Applications", RUNNER_APP_NAME);
   return {
     bundleId: RUNNER_BUNDLE_ID,
     appPath,
-    executablePath: path.join(appPath, "Contents", "MacOS", "FeishuCodeRunner"),
+    executablePath: path.join(appPath, "Contents", "MacOS", "CodeBridgeRunner"),
   };
 }
 
@@ -21,9 +21,9 @@ export function runnerInfoPlist() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleExecutable</key><string>FeishuCodeRunner</string>
+  <key>CFBundleExecutable</key><string>CodeBridgeRunner</string>
   <key>CFBundleIdentifier</key><string>${RUNNER_BUNDLE_ID}</string>
-  <key>CFBundleName</key><string>Feishu Code Runner</string>
+  <key>CFBundleName</key><string>CodeBridge Runner</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>0.1.0</string>
@@ -40,7 +40,7 @@ export function runnerInfoPlist() {
 export function installRunnerApp({
   home = os.homedir(),
   nodePath = process.execPath,
-  identity = process.env.FCB_CODESIGN_IDENTITY ?? "-",
+  identity = process.env.CODEBRIDGE_CODESIGN_IDENTITY ?? process.env.FCB_CODESIGN_IDENTITY ?? "-",
 } = {}) {
   if (process.platform !== "darwin") {
     throw new Error("固定 Bundle ID 的 Runner helper 仅支持 macOS");
@@ -69,7 +69,7 @@ export function installRunnerApp({
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
-    const identity = process.argv[2] ?? process.env.FCB_CODESIGN_IDENTITY ?? "-";
+    const identity = process.argv[2] ?? process.env.CODEBRIDGE_CODESIGN_IDENTITY ?? process.env.FCB_CODESIGN_IDENTITY ?? "-";
     const info = installRunnerApp({ identity });
     console.log(`Runner helper 已安装：${info.appPath}`);
     console.log(`Bundle ID：${info.bundleId}`);

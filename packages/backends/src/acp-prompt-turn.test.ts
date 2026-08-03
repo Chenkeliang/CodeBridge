@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveSession, ActiveSessionMessage } from "@agentclientprotocol/sdk";
-import type { AgentEvent } from "@feishu-code-bridge/core";
+import type { AgentEvent } from "@codebridge/core";
 import { runActivePromptTurn } from "./acp/acp-session-runner.js";
 
 /** 复刻 SDK AsyncQueue 语义：enqueue 交给最早注册的 waiter（FIFO） */

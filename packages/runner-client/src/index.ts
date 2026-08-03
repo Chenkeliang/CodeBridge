@@ -2,8 +2,8 @@ import type {
   AgentEvent,
   BackendConfigOption,
   RunRequest,
-} from "@feishu-code-bridge/core";
-import type { CliSessionSummary } from "@feishu-code-bridge/backends";
+} from "@codebridge/core";
+import type { CliSessionSummary } from "@codebridge/backends";
 
 export interface RunnerClientOptions {
   baseUrl: string;

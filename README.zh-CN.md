@@ -1,4 +1,4 @@
-# 飞书码桥（Feishu Code Bridge）
+# CodeBridge（码桥）
 
 一个自托管的多通道 [Agent Client Protocol（ACP）](https://agentclientprotocol.com) 网关。
 
@@ -47,8 +47,8 @@ Bridge 与 Runner 分开设计：Bridge 可以放在 Docker 或远程机器，Ru
 ### 安装与启动
 
 ```bash
-git clone https://github.com/Chenkeliang/feishu-code-bridge.git
-cd feishu-code-bridge
+git clone https://github.com/Chenkeliang/CodeBridge.git
+cd CodeBridge
 
 # 安装依赖、构建、生成配置、检查本机 CLI
 ./scripts/start.sh setup
@@ -57,7 +57,7 @@ cd feishu-code-bridge
 ./scripts/start.sh start
 ```
 
-引导配置保存在 `~/.feishu-code-bridge/config.yaml`，可交互填写飞书凭据，并自动生成 Runner token。
+引导配置保存在 `~/.codebridge/config.yaml`，可交互填写飞书凭据，并自动生成 Runner token。
 
 检查状态：
 
@@ -72,6 +72,8 @@ macOS 开机自启推荐使用 launchd。手动后台模式和 launchd 二选一
 ./scripts/start.sh install-launchd all
 ./scripts/start.sh restart
 ```
+
+从旧名称 `feishu-code-bridge` 升级时，执行 `restart` 或 `install-launchd` 会把默认数据目录从 `~/.feishu-code-bridge` 迁移到 `~/.codebridge`，并替换旧 launchd 任务；已存在于 `~/.codebridge` 的文件不会被覆盖，显式设置的 `DATA_DIR` 也不会被移动。如果以前安装过 `Feishu Code Runner.app`，请执行 `./scripts/start.sh install-macos-runner` 并重新授权受保护目录；macOS 不会把 TCC 权限迁移到新的 Bundle ID。
 
 常用生命周期命令：
 

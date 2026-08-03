@@ -11,7 +11,7 @@ import { resolve } from "node:path";
 const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:19789";
 const RUNNER_TOKEN = process.env.RUNNER_TOKEN ?? "";
 const cwd =
-  process.env.FCB_CWD ?? resolve(homedir(), "Projects/feishu-code-bridge");
+  process.env.CODEBRIDGE_CWD ?? process.env.FCB_CWD ?? resolve(homedir(), "Projects/CodeBridge");
 
 function parseArgs(argv) {
   let backend = "cursor";

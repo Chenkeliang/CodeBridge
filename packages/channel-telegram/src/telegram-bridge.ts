@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AppConfig } from "@feishu-code-bridge/core";
+import type { AppConfig } from "@codebridge/core";
 import {
   RunOrchestrator,
   createFeishuStreamPresenter,
   handleSlashCommand,
-} from "@feishu-code-bridge/router";
+} from "@codebridge/router";
 import {
   TelegramApi,
   chunkTelegramText,

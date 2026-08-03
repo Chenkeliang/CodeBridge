@@ -1,5 +1,5 @@
 {
-  "name": "feishu-code-bridge",
+  "name": "codebridge",
   "version": "0.1.0",
   "private": true,
   "description": "自托管多通道 ACP 网关：从飞书或 Telegram 远程驱动本机 Cursor、Claude Code、Codex",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
-    "dev": "pnpm --filter @feishu-code-bridge/bridge dev",
+    "dev": "pnpm --filter @codebridge/bridge dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:acp-probe": "node scripts/acp-probe.mjs",
@@ -21,8 +21,8 @@
     "setup": "bash scripts/start.sh setup"
   },
   "bin": {
-    "feishu-code-bridge": "./apps/bridge/dist/cli.js",
-    "feishu-code-runner": "./packages/runner-host/dist/cli.js"
+    "codebridge": "./apps/bridge/dist/cli.js",
+    "codebridge-runner": "./packages/runner-host/dist/cli.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

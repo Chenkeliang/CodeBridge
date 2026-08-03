@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
-import type { RunContext } from "@feishu-code-bridge/core";
+import type { RunContext } from "@codebridge/core";
 import {
   applySessionConfigOptions,
   mapSessionConfigOptions,

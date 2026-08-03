@@ -1,5 +1,5 @@
 {
-  "name": "@feishu-code-bridge/memory-plugin",
+  "name": "@codebridge/memory-plugin",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,7 +14,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@feishu-code-bridge/core": "workspace:*"
+    "@codebridge/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

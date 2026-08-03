@@ -149,7 +149,7 @@ export function formatFullCommandHelp(
   return lines.join("\n");
 }
 
-export function formatWelcomeMessage(botName = "飞书码桥"): string {
+export function formatWelcomeMessage(botName = "CodeBridge"): string {
   const quick = [
     "`/status` 查看状态",
     "`/resume last` 续聊最近 session",

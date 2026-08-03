@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@feishu-code-bridge/core";
+import type { AgentEvent } from "@codebridge/core";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { mapSessionConfigOptions } from "./acp-config-options.js";
 

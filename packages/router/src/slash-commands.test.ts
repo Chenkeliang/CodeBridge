@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   defaultConfig,
   type BackendConfigOption,
-} from "@feishu-code-bridge/core";
-import type { CliSessionSummary } from "@feishu-code-bridge/runner-client";
+} from "@codebridge/core";
+import type { CliSessionSummary } from "@codebridge/runner-client";
 import { handleSlashCommand, type SlashContext } from "./slash-commands.js";
 import { SessionRouter } from "./session-router.js";
 

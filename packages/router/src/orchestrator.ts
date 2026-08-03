@@ -1,10 +1,10 @@
 import path from "node:path";
-import { appendJsonl } from "@feishu-code-bridge/core";
-import type { AgentEvent, AppConfig, BackendConfigOption, RunAttachment, RunRequest } from "@feishu-code-bridge/core";
+import { appendJsonl } from "@codebridge/core";
+import type { AgentEvent, AppConfig, BackendConfigOption, RunAttachment, RunRequest } from "@codebridge/core";
 import {
   RunnerClient,
   type CliSessionSummary,
-} from "@feishu-code-bridge/runner-client";
+} from "@codebridge/runner-client";
 import { SessionRouter } from "./session-router.js";
 
 export interface OrchestratorOptions {

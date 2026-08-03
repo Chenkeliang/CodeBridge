@@ -6,17 +6,17 @@ import {
   DEFAULT_DATA_DIR,
   VERSION,
   defaultConfig,
-} from "@feishu-code-bridge/core";
-import { FeishuBridge, runDoctor } from "@feishu-code-bridge/channel-feishu";
-import { TelegramBridge } from "@feishu-code-bridge/channel-telegram";
-import { createMemoryPlugin } from "@feishu-code-bridge/memory-plugin";
+} from "@codebridge/core";
+import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
+import { TelegramBridge } from "@codebridge/channel-telegram";
+import { createMemoryPlugin } from "@codebridge/memory-plugin";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 const program = new Command();
 
 program
-  .name("feishu-code-bridge")
-  .description("飞书码桥 — 用飞书远程驱动本机写代码")
+  .name("codebridge")
+  .description("CodeBridge — 从飞书或 Telegram 远程驱动本机写代码")
   .version(VERSION);
 
 program
@@ -112,7 +112,7 @@ program
       port: apiPort,
     });
     console.log(`出站 API（fcb）监听 http://127.0.0.1:${apiPort}`);
-    console.log("飞书码桥已启动，等待消息…");
+    console.log("CodeBridge 已启动，等待消息…");
   });
 
 program

@@ -15,7 +15,7 @@ import type {
   AgentEvent,
   AcpPermissionPolicy,
   RunContext,
-} from "@feishu-code-bridge/core";
+} from "@codebridge/core";
 import { mapSessionUpdate } from "./acp-event-mapper.js";
 import { openActiveSession } from "./acp-active-session.js";
 import { raceWithAbort } from "./acp-race.js";
@@ -492,7 +492,7 @@ async function openAcpSessionResources(
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: ACP_CLIENT_CAPABILITIES,
         clientInfo: {
-          name: "feishu-code-bridge",
+          name: "codebridge",
           version: "0.1.0",
         },
       }),

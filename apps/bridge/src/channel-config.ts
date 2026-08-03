@@ -1,4 +1,4 @@
-import type { AppConfig } from "@feishu-code-bridge/core";
+import type { AppConfig } from "@codebridge/core";
 
 export function hasFeishuCredentials(config: AppConfig): boolean {
   return (

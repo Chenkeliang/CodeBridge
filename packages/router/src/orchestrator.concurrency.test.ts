@@ -2,7 +2,7 @@ import { describe, expect, it, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { defaultConfig } from "@feishu-code-bridge/core";
+import { defaultConfig } from "@codebridge/core";
 import { SessionRouter } from "./session-router.js";
 import { RunOrchestrator } from "./orchestrator.js";
 

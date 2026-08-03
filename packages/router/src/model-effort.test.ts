@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BackendConfigOption } from "@feishu-code-bridge/core";
+import type { BackendConfigOption } from "@codebridge/core";
 import { formatDynamicModelHelp } from "./model-effort.js";
 
 const claudeModelOption: BackendConfigOption = {

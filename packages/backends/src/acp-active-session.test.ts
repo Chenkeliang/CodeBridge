@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ClientConnection } from "@agentclientprotocol/sdk";
 import { openActiveSession } from "./acp/acp-active-session.js";
 import { AcpTimeoutError, raceWithAbort } from "./acp/acp-race.js";
-import { defaultConfig } from "@feishu-code-bridge/core";
+import { defaultConfig } from "@codebridge/core";
 
 describe("raceWithAbort", () => {
   it("throws AcpTimeoutError when promise never settles", async () => {

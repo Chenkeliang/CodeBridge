@@ -1,5 +1,5 @@
 {
-  "name": "@feishu-code-bridge/backends",
+  "name": "@codebridge/backends",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",
-    "@feishu-code-bridge/core": "workspace:*",
+    "@codebridge/core": "workspace:*",
     "zod": "^3.25.76"
   },
   "devDependencies": {

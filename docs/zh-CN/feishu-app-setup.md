@@ -31,7 +31,7 @@
 在应用「凭证与基础信息」获取 App ID、App Secret，写入：
 
 ```yaml
-# ~/.feishu-code-bridge/config.yaml
+# ~/.codebridge/config.yaml
 feishu:
   appId: cli_xxx
   appSecret: xxx

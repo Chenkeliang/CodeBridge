@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { CliSessionSummary } from "@feishu-code-bridge/runner-client";
+import type { CliSessionSummary } from "@codebridge/runner-client";
 
 export function isNoisePreview(text: string): boolean {
   const t = text.trim();

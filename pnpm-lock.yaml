@@ -20,16 +20,16 @@ importers:
 
   apps/bridge:
     dependencies:
-      '@feishu-code-bridge/channel-feishu':
+      '@codebridge/channel-feishu':
         specifier: workspace:*
         version: link:../../packages/channel-feishu
-      '@feishu-code-bridge/channel-telegram':
+      '@codebridge/channel-telegram':
         specifier: workspace:*
         version: link:../../packages/channel-telegram
-      '@feishu-code-bridge/core':
+      '@codebridge/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@feishu-code-bridge/memory-plugin':
+      '@codebridge/memory-plugin':
         specifier: workspace:*
         version: link:../../packages/memory-plugin
       '@hono/node-server':
@@ -51,7 +51,7 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 1.3.0
         version: 1.3.0(zod@3.25.76)
-      '@feishu-code-bridge/core':
+      '@codebridge/core':
         specifier: workspace:*
         version: link:../core
       zod:
@@ -64,10 +64,10 @@ importers:
 
   packages/channel-feishu:
     dependencies:
-      '@feishu-code-bridge/core':
+      '@codebridge/core':
         specifier: workspace:*
         version: link:../core
-      '@feishu-code-bridge/router':
+      '@codebridge/router':
         specifier: workspace:*
         version: link:../router
       '@larksuiteoapi/node-sdk':
@@ -80,10 +80,10 @@ importers:
 
   packages/channel-telegram:
     dependencies:
-      '@feishu-code-bridge/core':
+      '@codebridge/core':
         specifier: workspace:*
         version: link:../core
-      '@feishu-code-bridge/router':
+      '@codebridge/router':
         specifier: workspace:*
         version: link:../router
     devDependencies:
@@ -106,7 +106,7 @@ importers:
 
   packages/memory-plugin:
     dependencies:
-      '@feishu-code-bridge/core':
+      '@codebridge/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -116,10 +116,10 @@ importers:
 
   packages/router:
     dependencies:
-      '@feishu-code-bridge/core':
+      '@codebridge/core':
         specifier: workspace:*
         version: link:../core
-      '@feishu-code-bridge/runner-client':
+      '@codebridge/runner-client':
         specifier: workspace:*
         version: link:../runner-client
     devDependencies:
@@ -129,10 +129,10 @@ importers:
 
   packages/runner-client:
     dependencies:
-      '@feishu-code-bridge/backends':
+      '@codebridge/backends':
         specifier: workspace:*
         version: link:../backends
-      '@feishu-code-bridge/core':
+      '@codebridge/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -142,10 +142,10 @@ importers:
 
   packages/runner-host:
     dependencies:
-      '@feishu-code-bridge/backends':
+      '@codebridge/backends':
         specifier: workspace:*
         version: link:../backends
-      '@feishu-code-bridge/core':
+      '@codebridge/core':
         specifier: workspace:*
         version: link:../core
       '@hono/node-server':

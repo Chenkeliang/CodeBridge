@@ -1,5 +1,6 @@
+#!/usr/bin/env node
 import path from "node:path";
-import { ConfigStore } from "@feishu-code-bridge/core";
+import { ConfigStore } from "@codebridge/core";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -32,7 +33,7 @@ async function main() {
   });
 
   const app = createRunnerApp(runnerHost, config.runner.token);
-  console.log(`feishu-code-runner listening on http://${hostname}:${port}`);
+  console.log(`codebridge-runner listening on http://${hostname}:${port}`);
   serve({ fetch: app.fetch, hostname, port });
 
   // 适配器子进程是 detached（自成进程组），不会随 runner 死——退出前必须同步清场

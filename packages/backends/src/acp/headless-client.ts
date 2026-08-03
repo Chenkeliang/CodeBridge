@@ -7,7 +7,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
-import type { AcpPermissionPolicy } from "@feishu-code-bridge/core";
+import type { AcpPermissionPolicy } from "@codebridge/core";
 
 export interface HeadlessClientOptions {
   permissionPolicy: AcpPermissionPolicy;
@@ -58,7 +58,7 @@ export function pickAllowOption(
 export function createHeadlessClientApp(
   options: HeadlessClientOptions,
 ): ClientApp {
-  return client({ name: "feishu-code-bridge" })
+  return client({ name: "codebridge" })
     .onRequest(methods.client.session.requestPermission, async (ctx) => {
       if (options.permissionPolicy === "auto_allow") {
         return pickAllowOption(ctx.params);

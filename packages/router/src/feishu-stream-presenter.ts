@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@feishu-code-bridge/core";
+import type { AgentEvent } from "@codebridge/core";
 
 export type FeishuStreamZone = "thinking" | "result";
 

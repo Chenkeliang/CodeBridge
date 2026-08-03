@@ -1,4 +1,4 @@
-import type { BackendProfile } from "@feishu-code-bridge/core";
+import type { BackendProfile } from "@codebridge/core";
 
 export interface AcpSpawnProfile {
   command: string;

@@ -1,16 +1,16 @@
 # Docker + 宿主机 Runner 部署
 
-飞书码桥采用 **Bridge 容器 + 宿主机 Runner** 架构：Bridge 只负责飞书长连接与路由；Cursor / Claude / Codex 必须在宿主机执行以访问本机代码与登录态。
+CodeBridge 采用 **Bridge 容器 + 宿主机 Runner** 架构：Bridge 只负责聊天通道与路由；Cursor / Claude / Codex 必须在宿主机执行以访问本机代码与登录态。
 
 ## 1. 宿主机：安装并启动 Runner
 
 ```bash
-cd feishu-code-bridge
+cd CodeBridge
 pnpm install && pnpm build
 
 # 初始化配置
-pnpm exec feishu-code-bridge init
-# 编辑 ~/.feishu-code-bridge/config.yaml
+node apps/bridge/dist/cli.js init
+# 编辑 ~/.codebridge/config.yaml
 
 # 前台启动 Runner
 node packages/runner-host/dist/cli.js
@@ -42,7 +42,7 @@ Bridge 通过 `host.docker.internal:19789` 调用宿主机 Runner。
 ## 4. 验证
 
 ```bash
-feishu-code-bridge doctor
+node apps/bridge/dist/cli.js doctor
 curl -H "Authorization: Bearer $RUNNER_TOKEN" http://127.0.0.1:19789/health
 ```
 

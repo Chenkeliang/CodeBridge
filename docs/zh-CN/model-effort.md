@@ -82,6 +82,6 @@ backends:
     acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.9"]
 ```
 
-会话绑定持久化：`~/.feishu-code-bridge/chat-bindings.json`（按 `chatId|topicId`）。
+会话绑定持久化：`~/.codebridge/chat-bindings.json`（按 `chatId|topicId`）。
 
 不建议在 yaml 固定 model/effort，否则会覆盖 adapter 随版本更新的默认值。slash 设置的会话覆盖立即生效；`/model default`、`/effort default` 可恢复实时默认。
