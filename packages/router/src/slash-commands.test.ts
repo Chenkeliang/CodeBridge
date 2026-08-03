@@ -535,6 +535,28 @@ describe("/root additional directories", () => {
     expect((result as { text: string }).text).toContain("Runner 已验证目录访问权限");
   });
 
+  it("notifies the chat before waiting for macOS directory authorization", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const target = "/mock/tcc-project";
+    const events: string[] = [];
+    (
+      ctx as SlashContext & {
+        notifyStatus: (text: string) => Promise<void>;
+      }
+    ).notifyStatus = async (text) => {
+      expect(text).toContain("macOS");
+      events.push("notified");
+    };
+    ctx.authorizeDirectory = async (directory) => {
+      events.push("authorize");
+      return { ok: true, path: directory };
+    };
+
+    await handleSlashCommand({ ...ctx, text: `/root add ${target}` });
+
+    expect(events).toEqual(["notified", "authorize"]);
+  });
+
   it("lets Runner authorize a protected directory before Bridge filesystem access", async () => {
     const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
     const target = "/mock/protected-project";

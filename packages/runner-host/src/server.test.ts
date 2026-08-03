@@ -120,35 +120,46 @@ describe("RunnerHost cwd validation", () => {
     host.shutdown();
   });
 
-  it("opens an absolute directory to verify macOS access", () => {
+  it("opens an absolute directory to verify macOS access", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-authorize-"));
     tmpDirs.push(dataDir, target);
     const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
 
-    expect(host.authorizeDirectory(target)).toEqual({
+    await expect(host.authorizeDirectory(target)).resolves.toEqual({
       ok: true,
       path: fs.realpathSync(target),
     });
-    expect(host.authorizeDirectory("relative/path")).toEqual({
+    await expect(host.authorizeDirectory("relative/path")).resolves.toEqual({
       ok: false,
       error: expect.stringContaining("绝对路径"),
     });
     host.shutdown();
   });
 
-  it("keeps the candidate path when macOS denies directory access", () => {
+  it("uses asynchronous directory access so a TCC prompt does not block Runner", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-authorize-"));
+    tmpDirs.push(dataDir, target);
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
+    const open = vi.spyOn(fs.promises, "opendir");
+
+    await host.authorizeDirectory(target);
+
+    expect(open).toHaveBeenCalledWith(path.resolve(target));
+    host.shutdown();
+  });
+
+  it("keeps the candidate path when macOS denies directory access", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);
     const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
     const denied = Object.assign(new Error("operation not permitted"), {
       code: "EPERM",
     });
-    vi.spyOn(fs, "opendirSync").mockImplementationOnce(() => {
-      throw denied;
-    });
+    vi.spyOn(fs.promises, "opendir").mockRejectedValueOnce(denied);
 
-    expect(host.authorizeDirectory("/Users/tester/Desktop")).toEqual({
+    await expect(host.authorizeDirectory("/Users/tester/Desktop")).resolves.toEqual({
       ok: false,
       path: "/Users/tester/Desktop",
       error: expect.stringContaining("尚未获得目录访问权限"),

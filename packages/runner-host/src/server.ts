@@ -240,17 +240,17 @@ export class RunnerHost {
     }
   }
 
-  authorizeDirectory(
+  async authorizeDirectory(
     rawPath: string,
-  ): { ok: boolean; path?: string; error?: string } {
+  ): Promise<{ ok: boolean; path?: string; error?: string }> {
     if (!path.isAbsolute(rawPath)) {
       return { ok: false, error: `工作目录必须使用绝对路径: ${rawPath}` };
     }
     const candidate = path.resolve(rawPath);
     try {
-      const handle = fs.opendirSync(candidate);
-      handle.closeSync();
-      return { ok: true, path: fs.realpathSync(candidate) };
+      const handle = await fs.promises.opendir(candidate);
+      await handle.close();
+      return { ok: true, path: await fs.promises.realpath(candidate) };
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "EACCES" || code === "EPERM") {
@@ -642,7 +642,7 @@ export function createRunnerApp(host: RunnerHost, token: string) {
   app.post("/directories/authorize", async (c) => {
     const body = (await c.req.json().catch(() => null)) as { path?: string } | null;
     if (!body?.path) return c.json({ ok: false, error: "path 必填" }, 400);
-    const result = host.authorizeDirectory(body.path);
+    const result = await host.authorizeDirectory(body.path);
     return c.json(result, result.ok ? 200 : 403);
   });
 

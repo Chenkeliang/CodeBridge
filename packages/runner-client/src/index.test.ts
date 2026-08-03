@@ -93,4 +93,32 @@ describe("RunnerClient directory authorization", () => {
       }),
     );
   });
+
+  it("returns a clear timeout result when macOS authorization does not finish", async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) return Promise.reject(new Error("missing timeout signal"));
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          { once: true },
+        );
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({
+      baseUrl: "http://runner",
+      token: "token",
+      directoryAuthorizationTimeoutMs: 5,
+    });
+
+    await expect(
+      client.authorizeDirectory("/Users/tester/Desktop"),
+    ).resolves.toEqual({
+      ok: false,
+      path: "/Users/tester/Desktop",
+      error: expect.stringContaining("超时"),
+    });
+  });
 });

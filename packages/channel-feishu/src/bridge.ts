@@ -364,6 +364,8 @@ export class FeishuBridge {
         this.orchestrator.steerActiveForChat(msg.chatId, topicId, prompt),
       authorizeDirectory: (directory) =>
         this.orchestrator.authorizeDirectory(directory),
+      notifyStatus: (text) =>
+        this.sendMarkdown(msg.chatId, text, msg.messageId),
     });
 
     if (slash?.type === "reply") {
