@@ -1,35 +1,48 @@
-# 飞书码桥 (feishu-code-bridge)
+# 飞书码桥（Feishu Code Bridge）
 
-在飞书 @ 机器人，远程让本机 **Cursor / Claude Code / Codex** 改代码。
+一个自托管的多通道 [Agent Client Protocol（ACP）](https://agentclientprotocol.com) 网关。
+
+通过飞书或 Telegram 远程驱动本机 **Cursor、Claude Code、Codex**，代码、Git 凭据、MCP 工具和 Agent session 都留在自己的 Mac/Linux 上。
 
 [English README](README.md)
 
-## 特性
+## 它解决什么问题
 
-- 飞书 WebSocket 长连接，流式 Markdown 回复
-- 可选 Telegram Bot API 长轮询通道（与飞书共用 ACP session/router）
-- 多 ACP backend：`cursor` / `claude` / `codex`
-- 会话路由：`/new`、`/resume`、`/stop`、`/backend`、`/cd`、`/ws`、`/model`、`/effort`
-- **恢复本机会话**：`/resume` 通过 ACP 适配器列出并继续已有 session
-- **飞书常置命令**：开放平台配置机器人「自定义菜单」，详见 [feishu-bot-menu.md](docs/zh-CN/feishu-bot-menu.md)
-- **引导式启动**：`./scripts/start.sh setup` 检查依赖、CLI、生成配置
-- Git 快捷：`/clone`、`/pull`（复用本机 git/SSH 凭据）
-- 群聊默认需 @；支持 `policy.scenarios` 信任群免 @
-- Bridge 可 Docker；**Runner 必须在宿主机**（CLI 所在机器）
+你不需要把项目复制到云端，也不需要重新配置本机的 Git、SSH、MCP 和开发环境；在手机聊天里发任务，码桥让本机 Agent 执行并把结果带回聊天。
 
-## 架构
-
+```text
+飞书 WebSocket ─┐
+                ├─ Bridge ── 带 token 的 HTTP/SSE ── Runner ── ACP Agent ── 本地文件
+Telegram 长轮询 ─┘
 ```
-飞书 → Bridge (Channel SDK) → HTTP/SSE → Runner (宿主机) → cursor-agent / claude / codex
-```
+
+| 组件 | 职责 |
+|------|------|
+| **Bridge** | 连接聊天通道、访问策略、斜杠命令、session 路由和消息展示 |
+| **Runner** | 在宿主机启动 ACP session/Agent，访问本地文件和 Git，并处理权限请求 |
+| **ACP adapter** | Cursor、Claude Code、Codex 的协议适配 |
+
+Bridge 与 Runner 分开设计：Bridge 可以放在 Docker 或远程机器，Runner 必须靠近 CLI、代码和凭据所在的宿主机。
+
+## 主要能力
+
+- 飞书长连接流式卡片，可配置机器人自定义菜单
+- Telegram Bot API 长轮询，并自动注册原生命令菜单
+- 统一 ACP 通道：`cursor`、`claude`、`codex`；旧版直接 CLI transport 已移除
+- `/resume`、`/resume last`、`/resume all` 恢复本机会话
+- `/model`、`/effort`、`/permission`、`/config` 实时读取当前 adapter 能力
+- 命名工作区、ACP 附加目录、`/clone`、`/pull`、文件发送
+- `/root add` 感知 macOS TCC 授权，并即时提示“正在等待系统权限”
+- macOS launchd KeepAlive，或手动后台模式 watchdog
 
 ## 快速开始
 
-### 环境
+### 环境要求
 
+- macOS 或 Linux
 - Node.js ≥ 20、pnpm、curl
-- [飞书企业自建应用](docs/zh-CN/feishu-app-setup.md)（开启机器人）
-- 本机至少装一个 CLI：`cursor-agent`、`claude` 或 `codex`
+- 本机至少安装一个 CLI：`cursor-agent`、`claude` 或 `codex`
+- 一个已开启机器人的飞书企业自建应用，或一个 Telegram Bot token
 
 ### 安装与启动
 
@@ -37,137 +50,146 @@
 git clone https://github.com/Chenkeliang/feishu-code-bridge.git
 cd feishu-code-bridge
 
-# 交互式引导：依赖 → 构建 → 配置 → CLI 检查
+# 安装依赖、构建、生成配置、检查本机 CLI
 ./scripts/start.sh setup
 
-# 编辑 ~/.feishu-code-bridge/config.yaml，填入 feishu.appId / appSecret
-
-# 后台启动（自动停旧进程）
-./scripts/start.sh
+# 如果引导时没有启动服务，再手动启动
+./scripts/start.sh start
 ```
 
-常用：
+引导配置保存在 `~/.feishu-code-bridge/config.yaml`，可交互填写飞书凭据，并自动生成 Runner token。
+
+检查状态：
 
 ```bash
-./scripts/start.sh status   # 进程与 CLI 状态
-./scripts/start.sh fg       # Bridge 前台（调试）
-./scripts/start.sh stop     # 停止
-./scripts/start.sh doctor   # 诊断
+./scripts/start.sh status
+./scripts/start.sh doctor
 ```
 
-## 飞书命令
+macOS 开机自启推荐使用 launchd。手动后台模式和 launchd 二选一，不要混用：
 
-| 命令 | 说明 |
-|------|------|
-| `/help` `/menu` | 全部命令 |
-| `/status` | 当前 backend / cwd / model |
-| `/stop` | 停止正在执行的 Agent 任务 |
-| `/approve` `/deny` | 回应挂起的权限请求（prompt_feishu 模式） |
-| `/new` | 新建 ACP session |
-| `/resume` | 列出本机 session（按 cwd 含子目录） |
-| `/resume 2` | 绑定第 2 条 |
-| `/resume last` | 绑定最近一条 |
-| `/resume all` | 跨目录列出全部 |
-| `/backend cursor\|claude\|codex` | 切换 Agent |
-| `/cd <path>` | 切换项目目录 |
-| `/ws list\|save\|use\|remove` | 命名工作区 |
-| `/model` `/effort` `/permission` | 从当前 ACP adapter 实时读取模型 / 推理强度 / mode 权限 |
-| `/thinking on\|off` | 卡片是否显示思考/工具过程（默认 on） |
-| `/clone` `/pull` | 本机 git 操作 |
-| `/config` | 查看/设置 ACP 实时配置（含 boolean） |
+```bash
+./scripts/start.sh install-launchd all
+./scripts/start.sh restart
+```
 
-各 backend 的 session 目录：
+常用生命周期命令：
 
-| Backend | 存储位置 |
-|---------|----------|
-| **cursor** | `~/.cursor/projects/<项目>/agent-transcripts/<id>/<id>.jsonl` |
-| **claude** | `~/.claude/projects/<encoded-cwd>/<id>.jsonl` |
-| **codex** | `~/.codex/sessions/**/rollout-<id>.jsonl` |
+```bash
+./scripts/start.sh status
+./scripts/start.sh restart
+./scripts/start.sh stop
+./scripts/start.sh fg       # 前台调试 Bridge
+```
 
-绑定后，下一条普通消息会通过 ACP `session/resume`（Cursor 为 `session/load`）继续。
+### 配置通道
 
-## 并发与限制
+飞书需要创建企业自建应用、开启机器人，并按[飞书应用配置指南](docs/zh-CN/feishu-app-setup.md)订阅长连接事件。
 
-码桥分两层：**Runner（宿主机）** 负责起 ACP Agent 进程；**Bridge / Orchestrator（飞书侧）** 负责把消息路由到 Runner。两层限制不同，不要混为一谈。
-
-| 场景 | 是否支持 | 限制来自哪一层 |
-|------|----------|----------------|
-| **不同飞书会话**同时跑任务（如私聊 + 群聊、两个群、两个话题） | ✅ | Runner 默认最多 **4** 个并发 Agent（`runnerHost.maxConcurrentRuns`） |
-| **不同 backend 并行**（如 A 会话跑 cursor、B 会话跑 claude） | ✅ | Runner 层；各会话独立 `chatId` |
-| **多个 session 并存**（各自 `/resume` 绑定） | ✅ | 按 `chatId \| topicId \| backend \| cwd` 分别持久化到 `sessions.json` |
-| **同一会话**（同一 `chatId`，同一话题）发第二条消息 | ⚠️ 会取消上一条 | **飞书侧**：新消息触发 `/stop` 同类逻辑，同时只保留 1 个任务 |
-| **同一个群**里两人同时 @ 跑两个 Agent | ❌ | 群对应同一个 `chatId`，共享 binding（backend / cwd / model），且同时只能跑 1 个任务 |
-| **同一个群**里 cursor 和 claude **同时**跑 | ❌ | 一个群同一时刻只绑定一个 backend；可 `/backend` **切换**，不能并行 |
-| `/cd`、`/ws use` 换项目 | ✅ 两步操作 | 先 slash 切目录，**再** @ 发任务；`@` 本身不会猜 repo |
-
-**举例**
-
-- 私聊跑 cursor、群里跑 claude → 可以并行（两个 `chatId`）。
-- 群里你先 @ 让它改 A 项目，同事再 @ 改 B 项目 → 不行：cwd 和任务都会互相覆盖/取消。
-- 想并行改两个 repo → 开两个飞书会话（两个群或私聊 + 群），各自 `/cd` 或 `/ws use`。
-
-本地可跑并发冒烟测试：`node scripts/test-concurrency-live.mjs`（向本机 Runner 并行发 cursor + claude）。
-
-## ACP 模式
-
-Runner 通过 [Agent Client Protocol](https://agentclientprotocol.com) 与子进程 Agent 通信（stdio JSON-RPC），与 Zed External Agents 同一套机制。
-
-| 后端 | ACP 启动命令 |
-|------|-------------|
-| cursor | `cursor-agent acp` |
-| claude | `npx -y @agentclientprotocol/claude-agent-acp@0.64.2` |
-| codex | `npx -y @agentclientprotocol/codex-acp@1.1.9` |
-
-Runner 仅使用 ACP；旧版直接 spawn CLI 的 transport 已移除。`runnerHost.acpPermissionPolicy` 控制无头权限（默认 `auto_allow`）。
-
-续聊：Claude/Codex 用 `session/resume`；Cursor 用 `session/load`（不支持 resume）。
-
-### Telegram
-
-在 `config.yaml` 增加以下配置即可启用 Bot API 长轮询；不配置飞书凭据时也可以 Telegram-only 启动：
+Telegram 可与飞书同时启用，也可以只配置 Telegram：
 
 ```yaml
 telegram:
   botToken: "123456:replace-with-bot-token"
-  allowedUsers: ["123456789"] # 可选
-  allowedChats: ["-1001234567890"] # 可选
+  allowedUsers: ["123456789"]          # 可选白名单
+  allowedChats: ["-1001234567890"]     # 可选白名单
   pollingTimeoutSec: 25
 ```
 
-Telegram 会话使用 `telegram:<chatId>` 独立命名空间，支持 `/resume`、`/model`、`/permission`、`/config`、`/root`、`/steer` 等共享命令。
+完整配置见 [examples/config.full.yaml](examples/config.full.yaml)。
 
-### macOS 目录授权 helper
+## 手机优先的命令
 
-`/root add /absolute/path` 会让 Runner 实际打开该目录，触发 macOS TCC 授权提示。需要固定身份时先执行：
+`/menu` 和 `/help` 默认只返回短菜单，适合手机；发送 `/help full` 查看分组完整帮助。
 
-```bash
-./scripts/start.sh install-macos-runner
+| 命令 | 用途 |
+|------|------|
+| `/status` | 查看 backend、目录、模型、权限和任务状态 |
+| `/resume last` | 继续当前目录最近一次本机会话 |
+| `/new` | 新建 ACP session |
+| `/stop` | 停止当前任务，并清空飞书排队消息 |
+| `/backend claude` | 在 Cursor、Claude、Codex 之间切换 |
+| `/model` | 拉取实时模型；`/model <名称>` 切换 |
+| `/permission` | 拉取实时权限模式；`/permission <模式>` 切换 |
+| `/ws list` | 查看已保存工作区 |
+
+其他常用命令：
+
+```text
+/resume [N|last|all]
+/effort [list|级别|default]
+/config [id value|default]
+/root add|remove|rm /absolute/path
+/send /absolute/path/to/file
+/clone <git-url> [目录名]
+/pull
+/approve  /deny  /steer <指令>
 ```
 
-默认使用免费 ad-hoc 签名，仅适合本机；多人分发应传入自己的 Developer ID 或本机稳定签名身份：
-`./scripts/start.sh install-macos-runner "Developer ID Application: ..."`。这不会静默绕过 TCC，用户仍需在系统弹窗中允许目录访问。
+模型、effort、permission 和 boolean config 的准确选项以当前 ACP adapter 为准；可用 `/model list`、`/effort list`、`/permission list`、`/config` 查看。
+
+## Session、目录与权限
+
+- session 绑定按聊天、话题、backend 和工作目录隔离，元数据持久化在数据目录。
+- `/cd` 切换项目；`/ws save|use` 给常用目录起短名称。
+- `/root add /absolute/path` 添加 ACP `additionalDirectories`。macOS 上 Runner 会先实际访问目录，触发正常 TCC 弹窗；聊天会即时提示正在等待系统授权，但不会静默获得系统权限。
+- `runnerHost.acpPermissionPolicy`：
+
+  | 策略 | 行为 |
+  |------|------|
+  | `auto_allow` | 自动批准 ACP 权限请求（默认，适合可信本机） |
+  | `prompt_feishu` | 在聊天等待 `/approve` 或 `/deny`，超时自动拒绝 |
+  | `prompt_deny` | 自动拒绝权限请求 |
+
+- macOS 可执行 `./scripts/start.sh install-macos-runner` 安装固定身份 helper。默认 ad-hoc 签名免费且只适合本机；TCC 仍需用户确认。
+
+安全边界详见 [SECURITY.md](SECURITY.md)。
+
+## 并发与限制
+
+- 不同聊天可并行运行，默认上限为 `runnerHost.maxConcurrentRuns: 4`。
+- 飞书同一 `chatId + topic` 同时只有一个任务；后续消息最多排队 5 条，`/stop` 会取消任务并清空队列。
+- 同一个群共享 backend、目录、模型和 session 绑定；要并行处理不同项目，请使用不同聊天。
+- `/transport` 仅保留兼容回复，实际只支持 ACP。
+
+## ACP 后端
+
+| Backend | ACP 启动命令 |
+|---------|--------------|
+| Cursor | `cursor-agent acp` |
+| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.64.2` |
+| Codex | `npx -y @agentclientprotocol/codex-acp@1.1.9` |
+
+续聊语义取决于 adapter：Claude/Codex 使用 `session/resume`，Cursor 使用 `session/load`。
 
 ```bash
 node scripts/acp-probe.mjs
+node scripts/acp-probe.mjs --backend codex
 RUNNER_TOKEN=... node scripts/test-acp-live.mjs --backend cursor
 ```
 
 ## 文档
 
-- [飞书应用配置](docs/zh-CN/feishu-app-setup.md)
-- [机器人自定义菜单](docs/zh-CN/feishu-bot-menu.md)
-- [快速开始（手动 / Docker）](docs/zh-CN/quickstart.md)
-- [Model / Effort](docs/zh-CN/model-effort.md)
-- [并发与限制说明](README.zh-CN.md#并发与限制)（README）
-- [V2EX 宣传稿](docs/zh-CN/v2ex-post.md)
-- [Docker + 宿主机 Runner](docs/zh-CN/deploy/docker-host-runner.md)
-- [完整配置示例](examples/config.full.yaml)
+| 主题 | 文档 |
+|------|------|
+| 飞书应用与权限 | [docs/zh-CN/feishu-app-setup.md](docs/zh-CN/feishu-app-setup.md) |
+| 飞书机器人自定义菜单 | [docs/zh-CN/feishu-bot-menu.md](docs/zh-CN/feishu-bot-menu.md) |
+| 手动 / Docker 快速开始 | [docs/zh-CN/quickstart.md](docs/zh-CN/quickstart.md) |
+| Model、Effort、Permission | [docs/zh-CN/model-effort.md](docs/zh-CN/model-effort.md) |
+| Docker Bridge + 宿主机 Runner | [docs/zh-CN/deploy/docker-host-runner.md](docs/zh-CN/deploy/docker-host-runner.md) |
+| 完整配置 | [examples/config.full.yaml](examples/config.full.yaml) |
+| 安全策略 | [SECURITY.md](SECURITY.md) |
 
 ## 开发
 
 ```bash
-pnpm install && pnpm build && pnpm test
+pnpm install
+pnpm run lint
+pnpm run build
+pnpm test
 ```
+
+这是一个 pnpm monorepo，包含 `core`、`backends`、`runner-host`、`runner-client`、`router`、`channel-feishu`、`channel-telegram` 和 `apps/bridge`。
 
 ## License
 
