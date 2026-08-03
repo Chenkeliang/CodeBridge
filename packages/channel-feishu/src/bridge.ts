@@ -8,7 +8,7 @@ import {
   resolveRequireMention,
   type AppConfig,
   type RunAttachment,
-} from "@feishu-code-bridge/core";
+} from "@codebridge/core";
 import {
   RunOrchestrator,
   BOT_MENU_EVENT_KEYS,
@@ -17,7 +17,7 @@ import {
   formatElapsed,
   formatWelcomeMessage,
   handleSlashCommand,
-} from "@feishu-code-bridge/router";
+} from "@codebridge/router";
 import { registerFeishuExtraEvents } from "./feishu-extra-events.js";
 import { ChainTopicTracker } from "./chain-topics.js";
 import {
@@ -170,7 +170,7 @@ export class FeishuBridge {
       onP2pChatEntered: async (data) => {
         const chatId = data.chat_id;
         if (!chatId || data.last_message_id) return;
-        const name = this.channel?.botIdentity?.name ?? "飞书码桥";
+        const name = this.channel?.botIdentity?.name ?? "CodeBridge";
         await this.sendMarkdown(chatId, formatWelcomeMessage(name));
       },
       onBotMenu: async (data) => {
@@ -759,7 +759,7 @@ export async function runDoctor(
     runner = {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
-      hint: "Start feishu-code-runner on the host first",
+      hint: "Start codebridge-runner on the host first",
     };
   }
   return {

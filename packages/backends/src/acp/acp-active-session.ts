@@ -3,7 +3,7 @@ import {
   type ActiveSession,
   type ClientConnection,
 } from "@agentclientprotocol/sdk";
-import type { BackendProfile, RunContext } from "@feishu-code-bridge/core";
+import type { BackendProfile, RunContext } from "@codebridge/core";
 import { acpContinueMethod } from "./acp-spawn-profiles.js";
 import { raceWithAbort } from "./acp-race.js";
 

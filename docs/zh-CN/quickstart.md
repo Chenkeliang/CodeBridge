@@ -23,20 +23,21 @@
 
 ```bash
 pnpm install && pnpm build
-feishu-code-bridge init
+node apps/bridge/dist/cli.js init
 ```
 
 ### Runner（宿主机）
 
 ```bash
-feishu-code-runner
+node packages/runner-host/dist/cli.js
 # 或: pnpm runner
 ```
 
 ### Bridge
 
 ```bash
-feishu-code-bridge start
+node apps/bridge/dist/cli.js start
+# 或: pnpm start
 ```
 
 ## 飞书后台

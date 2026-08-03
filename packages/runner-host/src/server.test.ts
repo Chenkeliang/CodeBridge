@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig, type AgentEvent, type RunRequest } from "@feishu-code-bridge/core";
+import { defaultConfig, type AgentEvent, type RunRequest } from "@codebridge/core";
 import { RunnerHost } from "./server.js";
 
 const tmpDirs: string[] = [];

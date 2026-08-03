@@ -8,7 +8,7 @@ import type {
   AcpPermissionPolicy,
   BackendConfigOption,
   RunContext,
-} from "@feishu-code-bridge/core";
+} from "@codebridge/core";
 
 type Agent = ClientConnection["agent"];
 

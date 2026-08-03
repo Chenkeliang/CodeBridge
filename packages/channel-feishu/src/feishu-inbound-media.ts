@@ -1,5 +1,5 @@
 import type { Readable } from "node:stream";
-import type { RunAttachment } from "@feishu-code-bridge/core";
+import type { RunAttachment } from "@codebridge/core";
 import type { LarkChannel, ResourceDescriptor } from "@larksuiteoapi/node-sdk";
 
 async function bufferFromDownloadResponse(raw: unknown): Promise<Buffer> {

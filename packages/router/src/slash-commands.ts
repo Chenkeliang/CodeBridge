@@ -1,8 +1,8 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { AppConfig, BackendConfigOption } from "@feishu-code-bridge/core";
-import type { CliSessionSummary } from "@feishu-code-bridge/runner-client";
+import type { AppConfig, BackendConfigOption } from "@codebridge/core";
+import type { CliSessionSummary } from "@codebridge/runner-client";
 import {
   type CommandHelpFormat,
   formatCompactCommandHelp,
@@ -536,7 +536,7 @@ async function handleResume(
   if (!ctx.listSessions || !ctx.bindSession) {
     return {
       type: "reply",
-      text: "Runner 未就绪，无法列出 ACP session。请先启动 feishu-code-runner。",
+      text: "Runner 未就绪，无法列出 ACP session。请先启动 codebridge-runner。",
     };
   }
 

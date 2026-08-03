@@ -8,7 +8,7 @@ import {
   type ClaudePermissionMode,
   type SessionKey,
   type SessionRecord,
-} from "@feishu-code-bridge/core";
+} from "@codebridge/core";
 
 export interface ChatBinding {
   backendId: string;

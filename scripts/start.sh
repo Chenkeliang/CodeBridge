@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 飞书码桥 — 引导安装 / 一键启动
+# CodeBridge — 引导安装 / 一键启动
 # 用法:
 #   ./scripts/start.sh setup       # 交互式首次安装
 #   ./scripts/start.sh             # 检查依赖 → 停旧进程 → 后台启动（含守护，挂掉自动拉起）
@@ -16,7 +16,21 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DATA_DIR="${DATA_DIR:-$HOME/.feishu-code-bridge}"
+DEFAULT_DATA_DIR="$HOME/.codebridge"
+LEGACY_DATA_DIR="$HOME/.feishu-code-bridge"
+REQUESTED_CMD="${1:-start}"
+EXPLICIT_DATA_DIR=0
+if [[ -n "${DATA_DIR:-}" ]]; then
+  EXPLICIT_DATA_DIR=1
+  DATA_DIR="$DATA_DIR"
+elif [[ "$REQUESTED_CMD" == "restart" || "$REQUESTED_CMD" == "install-launchd" || "$REQUESTED_CMD" == "install-macos-runner" ]]; then
+  DATA_DIR="$DEFAULT_DATA_DIR"
+elif [[ -d "$DEFAULT_DATA_DIR" || ! -d "$LEGACY_DATA_DIR" ]]; then
+  DATA_DIR="$DEFAULT_DATA_DIR"
+else
+  # 只读状态和旧版手动启动继续识别原目录；restart/install-launchd 会完成迁移。
+  DATA_DIR="$LEGACY_DATA_DIR"
+fi
 CONFIG="$DATA_DIR/config.yaml"
 PID_DIR="$DATA_DIR/run"
 RUNNER_PID="$PID_DIR/runner.pid"
@@ -27,11 +41,16 @@ WATCHDOG_PID="$PID_DIR/watchdog.pid"
 WATCHDOG_LOG="$DATA_DIR/watchdog.log"
 MANUAL_LOCK="$PID_DIR/manual.lock"
 RUNNER_PORT="${RUNNER_PORT:-19789}"
-LAUNCHD_RUNNER_LABEL="com.feishu-code-bridge.runner"
-LAUNCHD_BRIDGE_LABEL="com.feishu-code-bridge.bridge"
+LAUNCHD_RUNNER_LABEL="com.codebridge.runner"
+LAUNCHD_BRIDGE_LABEL="com.codebridge.bridge"
+LEGACY_LAUNCHD_RUNNER_LABEL="com.feishu-code-bridge.runner"
+LEGACY_LAUNCHD_BRIDGE_LABEL="com.feishu-code-bridge.bridge"
 LAUNCHD_RUNNER_PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_RUNNER_LABEL}.plist"
 LAUNCHD_BRIDGE_PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_BRIDGE_LABEL}.plist"
-MACOS_RUNNER_EXECUTABLE="$HOME/Applications/Feishu Code Runner.app/Contents/MacOS/FeishuCodeRunner"
+LEGACY_LAUNCHD_RUNNER_PLIST="$HOME/Library/LaunchAgents/${LEGACY_LAUNCHD_RUNNER_LABEL}.plist"
+LEGACY_LAUNCHD_BRIDGE_PLIST="$HOME/Library/LaunchAgents/${LEGACY_LAUNCHD_BRIDGE_LABEL}.plist"
+MACOS_RUNNER_EXECUTABLE="$HOME/Applications/CodeBridge Runner.app/Contents/MacOS/CodeBridgeRunner"
+LEGACY_MACOS_RUNNER_EXECUTABLE="$HOME/Applications/Feishu Code Runner.app/Contents/MacOS/FeishuCodeRunner"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -102,8 +121,8 @@ ensure_built() {
 
 print_banner() {
   echo -e "${BOLD}"
-  echo "  飞书码桥 feishu-code-bridge"
-  echo "  飞书远程驱动本机 Cursor / Claude Code / Codex"
+  echo "  CodeBridge"
+  echo "  从飞书或 Telegram 远程驱动本机 Cursor / Claude Code / Codex"
   echo -e "${NC}"
 }
 
@@ -111,7 +130,7 @@ print_usage_guide() {
   title "飞书里怎么用"
   cat <<'EOF'
   常用斜杠命令：
-    /help          全部命令
+    /help          手机快捷菜单（/help full 查看全部）
     /status        当前 backend / 目录 / model
     /resume        列出本机 ACP session 并续聊
     /backend claude  切换 Agent
@@ -533,12 +552,150 @@ launchd_path_for_agents() {
 launchd_bootout() {
   local label="$1"
   local plist="$2"
-  [[ -f "$plist" ]] || return 0
   if launchd_loaded "$label"; then
-    launchctl bootout "$(launchd_domain)" "$plist" 2>/dev/null \
+    launchctl bootout "$(launchd_domain)/$label" 2>/dev/null \
+      || launchctl bootout "$(launchd_domain)" "$plist" 2>/dev/null \
       || launchctl unload "$plist" 2>/dev/null \
       || true
   fi
+}
+
+launchd_bootout_strict() {
+  local label="$1"
+  local plist="$2"
+  launchd_loaded "$label" || return 0
+  if ! launchctl bootout "$(launchd_domain)/$label" 2>/dev/null \
+    && ! launchctl bootout "$(launchd_domain)" "$plist" 2>/dev/null \
+    && ! launchctl unload "$plist" 2>/dev/null; then
+    err "无法停止 launchd 服务: ${label}；已中止数据迁移。"
+    return 1
+  fi
+  if launchd_loaded "$label"; then
+    err "launchd 服务停止后仍处于加载状态: ${label}；已中止数据迁移。"
+    return 1
+  fi
+}
+
+remove_legacy_launchd() {
+  local component="${1:-all}"
+  if [[ "$component" == "runner" || "$component" == "all" ]]; then
+    launchd_bootout "$LEGACY_LAUNCHD_RUNNER_LABEL" "$LEGACY_LAUNCHD_RUNNER_PLIST"
+    rm -f "$LEGACY_LAUNCHD_RUNNER_PLIST"
+  fi
+  if [[ "$component" == "bridge" || "$component" == "all" ]]; then
+    launchd_bootout "$LEGACY_LAUNCHD_BRIDGE_LABEL" "$LEGACY_LAUNCHD_BRIDGE_PLIST"
+    rm -f "$LEGACY_LAUNCHD_BRIDGE_PLIST"
+  fi
+}
+
+MIGRATION_NEW_RUNNER=0
+MIGRATION_NEW_BRIDGE=0
+MIGRATION_LEGACY_RUNNER=0
+MIGRATION_LEGACY_BRIDGE=0
+MIGRATION_REINSTALL_RUNNER=0
+MIGRATION_REINSTALL_BRIDGE=0
+
+launchd_present() {
+  local label="$1"
+  local plist="$2"
+  launchd_loaded "$label" || [[ -f "$plist" ]]
+}
+
+migrate_legacy_entries() {
+  local source="$1"
+  local destination="$2"
+  local prefix="${3:-}"
+  local entry name target display
+  while IFS= read -r -d '' entry; do
+    name="${entry##*/}"
+    target="$destination/$name"
+    display="${prefix:+$prefix/}$name"
+    if [[ -d "$entry" && ! -L "$entry" && -d "$target" && ! -L "$target" ]]; then
+      migrate_legacy_entries "$entry" "$target" "$display"
+      rmdir "$entry" 2>/dev/null || true
+    elif [[ -e "$target" || -L "$target" ]]; then
+      warn "保留旧目录中的冲突项: $display"
+      ((MIGRATION_CONFLICTS += 1))
+    else
+      mv "$entry" "$target"
+      ((MIGRATION_MOVED += 1))
+    fi
+  done < <(find "$source" -mindepth 1 -maxdepth 1 -print0)
+}
+
+migrate_default_data_dir() {
+  [[ -d "$LEGACY_DATA_DIR" ]] || return 0
+  if [[ ! -e "$DEFAULT_DATA_DIR" && ! -L "$DEFAULT_DATA_DIR" ]]; then
+    mv "$LEGACY_DATA_DIR" "$DEFAULT_DATA_DIR"
+    info "已迁移数据目录: $LEGACY_DATA_DIR → $DEFAULT_DATA_DIR"
+    return 0
+  fi
+  if [[ ! -d "$DEFAULT_DATA_DIR" ]]; then
+    err "新数据目录路径已存在且不是目录: $DEFAULT_DATA_DIR"
+    return 1
+  fi
+
+  MIGRATION_MOVED=0
+  MIGRATION_CONFLICTS=0
+  migrate_legacy_entries "$LEGACY_DATA_DIR" "$DEFAULT_DATA_DIR"
+  rmdir "$LEGACY_DATA_DIR" 2>/dev/null || true
+  if [[ "$MIGRATION_MOVED" -gt 0 ]]; then
+    info "已迁移数据目录: $LEGACY_DATA_DIR → $DEFAULT_DATA_DIR"
+  fi
+  if [[ "$MIGRATION_CONFLICTS" -gt 0 ]]; then
+    warn "旧目录仍保留冲突内容，请确认后手动处理: $LEGACY_DATA_DIR"
+  fi
+}
+
+prepare_default_data_migration() {
+  MIGRATION_NEW_RUNNER=0
+  MIGRATION_NEW_BRIDGE=0
+  MIGRATION_LEGACY_RUNNER=0
+  MIGRATION_LEGACY_BRIDGE=0
+  MIGRATION_REINSTALL_RUNNER=0
+  MIGRATION_REINSTALL_BRIDGE=0
+
+  launchd_present "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST" && MIGRATION_NEW_RUNNER=1
+  launchd_present "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST" && MIGRATION_NEW_BRIDGE=1
+  launchd_present "$LEGACY_LAUNCHD_RUNNER_LABEL" "$LEGACY_LAUNCHD_RUNNER_PLIST" && MIGRATION_LEGACY_RUNNER=1
+  launchd_present "$LEGACY_LAUNCHD_BRIDGE_LABEL" "$LEGACY_LAUNCHD_BRIDGE_PLIST" && MIGRATION_LEGACY_BRIDGE=1
+
+  if [[ "$EXPLICIT_DATA_DIR" -eq 1 ]]; then
+    MIGRATION_REINSTALL_RUNNER="$MIGRATION_LEGACY_RUNNER"
+    MIGRATION_REINSTALL_BRIDGE="$MIGRATION_LEGACY_BRIDGE"
+    [[ "$MIGRATION_LEGACY_RUNNER" -eq 1 ]] && launchd_bootout_strict "$LEGACY_LAUNCHD_RUNNER_LABEL" "$LEGACY_LAUNCHD_RUNNER_PLIST"
+    [[ "$MIGRATION_LEGACY_BRIDGE" -eq 1 ]] && launchd_bootout_strict "$LEGACY_LAUNCHD_BRIDGE_LABEL" "$LEGACY_LAUNCHD_BRIDGE_PLIST"
+    rm -f "$LEGACY_LAUNCHD_RUNNER_PLIST" "$LEGACY_LAUNCHD_BRIDGE_PLIST"
+    return 0
+  fi
+
+  if [[ -d "$LEGACY_DATA_DIR" ]]; then
+    MIGRATION_REINSTALL_RUNNER=$((MIGRATION_NEW_RUNNER || MIGRATION_LEGACY_RUNNER))
+    MIGRATION_REINSTALL_BRIDGE=$((MIGRATION_NEW_BRIDGE || MIGRATION_LEGACY_BRIDGE))
+
+    [[ "$MIGRATION_NEW_RUNNER" -eq 1 ]] && launchd_bootout_strict "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
+    [[ "$MIGRATION_NEW_BRIDGE" -eq 1 ]] && launchd_bootout_strict "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
+    [[ "$MIGRATION_LEGACY_RUNNER" -eq 1 ]] && launchd_bootout_strict "$LEGACY_LAUNCHD_RUNNER_LABEL" "$LEGACY_LAUNCHD_RUNNER_PLIST"
+    [[ "$MIGRATION_LEGACY_BRIDGE" -eq 1 ]] && launchd_bootout_strict "$LEGACY_LAUNCHD_BRIDGE_LABEL" "$LEGACY_LAUNCHD_BRIDGE_PLIST"
+    rm -f "$LEGACY_LAUNCHD_RUNNER_PLIST" "$LEGACY_LAUNCHD_BRIDGE_PLIST"
+
+    stop_watchdog
+    stop_pid_file "Runner" "$RUNNER_PID" || true
+    stop_pid_file "Bridge" "$BRIDGE_PID" || true
+    stop_pid_file "旧版守护" "$LEGACY_DATA_DIR/run/watchdog.pid" || true
+    stop_pid_file "旧版 Runner" "$LEGACY_DATA_DIR/run/runner.pid" || true
+    stop_pid_file "旧版 Bridge" "$LEGACY_DATA_DIR/run/bridge.pid" || true
+    stop_port_listener "$RUNNER_PORT"
+    stop_orphan_processes
+    migrate_default_data_dir
+    return 0
+  fi
+
+  MIGRATION_REINSTALL_RUNNER="$MIGRATION_LEGACY_RUNNER"
+  MIGRATION_REINSTALL_BRIDGE="$MIGRATION_LEGACY_BRIDGE"
+  [[ "$MIGRATION_LEGACY_RUNNER" -eq 1 ]] && launchd_bootout_strict "$LEGACY_LAUNCHD_RUNNER_LABEL" "$LEGACY_LAUNCHD_RUNNER_PLIST"
+  [[ "$MIGRATION_LEGACY_BRIDGE" -eq 1 ]] && launchd_bootout_strict "$LEGACY_LAUNCHD_BRIDGE_LABEL" "$LEGACY_LAUNCHD_BRIDGE_PLIST"
+  rm -f "$LEGACY_LAUNCHD_RUNNER_PLIST" "$LEGACY_LAUNCHD_BRIDGE_PLIST"
 }
 
 launchd_bootstrap() {
@@ -548,10 +705,12 @@ launchd_bootstrap() {
 }
 
 warn_launchd_conflict() {
-  local runner=0 bridge=0
+  local runner=0 bridge=0 legacy_runner=0 legacy_bridge=0
   launchd_loaded "$LAUNCHD_RUNNER_LABEL" && runner=1
   launchd_loaded "$LAUNCHD_BRIDGE_LABEL" && bridge=1
-  if [[ "$runner" -eq 0 && "$bridge" -eq 0 ]]; then
+  launchd_loaded "$LEGACY_LAUNCHD_RUNNER_LABEL" && legacy_runner=1
+  launchd_loaded "$LEGACY_LAUNCHD_BRIDGE_LABEL" && legacy_bridge=1
+  if [[ "$runner" -eq 0 && "$bridge" -eq 0 && "$legacy_runner" -eq 0 && "$legacy_bridge" -eq 0 ]]; then
     return 1
   fi
   err "检测到 macOS launchd 自启服务（KeepAlive），会与 start.sh 抢端口、抢进程。"
@@ -559,6 +718,8 @@ warn_launchd_conflict() {
   err "launchd 默认 PATH 不含 nvm，还会导致 cursor-agent ENOENT。"
   [[ "$runner" -eq 1 ]] && err "  · 已加载: $LAUNCHD_RUNNER_LABEL"
   [[ "$bridge" -eq 1 ]] && err "  · 已加载: $LAUNCHD_BRIDGE_LABEL"
+  [[ "$legacy_runner" -eq 1 ]] && err "  · 已加载旧版: $LEGACY_LAUNCHD_RUNNER_LABEL"
+  [[ "$legacy_bridge" -eq 1 ]] && err "  · 已加载旧版: $LEGACY_LAUNCHD_BRIDGE_LABEL"
   err "请二选一："
   err "  $0 uninstall-launchd && $0 restart    # 改用手动 start.sh（开发推荐）"
   err "  $0 install-launchd                  # 只用 launchd 开机自启"
@@ -627,6 +788,10 @@ check_launchd_component() {
 
 install_launchd_runner() {
   local program
+  if [[ -x "$LEGACY_MACOS_RUNNER_EXECUTABLE" && ! -x "$MACOS_RUNNER_EXECUTABLE" ]]; then
+    warn "检测到旧版 Feishu Code Runner.app；Bundle ID 变更后 macOS 授权不会自动迁移。"
+    warn "当前 Runner 将使用 node 启动。需要固定身份时，请执行 $0 install-macos-runner 并重新授权受保护目录。"
+  fi
   program="$(if [[ -x "$MACOS_RUNNER_EXECUTABLE" ]]; then printf '%s' "$MACOS_RUNNER_EXECUTABLE"; else command -v node; fi)"
   launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
   write_launchd_plist "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST" \
@@ -649,15 +814,22 @@ install_launchd_bridge() {
 
 cmd_install_launchd() {
   local component="${1:-all}"
+  local install_runner=0 install_bridge=0
   check_launchd_component "$component"
-  ensure_built
   need_cmd node || exit 1
+  ensure_built
+  prepare_default_data_migration
   info "安装 launchd 自启（${component}）…"
   stop_watchdog
+  remove_legacy_launchd "$component"
   cmd_stop 2>/dev/null || true
-  [[ "$component" == "runner" || "$component" == "all" ]] && install_launchd_runner
-  [[ "$component" == "bridge" || "$component" == "all" ]] && install_launchd_bridge
-  info "launchd 已加载。查看: launchctl list | grep feishu-code-bridge"
+  [[ "$component" == "runner" || "$component" == "all" ]] && install_runner=1
+  [[ "$component" == "bridge" || "$component" == "all" ]] && install_bridge=1
+  [[ "$MIGRATION_REINSTALL_RUNNER" -eq 1 ]] && install_runner=1
+  [[ "$MIGRATION_REINSTALL_BRIDGE" -eq 1 ]] && install_bridge=1
+  [[ "$install_runner" -eq 1 ]] && install_launchd_runner
+  [[ "$install_bridge" -eq 1 ]] && install_launchd_bridge
+  info "launchd 已加载。查看: launchctl list | grep codebridge"
   case "$component" in
     runner) info "日志: $RUNNER_LOG" ;;
     bridge) info "日志: $BRIDGE_LOG" ;;
@@ -671,11 +843,22 @@ cmd_install_macos_runner() {
     err "固定 Bundle ID 的 Runner helper 仅支持 macOS"
     exit 1
   }
-  ensure_built
   need_cmd node || exit 1
-  node "$ROOT/scripts/install-macos-runner-app.mjs" "${1:-${FCB_CODESIGN_IDENTITY:--}}"
+  ensure_built
+  prepare_default_data_migration
+  stop_watchdog
+  stop_pid_file "Runner" "$RUNNER_PID" || true
+  stop_port_listener "$RUNNER_PORT"
+  stop_runner_orphans
+  rm -f "$RUNNER_PID"
+  node "$ROOT/scripts/install-macos-runner-app.mjs" "${1:-${CODEBRIDGE_CODESIGN_IDENTITY:-${FCB_CODESIGN_IDENTITY:--}}}"
+  remove_legacy_launchd runner
   install_launchd_runner
-  info "Runner helper 已接入 launchd；不会重启 Bridge。"
+  if [[ "$MIGRATION_REINSTALL_BRIDGE" -eq 1 ]]; then
+    install_launchd_bridge
+    info "旧版 Bridge launchd 任务已一并迁移。"
+  fi
+  info "Runner helper 已接入 launchd。"
 }
 
 cmd_uninstall_launchd() {
@@ -690,19 +873,32 @@ cmd_uninstall_launchd() {
     launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
     rm -f "$LAUNCHD_BRIDGE_PLIST"
   fi
+  remove_legacy_launchd "$component"
   stop_port_listener "$RUNNER_PORT"
   stop_orphan_processes
   info "launchd 已卸载。可执行: $0 start"
 }
 
 cmd_status() {
-  local runner_launchd=0 bridge_launchd=0
+  local runner_launchd=0 bridge_launchd=0 legacy_runner=0 legacy_bridge=0
   launchd_loaded "$LAUNCHD_RUNNER_LABEL" && runner_launchd=1
   launchd_loaded "$LAUNCHD_BRIDGE_LABEL" && bridge_launchd=1
+  if [[ "$runner_launchd" -eq 0 ]] && launchd_loaded "$LEGACY_LAUNCHD_RUNNER_LABEL"; then
+    runner_launchd=1
+    legacy_runner=1
+  fi
+  if [[ "$bridge_launchd" -eq 0 ]] && launchd_loaded "$LEGACY_LAUNCHD_BRIDGE_LABEL"; then
+    bridge_launchd=1
+    legacy_bridge=1
+  fi
   echo "配置: $CONFIG"
   echo "数据: $DATA_DIR"
   if [[ "$runner_launchd" -eq 1 ]]; then
-    echo "Runner: launchd 管理中 (KeepAlive, log $RUNNER_LOG)"
+    if [[ "$legacy_runner" -eq 1 ]]; then
+      echo "Runner: 旧版 launchd 管理中 (KeepAlive, log $RUNNER_LOG)"
+    else
+      echo "Runner: launchd 管理中 (KeepAlive, log $RUNNER_LOG)"
+    fi
   elif is_running "$RUNNER_PID"; then
     echo "Runner: 运行中 (pid $(cat "$RUNNER_PID"), log $RUNNER_LOG)"
   elif has_cmd lsof && lsof -ti:"$RUNNER_PORT" >/dev/null 2>&1; then
@@ -711,7 +907,11 @@ cmd_status() {
     echo "Runner: 未运行"
   fi
   if [[ "$bridge_launchd" -eq 1 ]]; then
-    echo "Bridge: launchd 管理中 (KeepAlive, log $BRIDGE_LOG)"
+    if [[ "$legacy_bridge" -eq 1 ]]; then
+      echo "Bridge: 旧版 launchd 管理中 (KeepAlive, log $BRIDGE_LOG)"
+    else
+      echo "Bridge: launchd 管理中 (KeepAlive, log $BRIDGE_LOG)"
+    fi
   elif is_running "$BRIDGE_PID"; then
     echo "Bridge: 运行中 (pid $(cat "$BRIDGE_PID"), log $BRIDGE_LOG)"
   elif [[ -n "$(bridge_orphan_pids)" ]]; then
@@ -729,8 +929,15 @@ cmd_status() {
   echo ""
   if [[ "$runner_launchd" -eq 1 || "$bridge_launchd" -eq 1 ]]; then
     info "launchd 自启: 已加载（电脑重启后自动启动）"
-    [[ "$runner_launchd" -eq 1 ]] && echo "  · $LAUNCHD_RUNNER_LABEL"
-    [[ "$bridge_launchd" -eq 1 ]] && echo "  · $LAUNCHD_BRIDGE_LABEL"
+    if [[ "$runner_launchd" -eq 1 ]]; then
+      [[ "$legacy_runner" -eq 1 ]] && echo "  · $LEGACY_LAUNCHD_RUNNER_LABEL" || echo "  · $LAUNCHD_RUNNER_LABEL"
+    fi
+    if [[ "$bridge_launchd" -eq 1 ]]; then
+      [[ "$legacy_bridge" -eq 1 ]] && echo "  · $LEGACY_LAUNCHD_BRIDGE_LABEL" || echo "  · $LAUNCHD_BRIDGE_LABEL"
+    fi
+    if [[ "$legacy_runner" -eq 1 || "$legacy_bridge" -eq 1 ]]; then
+      warn "检测到旧版 launchd 标识，请执行 restart 或 install-launchd 完成 CodeBridge 迁移。"
+    fi
     echo ""
   fi
   check_one_cli "Cursor" cursor-agent agent || true
@@ -843,23 +1050,18 @@ cmd_start() {
 cmd_restart() {
   # launchd owns services installed with install-launchd; reload those jobs in
   # place so restart never creates a second Runner on the same port.
-  if launchd_loaded "$LAUNCHD_RUNNER_LABEL" || launchd_loaded "$LAUNCHD_BRIDGE_LABEL"; then
-    need_cmd node || exit 1
-    need_cmd pnpm || exit 1
-    ensure_built
+  local runner_launchd=0 bridge_launchd=0
+  need_cmd node || exit 1
+  need_cmd pnpm || exit 1
+  ensure_built
+  prepare_default_data_migration
+  runner_launchd=$((MIGRATION_NEW_RUNNER || MIGRATION_LEGACY_RUNNER))
+  bridge_launchd=$((MIGRATION_NEW_BRIDGE || MIGRATION_LEGACY_BRIDGE))
+  if [[ "$runner_launchd" -eq 1 || "$bridge_launchd" -eq 1 ]]; then
     check_config_ready
-    local reloaded=0
-    if launchd_loaded "$LAUNCHD_RUNNER_LABEL"; then
-      launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
-      launchd_bootstrap "$LAUNCHD_RUNNER_PLIST"
-      reloaded=1
-    fi
-    if launchd_loaded "$LAUNCHD_BRIDGE_LABEL"; then
-      launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
-      launchd_bootstrap "$LAUNCHD_BRIDGE_PLIST"
-      reloaded=1
-    fi
-    [[ "$reloaded" -eq 1 ]] && info "launchd 服务已重启（电脑重启后仍会自动启动）"
+    [[ "$runner_launchd" -eq 1 ]] && install_launchd_runner
+    [[ "$bridge_launchd" -eq 1 ]] && install_launchd_bridge
+    info "launchd 服务已迁移并重启（电脑重启后仍会自动启动）"
     return 0
   fi
 

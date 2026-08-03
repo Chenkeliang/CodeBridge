@@ -1,4 +1,4 @@
-import type { BackendConfigOption } from "@feishu-code-bridge/core";
+import type { BackendConfigOption } from "@codebridge/core";
 
 function formatOptionValue(
   value: BackendConfigOption["values"][number],

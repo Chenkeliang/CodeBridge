@@ -27,7 +27,7 @@ const AGENTS = {
 
 function parseArgs(argv) {
   let backend;
-  let cwd = resolve(homedir(), "Projects/feishu-code-bridge");
+  let cwd = resolve(homedir(), "Projects/CodeBridge");
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === "--backend" && argv[i + 1]) backend = argv[++i];
     else if (argv[i] === "--cwd" && argv[i + 1]) cwd = resolve(argv[++i]);
@@ -121,7 +121,7 @@ async function probeAgent(agentKey, cwd) {
     const msg = await send("initialize", {
       protocolVersion: 1,
       clientCapabilities: {},
-      clientInfo: { name: "fcb-probe", version: "0.1.0" },
+      clientInfo: { name: "codebridge-probe", version: "0.1.0" },
     });
     return { ok: !msg.error, error: msg.error };
   });
@@ -130,7 +130,7 @@ async function probeAgent(agentKey, cwd) {
     await send("initialize", {
       protocolVersion: 1,
       clientCapabilities: {},
-      clientInfo: { name: "fcb-probe", version: "0.1.0" },
+      clientInfo: { name: "codebridge-probe", version: "0.1.0" },
     });
     const s = await send("session/new", { cwd, mcpServers: [] });
     const p = await send("session/prompt", {
@@ -144,7 +144,7 @@ async function probeAgent(agentKey, cwd) {
     await send("initialize", {
       protocolVersion: 1,
       clientCapabilities: {},
-      clientInfo: { name: "fcb-probe", version: "0.1.0" },
+      clientInfo: { name: "codebridge-probe", version: "0.1.0" },
     });
     const s = await send("session/new", { cwd, mcpServers: [] });
     const p = await send("session/prompt", {

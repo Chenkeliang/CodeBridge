@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 
 const configPath = path.join(
   os.homedir(),
-  ".feishu-code-bridge",
+  ".codebridge",
   "config.yaml",
 );
 const raw = fs.readFileSync(configPath, "utf8");
@@ -21,7 +21,7 @@ if (!url || !token) {
   process.exit(1);
 }
 
-const cwd = path.join(os.homedir(), "Projects", "feishu-code-bridge");
+const cwd = path.join(os.homedir(), "Projects", "CodeBridge");
 const prompt = "只回复一个词：OK";
 
 async function runOnce(backendId, chatId) {

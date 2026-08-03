@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { LocalMediaPath, RunAttachment } from "@feishu-code-bridge/core";
+import type { LocalMediaPath, RunAttachment } from "@codebridge/core";
 
 export async function materializeAttachments(
   dataDir: string,

@@ -1,4 +1,4 @@
-# Feishu Code Bridge
+# CodeBridge
 
 Self-hosted, multi-channel [Agent Client Protocol (ACP)](https://agentclientprotocol.com) gateway for coding agents.
 
@@ -45,8 +45,8 @@ The Bridge and Runner are intentionally separate: the Bridge can be remote or co
 ### Install and start
 
 ```bash
-git clone https://github.com/Chenkeliang/feishu-code-bridge.git
-cd feishu-code-bridge
+git clone https://github.com/Chenkeliang/CodeBridge.git
+cd CodeBridge
 
 # Installs dependencies, builds, creates config, and checks local CLIs.
 ./scripts/start.sh setup
@@ -55,7 +55,7 @@ cd feishu-code-bridge
 ./scripts/start.sh start
 ```
 
-The setup wizard stores configuration at `~/.feishu-code-bridge/config.yaml`. It can configure Feishu credentials and generate a random Runner token for you.
+The setup wizard stores configuration at `~/.codebridge/config.yaml`. It can configure Feishu credentials and generate a random Runner token for you.
 
 Verify the installation:
 
@@ -70,6 +70,8 @@ On macOS, use launchd for boot-time startup and KeepAlive. Choose one process ma
 ./scripts/start.sh install-launchd all
 ./scripts/start.sh restart
 ```
+
+When upgrading from the former `feishu-code-bridge` name, `restart` or `install-launchd` migrates the default data directory from `~/.feishu-code-bridge` to `~/.codebridge` and replaces the old launchd jobs. Existing files in `~/.codebridge` are never overwritten, and an explicitly configured `DATA_DIR` is never moved. If you used the former `Feishu Code Runner.app`, run `./scripts/start.sh install-macos-runner` and approve protected folders again: macOS does not transfer TCC grants to the new Bundle ID.
 
 Useful lifecycle commands:
 

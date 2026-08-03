@@ -6,7 +6,7 @@ import path from "node:path";
  * 把文件/消息发回当前飞书聊天。纯 node 实现，无外部依赖。
  */
 const FCB_SCRIPT = `#!/usr/bin/env node
-// fcb — 在飞书码桥 Agent 任务里把文件/消息发回当前聊天
+// fcb — 在 CodeBridge Agent 任务里把文件/消息发回当前聊天
 // 用法: fcb send <文件路径> | fcb say <消息>
 const path = require("node:path");
 
@@ -36,7 +36,7 @@ async function post(route, body) {
 
 async function main() {
   if (!api || !token || !chatId) {
-    fail("fcb: 缺少 FCB_API/FCB_TOKEN/FCB_CHAT_ID（仅在飞书码桥任务中可用）");
+    fail("fcb: 缺少 FCB_API/FCB_TOKEN/FCB_CHAT_ID（仅在 CodeBridge 任务中可用）");
   }
   const [cmd, ...rest] = process.argv.slice(2);
   if (cmd === "send" && rest[0]) {

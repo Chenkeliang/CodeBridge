@@ -10,7 +10,7 @@ import {
   listAcpConfigOptions,
   probeAcpInitialize,
 } from "./acp/acp-session-list.js";
-import { defaultConfig } from "@feishu-code-bridge/core";
+import { defaultConfig } from "@codebridge/core";
 
 describe("collectAcpSessions", () => {
   it("includes sessions from the scoped cwd and its child directories", async () => {

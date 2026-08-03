@@ -212,6 +212,6 @@ export function parseSessionKey(raw: string): SessionKey {
   };
 }
 
-export const DEFAULT_DATA_DIR = `${process.env.HOME ?? ""}/.feishu-code-bridge`;
+export const DEFAULT_DATA_DIR = `${process.env.HOME ?? ""}/.codebridge`;
 
 export const VERSION = "0.1.0";

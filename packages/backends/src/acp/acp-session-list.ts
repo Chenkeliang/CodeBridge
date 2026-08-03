@@ -14,7 +14,7 @@ import {
 import type {
   BackendConfigOption,
   BackendProfile,
-} from "@feishu-code-bridge/core";
+} from "@codebridge/core";
 import type { CliSessionSummary } from "../session-discovery.js";
 import { killProcessTree } from "./acp-kill.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
@@ -52,7 +52,7 @@ async function withAcpConnection<T>(
   const spawnError = new Promise<never>((_, reject) => {
     child.once("error", reject);
   });
-  const app = client({ name: "feishu-code-bridge" });
+  const app = client({ name: "codebridge" });
   const stream = childToStream(child);
   const connection = app.connect(stream);
   try {
@@ -60,7 +60,7 @@ async function withAcpConnection<T>(
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: ACP_CLIENT_CAPABILITIES,
-        clientInfo: { name: "feishu-code-bridge", version: "0.1.0" },
+        clientInfo: { name: "codebridge", version: "0.1.0" },
       }),
       spawnError,
     ]);
@@ -214,14 +214,14 @@ export async function probeAcpInitialize(
 
     (async () => {
       try {
-        const app = client({ name: "feishu-code-bridge" });
+        const app = client({ name: "codebridge" });
         const stream = childToStream(child);
         const connection = app.connect(stream);
         const init = await Promise.race([
           connection.agent.request(methods.agent.initialize, {
             protocolVersion: PROTOCOL_VERSION,
             clientCapabilities: ACP_CLIENT_CAPABILITIES,
-            clientInfo: { name: "feishu-code-bridge", version: "0.1.0" },
+            clientInfo: { name: "codebridge", version: "0.1.0" },
           }),
           spawnError,
         ]);

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseSessionKey, serializeSessionKey } from "./types.js";
+import {
+  DEFAULT_DATA_DIR,
+  parseSessionKey,
+  serializeSessionKey,
+} from "./types.js";
 import {
   ConfigSchema,
   defaultConfig,
@@ -16,6 +20,12 @@ describe("session key", () => {
     };
     const raw = serializeSessionKey(key);
     expect(parseSessionKey(raw)).toEqual(key);
+  });
+});
+
+describe("CodeBridge defaults", () => {
+  it("uses the renamed data directory", () => {
+    expect(DEFAULT_DATA_DIR).toMatch(/\.codebridge$/);
   });
 });
 

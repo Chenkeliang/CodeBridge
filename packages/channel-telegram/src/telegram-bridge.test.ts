@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig } from "@feishu-code-bridge/core";
+import { defaultConfig } from "@codebridge/core";
 import { TelegramBridge } from "./telegram-bridge.js";
 
 const tmpDirs: string[] = [];

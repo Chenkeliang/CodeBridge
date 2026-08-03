@@ -1,4 +1,4 @@
-import type { BackendProfile, DoctorResult } from "@feishu-code-bridge/core";
+import type { BackendProfile, DoctorResult } from "@codebridge/core";
 import { detectBackend } from "./acp/acp-doctor.js";
 
 export class BackendRegistry {

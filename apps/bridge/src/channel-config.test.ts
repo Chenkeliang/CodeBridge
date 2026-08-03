@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultConfig } from "@feishu-code-bridge/core";
+import { defaultConfig } from "@codebridge/core";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 describe("channel credential selection", () => {

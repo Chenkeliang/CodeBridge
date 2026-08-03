@@ -1,4 +1,4 @@
-import type { BackendProfile, DoctorResult } from "@feishu-code-bridge/core";
+import type { BackendProfile, DoctorResult } from "@codebridge/core";
 import { probeAcpInitialize } from "./acp-session-list.js";
 
 export async function detectBackend(

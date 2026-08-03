@@ -1,5 +1,5 @@
 {
-  "name": "@feishu-code-bridge/channel-feishu",
+  "name": "@codebridge/channel-feishu",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,8 +14,8 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@feishu-code-bridge/core": "workspace:*",
-    "@feishu-code-bridge/router": "workspace:*",
+    "@codebridge/core": "workspace:*",
+    "@codebridge/router": "workspace:*",
     "@larksuiteoapi/node-sdk": "^1.54.0"
   },
   "devDependencies": {

@@ -10,7 +10,7 @@ import {
   listAcpSessions,
   runAcpSession,
   type CliSessionSummary,
-} from "@feishu-code-bridge/backends";
+} from "@codebridge/backends";
 import type {
   AgentEvent,
   AcpPermissionPolicy,
@@ -18,8 +18,8 @@ import type {
   BackendConfigOption,
   RunContext,
   RunRequest,
-} from "@feishu-code-bridge/core";
-import { DEFAULT_DATA_DIR, VERSION } from "@feishu-code-bridge/core";
+} from "@codebridge/core";
+import { DEFAULT_DATA_DIR, VERSION } from "@codebridge/core";
 import { Hono } from "hono";
 import {
   cleanupAttachments,
