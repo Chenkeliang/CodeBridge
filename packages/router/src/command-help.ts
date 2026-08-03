@@ -3,43 +3,93 @@ export interface CommandHelpItem {
   summary: string;
 }
 
-export const SLASH_COMMANDS: CommandHelpItem[] = [
-  { command: "/help", summary: "查看全部命令" },
-  { command: "/menu", summary: "快捷命令面板（同 /help）" },
-  { command: "/stop", summary: "停止当前正在执行的 Agent 任务（别名 /cancel）" },
-  { command: "/steer <指令>", summary: "向当前执行中的 ACP turn 注入补充指令" },
-  { command: "/approve", summary: "允许 Agent 挂起的权限请求（prompt_feishu 模式）" },
-  { command: "/deny", summary: "拒绝 Agent 挂起的权限请求" },
-  { command: "/status", summary: "查看当前 backend / cwd / model 等全部会话状态" },
-  { command: "/new", summary: "新建会话（别名 /reset）" },
-  { command: "/resume", summary: "列出本机 session" },
-  { command: "/resume <N>", summary: "绑定第 N 条 session" },
-  { command: "/resume last", summary: "绑定最近一条" },
-  { command: "/resume all", summary: "列出本机全部 session（不限当前目录）" },
-  { command: "/session close <sessionId>", summary: "关闭指定 ACP session" },
-  { command: "/session delete <sessionId>", summary: "永久删除指定 ACP session" },
-  { command: "/backend <名>", summary: "cursor | claude | codex" },
-  { command: "/cd <path>", summary: "切换项目目录" },
-  { command: "/roots", summary: "列出 ACP 附加目录" },
-  { command: "/root add|remove <path>", summary: "管理 ACP 附加工作目录" },
-  { command: "/ws list", summary: "列出命名工作区" },
-  { command: "/ws save <名>", summary: "保存当前目录为工作区" },
-  { command: "/ws use <名>", summary: "切换到已保存工作区" },
-  { command: "/ws remove <名>", summary: "删除命名工作区" },
-  { command: "/model [名|default]", summary: "切换模型" },
-  { command: "/effort [级|default]", summary: "ACP 实时推理强度（Claude/Codex）" },
+export type CommandHelpFormat = "markdown" | "plain";
+
+interface CommandHelpGroup {
+  title: string;
+  items: CommandHelpItem[];
+}
+
+const COMMAND_HELP_GROUPS: CommandHelpGroup[] = [
   {
-    command: "/permission [模式|default]",
-    summary: "ACP 实时 mode/权限（支持 Cursor/Claude/Codex，别名 /perm）",
+    title: "常用",
+    items: [
+      { command: "/help [full]", summary: "查看快捷菜单或全部命令" },
+      { command: "/menu", summary: "查看手机快捷菜单" },
+      { command: "/status", summary: "查看 backend、目录、模型和任务状态" },
+    ],
   },
   {
-    command: "/thinking [on|off]",
-    summary: "卡片是否显示思考/工具过程（默认 on，别名 /think）",
+    title: "任务控制",
+    items: [
+      { command: "/stop", summary: "停止当前 Agent 任务（别名 /cancel）" },
+      { command: "/steer <指令>", summary: "向运行中的 ACP turn 注入补充指令" },
+      { command: "/approve", summary: "允许当前挂起的权限请求" },
+      { command: "/deny", summary: "拒绝当前挂起的权限请求" },
+    ],
   },
-  { command: "/send <path>", summary: "把本机文件发到当前聊天" },
-  { command: "/clone <url>", summary: "git clone" },
-  { command: "/pull", summary: "git pull" },
-  { command: "/config [id value]", summary: "查看或设置 ACP 实时配置（含 boolean）" },
+  {
+    title: "会话管理",
+    items: [
+      { command: "/new", summary: "新建会话（别名 /reset）" },
+      { command: "/resume", summary: "列出当前目录的本机 session" },
+      { command: "/resume <N>", summary: "绑定列表中第 N 条 session" },
+      { command: "/resume last", summary: "绑定最近一条 session" },
+      { command: "/resume all", summary: "列出全部目录的本机 session" },
+      { command: "/session close <sessionId>", summary: "关闭指定 ACP session" },
+      { command: "/session delete <sessionId>", summary: "永久删除指定 ACP session" },
+    ],
+  },
+  {
+    title: "Agent 与模型",
+    items: [
+      { command: "/backend <cursor|claude|codex|default>", summary: "切换 Agent" },
+      { command: "/transport", summary: "兼容命令；当前仅支持 ACP，无需切换" },
+      { command: "/model [list|名称|default]", summary: "列出或切换实时模型" },
+      { command: "/effort [list|级别|default]", summary: "列出或切换实时推理强度" },
+      {
+        command: "/permission [list|模式|default]",
+        summary: "列出或切换实时 mode/权限（别名 /perm）",
+      },
+      { command: "/config [id value|default]", summary: "查看或设置 ACP 实时配置（含 boolean）" },
+      { command: "/thinking [on|off]", summary: "显示或隐藏思考/工具过程（别名 /think）" },
+    ],
+  },
+  {
+    title: "目录与工作区",
+    items: [
+      { command: "/cd <绝对路径>", summary: "切换项目目录" },
+      { command: "/roots", summary: "列出 ACP 附加目录" },
+      { command: "/root add|remove|rm <绝对路径>", summary: "管理 ACP 附加目录" },
+      { command: "/ws list", summary: "列出命名工作区" },
+      { command: "/ws save <名称>", summary: "保存当前目录为工作区" },
+      { command: "/ws use <名称>", summary: "切换到命名工作区" },
+      { command: "/ws remove <名称>", summary: "删除命名工作区" },
+    ],
+  },
+  {
+    title: "文件与 Git",
+    items: [
+      { command: "/send <文件路径>", summary: "把本机文件发到当前聊天" },
+      { command: "/clone <git-url> [目录名]", summary: "克隆仓库并切换目录" },
+      { command: "/pull", summary: "在当前目录执行 git pull --ff-only" },
+    ],
+  },
+];
+
+export const SLASH_COMMANDS: CommandHelpItem[] = COMMAND_HELP_GROUPS.flatMap(
+  (group) => group.items,
+);
+
+const COMPACT_COMMANDS: CommandHelpItem[] = [
+  { command: "/status", summary: "查看当前状态" },
+  { command: "/resume last", summary: "续聊最近会话" },
+  { command: "/new", summary: "新建会话" },
+  { command: "/stop", summary: "停止当前任务" },
+  { command: "/backend claude", summary: "切换到 Claude" },
+  { command: "/model", summary: "查看或切换模型" },
+  { command: "/permission", summary: "查看或切换权限" },
+  { command: "/ws list", summary: "查看工作区" },
 ];
 
 /** 飞书机器人自定义菜单 event_key → 模拟用户发送的文本 */
@@ -47,26 +97,64 @@ export const BOT_MENU_EVENT_KEYS: Record<string, string> = {
   fcb_help: "/help",
   fcb_status: "/status",
   fcb_resume: "/resume",
+  fcb_resume_last: "/resume last",
   fcb_new: "/new",
   fcb_stop: "/stop",
   fcb_backend_cursor: "/backend cursor",
   fcb_backend_claude: "/backend claude",
+  fcb_backend_codex: "/backend codex",
+  fcb_model: "/model",
+  fcb_permission: "/permission",
   fcb_ws_list: "/ws list",
 };
 
-export function formatFullCommandHelp(): string {
-  const lines = SLASH_COMMANDS.map(
-    (item) => `\`${item.command}\` — ${item.summary}`,
-  );
-  return ["**飞书码桥命令**", "", ...lines].join("\n");
+function heading(text: string, format: CommandHelpFormat): string {
+  return format === "markdown" ? `**${text}**` : text;
+}
+
+function commandLine(
+  item: CommandHelpItem,
+  format: CommandHelpFormat,
+): string {
+  const command = format === "markdown" ? `\`${item.command}\`` : item.command;
+  return `${command} — ${item.summary}`;
+}
+
+export function formatCompactCommandHelp(
+  format: CommandHelpFormat = "markdown",
+): string {
+  return [
+    heading("码桥快捷菜单", format),
+    "",
+    ...COMPACT_COMMANDS.map((item) => commandLine(item, format)),
+    "",
+    commandLine(
+      { command: "/help full", summary: "查看全部命令" },
+      format,
+    ),
+  ].join("\n");
+}
+
+export function formatFullCommandHelp(
+  format: CommandHelpFormat = "markdown",
+): string {
+  const lines = [heading("码桥全部命令", format)];
+  for (const group of COMMAND_HELP_GROUPS) {
+    lines.push(
+      "",
+      heading(group.title, format),
+      ...group.items.map((item) => commandLine(item, format)),
+    );
+  }
+  return lines.join("\n");
 }
 
 export function formatWelcomeMessage(botName = "飞书码桥"): string {
   const quick = [
     "`/status` 查看状态",
-    "`/resume` 续聊本机 session",
+    "`/resume last` 续聊最近 session",
     "`/backend claude` 切换 Agent",
-    "`/help` 全部命令",
+    "`/menu` 快捷菜单",
   ];
   return [
     `👋 欢迎使用 **${botName}**`,
@@ -83,7 +171,7 @@ export function formatWelcomeMessage(botName = "飞书码桥"): string {
 }
 
 export function formatCompactCommandHint(): string {
-  return "快捷：`/help` · `/status` · `/resume` · `/stop` · `/new` · `/backend`";
+  return "快捷：`/menu` · `/status` · `/resume last` · `/stop` · `/new` · `/backend`";
 }
 
 export function formatBotMenuSetupGuide(): string[] {
@@ -91,7 +179,7 @@ export function formatBotMenuSetupGuide(): string[] {
     "建议在飞书开放平台 → 机器人 → 自定义菜单 中配置（单聊）：",
     "  · 展示样式：悬浮菜单",
     "  · 动作类型：发送文字 或 推送事件",
-    "  · 发送文字示例：/status、/resume、/new",
+    "  · 发送文字示例：/status、/resume last、/new",
     "  · 推送事件 event_key 见 docs/zh-CN/feishu-bot-menu.md",
     "  · 订阅事件：application.bot.menu_v6、im.chat.access_event.bot_p2p_chat_entered_v1",
   ];

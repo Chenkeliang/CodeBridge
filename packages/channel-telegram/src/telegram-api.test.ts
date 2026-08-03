@@ -42,6 +42,30 @@ describe("TelegramApi", () => {
       expect.objectContaining({ body: JSON.stringify({ offset: 4, timeout: 15 }) }),
     );
   });
+
+  it("registers the native bot command menu", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: true }), { status: 200 }),
+    );
+    const api = new TelegramApi({
+      token: "123:token",
+      fetch: fetchMock,
+      baseUrl: "https://telegram.test",
+    });
+    const commands = [
+      { command: "status", description: "查看会话状态" },
+      { command: "resume", description: "恢复本机会话" },
+    ];
+
+    await expect(api.setMyCommands(commands)).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://telegram.test/bot123:token/setMyCommands",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ commands }),
+      }),
+    );
+  });
 });
 
 describe("chunkTelegramText", () => {

@@ -14,12 +14,15 @@
 | 菜单名称 | 动作 | 发送文字 |
 |---------|------|----------|
 | 状态 | 发送文字 | `/status` |
-| 续聊 | 发送文字 | `/resume` |
+| 最近续聊 | 发送文字 | `/resume last` |
 | 新会话 | 发送文字 | `/new` |
 | 停止 | 发送文字 | `/stop` |
-| 帮助 | 发送文字 | `/help` |
+| 快捷菜单 | 发送文字 | `/menu` |
 | Cursor | 发送文字 | `/backend cursor` |
 | Claude | 发送文字 | `/backend claude` |
+| Codex | 发送文字 | `/backend codex` |
+| 模型 | 发送文字 | `/model` |
+| 权限 | 发送文字 | `/permission` |
 
 用户点击后，文字会作为消息发给机器人，码桥按斜杠命令处理。
 
@@ -35,10 +38,14 @@
 | 帮助 | `fcb_help` |
 | 状态 | `fcb_status` |
 | 续聊 | `fcb_resume` |
+| 最近续聊 | `fcb_resume_last` |
 | 新会话 | `fcb_new` |
 | 停止 | `fcb_stop` |
 | Cursor | `fcb_backend_cursor` |
 | Claude | `fcb_backend_claude` |
+| Codex | `fcb_backend_codex` |
+| 模型 | `fcb_model` |
+| 权限 | `fcb_permission` |
 | 工作区 | `fcb_ws_list` |
 
 码桥启动后会自动处理上述 `event_key`（见 `packages/router/src/command-help.ts`）。
