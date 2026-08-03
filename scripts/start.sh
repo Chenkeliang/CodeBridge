@@ -570,10 +570,15 @@ launchd_bootout_strict() {
     err "无法停止 launchd 服务: ${label}；已中止数据迁移。"
     return 1
   fi
-  if launchd_loaded "$label"; then
-    err "launchd 服务停止后仍处于加载状态: ${label}；已中止数据迁移。"
-    return 1
-  fi
+  local attempt
+  for attempt in {1..20}; do
+    if ! launchd_loaded "$label"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  err "launchd 服务停止后仍处于加载状态: ${label}；已中止数据迁移。"
+  return 1
 }
 
 remove_legacy_launchd() {
