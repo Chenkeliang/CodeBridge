@@ -362,6 +362,8 @@ export class FeishuBridge {
         this.orchestrator.activeRunElapsedMs(msg.chatId, topicId),
       steerActiveRun: (prompt) =>
         this.orchestrator.steerActiveForChat(msg.chatId, topicId, prompt),
+      authorizeDirectory: (directory) =>
+        this.orchestrator.authorizeDirectory(directory),
     });
 
     if (slash?.type === "reply") {

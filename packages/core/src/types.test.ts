@@ -59,4 +59,13 @@ describe("ACP-only backend configuration", () => {
     expect(config.backends.claude?.model).toBeUndefined();
     expect(config.backends.claude?.effort).toBeUndefined();
   });
+
+  it("accepts optional Telegram and arbitrary ACP config overrides", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      telegram: { botToken: "123:token", allowedChats: ["-1001"] },
+    });
+    expect(config.telegram?.botToken).toBe("123:token");
+    expect(config.telegram?.allowedChats).toEqual(["-1001"]);
+  });
 });

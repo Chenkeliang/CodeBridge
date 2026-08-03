@@ -23,6 +23,9 @@ importers:
       '@feishu-code-bridge/channel-feishu':
         specifier: workspace:*
         version: link:../../packages/channel-feishu
+      '@feishu-code-bridge/channel-telegram':
+        specifier: workspace:*
+        version: link:../../packages/channel-telegram
       '@feishu-code-bridge/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -70,6 +73,19 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: ^1.54.0
         version: 1.68.0
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/channel-telegram:
+    dependencies:
+      '@feishu-code-bridge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@feishu-code-bridge/router':
+        specifier: workspace:*
+        version: link:../router
     devDependencies:
       typescript:
         specifier: ^5.7.2

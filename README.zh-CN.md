@@ -7,6 +7,7 @@
 ## 特性
 
 - 飞书 WebSocket 长连接，流式 Markdown 回复
+- 可选 Telegram Bot API 长轮询通道（与飞书共用 ACP session/router）
 - 多 ACP backend：`cursor` / `claude` / `codex`
 - 会话路由：`/new`、`/resume`、`/stop`、`/backend`、`/cd`、`/ws`、`/model`、`/effort`
 - **恢复本机会话**：`/resume` 通过 ACP 适配器列出并继续已有 session
@@ -73,7 +74,7 @@ cd feishu-code-bridge
 | `/model` `/effort` `/permission` | 从当前 ACP adapter 实时读取模型 / 推理强度 / mode 权限 |
 | `/thinking on\|off` | 卡片是否显示思考/工具过程（默认 on） |
 | `/clone` `/pull` | 本机 git 操作 |
-| `/config` | 查看配置摘要 |
+| `/config` | 查看/设置 ACP 实时配置（含 boolean） |
 
 各 backend 的 session 目录：
 
@@ -114,12 +115,37 @@ Runner 通过 [Agent Client Protocol](https://agentclientprotocol.com) 与子进
 | 后端 | ACP 启动命令 |
 |------|-------------|
 | cursor | `cursor-agent acp` |
-| claude | `npx -y @agentclientprotocol/claude-agent-acp@0.63.0` |
-| codex | `npx -y @agentclientprotocol/codex-acp@1.1.7` |
+| claude | `npx -y @agentclientprotocol/claude-agent-acp@0.64.2` |
+| codex | `npx -y @agentclientprotocol/codex-acp@1.1.9` |
 
 Runner 仅使用 ACP；旧版直接 spawn CLI 的 transport 已移除。`runnerHost.acpPermissionPolicy` 控制无头权限（默认 `auto_allow`）。
 
 续聊：Claude/Codex 用 `session/resume`；Cursor 用 `session/load`（不支持 resume）。
+
+### Telegram
+
+在 `config.yaml` 增加以下配置即可启用 Bot API 长轮询；不配置飞书凭据时也可以 Telegram-only 启动：
+
+```yaml
+telegram:
+  botToken: "123456:replace-with-bot-token"
+  allowedUsers: ["123456789"] # 可选
+  allowedChats: ["-1001234567890"] # 可选
+  pollingTimeoutSec: 25
+```
+
+Telegram 会话使用 `telegram:<chatId>` 独立命名空间，支持 `/resume`、`/model`、`/permission`、`/config`、`/root`、`/steer` 等共享命令。
+
+### macOS 目录授权 helper
+
+`/root add /absolute/path` 会让 Runner 实际打开该目录，触发 macOS TCC 授权提示。需要固定身份时先执行：
+
+```bash
+./scripts/start.sh install-macos-runner
+```
+
+默认使用免费 ad-hoc 签名，仅适合本机；多人分发应传入自己的 Developer ID 或本机稳定签名身份：
+`./scripts/start.sh install-macos-runner "Developer ID Application: ..."`。这不会静默绕过 TCC，用户仍需在系统弹窗中允许目录访问。
 
 ```bash
 node scripts/acp-probe.mjs

@@ -43,6 +43,10 @@ export interface SlashContext {
   ) => Promise<{ ok: boolean; outcome?: string; error?: string }>;
   /** prompt_feishu：回应当前 run 挂起的权限请求（true=允许 false=拒绝） */
   resolvePermission?: (approve: boolean) => Promise<boolean>;
+  /** 让 Runner 进程实际访问目录，触发 macOS TCC 对固定 helper 身份的授权提示 */
+  authorizeDirectory?: (
+    directory: string,
+  ) => Promise<{ ok: boolean; path?: string; error?: string }>;
 }
 
 export type SlashResult =
@@ -265,6 +269,9 @@ export async function handleSlashCommand(
     case "/roots":
       return handleAdditionalDirectories(ctx, arg);
 
+    case "/config":
+      return handleAcpConfig(ctx, arg);
+
     case "/backend": {
       const id = arg === "default" || !arg ? ctx.config.defaultBackend : arg;
       if (!ctx.config.backends[id]) {
@@ -305,27 +312,14 @@ export async function handleSlashCommand(
       if (lower === "/clone") {
         return handleClone(ctx, rest);
       }
-      if (lower === "/config") {
-        const p = ctx.config.feishu.policy;
-        return {
-          type: "reply",
-          text: [
-            "**配置摘要**",
-            `requireMention: ${p?.requireMention ?? true}`,
-            `defaultBackend: ${ctx.config.defaultBackend}`,
-            `runner: ${ctx.config.runner.url}`,
-            "完整配置见 ~/.feishu-code-bridge/config.yaml",
-          ].join("\n"),
-        };
-      }
       return { type: "agent", prompt: trimmed };
   }
 }
 
-function handleAdditionalDirectories(
+async function handleAdditionalDirectories(
   ctx: SlashContext,
   arg: string,
-): SlashResult {
+): Promise<SlashResult> {
   const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
   const directories = binding.additionalDirectories ?? [];
   const [operation, ...pathParts] = arg.split(/\s+/).filter(Boolean);
@@ -359,12 +353,38 @@ function handleAdditionalDirectories(
 
   let target: string;
   if (op === "add") {
-    const resolved = canonicalDirectory(rawPath);
-    if ("error" in resolved) return { type: "reply", text: resolved.error };
-    if (resolved.cwd === binding.cwd) {
+    let authorization = "";
+    if (ctx.authorizeDirectory) {
+      if (!path.isAbsolute(rawPath)) {
+        return { type: "reply", text: `工作目录必须使用绝对路径: ${rawPath}` };
+      }
+      try {
+        const result = await ctx.authorizeDirectory(rawPath);
+        if (!result.ok && !result.path) {
+          return {
+            type: "reply",
+            text: `Runner 无法验证目录访问权限：${result.error ?? "目录不存在或无法访问"}`,
+          };
+        }
+        target = result.path ?? path.resolve(rawPath);
+        authorization = result.ok
+          ? "\nRunner 已验证目录访问权限。"
+          : `\nRunner 尚未获得目录访问权限：${result.error ?? "请在 macOS 弹窗中允许后重试"}`;
+      } catch (err) {
+        // Runner 暂时不可用时保留旧的本地校验作为回退；正常 TCC 路径不会触碰 Bridge 的文件权限。
+        const resolved = canonicalDirectory(rawPath);
+        if ("error" in resolved) return { type: "reply", text: resolved.error };
+        target = resolved.cwd;
+        authorization = `\nRunner 目录授权检查失败：${err instanceof Error ? err.message : String(err)}`;
+      }
+    } else {
+      const resolved = canonicalDirectory(rawPath);
+      if ("error" in resolved) return { type: "reply", text: resolved.error };
+      target = resolved.cwd;
+    }
+    if (target === binding.cwd) {
       return { type: "reply", text: "附加目录不能与当前工作目录相同。" };
     }
-    target = resolved.cwd;
     if (directories.includes(target)) {
       return { type: "reply", text: `附加目录已存在：${target}` };
     }
@@ -375,7 +395,7 @@ function handleAdditionalDirectories(
     );
     return {
       type: "reply",
-      text: `已添加 ACP 附加目录：${target}\n下一条消息生效；这不会绕过 macOS TCC 授权。`,
+      text: `已添加 ACP 附加目录：${target}${authorization}\n下一条消息生效；macOS TCC 仍需用户确认。`,
     };
   }
 
@@ -396,6 +416,77 @@ function handleAdditionalDirectories(
     ctx.topicId,
   );
   return { type: "reply", text: `已移除 ACP 附加目录：${target}` };
+}
+
+async function handleAcpConfig(
+  ctx: SlashContext,
+  arg: string,
+): Promise<SlashResult> {
+  if (!ctx.listConfigOptions) {
+    return { type: "reply", text: "Runner 未就绪，无法读取 ACP 配置能力。" };
+  }
+  let options: BackendConfigOption[];
+  try {
+    options = await ctx.listConfigOptions();
+  } catch (err) {
+    return {
+      type: "reply",
+      text: `ACP 配置能力读取失败：${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
+  const overrides = binding.acpConfig ?? {};
+  const [configId, ...valueParts] = arg.split(/\s+/).filter(Boolean);
+  if (!configId) {
+    if (!options.length) return { type: "reply", text: "当前 ACP 适配器没有可配置项。" };
+    return {
+      type: "reply",
+      text: [
+        "**ACP 实时配置**",
+        ...options.map((option) => {
+          const value = overrides[option.id] ?? option.currentValue ?? "(默认)";
+          return `- \`${option.id}\` · ${option.name} · ${option.type ?? "select"} · 当前: \`${String(value)}\``;
+        }),
+        "",
+        "用法：`/config <id> <value>`；恢复默认：`/config <id> default`",
+      ].join("\n"),
+    };
+  }
+  const option = options.find((candidate) => candidate.id === configId);
+  if (!option) return { type: "reply", text: `未知 ACP config id：\`${configId}\`` };
+  const rawValue = valueParts.join(" ").trim();
+  if (!rawValue) {
+    return {
+      type: "reply",
+      text: `用法：\`/config ${configId} <value>\`\n当前：\`${String(overrides[configId] ?? option.currentValue ?? "(默认)")}\``,
+    };
+  }
+  if (rawValue.toLowerCase() === "default") {
+    const next = { ...overrides };
+    delete next[configId];
+    ctx.router.setBinding(ctx.chatId, { acpConfig: next }, ctx.topicId);
+    return { type: "reply", text: `已清除 ACP config 覆盖：\`${configId}\`` };
+  }
+  let value: string | boolean;
+  if (option.type === "boolean") {
+    const lowerValue = rawValue.toLowerCase();
+    if (["true", "on", "1", "yes"].includes(lowerValue)) value = true;
+    else if (["false", "off", "0", "no"].includes(lowerValue)) value = false;
+    else return { type: "reply", text: `\`${configId}\` 需要 true/false（或 on/off）。` };
+  } else {
+    const matched = matchBackendConfigValue(option, rawValue);
+    if (!matched) return invalidLiveValue(`config ${configId}`, rawValue, option);
+    value = matched;
+  }
+  ctx.router.setBinding(
+    ctx.chatId,
+    { acpConfig: { ...overrides, [configId]: value } },
+    ctx.topicId,
+  );
+  return {
+    type: "reply",
+    text: `已设置 ACP config：\`${configId}\` = \`${String(value)}\`\n下一条消息生效。`,
+  };
 }
 
 /** 上一次 /resume 展示给用户的列表（按聊天/话题缓存），供 /resume <N> 按原序号定位 */

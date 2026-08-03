@@ -61,6 +61,26 @@ export class RunnerClient {
     }>;
   }
 
+  async authorizeDirectory(
+    directory: string,
+  ): Promise<{ ok: boolean; path?: string; error?: string }> {
+    const res = await this.fetch("/directories/authorize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: directory }),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      path?: string;
+      error?: string;
+    };
+    return {
+      ok: res.ok && body.ok === true,
+      path: body.path,
+      error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
+    };
+  }
+
   async closeSession(
     backend: string,
     cwd: string,

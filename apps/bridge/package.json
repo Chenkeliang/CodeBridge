@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@feishu-code-bridge/channel-feishu": "workspace:*",
+    "@feishu-code-bridge/channel-telegram": "workspace:*",
     "@feishu-code-bridge/core": "workspace:*",
     "@feishu-code-bridge/memory-plugin": "workspace:*",
     "@hono/node-server": "^1.19.14",

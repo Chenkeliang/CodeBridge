@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, type AgentEvent, type RunRequest } from "@feishu-code-bridge/core";
 import { RunnerHost } from "./server.js";
 
 const tmpDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await new Promise((resolve) => setTimeout(resolve, 20));
   for (const dir of tmpDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -116,6 +117,42 @@ describe("RunnerHost cwd validation", () => {
 
     expect(result.sessions).toEqual([]);
     expect(result.error).toContain("ACP session/list failed");
+    host.shutdown();
+  });
+
+  it("opens an absolute directory to verify macOS access", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-authorize-"));
+    tmpDirs.push(dataDir, target);
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
+
+    expect(host.authorizeDirectory(target)).toEqual({
+      ok: true,
+      path: fs.realpathSync(target),
+    });
+    expect(host.authorizeDirectory("relative/path")).toEqual({
+      ok: false,
+      error: expect.stringContaining("绝对路径"),
+    });
+    host.shutdown();
+  });
+
+  it("keeps the candidate path when macOS denies directory access", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
+    const denied = Object.assign(new Error("operation not permitted"), {
+      code: "EPERM",
+    });
+    vi.spyOn(fs, "opendirSync").mockImplementationOnce(() => {
+      throw denied;
+    });
+
+    expect(host.authorizeDirectory("/Users/tester/Desktop")).toEqual({
+      ok: false,
+      path: "/Users/tester/Desktop",
+      error: expect.stringContaining("尚未获得目录访问权限"),
+    });
     host.shutdown();
   });
 });

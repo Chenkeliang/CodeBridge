@@ -101,7 +101,7 @@ describe("ACP client capabilities", () => {
     ).toEqual({
       fs: { readTextFile: false, writeTextFile: false },
       plan: {},
-      session: { configOptions: {} },
+      session: { configOptions: { boolean: {} } },
     });
   });
 });

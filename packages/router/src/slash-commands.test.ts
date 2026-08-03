@@ -116,6 +116,16 @@ const cursorOptions: BackendConfigOption[] = [
       { value: "gpt-5.6-sol[reasoning=medium]", name: "gpt-5.6-sol" },
     ],
   },
+  {
+    id: "telemetry",
+    name: "Telemetry",
+    type: "boolean",
+    currentValue: "false",
+    values: [
+      { value: "true", name: "On" },
+      { value: "false", name: "Off" },
+    ],
+  },
 ];
 
 const claudeOptions: BackendConfigOption[] = [
@@ -280,6 +290,22 @@ describe("live ACP capabilities", () => {
 
     expect((result as { text: string }).text).toContain("adapter unavailable");
     expect((result as { text: string }).text).not.toContain("可用 model 示例");
+  });
+
+  it("lists and stores arbitrary boolean ACP config options", async () => {
+    const ctx = capabilityCtx("cursor", cursorOptions);
+
+    const list = await handleSlashCommand({ ...ctx, text: "/config" });
+    expect((list as { text: string }).text).toContain("telemetry");
+    expect((list as { text: string }).text).toContain("boolean");
+
+    const set = await handleSlashCommand({ ...ctx, text: "/config telemetry on" });
+    expect((set as { text: string }).text).toContain("telemetry");
+    expect(
+      (ctx.router.getBinding(ctx.chatId) as unknown as {
+        acpConfig?: Record<string, string | boolean>;
+      }).acpConfig,
+    ).toEqual({ telemetry: true });
   });
 });
 
@@ -482,6 +508,50 @@ describe("/root additional directories", () => {
     });
     expect((result as { text: string }).text).toContain("不存在");
     expect(ctx.router.getBinding(ctx.chatId).additionalDirectories).toBeUndefined();
+  });
+
+  it("asks Runner to access a newly added directory so macOS can grant TCC", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-root-auth-"));
+    tmpDirs.push(target);
+    const requested: string[] = [];
+    (
+      ctx as SlashContext & {
+        authorizeDirectory: (
+          directory: string,
+        ) => Promise<{ ok: boolean; path?: string }>;
+      }
+    ).authorizeDirectory = async (directory) => {
+      requested.push(directory);
+      return { ok: true, path: fs.realpathSync(directory) };
+    };
+
+    const result = await handleSlashCommand({
+      ...ctx,
+      text: `/root add ${target}`,
+    });
+
+    expect(requested).toEqual([target]);
+    expect((result as { text: string }).text).toContain("Runner 已验证目录访问权限");
+  });
+
+  it("lets Runner authorize a protected directory before Bridge filesystem access", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const target = "/mock/protected-project";
+    ctx.authorizeDirectory = async (directory) => ({
+      ok: true,
+      path: directory,
+    });
+
+    const result = await handleSlashCommand({
+      ...ctx,
+      text: `/root add ${target}`,
+    });
+
+    expect((result as { text: string }).text).toContain("Runner 已验证目录访问权限");
+    expect(ctx.router.getBinding(ctx.chatId).additionalDirectories).toEqual([
+      target,
+    ]);
   });
 });
 

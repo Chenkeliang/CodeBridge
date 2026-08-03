@@ -240,6 +240,33 @@ export class RunnerHost {
     }
   }
 
+  authorizeDirectory(
+    rawPath: string,
+  ): { ok: boolean; path?: string; error?: string } {
+    if (!path.isAbsolute(rawPath)) {
+      return { ok: false, error: `工作目录必须使用绝对路径: ${rawPath}` };
+    }
+    const candidate = path.resolve(rawPath);
+    try {
+      const handle = fs.opendirSync(candidate);
+      handle.closeSync();
+      return { ok: true, path: fs.realpathSync(candidate) };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EACCES" || code === "EPERM") {
+        return {
+          ok: false,
+          path: candidate,
+          error: `Runner 尚未获得目录访问权限：${candidate}`,
+        };
+      }
+      return {
+        ok: false,
+        error: `Runner 无法访问目录 ${candidate}：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
   async closeSession(
     backendId: string,
     cwd: string,
@@ -375,6 +402,7 @@ export class RunnerHost {
       effort: request.effort,
       mode: request.mode,
       claudePermissionMode: request.claudePermissionMode,
+      acpConfig: request.acpConfig,
       extraEnv: await this.buildAgentEnv(request),
     };
 
@@ -609,6 +637,13 @@ export function createRunnerApp(host: RunnerHost, token: string) {
       limit: Number.isFinite(limit) ? limit : 20,
     });
     return c.json(result);
+  });
+
+  app.post("/directories/authorize", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { path?: string } | null;
+    if (!body?.path) return c.json({ ok: false, error: "path 必填" }, 400);
+    const result = host.authorizeDirectory(body.path);
+    return c.json(result, result.ok ? 200 : 403);
   });
 
   app.post("/sessions/:id/close", async (c) => {

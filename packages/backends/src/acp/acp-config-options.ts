@@ -18,6 +18,8 @@ export interface DesiredSessionConfig {
   permissionMode?: string;
 }
 
+export type CustomSessionConfig = Record<string, string | boolean>;
+
 /** 展平 select 选项（可能是「分组」结构），拿到全部可选值 */
 function flattenSelectOptions(
   option: SessionConfigOption,
@@ -79,7 +81,7 @@ export function resolveDesiredConfig(
 
 /**
  * 把 SDK 的 configOptions（含分组 select）映射为跨包共享的精简形态，供 /model 等
- * 动态列表展示。仅保留 select 型选项；boolean 型（实验性）对列表场景无意义，跳过。
+ * 动态列表展示。select 和 boolean 都保留，供 /model 与通用 /config 使用。
  */
 export function mapSessionConfigOptions(
   options: SessionConfigOption[],
@@ -135,6 +137,7 @@ export async function applySessionConfigOptions(
   sessionId: string,
   configOptions: SessionConfigOption[],
   desired: DesiredSessionConfig,
+  custom: CustomSessionConfig = {},
 ): Promise<{ warnings: string[]; configOptions: SessionConfigOption[] }> {
   const warnings: string[] = [];
   let currentOptions = configOptions;
@@ -161,6 +164,44 @@ export async function applySessionConfigOptions(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       warnings.push(`ACP 设置 ${field}=${value} 失败：${msg}`);
+    }
+  }
+  for (const [configId, wanted] of Object.entries(custom)) {
+    const option = currentOptions.find((candidate) => candidate.id === configId);
+    if (!option) {
+      warnings.push(`ACP config=${configId} 未在当前会话能力中找到，未生效。`);
+      continue;
+    }
+    let params:
+      | { sessionId: string; configId: string; type: "boolean"; value: boolean }
+      | { sessionId: string; configId: string; value: string };
+    if (option.type === "boolean") {
+      if (typeof wanted !== "boolean") {
+        warnings.push(`ACP config=${configId} 需要 boolean 值，未生效。`);
+        continue;
+      }
+      params = { sessionId, configId, type: "boolean", value: wanted };
+    } else {
+      if (typeof wanted !== "string") {
+        warnings.push(`ACP config=${configId} 需要 select 值，未生效。`);
+        continue;
+      }
+      const value = matchConfigValue(option, wanted);
+      if (!value) {
+        warnings.push(`ACP config=${configId}=${wanted} 不在可选值内，未生效。`);
+        continue;
+      }
+      params = { sessionId, configId, value };
+    }
+    try {
+      const response = (await agent.request(
+        methods.agent.session.setConfigOption,
+        params,
+      )) as { configOptions: SessionConfigOption[] };
+      currentOptions = response.configOptions;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`ACP 设置 config=${configId} 失败：${msg}`);
     }
   }
   return { warnings, configOptions: currentOptions };
