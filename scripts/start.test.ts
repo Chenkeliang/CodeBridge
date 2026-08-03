@@ -18,7 +18,11 @@ function writeCommand(binDir: string, name: string, body: string): void {
   fs.chmodSync(file, 0o755);
 }
 
-function writeStatefulLaunchctl(binDir: string, loadedLabels: string[]): void {
+function writeStatefulLaunchctl(
+  binDir: string,
+  loadedLabels: string[],
+  delayedUnloadChecks = 0,
+): void {
   const stateDir = path.join(binDir, "launchd-state");
   fs.mkdirSync(stateDir, { recursive: true });
   for (const label of loadedLabels) {
@@ -29,10 +33,11 @@ function writeStatefulLaunchctl(binDir: string, loadedLabels: string[]): void {
     "launchctl",
     [
       `state=${JSON.stringify(stateDir)}`,
+      `delay=${delayedUnloadChecks}`,
       '[ -z "${ORDER_LOG:-}" ] || echo "launchctl $1 $2" >> "$ORDER_LOG"',
       'case "$1" in',
-      '  print) label="${2##*/}"; [ -f "$state/$label" ] ;;',
-      '  bootout) value="${3:-$2}"; label="${value##*/}"; label="${label%.plist}"; rm -f "$state/$label" ;;',
+      '  print) label="${2##*/}"; if [ "$delay" -gt 0 ] && [ -f "$state/.booted" ] && [ -f "$state/$label" ]; then count=$(cat "$state/.count" 2>/dev/null || echo 0); if [ "$count" -lt "$delay" ]; then echo $((count + 1)) > "$state/.count"; exit 0; fi; rm -f "$state/$label"; fi; [ -f "$state/$label" ] ;;',
+      '  bootout) value="${3:-$2}"; label="${value##*/}"; label="${label%.plist}"; if [ "$delay" -gt 0 ]; then touch "$state/.booted"; else rm -f "$state/$label"; fi ;;',
       '  unload) label="${2##*/}"; label="${label%.plist}"; rm -f "$state/$label" ;;',
       '  bootstrap) label="${3##*/}"; label="${label%.plist}"; touch "$state/$label" ;;',
       '  load) label="${2##*/}"; label="${label%.plist}"; touch "$state/$label" ;;',
@@ -221,7 +226,7 @@ describe("start.sh status", () => {
     writeCommand(binDir, "lsof", "exit 1");
     writeCommand(binDir, "pgrep", "exit 1");
     writeCommand(binDir, "pkill", "exit 0");
-    writeCommand(binDir, "node", "exit 0");
+    writeCommand(binDir, "node", `exec ${JSON.stringify(process.execPath)} "$@"`);
     writeCommand(binDir, "pnpm", "exit 0");
 
     expect(() =>
@@ -237,6 +242,48 @@ describe("start.sh status", () => {
     ).toThrow();
     expect(fs.existsSync(legacyDataDir)).toBe(true);
     expect(fs.existsSync(path.join(home, ".codebridge"))).toBe(false);
+  });
+
+  it("waits for launchd to finish an asynchronous bootout", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-wait-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-wait-bin-"));
+    tmpDirs.push(home, binDir);
+    const legacyDataDir = path.join(home, ".feishu-code-bridge");
+    const agentsDir = path.join(home, "Library", "LaunchAgents");
+    fs.mkdirSync(legacyDataDir, { recursive: true });
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDataDir, "config.yaml"),
+      [
+        "feishu:",
+        "  appId: cli_test",
+        "  appSecret: secret_test",
+        "runner:",
+        "  token: runner_test",
+      ].join("\n"),
+    );
+    fs.writeFileSync(
+      path.join(agentsDir, "com.feishu-code-bridge.runner.plist"),
+      "legacy runner",
+    );
+    writeStatefulLaunchctl(binDir, ["com.feishu-code-bridge.runner"], 2);
+    writeCommand(binDir, "lsof", "exit 1");
+    writeCommand(binDir, "pgrep", "exit 1");
+    writeCommand(binDir, "pkill", "exit 0");
+    writeCommand(binDir, "node", `exec ${JSON.stringify(process.execPath)} "$@"`);
+    writeCommand(binDir, "pnpm", "exit 0");
+
+    expect(() =>
+      execFileSync("/bin/bash", ["scripts/start.sh", "restart"], {
+        cwd: path.resolve(import.meta.dirname, ".."),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          PATH: `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
+        },
+      }),
+    ).not.toThrow();
   });
 
   it("preserves new data while moving non-conflicting legacy entries", () => {
