@@ -135,6 +135,7 @@ export class TelegramBridge {
         this.orchestrator.resolveActivePermission(chatId, topicId, approve),
       authorizeDirectory: (directory) =>
         this.orchestrator.authorizeDirectory(directory),
+      notifyStatus: (text) => this.sendText(chatId, text, topicId),
     });
 
     if (slash?.type === "reply") {

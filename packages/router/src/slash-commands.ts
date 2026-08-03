@@ -47,6 +47,8 @@ export interface SlashContext {
   authorizeDirectory?: (
     directory: string,
   ) => Promise<{ ok: boolean; path?: string; error?: string }>;
+  /** /root add 开始等待 macOS TCC 时，先向聊天发送即时状态提示 */
+  notifyStatus?: (text: string) => Promise<void>;
 }
 
 export type SlashResult =
@@ -358,6 +360,9 @@ async function handleAdditionalDirectories(
       if (!path.isAbsolute(rawPath)) {
         return { type: "reply", text: `工作目录必须使用绝对路径: ${rawPath}` };
       }
+      await ctx.notifyStatus?.(
+        "⏳ Runner 正在请求 macOS 目录权限，请查看系统弹窗。",
+      ).catch(() => {});
       try {
         const result = await ctx.authorizeDirectory(rawPath);
         if (!result.ok && !result.path) {

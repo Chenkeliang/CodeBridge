@@ -8,6 +8,7 @@ import type { CliSessionSummary } from "@feishu-code-bridge/backends";
 export interface RunnerClientOptions {
   baseUrl: string;
   token: string;
+  directoryAuthorizationTimeoutMs?: number;
 }
 
 export type { CliSessionSummary };
@@ -64,21 +65,41 @@ export class RunnerClient {
   async authorizeDirectory(
     directory: string,
   ): Promise<{ ok: boolean; path?: string; error?: string }> {
-    const res = await this.fetch("/directories/authorize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: directory }),
-    });
-    const body = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      path?: string;
-      error?: string;
-    };
-    return {
-      ok: res.ok && body.ok === true,
-      path: body.path,
-      error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
-    };
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      this.options.directoryAuthorizationTimeoutMs ?? 45_000,
+    );
+    timer.unref?.();
+    try {
+      const res = await this.fetch("/directories/authorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: directory }),
+        signal: controller.signal,
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        path?: string;
+        error?: string;
+      };
+      return {
+        ok: res.ok && body.ok === true,
+        path: body.path,
+        error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
+      };
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return {
+          ok: false,
+          path: directory,
+          error: "Runner 目录授权请求超时，请检查 macOS 系统弹窗或隐私与安全性设置。",
+        };
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async closeSession(
