@@ -36,6 +36,7 @@ export interface RunRequest {
   mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
   additionalDirectories?: string[];
+  acpConfig?: Record<string, string | boolean>;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -140,6 +141,7 @@ export interface RunContext {
   mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
   additionalDirectories?: string[];
+  acpConfig?: Record<string, string | boolean>;
   /** 注入 Agent 子进程的额外环境变量（如 FCB_* 出站 API 凭据） */
   extraEnv?: Record<string, string>;
 }

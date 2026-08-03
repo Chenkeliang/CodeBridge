@@ -101,6 +101,11 @@ export class ConfigStore {
         token: process.env.RUNNER_TOKEN,
       };
     }
+    if (process.env.TELEGRAM_BOT_TOKEN) {
+      result.telegram = {
+        botToken: process.env.TELEGRAM_BOT_TOKEN,
+      };
+    }
     if (process.env.DEFAULT_BACKEND) {
       result.defaultBackend = process.env.DEFAULT_BACKEND;
     }

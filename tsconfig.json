@@ -7,6 +7,7 @@
     { "path": "./packages/runner-host" },
     { "path": "./packages/router" },
     { "path": "./packages/channel-feishu" },
+    { "path": "./packages/channel-telegram" },
     { "path": "./packages/memory-plugin" },
     { "path": "./apps/bridge" }
   ]

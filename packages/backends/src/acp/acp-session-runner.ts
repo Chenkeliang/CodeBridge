@@ -632,6 +632,7 @@ export async function* runAcpSession(
           r.sessionId,
           r.configOptions,
           desired,
+          ctx.acpConfig,
         );
         r.configOptions = [...result.configOptions];
         return result.warnings.map((message) => ({

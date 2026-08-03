@@ -74,12 +74,12 @@ backends:
   claude:
     type: claude-code
     acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.63.0"]
+    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.64.2"]
     claudePermissionMode: bypassPermissions
   codex:
     type: codex
     acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.7"]
+    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.9"]
 ```
 
 会话绑定持久化：`~/.feishu-code-bridge/chat-bindings.json`（按 `chatId|topicId`）。

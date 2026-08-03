@@ -39,7 +39,7 @@ export const SLASH_COMMANDS: CommandHelpItem[] = [
   { command: "/send <path>", summary: "把本机文件发到当前聊天" },
   { command: "/clone <url>", summary: "git clone" },
   { command: "/pull", summary: "git pull" },
-  { command: "/config", summary: "查看配置摘要（policy / defaultBackend / runner）" },
+  { command: "/config [id value]", summary: "查看或设置 ACP 实时配置（含 boolean）" },
 ];
 
 /** 飞书机器人自定义菜单 event_key → 模拟用户发送的文本 */

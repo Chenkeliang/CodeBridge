@@ -255,6 +255,29 @@ describe("applySessionConfigOptions", () => {
 
     expect(result.configOptions).toEqual(updated);
   });
+
+  it("applies arbitrary select and boolean config overrides", async () => {
+    const customOption = {
+      id: "verbose",
+      name: "Verbose",
+      type: "boolean",
+      currentValue: false,
+    } as unknown as SessionConfigOption;
+    const { agent, calls } = fakeAgent([customOption]);
+
+    const result = await applySessionConfigOptions(
+      agent,
+      "s1",
+      [customOption],
+      {},
+      { verbose: true },
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(calls.map((c) => c.params)).toEqual([
+      { sessionId: "s1", configId: "verbose", type: "boolean", value: true },
+    ]);
+  });
 });
 
 describe("mapSessionConfigOptions", () => {

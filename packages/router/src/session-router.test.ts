@@ -43,6 +43,22 @@ describe("SessionRouter resolveRunOptions", () => {
     ).toEqual(["/tmp/shared", "/tmp/docs"]);
   });
 
+  it("preserves arbitrary ACP config overrides in resolved run options", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const router = new SessionRouter(dataDir);
+    const config = defaultConfig();
+    router.initFromConfig(config);
+    router.setBinding("chat1", {
+      acpConfig: { telemetry: true, output_style: "concise" },
+    } as never);
+
+    expect(router.resolveRunOptions("chat1", undefined, config).acpConfig).toEqual({
+      telemetry: true,
+      output_style: "concise",
+    });
+  });
+
   it("falls back to profile when binding cleared", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
     tmpDirs.push(dataDir);

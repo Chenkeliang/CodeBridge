@@ -56,6 +56,14 @@ export const ConfigSchema = z.object({
     appSecret: z.string().min(1),
     policy: FeishuPolicySchema.optional(),
   }),
+  telegram: z
+    .object({
+      botToken: z.string().min(1),
+      allowedUsers: z.array(z.string()).optional(),
+      allowedChats: z.array(z.string()).optional(),
+      pollingTimeoutSec: z.number().int().min(1).max(50).default(25),
+    })
+    .optional(),
   runner: z.object({
     url: z.string().url().default("http://127.0.0.1:19789"),
     token: z.string().min(8),
@@ -152,13 +160,13 @@ export function defaultConfig(): AppConfig {
       claude: {
         type: "claude-code",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.63.0"],
+        acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.64.2"],
         claudePermissionMode: "bypassPermissions",
       },
       codex: {
         type: "codex",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.7"],
+        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.9"],
         // 不钉 model：OpenAI 轮换模型名很快，钉了必过期；用适配器默认，会话内 /model 切
       },
     },

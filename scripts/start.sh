@@ -8,6 +8,7 @@
 #   ./scripts/start.sh stop        # 停止服务
 #   ./scripts/start.sh restart     # 重启服务
 #   ./scripts/start.sh install-launchd [runner|bridge|all]   # macOS 开机自启（launchd，默认 all）
+#   ./scripts/start.sh install-macos-runner [codesign-id]    # 固定 Bundle ID/signature 的 Runner helper
 #   ./scripts/start.sh uninstall-launchd [runner|bridge|all] # 卸载 launchd（改用手动 start.sh）
 #   ./scripts/start.sh status      # 查看状态
 #   ./scripts/start.sh doctor      # 诊断
@@ -30,6 +31,7 @@ LAUNCHD_RUNNER_LABEL="com.feishu-code-bridge.runner"
 LAUNCHD_BRIDGE_LABEL="com.feishu-code-bridge.bridge"
 LAUNCHD_RUNNER_PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_RUNNER_LABEL}.plist"
 LAUNCHD_BRIDGE_PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_BRIDGE_LABEL}.plist"
+MACOS_RUNNER_EXECUTABLE="$HOME/Applications/Feishu Code Runner.app/Contents/MacOS/FeishuCodeRunner"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -341,19 +343,23 @@ check_config_ready() {
     exit 1
   fi
 
-  local app_id app_secret token
+  local app_id app_secret telegram_token token
   app_id="$(read_yaml_scalar feishu.appId 2>/dev/null || true)"
   app_secret="$(read_yaml_scalar feishu.appSecret 2>/dev/null || true)"
+  telegram_token="$(read_yaml_scalar telegram.botToken 2>/dev/null || true)"
   token="$(read_yaml_scalar runner.token 2>/dev/null || true)"
 
   local ok=1
-  if [[ -z "$app_id" || "$app_id" == "cli_placeholder" ]]; then
-    err "请在 $CONFIG 中设置 feishu.appId"
+  local feishu_ready=1
+  if [[ -z "$app_id" || "$app_id" == "cli_placeholder" || -z "$app_secret" || "$app_secret" == "secret_placeholder" ]]; then
+    feishu_ready=0
+  fi
+  if [[ "$feishu_ready" -eq 0 && -z "$telegram_token" ]]; then
+    err "请至少配置飞书 App 凭据或 telegram.botToken"
     ok=0
   fi
-  if [[ -z "$app_secret" || "$app_secret" == "secret_placeholder" ]]; then
-    err "请在 $CONFIG 中设置 feishu.appSecret"
-    ok=0
+  if [[ "$feishu_ready" -eq 0 && -n "$telegram_token" ]]; then
+    info "未配置飞书凭据，使用 Telegram-only 模式"
   fi
   if [[ -z "$token" || "$token" == change-me* ]]; then
     err "请设置 runner.token（运行 $0 setup 可自动生成）"
@@ -570,10 +576,10 @@ write_launchd_plist() {
   local plist="$2"
   local stdout_log="$3"
   local stderr_log="$4"
-  shift 4
+  local program="$5"
+  shift 5
   local -a args=("$@")
-  local node path
-  node="$(command -v node)"
+  local path
   path="$(launchd_path_for_agents)"
   mkdir -p "$(dirname "$plist")"
   cat >"$plist" <<EOF
@@ -585,7 +591,7 @@ write_launchd_plist() {
   <string>${label}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${node}</string>
+    <string>${program}</string>
 $(for a in "${args[@]}"; do printf '    <string>%s</string>\n' "$a"; done)
   </array>
   <key>RunAtLoad</key>
@@ -620,17 +626,23 @@ check_launchd_component() {
 }
 
 install_launchd_runner() {
+  local program
+  program="$(if [[ -x "$MACOS_RUNNER_EXECUTABLE" ]]; then printf '%s' "$MACOS_RUNNER_EXECUTABLE"; else command -v node; fi)"
   launchd_bootout "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST"
   write_launchd_plist "$LAUNCHD_RUNNER_LABEL" "$LAUNCHD_RUNNER_PLIST" \
     "$RUNNER_LOG" "$DATA_DIR/runner.err.log" \
+    "$program" \
     "$ROOT/packages/runner-host/dist/cli.js"
   launchd_bootstrap "$LAUNCHD_RUNNER_PLIST"
 }
 
 install_launchd_bridge() {
+  local program
+  program="$(command -v node)"
   launchd_bootout "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST"
   write_launchd_plist "$LAUNCHD_BRIDGE_LABEL" "$LAUNCHD_BRIDGE_PLIST" \
     "$BRIDGE_LOG" "$DATA_DIR/bridge.err.log" \
+    "$program" \
     "$ROOT/apps/bridge/dist/cli.js" "start"
   launchd_bootstrap "$LAUNCHD_BRIDGE_PLIST"
 }
@@ -652,6 +664,18 @@ cmd_install_launchd() {
     all) info "日志: $RUNNER_LOG / $BRIDGE_LOG" ;;
   esac
   warn "之后请用 launchctl 或 $0 uninstall-launchd 管理，不要与 $0 start 混用。"
+}
+
+cmd_install_macos_runner() {
+  [[ "$(uname -s)" == "Darwin" ]] || {
+    err "固定 Bundle ID 的 Runner helper 仅支持 macOS"
+    exit 1
+  }
+  ensure_built
+  need_cmd node || exit 1
+  node "$ROOT/scripts/install-macos-runner-app.mjs" "${1:-${FCB_CODESIGN_IDENTITY:--}}"
+  install_launchd_runner
+  info "Runner helper 已接入 launchd；不会重启 Bridge。"
 }
 
 cmd_uninstall_launchd() {
@@ -897,13 +921,14 @@ main() {
     restart) cmd_restart "${arg:-bg}" ;;
     __watchdog) cmd_watchdog ;;
     install-launchd) cmd_install_launchd "${arg:-all}" ;;
+    install-macos-runner) cmd_install_macos_runner "$arg" ;;
     uninstall-launchd) cmd_uninstall_launchd "${arg:-all}" ;;
     status) cmd_status ;;
     doctor) cmd_doctor ;;
     help|-h|--help) cmd_help ;;
     *)
       err "未知命令: $cmd"
-      echo "用法: $0 {setup|start|fg|docker|stop|restart|install-launchd [runner|bridge|all]|uninstall-launchd [runner|bridge|all]|status|doctor|help}"
+      echo "用法: $0 {setup|start|fg|docker|stop|restart|install-launchd [runner|bridge|all]|install-macos-runner [codesign-identity]|uninstall-launchd [runner|bridge|all]|status|doctor|help}"
       exit 1
       ;;
   esac

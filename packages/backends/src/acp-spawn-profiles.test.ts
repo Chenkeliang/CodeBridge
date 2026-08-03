@@ -14,11 +14,11 @@ describe("acp-spawn-profiles", () => {
   it("uses the current Claude and Codex ACP adapters", () => {
     expect(resolveAcpSpawn({ type: "claude-code" }).args).toEqual([
       "-y",
-      "@agentclientprotocol/claude-agent-acp@0.63.0",
+      "@agentclientprotocol/claude-agent-acp@0.64.2",
     ]);
     expect(resolveAcpSpawn({ type: "codex" }).args).toEqual([
       "-y",
-      "@agentclientprotocol/codex-acp@1.1.7",
+      "@agentclientprotocol/codex-acp@1.1.9",
     ]);
   });
 

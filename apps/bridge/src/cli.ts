@@ -8,7 +8,9 @@ import {
   defaultConfig,
 } from "@feishu-code-bridge/core";
 import { FeishuBridge, runDoctor } from "@feishu-code-bridge/channel-feishu";
+import { TelegramBridge } from "@feishu-code-bridge/channel-telegram";
 import { createMemoryPlugin } from "@feishu-code-bridge/memory-plugin";
+import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 const program = new Command();
 
@@ -33,14 +35,11 @@ program
     const store = new ConfigStore({ dataDir });
     const config = store.get();
 
-    if (
-      config.feishu.appId === "cli_placeholder" ||
-      config.feishu.appSecret === "secret_placeholder"
-    ) {
+    if (!hasFeishuCredentials(config) && !hasTelegramCredentials(config)) {
       console.error(
-        "请配置飞书 App 凭据：编辑",
+        "请至少配置一个通道：飞书 App 凭据或 TELEGRAM_BOT_TOKEN（配置文件：",
         store.path,
-        "或设置 FEISHU_APP_ID / FEISHU_APP_SECRET",
+        ")",
       );
       process.exit(1);
     }
@@ -53,28 +52,62 @@ program
       console.log("memory-plugin: enabled");
     }
 
-    const bridge = new FeishuBridge({
-      config,
-      dataDir,
-      onLog: (m) => console.log(m),
+    const bridge = hasFeishuCredentials(config)
+      ? new FeishuBridge({
+          config,
+          dataDir,
+          onLog: (m) => console.log(m),
+        })
+      : undefined;
+    const telegram = config.telegram
+      ? new TelegramBridge({
+          config,
+          dataDir,
+          onLog: (m) => console.log(m),
+        })
+      : undefined;
+
+    store.onChange((c) => {
+      bridge?.updateConfig(c);
+      telegram?.updateConfig(c);
     });
 
-    store.onChange((c) => bridge.updateConfig(c));
-
     const shutdown = async () => {
-      await bridge.disconnect();
+      await bridge?.disconnect();
+      await telegram?.disconnect();
       process.exit(0);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
 
-    await bridge.connect();
+    await bridge?.connect();
+    if (telegram) await telegram.connect();
 
     const apiPort = config.bridge?.apiPort ?? 19790;
     const { serve } = await import("@hono/node-server");
     const { createOutboundApp } = await import("./outbound-api.js");
     serve({
-      fetch: createOutboundApp(bridge, config.runner.token).fetch,
+      fetch: createOutboundApp(
+        {
+          sendOutboundFile: (chatId, rawPath, topicId) =>
+            chatId.startsWith("telegram:")
+              ? telegram
+                ? telegram.sendOutboundFile(chatId, rawPath, topicId)
+                : Promise.reject(new Error("Telegram 通道未配置"))
+              : bridge
+                ? bridge.sendOutboundFile(chatId, rawPath, topicId)
+                : Promise.reject(new Error("飞书通道未配置")),
+          sendOutboundMarkdown: (chatId, markdown, topicId) =>
+            chatId.startsWith("telegram:")
+              ? telegram
+                ? telegram.sendOutboundMarkdown(chatId, markdown, topicId)
+                : Promise.reject(new Error("Telegram 通道未配置"))
+              : bridge
+                ? bridge.sendOutboundMarkdown(chatId, markdown, topicId)
+                : Promise.reject(new Error("飞书通道未配置")),
+        },
+        config.runner.token,
+      ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,
     });

@@ -9,6 +9,7 @@ Message your Feishu bot to run coding agents on your Mac/Linux host: stream repl
 ## Features
 
 - **Feishu WebSocket** long connection with streaming markdown replies
+- Optional **Telegram Bot API** long-polling channel sharing the ACP router
 - **Multi-backend**: `cursor` / `claude` / `codex` via **ACP**
 - **Session routing**: `/new`, `/resume`, `/backend`, `/cd`, `/ws`, `/model`, `/effort`, `/permission`, `/stop`
 - **Resume local sessions**: pick an existing Cursor / Claude / Codex session through its ACP adapter
@@ -79,7 +80,7 @@ Other commands:
 | `/model` `/effort` `/permission` | Live ACP model / reasoning effort / mode capabilities |
 | `/thinking on\|off` | Show/hide the thinking & tool-call process on the card (default on) |
 | `/clone <url>` `/pull` | Git on the host |
-| `/config` | Show config summary |
+| `/config` | List/set live ACP config options, including booleans |
 
 Session storage paths:
 
@@ -118,10 +119,29 @@ Runner talks to agents over the [Agent Client Protocol](https://agentclientproto
 | Backend | ACP spawn command |
 |---------|-------------------|
 | **cursor** | `cursor-agent acp` |
-| **claude** | `npx -y @agentclientprotocol/claude-agent-acp@0.63.0` |
-| **codex** | `npx -y @agentclientprotocol/codex-acp@1.1.7` |
+| **claude** | `npx -y @agentclientprotocol/claude-agent-acp@0.64.2` |
+| **codex** | `npx -y @agentclientprotocol/codex-acp@1.1.9` |
 
 Runner uses ACP only; the legacy direct CLI spawn transport has been removed.
+
+### Telegram and macOS TCC
+
+Add `telegram.botToken` to enable Telegram long polling. The same slash commands and ACP sessions are used, with chat ids isolated under `telegram:<id>`:
+
+```yaml
+telegram:
+  botToken: "123456:replace-with-bot-token"
+  allowedUsers: ["123456789"]
+  allowedChats: ["-1001234567890"]
+```
+
+For a stable macOS identity when accessing protected folders, install the signed Runner helper before loading its launchd job:
+
+```bash
+./scripts/start.sh install-macos-runner
+```
+
+The default ad-hoc signature is free and local-only. A Developer ID or stable local signing identity is recommended for distribution. macOS still requires the user to approve the TCC prompt.
 
 `runnerHost.acpPermissionPolicy`: `auto_allow` (headless Feishu) or `prompt_deny`.
 

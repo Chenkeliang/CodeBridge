@@ -152,6 +152,30 @@ describe("RunOrchestrator ACP capabilities", () => {
     expect(body.additionalDirectories).toEqual(["/tmp/shared"]);
   });
 
+  it("passes arbitrary ACP config overrides to Runner", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    tmpDirs.push(dataDir);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    orchestrator.router.setBinding("chat1", {
+      acpConfig: { telemetry: true },
+    } as never);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(['data: {"type":"done","exitCode":0}', ""].join("\n"), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    for await (const _event of orchestrator.runAgent("chat1", undefined, "hi")) {
+      // consume stream
+    }
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+      acpConfig?: Record<string, string | boolean>;
+    };
+    expect(body.acpConfig).toEqual({ telemetry: true });
+  });
+
   it("refreshes config options on every request", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-"));

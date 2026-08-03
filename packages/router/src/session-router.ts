@@ -19,6 +19,7 @@ export interface ChatBinding {
   mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
   additionalDirectories?: string[];
+  acpConfig?: Record<string, string | boolean>;
   /** 卡片是否展示思考/工具过程；缺省=true（显示）。纯展示偏好，切 backend 不清除 */
   showThinking?: boolean;
 }
@@ -29,6 +30,7 @@ export interface ResolvedRunOptions {
   mode?: string;
   claudePermissionMode?: ClaudePermissionMode;
   additionalDirectories?: string[];
+  acpConfig?: Record<string, string | boolean>;
 }
 
 export class SessionRouter {
@@ -118,12 +120,24 @@ export class SessionRouter {
     });
   }
 
+  clearAcpConfig(chatId: string, topicId?: string): void {
+    const key = this.bindingKey(chatId, topicId);
+    this.bindings.update((all) => {
+      const current = all[key];
+      if (!current) return all;
+      const next = { ...current };
+      delete next.acpConfig;
+      return { ...all, [key]: next };
+    });
+  }
+
   /** 切换 backend 时清除 model/effort/permission 会话覆盖 */
   clearRunOverrides(chatId: string, topicId?: string): void {
     this.clearModel(chatId, topicId);
     this.clearEffort(chatId, topicId);
     this.clearMode(chatId, topicId);
     this.clearClaudePermissionMode(chatId, topicId);
+    this.clearAcpConfig(chatId, topicId);
   }
 
   resolveRunOptions(
@@ -144,6 +158,7 @@ export class SessionRouter {
       mode: binding.mode ?? rawPermission,
       claudePermissionMode: rawPermission,
       additionalDirectories: binding.additionalDirectories,
+      acpConfig: binding.acpConfig,
     };
   }
 

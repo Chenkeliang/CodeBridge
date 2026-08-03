@@ -133,6 +133,7 @@ export class RunOrchestrator {
       mode: runOpts.mode,
       claudePermissionMode: runOpts.claudePermissionMode,
       additionalDirectories: runOpts.additionalDirectories,
+      acpConfig: runOpts.acpConfig,
     };
 
     let sessionId = resumeSessionId ?? existing?.sessionId;
@@ -224,6 +225,10 @@ export class RunOrchestrator {
 
   async health() {
     return this.client.health();
+  }
+
+  async authorizeDirectory(directory: string) {
+    return this.client.authorizeDirectory(directory);
   }
 
   async listSessions(

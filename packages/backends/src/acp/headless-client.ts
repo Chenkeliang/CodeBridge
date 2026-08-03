@@ -21,9 +21,7 @@ export interface HeadlessClientOptions {
 export const ACP_CLIENT_CAPABILITIES: ClientCapabilities = {
   fs: { readTextFile: false, writeTextFile: false },
   plan: {},
-  // Standard select config options are supported. Boolean options stay
-  // unadvertised until the bridge has a typed config setter/UI for them.
-  session: { configOptions: {} },
+  session: { configOptions: { boolean: {} } },
 };
 
 /** 从权限请求里提取给用户看的操作描述 */
