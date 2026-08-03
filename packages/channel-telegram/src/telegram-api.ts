@@ -29,6 +29,11 @@ interface TelegramApiOptions {
   baseUrl?: string;
 }
 
+export interface TelegramBotCommand {
+  command: string;
+  description: string;
+}
+
 export function rawTelegramChatId(chatId: string): string {
   if (!chatId.startsWith("telegram:")) {
     throw new Error(`不是 Telegram chat id：${chatId}`);
@@ -64,6 +69,10 @@ export class TelegramApi {
     signal?: AbortSignal,
   ): Promise<TelegramUpdate[]> {
     return this.request("getUpdates", { offset, timeout }, signal);
+  }
+
+  setMyCommands(commands: TelegramBotCommand[]): Promise<true> {
+    return this.request("setMyCommands", { commands });
   }
 
   sendMessage(

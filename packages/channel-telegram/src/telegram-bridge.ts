@@ -9,11 +9,26 @@ import {
 import {
   TelegramApi,
   chunkTelegramText,
+  type TelegramBotCommand,
   type TelegramUpdate,
 } from "./telegram-api.js";
 
+export const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
+  { command: "menu", description: "打开手机快捷菜单" },
+  { command: "help", description: "查看帮助；加 full 查看全部" },
+  { command: "status", description: "查看当前会话状态" },
+  { command: "resume", description: "列出或恢复本机会话" },
+  { command: "new", description: "新建会话" },
+  { command: "stop", description: "停止当前任务" },
+  { command: "backend", description: "切换 Cursor、Claude 或 Codex" },
+  { command: "model", description: "查看或切换模型" },
+  { command: "permission", description: "查看或切换权限模式" },
+  { command: "ws", description: "管理命名工作区" },
+];
+
 interface TelegramTransport {
   getMe(): Promise<{ username?: string; first_name?: string }>;
+  setMyCommands?(commands: TelegramBotCommand[]): Promise<true>;
   getUpdates(
     offset: number,
     timeout: number,
@@ -74,6 +89,13 @@ export class TelegramBridge {
 
   async connect(): Promise<void> {
     const me = await this.api.getMe();
+    try {
+      await this.api.setMyCommands?.(TELEGRAM_BOT_COMMANDS);
+    } catch (err) {
+      this.options.onLog?.(
+        `Telegram 原生命令菜单注册失败，继续轮询：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     this.options.onLog?.(`已连接 Telegram bot: ${me.username ?? me.first_name ?? "unknown"}`);
     this.pollAbort = new AbortController();
     this.pollTask = this.poll(this.pollAbort.signal);
@@ -136,6 +158,7 @@ export class TelegramBridge {
       authorizeDirectory: (directory) =>
         this.orchestrator.authorizeDirectory(directory),
       notifyStatus: (text) => this.sendText(chatId, text, topicId),
+      helpFormat: "plain",
     });
 
     if (slash?.type === "reply") {

@@ -4,6 +4,8 @@ import path from "node:path";
 import type { AppConfig, BackendConfigOption } from "@feishu-code-bridge/core";
 import type { CliSessionSummary } from "@feishu-code-bridge/runner-client";
 import {
+  type CommandHelpFormat,
+  formatCompactCommandHelp,
   formatFullCommandHelp,
 } from "./command-help.js";
 import {
@@ -49,6 +51,8 @@ export interface SlashContext {
   ) => Promise<{ ok: boolean; path?: string; error?: string }>;
   /** /root add 开始等待 macOS TCC 时，先向聊天发送即时状态提示 */
   notifyStatus?: (text: string) => Promise<void>;
+  /** 帮助文本格式；飞书默认 Markdown，Telegram 使用纯文本。 */
+  helpFormat?: CommandHelpFormat;
 }
 
 export type SlashResult =
@@ -87,10 +91,18 @@ export async function handleSlashCommand(
 
   switch (lower) {
     case "/help":
+      return {
+        type: "reply",
+        text:
+          arg.toLowerCase() === "full"
+            ? formatFullCommandHelp(ctx.helpFormat)
+            : formatCompactCommandHelp(ctx.helpFormat),
+      };
+
     case "/menu":
       return {
         type: "reply",
-        text: formatFullCommandHelp(),
+        text: formatCompactCommandHelp(ctx.helpFormat),
       };
 
     case "/new":

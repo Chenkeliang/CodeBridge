@@ -53,6 +53,46 @@ function makeCtx(overrides: {
   };
 }
 
+describe("help commands", () => {
+  it("returns the compact menu for /help and /menu", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+
+    const help = await handleSlashCommand({ ...ctx, text: "/help" });
+    const menu = await handleSlashCommand({ ...ctx, text: "/menu" });
+
+    expect(help).toEqual(menu);
+    expect(help).toEqual({
+      type: "reply",
+      text: expect.stringContaining("/resume last"),
+    });
+    expect((help as { text: string }).text).not.toContain("/session delete");
+  });
+
+  it("returns grouped full help for /help full", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+
+    const result = await handleSlashCommand({ ...ctx, text: "/help full" });
+
+    expect(result).toEqual({
+      type: "reply",
+      text: expect.stringContaining("**文件与 Git**"),
+    });
+    expect((result as { text: string }).text).toContain("/session delete");
+  });
+
+  it("uses plain help rendering when requested by the channel", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+
+    const result = await handleSlashCommand({
+      ...ctx,
+      text: "/help full",
+      helpFormat: "plain",
+    });
+
+    expect((result as { text: string }).text).not.toMatch(/[`*]/);
+  });
+});
+
 describe("/session lifecycle", () => {
   it("requires an explicit id for close and delegates it", async () => {
     const closed: string[] = [];
