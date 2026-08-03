@@ -1,190 +1,195 @@
-# feishu-code-bridge
+# Feishu Code Bridge
 
-**飞书码桥** — Control local **Cursor**, **Claude Code**, and **Codex** from Feishu (Lark).
+Self-hosted, multi-channel [Agent Client Protocol (ACP)](https://agentclientprotocol.com) gateway for coding agents.
 
-Message your Feishu bot to run coding agents on your Mac/Linux host: stream replies, resume terminal sessions, switch backends, and change project directories — without leaving chat.
+Control local **Cursor**, **Claude Code**, and **Codex** from Feishu or Telegram while your source code, Git credentials, MCP tools, and agent sessions stay on your own Mac/Linux host.
 
-[中文文档](README.zh-CN.md)
+[简体中文](README.zh-CN.md)
 
-## Features
+## What it does
 
-- **Feishu WebSocket** long connection with streaming markdown replies
-- Optional **Telegram Bot API** long-polling channel sharing the ACP router
-- **Multi-backend**: `cursor` / `claude` / `codex` via **ACP**
-- **Session routing**: `/new`, `/resume`, `/backend`, `/cd`, `/ws`, `/model`, `/effort`, `/permission`, `/stop`
-- **Resume local sessions**: pick an existing Cursor / Claude / Codex session through its ACP adapter
-- **Pinned bot menu**: configure Feishu custom menu items for one-tap commands ([guide](docs/zh-CN/feishu-bot-menu.md))
-- **Git shortcuts**: `/clone`, `/pull` (uses host git + SSH credentials)
-- **Group chat policy**: @mention required by default; trusted groups can opt out
-- **Split deploy**: Bridge in Docker optional; **Runner must run on the host** (where CLIs live)
-
-## Architecture
-
-```
-Feishu  →  Bridge (Channel SDK)  →  HTTP/SSE  →  Runner (host)  →  cursor-agent / claude / codex
+```text
+Feishu WebSocket ─┐
+                  ├─ Bridge ── authenticated HTTP/SSE + token ── Runner ── ACP agents ── local files
+Telegram polling ─┘
 ```
 
-| Component | Role |
-|-----------|------|
-| **Bridge** | Feishu bot, slash commands, streaming UI |
-| **Runner** | Spawns ACP agents, streams events, exposes `/runs` API |
+| Component | Responsibility |
+|-----------|----------------|
+| **Bridge** | Channel connections, access policy, slash commands, session routing, and reply presentation |
+| **Runner** | Host-side ACP sessions, agent processes, file/Git access, and permission handling |
+| **ACP adapters** | Cursor, Claude Code, and Codex protocol adapters |
+
+The Bridge and Runner are intentionally separate: the Bridge can be remote or containerized, but the Runner stays next to the CLIs and files it needs to access.
+
+## Highlights
+
+- Feishu long connection with streaming cards and optional custom menu
+- Telegram Bot API long polling, including a native command menu
+- One ACP path for `cursor`, `claude`, and `codex`; the legacy direct-CLI transport is gone
+- Resume local sessions with `/resume`, `/resume last`, or `/resume all`
+- Live adapter capabilities through `/model`, `/effort`, `/permission`, and `/config`
+- Named workspaces, additional directories, `/clone`, `/pull`, and file delivery
+- macOS TCC-aware `/root add` flow with an immediate “waiting for system permission” status
+- launchd KeepAlive on macOS, or the built-in watchdog for manual background mode
 
 ## Quick start
 
-### Prerequisites
+### Requirements
 
-- Node.js ≥ 20, pnpm, curl
-- A [Feishu custom app](docs/zh-CN/feishu-app-setup.md) with bot enabled
-- At least one local CLI: `cursor-agent`, `claude`, or `codex`
+- macOS or Linux
+- Node.js ≥ 20, pnpm, and curl
+- At least one local agent CLI: `cursor-agent`, `claude`, or `codex`
+- A Feishu custom app with a bot, or a Telegram bot token
 
-### Install & run
+### Install and start
 
 ```bash
 git clone https://github.com/Chenkeliang/feishu-code-bridge.git
 cd feishu-code-bridge
 
-# Interactive setup: deps, build, config, CLI checks
+# Installs dependencies, builds, creates config, and checks local CLIs.
 ./scripts/start.sh setup
 
-# Edit ~/.feishu-code-bridge/config.yaml — set feishu.appId / feishu.appSecret
-
-# Start Runner + Bridge in background (auto-stops stale processes)
-./scripts/start.sh
+# If setup did not start the service, start Runner + Bridge in the background.
+./scripts/start.sh start
 ```
 
-Other commands:
+The setup wizard stores configuration at `~/.feishu-code-bridge/config.yaml`. It can configure Feishu credentials and generate a random Runner token for you.
+
+Verify the installation:
 
 ```bash
-./scripts/start.sh status   # process + CLI status
-./scripts/start.sh fg       # foreground Bridge (debug)
-./scripts/start.sh stop     # stop services
-./scripts/start.sh doctor   # diagnose Runner + backends
+./scripts/start.sh status
+./scripts/start.sh doctor
 ```
 
-### Feishu slash commands
+On macOS, use launchd for boot-time startup and KeepAlive. Choose one process manager; do not mix launchd with manual `start.sh` mode:
 
-| Command | Description |
-|---------|-------------|
-| `/help` `/menu` | List all commands |
-| `/status` | Current backend, cwd, model |
-| `/stop` | Cancel the running agent task |
-| `/approve` `/deny` | Answer a pending permission request (prompt_feishu mode) |
-| `/new` | Start a fresh ACP session |
-| `/resume` | List local sessions through ACP (scoped by cwd) |
-| `/resume 2` | Bind session #2 to this chat |
-| `/resume last` | Bind the most recent session |
-| `/resume all` | List sessions across all projects |
-| `/backend cursor\|claude\|codex` | Switch agent |
-| `/cd <path>` | Change project directory |
-| `/ws list\|save\|use\|remove` | Named workspaces |
-| `/model` `/effort` `/permission` | Live ACP model / reasoning effort / mode capabilities |
-| `/thinking on\|off` | Show/hide the thinking & tool-call process on the card (default on) |
-| `/clone <url>` `/pull` | Git on the host |
-| `/config` | List/set live ACP config options, including booleans |
+```bash
+./scripts/start.sh install-launchd all
+./scripts/start.sh restart
+```
 
-Session storage paths:
+Useful lifecycle commands:
 
-| Backend | On-disk location |
-|---------|------------------|
-| **cursor** | `~/.cursor/projects/<project>/agent-transcripts/<id>/<id>.jsonl` |
-| **claude** | `~/.claude/projects/<encoded-cwd>/<id>.jsonl` |
-| **codex** | `~/.codex/sessions/**/rollout-<id>.jsonl` |
+```bash
+./scripts/start.sh status
+./scripts/start.sh restart
+./scripts/start.sh stop
+./scripts/start.sh fg       # foreground Bridge debugging
+```
 
-## Concurrency & limits
+### Configure a channel
 
-Two layers matter: **Runner (host)** spawns ACP agents; **Bridge / Orchestrator (Feishu)** routes chat messages to Runner. Limits differ.
+For Feishu, create an enterprise custom app, enable the bot, and subscribe to the long-connection events described in [Feishu app setup](docs/zh-CN/feishu-app-setup.md).
 
-| Scenario | Supported? | Layer |
-|----------|------------|-------|
-| **Different Feishu chats** running tasks at once (DM + group, two groups, two topics) | ✅ | Runner default **4** concurrent agents (`runnerHost.maxConcurrentRuns`) |
-| **Different backends in parallel** (chat A → cursor, chat B → claude) | ✅ | Runner; separate `chatId` per chat |
-| **Multiple sessions** (each chat binds its own `/resume` target) | ✅ | Persisted per `chatId \| topicId \| backend \| cwd` in `sessions.json` |
-| **Second message in the same chat** (same `chatId` + topic) | ⚠️ Cancels the first | **Feishu side**: one active run per chat; new message aborts the previous |
-| **Two people @ the bot in one group** at the same time | ❌ | One `chatId` → shared binding (backend / cwd / model) and only one active run |
-| **cursor + claude in parallel in one group** | ❌ | One backend bound per chat at a time; use `/backend` to **switch**, not run both |
-| `/cd`, `/ws use` to change project | ✅ Two steps | Slash command first, then @ with your task; @ alone does not pick a repo |
-
-**Examples**
-
-- DM runs cursor + a group runs claude → parallel OK (different `chatId`s).
-- Two people in the same group @ the bot for different repos → not OK: shared binding and task cancellation.
-- Two repos in parallel → use two Feishu chats (two groups or DM + group), each with its own `/cd` or `/ws use`.
-
-Smoke test: `node scripts/test-concurrency-live.mjs` (parallel cursor + claude against local Runner).
-
-## ACP mode
-
-Runner talks to agents over the [Agent Client Protocol](https://agentclientprotocol.com) (stdio JSON-RPC), same model as Zed External Agents.
-
-| Backend | ACP spawn command |
-|---------|-------------------|
-| **cursor** | `cursor-agent acp` |
-| **claude** | `npx -y @agentclientprotocol/claude-agent-acp@0.64.2` |
-| **codex** | `npx -y @agentclientprotocol/codex-acp@1.1.9` |
-
-Runner uses ACP only; the legacy direct CLI spawn transport has been removed.
-
-### Telegram and macOS TCC
-
-Add `telegram.botToken` to enable Telegram long polling. The same slash commands and ACP sessions are used, with chat ids isolated under `telegram:<id>`:
+Telegram is optional. It can run alongside Feishu or in Telegram-only mode:
 
 ```yaml
 telegram:
   botToken: "123456:replace-with-bot-token"
-  allowedUsers: ["123456789"]
-  allowedChats: ["-1001234567890"]
+  allowedUsers: ["123456789"]          # optional allowlist
+  allowedChats: ["-1001234567890"]     # optional allowlist
+  pollingTimeoutSec: 25
 ```
 
-For a stable macOS identity when accessing protected folders, install the signed Runner helper before loading its launchd job:
+See [examples/config.full.yaml](examples/config.full.yaml) for the complete configuration shape.
 
-```bash
-./scripts/start.sh install-macos-runner
+## Phone-first commands
+
+`/menu` and `/help` intentionally return a short list for small screens. Use `/help full` for the grouped reference.
+
+| Command | Use |
+|---------|-----|
+| `/status` | Check backend, project directory, model, permission, and active-task state |
+| `/resume last` | Continue the most recent local session in the current directory |
+| `/new` | Start a clean ACP session |
+| `/stop` | Stop the current task and clear queued Feishu prompts |
+| `/backend claude` | Switch the current chat to Cursor, Claude, or Codex |
+| `/model` | List live models; `/model <name>` switches one |
+| `/permission` | List live modes; `/permission <mode>` switches one |
+| `/ws list` | Show saved workspaces |
+
+Other useful commands:
+
+```text
+/resume [N|last|all]
+/effort [list|level|default]
+/config [id value|default]
+/root add|remove|rm /absolute/path
+/send /absolute/path/to/file
+/clone <git-url> [directory-name]
+/pull
+/approve  /deny  /steer <instruction>
 ```
 
-The default ad-hoc signature is free and local-only. A Developer ID or stable local signing identity is recommended for distribution. macOS still requires the user to approve the TCC prompt.
+The exact model, effort, permission, and boolean config values come from the connected ACP adapter, so `/model list`, `/effort list`, `/permission list`, and `/config` are the source of truth.
 
-`runnerHost.acpPermissionPolicy`: `auto_allow` (headless Feishu) or `prompt_deny`.
+## Sessions, directories, and permissions
 
-**Resume**: Claude/Codex use `session/resume`; Cursor uses `session/load` (no `session/resume`).
+- Session bindings are isolated by channel chat, topic, backend, and working directory; session metadata is persisted under the configured data directory.
+- `/cd` changes the current project. `/ws save|use` gives frequently used directories short names.
+- `/root add /absolute/path` adds an ACP `additionalDirectories` entry. On macOS, Runner touches the directory first so the normal TCC prompt can appear. The chat reports that it is waiting for system authorization, but the command does not silently grant macOS access.
+- `runnerHost.acpPermissionPolicy` controls agent permission requests:
 
-**Doctor** reports each backend's `acp-initialize` result.
+  | Policy | Behavior |
+  |--------|----------|
+  | `auto_allow` | Runner approves ACP permission requests automatically (default for trusted local use) |
+  | `prompt_feishu` | Pause and wait for `/approve` or `/deny` in the chat; timeout rejects |
+  | `prompt_deny` | Reject permission requests automatically |
+
+- On macOS, `./scripts/start.sh install-macos-runner` creates the optional fixed-identity helper. Ad-hoc signing is free and local; TCC still requires the user’s approval.
+
+Read [SECURITY.md](SECURITY.md) before exposing anything beyond localhost.
+
+## Concurrency and known boundaries
+
+- Different chats can run in parallel up to `runnerHost.maxConcurrentRuns` (default `4`).
+- A Feishu `chatId + topic` has one active task. Later messages queue up to five; `/stop` cancels the task and clears that queue.
+- A group shares one backend, directory, model, and session binding. Use separate chats for independent projects or agents.
+- `/transport` remains only as a compatibility response; ACP is the only transport.
+
+## ACP backends
+
+| Backend | ACP command |
+|---------|-------------|
+| Cursor | `cursor-agent acp` |
+| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.64.2` |
+| Codex | `npx -y @agentclientprotocol/codex-acp@1.1.9` |
+
+Resume semantics depend on the adapter: Claude/Codex use `session/resume`; Cursor uses `session/load`.
+
+Probe adapters without starting the Bridge:
 
 ```bash
-node scripts/acp-probe.mjs                    # direct JSON-RPC probe (no Runner)
+node scripts/acp-probe.mjs
 node scripts/acp-probe.mjs --backend codex
 RUNNER_TOKEN=... node scripts/test-acp-live.mjs --backend cursor
 ```
-
-See [examples/config.full.yaml](examples/config.full.yaml).
 
 ## Documentation
 
 | Topic | Link |
 |-------|------|
-| Feishu app setup | [docs/zh-CN/feishu-app-setup.md](docs/zh-CN/feishu-app-setup.md) |
-| Bot custom menu | [docs/zh-CN/feishu-bot-menu.md](docs/zh-CN/feishu-bot-menu.md) |
-| Quick start (manual / Docker) | [docs/zh-CN/quickstart.md](docs/zh-CN/quickstart.md) |
-| Model & effort | [docs/zh-CN/model-effort.md](docs/zh-CN/model-effort.md) |
-| Concurrency & limits | [README.md#concurrency--limits](README.md#concurrency--limits) |
-| V2EX post (ZH) | [docs/zh-CN/v2ex-post.md](docs/zh-CN/v2ex-post.md) |
-| Docker + host Runner | [docs/zh-CN/deploy/docker-host-runner.md](docs/zh-CN/deploy/docker-host-runner.md) |
+| Feishu app and permissions | [docs/zh-CN/feishu-app-setup.md](docs/zh-CN/feishu-app-setup.md) |
+| Feishu custom menu | [docs/zh-CN/feishu-bot-menu.md](docs/zh-CN/feishu-bot-menu.md) |
+| Manual / Docker quick start | [docs/zh-CN/quickstart.md](docs/zh-CN/quickstart.md) |
+| Model, effort, and permission | [docs/zh-CN/model-effort.md](docs/zh-CN/model-effort.md) |
+| Docker Bridge + host Runner | [docs/zh-CN/deploy/docker-host-runner.md](docs/zh-CN/deploy/docker-host-runner.md) |
 | Full config example | [examples/config.full.yaml](examples/config.full.yaml) |
+| Security policy | [SECURITY.md](SECURITY.md) |
 
 ## Development
 
 ```bash
 pnpm install
-pnpm build
+pnpm run lint
+pnpm run build
 pnpm test
 ```
 
-Monorepo packages: `core`, `backends`, `runner-host`, `runner-client`, `router`, `channel-feishu`, `apps/bridge`.
-
-## Security
-
-- Runner listens on `127.0.0.1` by default; protect `runner.token`
-- Agent permissions are controlled by ACP policy — see [SECURITY.md](SECURITY.md)
-- Do not commit real `appSecret` or tokens
+The monorepo contains `core`, `backends`, `runner-host`, `runner-client`, `router`, `channel-feishu`, `channel-telegram`, and `apps/bridge`.
 
 ## License
 
