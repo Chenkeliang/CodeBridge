@@ -18,6 +18,12 @@ function writeCommand(binDir: string, name: string, body: string): void {
   fs.chmodSync(file, 0o755);
 }
 
+function sandboxProcessCommands(binDir: string): void {
+  writeCommand(binDir, "lsof", "exit 1");
+  writeCommand(binDir, "pgrep", "exit 1");
+  writeCommand(binDir, "pkill", "exit 0");
+}
+
 function writeStatefulLaunchctl(
   binDir: string,
   loadedLabels: string[],
@@ -48,10 +54,31 @@ function writeStatefulLaunchctl(
 }
 
 describe("start.sh status", () => {
+  it("sandboxes host process commands in every mutating script test", () => {
+    const source = fs.readFileSync(import.meta.filename, "utf8");
+    const mutatingCases = source
+      .split(/\n  it\(/)
+      .filter(
+        (section) =>
+          !section.startsWith(
+            '"sandboxes host process commands in every mutating script test"',
+          ) &&
+          /execFileSync\("\/bin\/bash", \["scripts\/start\.sh", "(?:restart|install-launchd|install-macos-runner)"/.test(
+            section,
+          ),
+      );
+
+    expect(mutatingCases.length).toBeGreaterThan(0);
+    for (const testCase of mutatingCases) {
+      expect(testCase).toContain("sandboxProcessCommands(binDir)");
+    }
+  });
+
   it("recognizes launchd-owned services instead of reporting zombies", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     writeCommand(binDir, "launchctl", '[ "$1" = "print" ]');
     writeCommand(binDir, "lsof", "echo 4321");
     writeCommand(binDir, "pgrep", "echo 5678");
@@ -74,9 +101,10 @@ describe("start.sh status", () => {
   });
 
   it("recognizes legacy launchd labels during the rename migration", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-legacy-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-legacy-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-legacy-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-legacy-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     writeCommand(
       binDir,
       "launchctl",
@@ -100,9 +128,10 @@ describe("start.sh status", () => {
   });
 
   it("restart migrates the legacy data directory and launchd jobs", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-migrate-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-migrate-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-migrate-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-migrate-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     fs.mkdirSync(path.join(home, ".codebridge"), { recursive: true });
     const agentsDir = path.join(home, "Library", "LaunchAgents");
@@ -157,9 +186,10 @@ describe("start.sh status", () => {
   });
 
   it("stops legacy launchd jobs before moving their data directory", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-order-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-order-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-order-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-order-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     const agentsDir = path.join(home, "Library", "LaunchAgents");
     const orderLog = path.join(home, "order.log");
@@ -206,9 +236,10 @@ describe("start.sh status", () => {
   });
 
   it("aborts data migration when a legacy launchd job cannot be stopped", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-bootout-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-bootout-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-bootout-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-bootout-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     const agentsDir = path.join(home, "Library", "LaunchAgents");
     fs.mkdirSync(legacyDataDir, { recursive: true });
@@ -245,9 +276,10 @@ describe("start.sh status", () => {
   });
 
   it("waits for launchd to finish an asynchronous bootout", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-wait-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-wait-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-wait-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-wait-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     const agentsDir = path.join(home, "Library", "LaunchAgents");
     fs.mkdirSync(legacyDataDir, { recursive: true });
@@ -287,9 +319,10 @@ describe("start.sh status", () => {
   });
 
   it("preserves new data while moving non-conflicting legacy entries", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-merge-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-merge-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-merge-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-merge-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     const dataDir = path.join(home, ".codebridge");
     const agentsDir = path.join(home, "Library", "LaunchAgents");
@@ -339,9 +372,10 @@ describe("start.sh status", () => {
   });
 
   it("restart migrates legacy launchd plists even when they are unloaded", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-plist-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-plist-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-plist-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-plist-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     const agentsDir = path.join(home, "Library", "LaunchAgents");
     fs.mkdirSync(legacyDataDir, { recursive: true });
@@ -401,9 +435,10 @@ describe("start.sh status", () => {
   });
 
   it("restart honors unloaded current launchd plists", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-current-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-current-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-current-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-current-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const dataDir = path.join(home, ".codebridge");
     const agentsDir = path.join(home, "Library", "LaunchAgents");
     fs.mkdirSync(dataDir, { recursive: true });
@@ -455,9 +490,10 @@ describe("start.sh status", () => {
   });
 
   it("keeps an explicit DATA_DIR while migrating legacy launchd labels", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-explicit-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-explicit-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-explicit-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-explicit-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     const explicitDataDir = path.join(home, "custom-data");
     const agentsDir = path.join(home, "Library", "LaunchAgents");
@@ -521,9 +557,10 @@ describe("start.sh status", () => {
   });
 
   it("component install migrates other legacy launchd jobs sharing the data dir", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-component-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-component-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-component-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-component-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     const agentsDir = path.join(home, "Library", "LaunchAgents");
     fs.mkdirSync(legacyDataDir, { recursive: true });
@@ -568,9 +605,10 @@ describe("start.sh status", () => {
   });
 
   it("install-macos-runner removes the legacy Runner launchd job", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-helper-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-helper-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-helper-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-helper-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const agentsDir = path.join(home, "Library", "LaunchAgents");
     const legacyDataDir = path.join(home, ".feishu-code-bridge");
     fs.mkdirSync(agentsDir, { recursive: true });
@@ -618,9 +656,10 @@ describe("start.sh status", () => {
   });
 
   it("install-macos-runner stops manual Runner state but preserves Bridge", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-helper-manual-home-"));
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-start-helper-manual-bin-"));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-helper-manual-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-helper-manual-bin-"));
     tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
     const runDir = path.join(home, ".codebridge", "run");
     fs.mkdirSync(runDir, { recursive: true });
     fs.writeFileSync(path.join(runDir, "runner.pid"), "999999");

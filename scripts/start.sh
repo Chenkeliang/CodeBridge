@@ -17,6 +17,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEFAULT_DATA_DIR="$HOME/.codebridge"
+# 旧名称仅用于一次性迁移；删除会导致老用户的配置与 Session 无法升级。
 LEGACY_DATA_DIR="$HOME/.feishu-code-bridge"
 REQUESTED_CMD="${1:-start}"
 EXPLICIT_DATA_DIR=0
@@ -43,6 +44,7 @@ MANUAL_LOCK="$PID_DIR/manual.lock"
 RUNNER_PORT="${RUNNER_PORT:-19789}"
 LAUNCHD_RUNNER_LABEL="com.codebridge.runner"
 LAUNCHD_BRIDGE_LABEL="com.codebridge.bridge"
+# 同上：只识别并卸载旧 launchd 任务，不作为当前 CodeBridge 身份使用。
 LEGACY_LAUNCHD_RUNNER_LABEL="com.feishu-code-bridge.runner"
 LEGACY_LAUNCHD_BRIDGE_LABEL="com.feishu-code-bridge.bridge"
 LAUNCHD_RUNNER_PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_RUNNER_LABEL}.plist"

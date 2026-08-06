@@ -1,10 +1,14 @@
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { defaultConfig, type AgentEvent } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "./bridge.js";
 
 type StreamController = {
+  readonly messageId: string;
   append(chunk: string): Promise<void>;
+  setContent(full: string): Promise<void>;
 };
 
 type StreamInput = {
@@ -89,8 +93,12 @@ async function renderThroughSdk(chunks: string[]): Promise<string> {
   bridge.channel = {
     async stream(_chatId, input) {
       await input.markdown({
+        messageId: "card-message-1",
         async append(chunk) {
           rendered = sdkMergeStreamingText(rendered, chunk);
+        },
+        async setContent(full) {
+          rendered = full;
         },
       });
     },
@@ -122,6 +130,59 @@ async function renderThroughSdk(chunks: string[]): Promise<string> {
 }
 
 describe("FeishuBridge streaming", () => {
+  it("persists the streaming card until it is finalized", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-stream-"));
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir,
+    }) as unknown as TestableBridge;
+    const pendingPath = path.join(dataDir, "feishu-pending-streams.json");
+    let pendingWhileStreaming: unknown;
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append() {
+            pendingWhileStreaming = fs.existsSync(pendingPath)
+              ? JSON.parse(fs.readFileSync(pendingPath, "utf8"))
+              : undefined;
+          },
+          async setContent() {},
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        yield { type: "text_delta", text: "完成" };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    await bridge.streamAgentReply(
+      {
+        messageId: "source-message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    );
+
+    expect(pendingWhileStreaming).toMatchObject({
+      "card-message-1": {
+        chatId: "chat-1",
+        sourceMessageId: "source-message-1",
+      },
+    });
+    expect(JSON.parse(fs.readFileSync(pendingPath, "utf8"))).toEqual({});
+  });
+
   it("adds sparse official text-tag guidance to Feishu agent prompts", async () => {
     const bridge = new FeishuBridge({
       config: defaultConfig(),
