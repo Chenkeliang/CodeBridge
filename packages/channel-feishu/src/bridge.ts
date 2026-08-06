@@ -58,6 +58,9 @@ const FEISHU_MSG_CHUNK_CHARS = 12000;
 /** 忙时最多排队多少条消息（合并成一条 prompt 发出，防无限堆积） */
 const PENDING_PROMPTS_MAX = 5;
 
+const FEISHU_OUTPUT_STYLE_GUIDANCE =
+  "【飞书输出样式】最终答复可按需少量使用飞书官方 `<text_tag color='blue'>文本</text_tag>`：blue 表示分组/信息，orange 表示需关注的修改，green 表示成功，red 表示失败/阻塞；每次最多 3 个，其余使用标准 Markdown，不必强行加色。";
+
 /** 把长文本按行切成 ≤ maxLen 的块，用于超长结果分条普通消息发送（避免又撞长度上限） */
 export function chunkMarkdown(text: string, maxLen: number): string[] {
   const chunks: string[] = [];
@@ -491,9 +494,10 @@ export class FeishuBridge {
         this.options.onLog?.(`话题/引用上下文拉取失败: ${message}`);
       }
     }
-    const finalPrompt = contextPrefix
+    const promptWithContext = contextPrefix
       ? `${contextPrefix}\n\n${agentPrompt}`
       : agentPrompt;
+    const finalPrompt = `${promptWithContext}\n\n${FEISHU_OUTPUT_STYLE_GUIDANCE}`;
 
     if (topicId) this.botParticipatedTopics.add(topicId);
 
