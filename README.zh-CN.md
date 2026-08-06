@@ -28,6 +28,7 @@ Bridge 与 Runner 分开设计：Bridge 可以放在 Docker 或远程机器，Ru
 
 - 飞书长连接流式卡片，可配置机器人自定义菜单
 - Telegram Bot API 长轮询，并自动注册原生命令菜单
+- 飞书和 Telegram 原生 @ 通知，可提醒当前发送者或任务中明确 @ 的参与者
 - 统一 ACP 通道：`cursor`、`claude`、`codex`；旧版直接 CLI transport 已移除
 - `/resume`、`/resume last`、`/resume all` 恢复本机会话
 - `/model`、`/effort`、`/permission`、`/config` 实时读取当前 adapter 能力
@@ -130,6 +131,8 @@ telegram:
 
 模型、effort、permission 和 boolean config 的准确选项以当前 ACP adapter 为准；可用 `/model list`、`/effort list`、`/permission list`、`/config` 查看。
 
+需要真实通知时，可以在任务里说“完成后 @ 我”，或者直接 @ 需要通知的参与者。Agent 会在确有必要时调用内部的 `fcb mention`；普通回复不会额外提醒。
+
 ## Session、目录与权限
 
 - session 绑定按聊天、话题、backend 和工作目录隔离，元数据持久化在数据目录。
@@ -152,6 +155,7 @@ telegram:
 - 不同聊天可并行运行，默认上限为 `runnerHost.maxConcurrentRuns: 4`。
 - 飞书同一 `chatId + topic` 同时只有一个任务；后续消息最多排队 5 条，`/stop` 会取消任务并清空队列。
 - 同一个群共享 backend、目录、模型和 session 绑定；要并行处理不同项目，请使用不同聊天。
+- Agent 只能通知本轮发送者和本轮任务中明确 @ 的参与者；不会扫描组织通讯录、@ 所有人，也不能自行构造任意用户 ID。
 - `/transport` 仅保留兼容回复，实际只支持 ACP。
 
 ## ACP 后端

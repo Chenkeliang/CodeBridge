@@ -5,6 +5,8 @@ import {
   type ResourceDescriptor,
 } from "@larksuiteoapi/node-sdk";
 import {
+  MentionRegistry,
+  formatMentionGuidance,
   resolveRequireMention,
   type AppConfig,
   type RunAttachment,
@@ -36,6 +38,7 @@ export interface FeishuMessage {
   chatId: string;
   chatType: "p2p" | "group";
   senderId: string;
+  senderName?: string;
   content: string;
   threadId?: string;
   /** 回复串的串首消息 id（普通群回复时有值） */
@@ -43,7 +46,15 @@ export interface FeishuMessage {
   /** 被直接回复（引用）的消息 id */
   replyToMessageId?: string;
   mentionedBot?: boolean;
+  mentions?: FeishuMention[];
   attachments?: RunAttachment[];
+}
+
+export interface FeishuMention {
+  openId?: string;
+  userId?: string;
+  name?: string;
+  isBot?: boolean;
 }
 
 export interface FeishuBridgeOptions {
@@ -104,6 +115,7 @@ export class FeishuBridge {
   private readonly chainTopics = new ChainTopicTracker();
   /** bot 已参与过的话题（内存；重启后由 sessions.json 续上） */
   private readonly botParticipatedTopics = new Set<string>();
+  private readonly mentionRegistry = new MentionRegistry();
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
@@ -227,11 +239,13 @@ export class FeishuBridge {
     chatId: string;
     chatType: "p2p" | "group";
     senderId: string;
+    senderName?: string;
     content: string;
     threadId?: string;
     rootId?: string;
     replyToMessageId?: string;
     mentionedBot?: boolean;
+    mentions?: FeishuMention[];
     resources?: ResourceDescriptor[];
   }): Promise<void> {
     this.options.onLog?.(
@@ -268,11 +282,13 @@ export class FeishuBridge {
       chatId: msg.chatId,
       chatType: msg.chatType,
       senderId: msg.senderId,
+      senderName: msg.senderName,
       content: msg.content,
       threadId: msg.threadId,
       rootId: msg.rootId,
       replyToMessageId: msg.replyToMessageId,
       mentionedBot: msg.mentionedBot,
+      mentions: msg.mentions,
       attachments,
     });
   }
@@ -497,7 +513,36 @@ export class FeishuBridge {
     const promptWithContext = contextPrefix
       ? `${contextPrefix}\n\n${agentPrompt}`
       : agentPrompt;
-    const finalPrompt = `${promptWithContext}\n\n${FEISHU_OUTPUT_STYLE_GUIDANCE}`;
+    const scope = { chatId: msg.chatId, topicId };
+    const requester = this.mentionRegistry.register(scope, {
+      channel: "feishu",
+      kind: "user",
+      id: msg.senderId,
+      name: msg.senderName,
+    });
+    const mentionTargets = [requester];
+    for (const mention of msg.mentions ?? []) {
+      const id = mention.openId ?? mention.userId;
+      if (!id || mention.isBot) continue;
+      const registered = this.mentionRegistry.register(scope, {
+        channel: "feishu",
+        kind: "user",
+        id,
+        name: mention.name,
+      });
+      if (!mentionTargets.some((target) => target.ref === registered.ref)) {
+        mentionTargets.push(registered);
+      }
+    }
+    const mentionGuidance = formatMentionGuidance(
+      mentionTargets,
+      requester.ref,
+    );
+    const finalPrompt = [
+      promptWithContext,
+      mentionGuidance,
+      FEISHU_OUTPUT_STYLE_GUIDANCE,
+    ].join("\n\n");
 
     if (topicId) this.botParticipatedTopics.add(topicId);
 
@@ -745,6 +790,34 @@ export class FeishuBridge {
       chatId,
       { markdown },
       this.outboundSendOptions(chatId, topicId),
+    );
+  }
+
+  async sendOutboundMention(
+    chatId: string,
+    ref: string,
+    text: string,
+    topicId?: string,
+  ): Promise<void> {
+    if (!this.channel) throw new Error("飞书通道未连接");
+    const target = this.mentionRegistry.resolve({ chatId, topicId }, ref);
+    if (!target || target.channel !== "feishu") {
+      throw new Error(`当前对话不存在可通知对象：${ref}`);
+    }
+    await this.channel.send(
+      chatId,
+      { markdown: text },
+      {
+        ...this.outboundSendOptions(chatId, topicId),
+        mentions: [
+          {
+            key: ref,
+            openId: target.id,
+            name: target.name,
+            isBot: target.kind === "bot",
+          },
+        ],
+      },
     );
   }
 }

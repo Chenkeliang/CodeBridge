@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig } from "@codebridge/core";
+import { defaultConfig, type AgentEvent } from "@codebridge/core";
 import { TelegramBridge } from "./telegram-bridge.js";
 
 const tmpDirs: string[] = [];
@@ -203,5 +203,91 @@ describe("TelegramBridge inbound commands", () => {
       expect.stringContaining("正在请求 macOS 目录权限"),
       expect.stringContaining("已添加 ACP 附加目录"),
     ]);
+  });
+
+  it("guides the Agent and sends a real scoped Telegram mention", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const editMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const bridge = new TelegramBridge({
+      config,
+      dataDir,
+      api: { sendMessage, editMessage } as never,
+    });
+    let receivedPrompt = "";
+    const testable = bridge as unknown as {
+      orchestrator: {
+        runAgent(
+          chatId: string,
+          topicId: string | undefined,
+          prompt: string,
+        ): AsyncGenerator<AgentEvent>;
+      };
+      sendOutboundMention(
+        chatId: string,
+        ref: string,
+        text: string,
+        topicId?: string,
+      ): Promise<void>;
+    };
+    testable.orchestrator.runAgent = async function* (
+      _chatId,
+      _topicId,
+      prompt,
+    ) {
+      receivedPrompt = prompt;
+      yield { type: "text_delta", text: "处理完成" };
+      yield { type: "done", exitCode: 0 };
+    };
+
+    await bridge.handleUpdate({
+      update_id: 1,
+      message: {
+        message_id: 7,
+        chat: { id: 42, type: "group" },
+        from: { id: 99, first_name: "陈科良" },
+        text: "完成后通知 张三 和 @reviewer",
+        entities: [
+          {
+            type: "text_mention",
+            offset: 6,
+            length: 2,
+            user: { id: 100, first_name: "张三", is_bot: false },
+          },
+          { type: "mention", offset: 11, length: 9 },
+        ],
+      },
+    });
+    await bridge.disconnect();
+
+    expect(receivedPrompt).toContain("fcb mention <对象引用>");
+    expect(receivedPrompt).toContain("陈科良（当前发送者）");
+    expect(receivedPrompt).toContain("张三");
+    expect(receivedPrompt).toContain("reviewer");
+    const ref = receivedPrompt.match(/- (u\d+)：张三/)?.[1];
+    expect(ref).toBeDefined();
+
+    await testable.sendOutboundMention(
+      "telegram:42",
+      ref!,
+      "发布已经完成",
+    );
+
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "telegram:42",
+      "张三 发布已经完成",
+      undefined,
+      [
+        {
+          type: "text_mention",
+          offset: 0,
+          length: 2,
+          user: { id: 100, is_bot: false, first_name: "张三" },
+        },
+      ],
+    );
   });
 });
