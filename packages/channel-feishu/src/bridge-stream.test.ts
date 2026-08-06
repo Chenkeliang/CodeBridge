@@ -35,6 +35,11 @@ type TestableBridge = {
     prompt: string,
     topicId?: string,
   ): Promise<void>;
+  dispatchToAgent(
+    message: FeishuMessage,
+    prompt: string,
+    topicId?: string,
+  ): Promise<void>;
 };
 
 function sdkMergeStreamingText(previous: string, next: string): string {
@@ -94,6 +99,36 @@ async function renderThroughSdk(chunks: string[]): Promise<string> {
 }
 
 describe("FeishuBridge streaming", () => {
+  it("adds sparse official text-tag guidance to Feishu agent prompts", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as TestableBridge;
+    let receivedPrompt = "";
+
+    bridge.streamAgentReply = async (_message, prompt) => {
+      receivedPrompt = prompt;
+    };
+
+    await bridge.dispatchToAgent(
+      {
+        messageId: "message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "总结改动",
+      },
+      "总结改动",
+    );
+
+    expect(receivedPrompt).toMatch(/^总结改动\n\n/);
+    expect(receivedPrompt).toContain(
+      "<text_tag color='blue'>文本</text_tag>",
+    );
+    expect(receivedPrompt).toContain("每次最多 3 个");
+    expect(receivedPrompt).toContain("不必强行加色");
+  });
+
   it("preserves repeated letters split across ACP deltas", async () => {
     await expect(renderThroughSdk(["Me", "epo"])).resolves.toBe("Meepo");
   });
