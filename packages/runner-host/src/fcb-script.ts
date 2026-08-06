@@ -7,7 +7,7 @@ import path from "node:path";
  */
 const FCB_SCRIPT = `#!/usr/bin/env node
 // fcb — 在 CodeBridge Agent 任务里把文件/消息发回当前聊天
-// 用法: fcb send <文件路径> | fcb say <消息>
+// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息>
 const path = require("node:path");
 
 const api = process.env.FCB_API;
@@ -51,8 +51,15 @@ async function main() {
       topicId,
       markdown: rest.join(" "),
     });
+  } else if (cmd === "mention" && rest[0] && rest.length > 1) {
+    await post("/outbound/mention", {
+      chatId,
+      topicId,
+      ref: rest[0],
+      text: rest.slice(1).join(" "),
+    });
   } else {
-    fail("用法: fcb send <文件路径> | fcb say <消息>");
+    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息>");
   }
 }
 
