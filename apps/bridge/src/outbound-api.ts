@@ -12,6 +12,12 @@ export interface OutboundBridge {
     markdown: string,
     topicId?: string,
   ): Promise<void>;
+  sendOutboundMention(
+    chatId: string,
+    ref: string,
+    text: string,
+    topicId?: string,
+  ): Promise<void>;
 }
 
 /**
@@ -64,6 +70,30 @@ export function createOutboundApp(bridge: OutboundBridge, token: string) {
       await bridge.sendOutboundMarkdown(
         body.chatId,
         body.markdown,
+        body.topicId,
+      );
+      return c.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 400);
+    }
+  });
+
+  app.post("/outbound/mention", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      chatId?: string;
+      ref?: string;
+      text?: string;
+      topicId?: string;
+    } | null;
+    if (!body?.chatId || !body?.ref || !body?.text) {
+      return c.json({ error: "chatId、ref 和 text 必填" }, 400);
+    }
+    try {
+      await bridge.sendOutboundMention(
+        body.chatId,
+        body.ref,
+        body.text,
         body.topicId,
       );
       return c.json({ ok: true });

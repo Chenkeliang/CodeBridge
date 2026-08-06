@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AppConfig } from "@codebridge/core";
+import {
+  MentionRegistry,
+  formatMentionGuidance,
+  type AppConfig,
+} from "@codebridge/core";
 import {
   RunOrchestrator,
   createFeishuStreamPresenter,
@@ -10,6 +14,7 @@ import {
   TelegramApi,
   chunkTelegramText,
   type TelegramBotCommand,
+  type TelegramMessageEntity,
   type TelegramUpdate,
 } from "./telegram-api.js";
 
@@ -38,6 +43,7 @@ interface TelegramTransport {
     chatId: string,
     text: string,
     topicId?: string,
+    entities?: TelegramMessageEntity[],
   ): Promise<{ message_id: number }>;
   editMessage(
     chatId: string,
@@ -67,6 +73,7 @@ export class TelegramBridge {
   private pollAbort?: AbortController;
   private pollTask?: Promise<void>;
   private readonly activeReplies = new Set<Promise<void>>();
+  private readonly mentionRegistry = new MentionRegistry();
   private offset = 0;
 
   constructor(private readonly options: TelegramBridgeOptions) {
@@ -111,7 +118,8 @@ export class TelegramBridge {
     const message = update.message;
     const telegram = this.config.telegram;
     if (!message || !telegram) return;
-    const text = (message.text ?? message.caption ?? "").trim();
+    const rawText = message.text ?? message.caption ?? "";
+    const text = rawText.trim();
     if (!text || !message.from) return;
     const senderId = String(message.from.id);
     const rawChatId = String(message.chat.id);
@@ -128,6 +136,52 @@ export class TelegramBridge {
     const topicId = message.message_thread_id
       ? String(message.message_thread_id)
       : undefined;
+    const mentionScope = { chatId, topicId };
+    const requester = this.mentionRegistry.register(mentionScope, {
+      channel: "telegram",
+      kind: message.from.is_bot ? "bot" : "user",
+      id: senderId,
+      name:
+        message.from.first_name ??
+        (message.from.username ? `@${message.from.username}` : "当前发送者"),
+      username: message.from.username,
+    });
+    const mentionTargets = [requester];
+    const entities = message.text
+      ? message.entities
+      : message.caption_entities;
+    for (const entity of entities ?? []) {
+      if (entity.type === "text_mention" && entity.user) {
+        const registered = this.mentionRegistry.register(mentionScope, {
+          channel: "telegram",
+          kind: entity.user.is_bot ? "bot" : "user",
+          id: String(entity.user.id),
+          name:
+            entity.user.first_name ??
+            (entity.user.username ? `@${entity.user.username}` : undefined),
+          username: entity.user.username,
+        });
+        if (!mentionTargets.some((target) => target.ref === registered.ref)) {
+          mentionTargets.push(registered);
+        }
+      } else if (entity.type === "mention") {
+        const username = rawText
+          .slice(entity.offset, entity.offset + entity.length)
+          .replace(/^@/, "");
+        if (username) {
+          const registered = this.mentionRegistry.register(mentionScope, {
+            channel: "telegram",
+            kind: "user",
+            id: `username:${username.toLowerCase()}`,
+            name: `@${username}`,
+            username,
+          });
+          if (!mentionTargets.some((target) => target.ref === registered.ref)) {
+            mentionTargets.push(registered);
+          }
+        }
+      }
+    }
     const normalized = text.replace(/^\/([^\s@]+)@[^\s]+/, "/$1");
     const slash = await handleSlashCommand({
       chatId,
@@ -171,7 +225,15 @@ export class TelegramBridge {
     }
     if (slash?.type === "noop") return;
     const prompt = slash?.type === "agent" ? slash.prompt : normalized;
-    const task = this.replyWithAgent(chatId, topicId, prompt);
+    const mentionGuidance = formatMentionGuidance(
+      mentionTargets,
+      requester.ref,
+    );
+    const task = this.replyWithAgent(
+      chatId,
+      topicId,
+      `${prompt}\n\n${mentionGuidance}`,
+    );
     this.activeReplies.add(task);
     void task
       .finally(() => this.activeReplies.delete(task))
@@ -206,6 +268,47 @@ export class TelegramBridge {
       topicId,
     );
     return fileName;
+  }
+
+  async sendOutboundMention(
+    chatId: string,
+    ref: string,
+    text: string,
+    topicId?: string,
+  ): Promise<void> {
+    const target = this.mentionRegistry.resolve({ chatId, topicId }, ref);
+    if (!target || target.channel !== "telegram") {
+      throw new Error(`当前对话不存在可通知对象：${ref}`);
+    }
+
+    let label: string;
+    let entity: TelegramMessageEntity;
+    if (target.username) {
+      label = `@${target.username.replace(/^@/, "")}`;
+      entity = { type: "mention", offset: 0, length: label.length };
+    } else {
+      const id = Number(target.id);
+      if (!Number.isSafeInteger(id)) {
+        throw new Error(`Telegram 用户 ID 无效：${target.id}`);
+      }
+      label = target.name ?? "用户";
+      entity = {
+        type: "text_mention",
+        offset: 0,
+        length: label.length,
+        user: {
+          id,
+          is_bot: target.kind === "bot",
+          first_name: label,
+        },
+      };
+    }
+    await this.api.sendMessage(
+      chatId,
+      `${label} ${text}`,
+      topicId,
+      [entity],
+    );
   }
 
   private async poll(signal: AbortSignal): Promise<void> {

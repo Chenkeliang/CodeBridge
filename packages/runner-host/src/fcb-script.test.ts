@@ -24,6 +24,8 @@ describe("writeFcbScript", () => {
     const content = await fs.readFile(file, "utf8");
     expect(content.startsWith("#!/usr/bin/env node")).toBe(true);
     expect(content).toContain("FCB_CHAT_ID");
+    expect(content).toContain('cmd === "mention"');
+    expect(content).toContain('post("/outbound/mention"');
 
     const stat = await fs.stat(file);
     expect(stat.mode & 0o111).not.toBe(0);

@@ -4,9 +4,10 @@ import { createOutboundApp, type OutboundBridge } from "./outbound-api.js";
 const TOKEN = "test-token-12345";
 
 function makeApp(overrides: Partial<OutboundBridge> = {}) {
-  const calls: { file: unknown[]; markdown: unknown[] } = {
+  const calls: { file: unknown[]; markdown: unknown[]; mention: unknown[] } = {
     file: [],
     markdown: [],
+    mention: [],
   };
   const bridge: OutboundBridge = {
     sendOutboundFile: async (chatId, rawPath, topicId) => {
@@ -15,6 +16,9 @@ function makeApp(overrides: Partial<OutboundBridge> = {}) {
     },
     sendOutboundMarkdown: async (chatId, markdown, topicId) => {
       calls.markdown.push([chatId, markdown, topicId]);
+    },
+    sendOutboundMention: async (chatId, ref, text, topicId) => {
+      calls.mention.push([chatId, ref, text, topicId]);
     },
     ...overrides,
   };
@@ -90,5 +94,22 @@ describe("createOutboundApp", () => {
     );
     expect(res.status).toBe(200);
     expect(calls.markdown).toEqual([["oc_1", "进度 50%", undefined]]);
+  });
+
+  it("sends a scoped mention request", async () => {
+    const { app, calls } = makeApp();
+    const res = await app.request(
+      post("/outbound/mention", {
+        chatId: "oc_1",
+        ref: "u1",
+        text: "发布已经完成",
+        topicId: "omt_1",
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(calls.mention).toEqual([
+      ["oc_1", "u1", "发布已经完成", "omt_1"],
+    ]);
   });
 });

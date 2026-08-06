@@ -27,6 +27,8 @@ export function createFeishuStreamPresenter(
   let lastConfigKey: string | undefined;
   let lastCommandsKey: string | undefined;
   let lastSessionTitle: string | null | undefined;
+  let lastResultMessageId: string | undefined;
+  let resultTrailingNewlines = 0;
 
   const present = (event: AgentEvent): FeishuStreamPart | null => {
     switch (event.type) {
@@ -67,8 +69,26 @@ export function createFeishuStreamPresenter(
       }
       case "thought_delta":
         return showThinking ? { zone: "thinking", text: event.text } : null;
-      case "text_delta":
-        return { zone: "result", text: event.text };
+      case "text_delta": {
+        let text = event.text;
+        if (
+          event.messageId &&
+          lastResultMessageId &&
+          event.messageId !== lastResultMessageId
+        ) {
+          const leadingNewlines = text.match(/^\n*/)?.[0].length ?? 0;
+          text =
+            "\n".repeat(
+              Math.max(0, 2 - resultTrailingNewlines - leadingNewlines),
+            ) + text;
+        }
+        if (event.messageId) lastResultMessageId = event.messageId;
+        resultTrailingNewlines = Math.min(
+          2,
+          text.match(/\n*$/)?.[0].length ?? 0,
+        );
+        return { zone: "result", text };
+      }
       case "plan": {
         if (!showThinking) return null;
         const text = event.entries
