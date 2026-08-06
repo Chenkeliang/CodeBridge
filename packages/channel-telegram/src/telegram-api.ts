@@ -1,7 +1,15 @@
 export interface TelegramUser {
   id: number;
+  is_bot?: boolean;
   username?: string;
   first_name?: string;
+}
+
+export interface TelegramMessageEntity {
+  type: string;
+  offset: number;
+  length: number;
+  user?: TelegramUser;
 }
 
 export interface TelegramChat {
@@ -16,6 +24,8 @@ export interface TelegramMessage {
   chat: TelegramChat;
   text?: string;
   caption?: string;
+  entities?: TelegramMessageEntity[];
+  caption_entities?: TelegramMessageEntity[];
 }
 
 export interface TelegramUpdate {
@@ -79,11 +89,13 @@ export class TelegramApi {
     chatId: string,
     text: string,
     topicId?: string,
+    entities?: TelegramMessageEntity[],
   ): Promise<{ message_id: number }> {
     return this.request("sendMessage", {
       chat_id: rawTelegramChatId(chatId),
       text,
       ...(topicId ? { message_thread_id: Number(topicId) } : {}),
+      ...(entities?.length ? { entities } : {}),
     });
   }
 

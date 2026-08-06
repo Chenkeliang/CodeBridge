@@ -1,10 +1,14 @@
 import os from "node:os";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { defaultConfig, type AgentEvent } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "./bridge.js";
 
 type StreamController = {
+  readonly messageId: string;
   append(chunk: string): Promise<void>;
+  setContent(full: string): Promise<void>;
 };
 
 type StreamInput = {
@@ -42,6 +46,29 @@ type TestableBridge = {
   ): Promise<void>;
 };
 
+type MentionTestableBridge = {
+  channel?: {
+    send(
+      chatId: string,
+      input: { markdown: string },
+      options: unknown,
+    ): Promise<void>;
+  };
+  handleMessage(message: FeishuMessage): Promise<void>;
+  dispatchInboundMessage(message: unknown): Promise<void>;
+  streamAgentReply(
+    message: FeishuMessage,
+    prompt: string,
+    topicId?: string,
+  ): Promise<void>;
+  sendOutboundMention(
+    chatId: string,
+    ref: string,
+    text: string,
+    topicId?: string,
+  ): Promise<void>;
+};
+
 function sdkMergeStreamingText(previous: string, next: string): string {
   if (!previous) return next;
   if (!next) return previous;
@@ -66,8 +93,12 @@ async function renderThroughSdk(chunks: string[]): Promise<string> {
   bridge.channel = {
     async stream(_chatId, input) {
       await input.markdown({
+        messageId: "card-message-1",
         async append(chunk) {
           rendered = sdkMergeStreamingText(rendered, chunk);
+        },
+        async setContent(full) {
+          rendered = full;
         },
       });
     },
@@ -99,6 +130,59 @@ async function renderThroughSdk(chunks: string[]): Promise<string> {
 }
 
 describe("FeishuBridge streaming", () => {
+  it("persists the streaming card until it is finalized", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-stream-"));
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir,
+    }) as unknown as TestableBridge;
+    const pendingPath = path.join(dataDir, "feishu-pending-streams.json");
+    let pendingWhileStreaming: unknown;
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append() {
+            pendingWhileStreaming = fs.existsSync(pendingPath)
+              ? JSON.parse(fs.readFileSync(pendingPath, "utf8"))
+              : undefined;
+          },
+          async setContent() {},
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        yield { type: "text_delta", text: "完成" };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    await bridge.streamAgentReply(
+      {
+        messageId: "source-message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    );
+
+    expect(pendingWhileStreaming).toMatchObject({
+      "card-message-1": {
+        chatId: "chat-1",
+        sourceMessageId: "source-message-1",
+      },
+    });
+    expect(JSON.parse(fs.readFileSync(pendingPath, "utf8"))).toEqual({});
+  });
+
   it("adds sparse official text-tag guidance to Feishu agent prompts", async () => {
     const bridge = new FeishuBridge({
       config: defaultConfig(),
@@ -137,5 +221,82 @@ describe("FeishuBridge streaming", () => {
     await expect(
       renderThroughSdk(["692818", "820925", "5382", "277A"]),
     ).resolves.toBe("6928188209255382277A");
+  });
+});
+
+describe("FeishuBridge mentions", () => {
+  it("preserves structured inbound mention identities", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as MentionTestableBridge;
+    let received: FeishuMessage | undefined;
+    bridge.handleMessage = async (message) => {
+      received = message;
+    };
+
+    await bridge.dispatchInboundMessage({
+      messageId: "message-1",
+      chatId: "chat-1",
+      chatType: "group",
+      senderId: "ou_requester",
+      senderName: "陈科良",
+      content: "请完成后通知 @张三",
+      mentionedBot: true,
+      mentions: [
+        { openId: "ou_zhangsan", name: "张三", isBot: false },
+      ],
+    });
+
+    expect(received).toMatchObject({
+      senderName: "陈科良",
+      mentions: [{ openId: "ou_zhangsan", name: "张三", isBot: false }],
+    });
+  });
+
+  it("guides the Agent and sends a real scoped Feishu mention", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as MentionTestableBridge;
+    let receivedPrompt = "";
+    bridge.streamAgentReply = async (_message, prompt) => {
+      receivedPrompt = prompt;
+    };
+
+    await bridge.handleMessage({
+      messageId: "message-1",
+      chatId: "chat-1",
+      chatType: "group",
+      senderId: "ou_requester",
+      senderName: "陈科良",
+      content: "请完成后通知 @张三",
+      mentionedBot: true,
+      mentions: [
+        { openId: "ou_bridge", name: "小库", isBot: true },
+        { openId: "ou_zhangsan", name: "张三", isBot: false },
+      ],
+    });
+
+    expect(receivedPrompt).toContain("fcb mention <对象引用>");
+    expect(receivedPrompt).toContain("陈科良（当前发送者）");
+    expect(receivedPrompt).toContain("张三");
+    expect(receivedPrompt).not.toContain("小库（机器人）");
+    const ref = receivedPrompt.match(/- (u\d+)：张三/)?.[1];
+    expect(ref).toBeDefined();
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    bridge.channel = { send };
+    await bridge.sendOutboundMention("chat-1", ref!, "发布已经完成");
+
+    expect(send).toHaveBeenCalledWith(
+      "chat-1",
+      { markdown: "发布已经完成" },
+      {
+        mentions: [
+          { key: ref, openId: "ou_zhangsan", name: "张三", isBot: false },
+        ],
+      },
+    );
   });
 });

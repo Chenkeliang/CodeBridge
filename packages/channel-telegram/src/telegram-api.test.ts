@@ -28,6 +28,40 @@ describe("TelegramApi", () => {
     );
   });
 
+  it("sends native mention entities without changing parse mode", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: { message_id: 7 } }), {
+        status: 200,
+      }),
+    );
+    const api = new TelegramApi({
+      token: "123:token",
+      fetch: fetchMock,
+      baseUrl: "https://telegram.test",
+    });
+    const entities = [
+      {
+        type: "text_mention",
+        offset: 0,
+        length: 2,
+        user: { id: 99, is_bot: false, first_name: "张三" },
+      },
+    ];
+
+    await api.sendMessage("telegram:-1001", "张三 发布完成", undefined, entities);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://telegram.test/bot123:token/sendMessage",
+      expect.objectContaining({
+        body: JSON.stringify({
+          chat_id: "-1001",
+          text: "张三 发布完成",
+          entities,
+        }),
+      }),
+    );
+  });
+
   it("maps getUpdates response to updates", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true, result: [{ update_id: 4 }] }), {

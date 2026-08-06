@@ -33,6 +33,20 @@ describe("createFeishuStreamPresenter", () => {
     expect(present({ type: "text_delta", text: " world" })?.text).toBe(" world");
   });
 
+  it("starts a new paragraph when the ACP message id changes", () => {
+    const { present } = createFeishuStreamPresenter();
+
+    expect(
+      present({ type: "text_delta", text: "第一段", messageId: "m1" })?.text,
+    ).toBe("第一段");
+    expect(
+      present({ type: "text_delta", text: "继续", messageId: "m1" })?.text,
+    ).toBe("继续");
+    expect(
+      present({ type: "text_delta", text: "第二段", messageId: "m2" })?.text,
+    ).toBe("\n\n第二段");
+  });
+
   it("showThinking:false drops thought and tool events, keeps result/error", () => {
     const { present } = createFeishuStreamPresenter({ showThinking: false });
     expect(present({ type: "thought_delta", text: "内部推理" })).toBeNull();

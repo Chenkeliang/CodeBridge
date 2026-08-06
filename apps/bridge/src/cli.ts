@@ -105,6 +105,14 @@ program
               : bridge
                 ? bridge.sendOutboundMarkdown(chatId, markdown, topicId)
                 : Promise.reject(new Error("飞书通道未配置")),
+          sendOutboundMention: (chatId, ref, text, topicId) =>
+            chatId.startsWith("telegram:")
+              ? telegram
+                ? telegram.sendOutboundMention(chatId, ref, text, topicId)
+                : Promise.reject(new Error("Telegram 通道未配置"))
+              : bridge
+                ? bridge.sendOutboundMention(chatId, ref, text, topicId)
+                : Promise.reject(new Error("飞书通道未配置")),
         },
         config.runner.token,
       ).fetch,

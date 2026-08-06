@@ -26,6 +26,7 @@ The Bridge and Runner are intentionally separate: the Bridge can be remote or co
 
 - Feishu long connection with streaming cards and optional custom menu
 - Telegram Bot API long polling, including a native command menu
+- Scoped native mentions on Feishu and Telegram for the requester or participants explicitly mentioned in a task
 - One ACP path for `cursor`, `claude`, and `codex`; the legacy direct-CLI transport is gone
 - Resume local sessions with `/resume`, `/resume last`, or `/resume all`
 - Live adapter capabilities through `/model`, `/effort`, `/permission`, and `/config`
@@ -128,6 +129,8 @@ Other useful commands:
 
 The exact model, effort, permission, and boolean config values come from the connected ACP adapter, so `/model list`, `/effort list`, `/permission list`, and `/config` are the source of truth.
 
+To request a real channel notification, say “mention me when it finishes” or explicitly mention a participant in the task. The Agent uses `fcb mention` internally; ordinary replies do not create extra notifications.
+
 ## Sessions, directories, and permissions
 
 - Session bindings are isolated by channel chat, topic, backend, and working directory; session metadata is persisted under the configured data directory.
@@ -150,6 +153,7 @@ Read [SECURITY.md](SECURITY.md) before exposing anything beyond localhost.
 - Different chats can run in parallel up to `runnerHost.maxConcurrentRuns` (default `4`).
 - A Feishu `chatId + topic` has one active task. Later messages queue up to five; `/stop` cancels the task and clears that queue.
 - A group shares one backend, directory, model, and session binding. Use separate chats for independent projects or agents.
+- Agent notifications are limited to the current sender and participants explicitly mentioned in the current task. CodeBridge does not search the organization directory, mention everyone, or accept arbitrary user IDs from the Agent.
 - `/transport` remains only as a compatibility response; ACP is the only transport.
 
 ## ACP backends

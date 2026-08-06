@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   createLarkChannel,
   LoggerLevel,
@@ -5,6 +6,9 @@ import {
   type ResourceDescriptor,
 } from "@larksuiteoapi/node-sdk";
 import {
+  JsonMapStore,
+  MentionRegistry,
+  formatMentionGuidance,
   resolveRequireMention,
   type AppConfig,
   type RunAttachment,
@@ -36,6 +40,7 @@ export interface FeishuMessage {
   chatId: string;
   chatType: "p2p" | "group";
   senderId: string;
+  senderName?: string;
   content: string;
   threadId?: string;
   /** 回复串的串首消息 id（普通群回复时有值） */
@@ -43,7 +48,15 @@ export interface FeishuMessage {
   /** 被直接回复（引用）的消息 id */
   replyToMessageId?: string;
   mentionedBot?: boolean;
+  mentions?: FeishuMention[];
   attachments?: RunAttachment[];
+}
+
+export interface FeishuMention {
+  openId?: string;
+  userId?: string;
+  name?: string;
+  isBot?: boolean;
 }
 
 export interface FeishuBridgeOptions {
@@ -60,6 +73,30 @@ const PENDING_PROMPTS_MAX = 5;
 
 const FEISHU_OUTPUT_STYLE_GUIDANCE =
   "【飞书输出样式】最终答复可按需少量使用飞书官方 `<text_tag color='blue'>文本</text_tag>`：blue 表示分组/信息，orange 表示需关注的修改，green 表示成功，red 表示失败/阻塞；每次最多 3 个，其余使用标准 Markdown，不必强行加色。";
+
+interface PendingFeishuStream {
+  chatId: string;
+  sourceMessageId: string;
+  startedAt: string;
+}
+
+function interruptedStreamCard(): object {
+  return {
+    schema: "2.0",
+    config: {
+      summary: { content: "任务因服务重启而中断" },
+    },
+    body: {
+      elements: [
+        {
+          tag: "markdown",
+          content:
+            "⚠️ **任务因 CodeBridge 服务重启而中断。**\n\n请重新发送上一条消息继续。",
+        },
+      ],
+    },
+  };
+}
 
 /** 把长文本按行切成 ≤ maxLen 的块，用于超长结果分条普通消息发送（避免又撞长度上限） */
 export function chunkMarkdown(text: string, maxLen: number): string[] {
@@ -104,9 +141,15 @@ export class FeishuBridge {
   private readonly chainTopics = new ChainTopicTracker();
   /** bot 已参与过的话题（内存；重启后由 sessions.json 续上） */
   private readonly botParticipatedTopics = new Set<string>();
+  private readonly mentionRegistry = new MentionRegistry();
+  private readonly pendingStreams: JsonMapStore<PendingFeishuStream>;
+  private disconnecting = false;
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
+    this.pendingStreams = new JsonMapStore<PendingFeishuStream>(
+      path.join(options.dataDir, "feishu-pending-streams.json"),
+    );
     this.orchestrator = new RunOrchestrator({
       dataDir: options.dataDir,
       config: options.config,
@@ -137,6 +180,7 @@ export class FeishuBridge {
   }
 
   async connect(): Promise<void> {
+    this.disconnecting = false;
     const { feishu } = this.config;
     this.channel = createLarkChannel({
       appId: feishu.appId,
@@ -199,6 +243,7 @@ export class FeishuBridge {
     });
 
     await this.channel.connect();
+    await this.recoverInterruptedStreams();
     const botName = this.channel.botIdentity?.name ?? "unknown";
     this.options.onLog?.(`已连接飞书 bot: ${botName}`);
     this.options.onLog?.(
@@ -207,9 +252,28 @@ export class FeishuBridge {
   }
 
   async disconnect(): Promise<void> {
+    this.disconnecting = true;
     for (const ac of this.chatStreamAbort.values()) ac.abort();
     this.chatStreamAbort.clear();
     await this.channel?.disconnect();
+  }
+
+  private async recoverInterruptedStreams(): Promise<void> {
+    if (!this.channel) return;
+    for (const messageId of Object.keys(this.pendingStreams.read())) {
+      try {
+        await this.channel.updateCard(messageId, interruptedStreamCard());
+        this.pendingStreams.update((all) => {
+          const next = { ...all };
+          delete next[messageId];
+          return next;
+        });
+        this.options.onLog?.(`已收尾服务重启前中断的飞书卡片: ${messageId}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.options.onLog?.(`中断卡片收尾失败，保留待下次重试: ${messageId} ${message}`);
+      }
+    }
   }
 
   private chatKey(chatId: string, topicId?: string): string {
@@ -227,11 +291,13 @@ export class FeishuBridge {
     chatId: string;
     chatType: "p2p" | "group";
     senderId: string;
+    senderName?: string;
     content: string;
     threadId?: string;
     rootId?: string;
     replyToMessageId?: string;
     mentionedBot?: boolean;
+    mentions?: FeishuMention[];
     resources?: ResourceDescriptor[];
   }): Promise<void> {
     this.options.onLog?.(
@@ -268,11 +334,13 @@ export class FeishuBridge {
       chatId: msg.chatId,
       chatType: msg.chatType,
       senderId: msg.senderId,
+      senderName: msg.senderName,
       content: msg.content,
       threadId: msg.threadId,
       rootId: msg.rootId,
       replyToMessageId: msg.replyToMessageId,
       mentionedBot: msg.mentionedBot,
+      mentions: msg.mentions,
       attachments,
     });
   }
@@ -497,7 +565,36 @@ export class FeishuBridge {
     const promptWithContext = contextPrefix
       ? `${contextPrefix}\n\n${agentPrompt}`
       : agentPrompt;
-    const finalPrompt = `${promptWithContext}\n\n${FEISHU_OUTPUT_STYLE_GUIDANCE}`;
+    const scope = { chatId: msg.chatId, topicId };
+    const requester = this.mentionRegistry.register(scope, {
+      channel: "feishu",
+      kind: "user",
+      id: msg.senderId,
+      name: msg.senderName,
+    });
+    const mentionTargets = [requester];
+    for (const mention of msg.mentions ?? []) {
+      const id = mention.openId ?? mention.userId;
+      if (!id || mention.isBot) continue;
+      const registered = this.mentionRegistry.register(scope, {
+        channel: "feishu",
+        kind: "user",
+        id,
+        name: mention.name,
+      });
+      if (!mentionTargets.some((target) => target.ref === registered.ref)) {
+        mentionTargets.push(registered);
+      }
+    }
+    const mentionGuidance = formatMentionGuidance(
+      mentionTargets,
+      requester.ref,
+    );
+    const finalPrompt = [
+      promptWithContext,
+      mentionGuidance,
+      FEISHU_OUTPUT_STYLE_GUIDANCE,
+    ].join("\n\n");
 
     if (topicId) this.botParticipatedTopics.add(topicId);
 
@@ -570,6 +667,7 @@ export class FeishuBridge {
     let resultBuffer = ""; // 结果区累积；卡片挂了/被截断就用它降级发普通消息
     let agentConsumed = false; // 已消费过 agent 事件流？（避免降级时重复跑）
     let cardBroken = false; // 飞书卡片流式失败（如 11310 cardid invalid）→ 降级
+    let streamMessageId: string | undefined;
 
     // 消费一次 agent 事件流：thinking / result 分别交给回调；result 同时累积进 buffer。
     const consumeAgent = async (
@@ -620,6 +718,15 @@ export class FeishuBridge {
         msg.chatId,
         {
           markdown: async (s) => {
+            streamMessageId = s.messageId;
+            this.pendingStreams.update((all) => ({
+              ...all,
+              [s.messageId]: {
+                chatId: msg.chatId,
+                sourceMessageId: msg.messageId,
+                startedAt: new Date().toISOString(),
+              },
+            }));
             if (streamAbort.signal.aborted) return;
             let cardContent = "";
             // 卡片写操作包一层：只有真报错才标记 cardBroken 并降级——之后不再碰卡片，
@@ -668,6 +775,13 @@ export class FeishuBridge {
     } finally {
       if (this.chatStreamAbort.get(key) === streamAbort) {
         this.chatStreamAbort.delete(key);
+      }
+      if (streamMessageId && !this.disconnecting) {
+        this.pendingStreams.update((all) => {
+          const next = { ...all };
+          delete next[streamMessageId!];
+          return next;
+        });
       }
     }
 
@@ -745,6 +859,34 @@ export class FeishuBridge {
       chatId,
       { markdown },
       this.outboundSendOptions(chatId, topicId),
+    );
+  }
+
+  async sendOutboundMention(
+    chatId: string,
+    ref: string,
+    text: string,
+    topicId?: string,
+  ): Promise<void> {
+    if (!this.channel) throw new Error("飞书通道未连接");
+    const target = this.mentionRegistry.resolve({ chatId, topicId }, ref);
+    if (!target || target.channel !== "feishu") {
+      throw new Error(`当前对话不存在可通知对象：${ref}`);
+    }
+    await this.channel.send(
+      chatId,
+      { markdown: text },
+      {
+        ...this.outboundSendOptions(chatId, topicId),
+        mentions: [
+          {
+            key: ref,
+            openId: target.id,
+            name: target.name,
+            isBot: target.kind === "bot",
+          },
+        ],
+      },
     );
   }
 }
