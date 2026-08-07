@@ -1,5 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createOutboundApp, type OutboundBridge } from "./outbound-api.js";
+import { SqliteEventStore } from "@codebridge/work-items";
+import {
+  createBridgeApp,
+  createOutboundApp,
+  type OutboundBridge,
+} from "./outbound-api.js";
 
 const TOKEN = "test-token-12345";
 
@@ -22,7 +30,7 @@ function makeApp(overrides: Partial<OutboundBridge> = {}) {
     },
     ...overrides,
   };
-  return { app: createOutboundApp(bridge, TOKEN), calls };
+  return { app: createOutboundApp(bridge, TOKEN), bridge, calls };
 }
 
 function post(path: string, body: unknown, token = TOKEN) {
@@ -111,5 +119,26 @@ describe("createOutboundApp", () => {
     expect(calls.mention).toEqual([
       ["oc_1", "u1", "发布已经完成", "omt_1"],
     ]);
+  });
+
+  it("mounts WorkItem routes on the Bridge app", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-mount-"));
+    const store = new SqliteEventStore(path.join(directory, "events.sqlite"));
+    const { bridge } = makeApp();
+    const app = createBridgeApp(bridge, TOKEN, store);
+
+    const response = await app.request(
+      post("/v1/work-items", {
+        conversation_id: "conv_01JMOUNT",
+        title: "验证路由装配",
+        agent_id: "pi-investigator",
+        mode: "investigation",
+        message: "读取项目状态",
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   });
 });

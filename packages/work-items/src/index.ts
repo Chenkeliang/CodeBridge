@@ -35,6 +35,7 @@ export type RiskLevel =
 
 export type DomainEventType =
   | "WORK_ITEM_CREATED"
+  | "MESSAGE_RECEIVED"
   | "DISCOVERY_STARTED"
   | "PROJECT_CANDIDATE_FOUND"
   | "PLAN_PROPOSED"
@@ -62,6 +63,7 @@ export interface WorkItem {
   status: WorkItemStatus;
   mode: WorkItemMode;
   conversationId: string;
+  agentId: string | null;
   workflowId: string | null;
   workflowRevision: string | null;
   workspaceScope: string[];
@@ -77,6 +79,7 @@ export interface CreateWorkItemInput {
   title: string;
   mode: WorkItemMode;
   conversationId: string;
+  agentId?: string | null;
   workflowId?: string | null;
   workflowRevision?: string | null;
   workspaceScope?: string[];
@@ -143,6 +146,7 @@ export class SqliteEventStore {
         status TEXT NOT NULL,
         mode TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
+        agent_id TEXT,
         workflow_id TEXT,
         workflow_revision TEXT,
         workspace_scope TEXT NOT NULL,
@@ -184,6 +188,7 @@ export class SqliteEventStore {
       status: "created",
       mode: input.mode,
       conversationId: input.conversationId,
+      agentId: input.agentId ?? null,
       workflowId: input.workflowId ?? null,
       workflowRevision: input.workflowRevision ?? null,
       workspaceScope: [...(input.workspaceScope ?? [])],
@@ -200,9 +205,9 @@ export class SqliteEventStore {
         .prepare(
           `INSERT INTO work_items (
             id, schema_version, title, status, mode, conversation_id,
-            workflow_id, workflow_revision, workspace_scope, identifiers,
+            agent_id, workflow_id, workflow_revision, workspace_scope, identifiers,
             context_revision, risk_level, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           workItem.id,
@@ -211,6 +216,7 @@ export class SqliteEventStore {
           workItem.status,
           workItem.mode,
           workItem.conversationId,
+          workItem.agentId,
           workItem.workflowId,
           workItem.workflowRevision,
           JSON.stringify(workItem.workspaceScope),
@@ -325,6 +331,7 @@ export class SqliteEventStore {
 
     return event;
   }
+
 }
 
 function createId(prefix: "wi" | "evt"): string {
@@ -339,6 +346,7 @@ function toWorkItem(row: SqliteRow): WorkItem {
     status: String(row.status) as WorkItemStatus,
     mode: String(row.mode) as WorkItemMode,
     conversationId: String(row.conversation_id),
+    agentId: row.agent_id === null ? null : String(row.agent_id),
     workflowId: row.workflow_id === null ? null : String(row.workflow_id),
     workflowRevision:
       row.workflow_revision === null ? null : String(row.workflow_revision),

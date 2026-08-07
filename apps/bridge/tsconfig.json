@@ -8,6 +8,7 @@
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/channel-feishu" },
-    { "path": "../../packages/memory-plugin" }
+    { "path": "../../packages/memory-plugin" },
+    { "path": "../../packages/work-items" }
   ]
 }

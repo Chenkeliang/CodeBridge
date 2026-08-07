@@ -1,6 +1,8 @@
 # Orchestration 接口规范
 
-状态：v1 设计基线，未实现。
+状态：v1 设计基线；WorkItem 创建、查询、消息和 SSE 事件读取已实现，Run、审批和 Discovery 路由仍待接入。
+
+当前实现是本地工作台切片，尚未实现跨进程幂等键存储；在开放到生产写入前，必须补齐 `Idempotency-Key` 的持久化去重。
 
 ## 1. 协议选择
 
@@ -14,6 +16,8 @@
 | 外部工具和资源 | MCP 或 Capability Adapter |
 
 第一阶段使用 `POST message + SSE events` 支持 Web 直接对话，不要求 WebSocket。只有出现浏览器到服务端的高频双向事件需求时再增加 WebSocket，并继续复用相同 Event Schema。
+
+当前本地 Bridge API 复用现有 Runner Bearer Token；接入 Web、飞书或 Telegram 身份后，再在 Channel 层映射用户身份和权限，不把 Runner Token 暴露给终端用户。
 
 ## 2. 资源和命令
 
