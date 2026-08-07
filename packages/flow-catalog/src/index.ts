@@ -16,6 +16,7 @@ export interface FlowStep {
   dependsOn?: string[];
   mode?: string;
   approval?: "none" | "required";
+  branches?: Array<{ when: string; next: string }>;
 }
 export interface FlowRecord {
   schemaVersion: 1;

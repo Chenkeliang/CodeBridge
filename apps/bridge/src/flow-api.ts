@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { FlowCatalogStore } from "@codebridge/flow-catalog";
+import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
 
 export function createFlowApp(catalog: FlowCatalogStore, token: string) {
   const app = new Hono();
@@ -23,21 +24,38 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string) {
       : {};
     const flowId = typeof input.flow_id === "string" ? input.flow_id : `flow_${randomUUID().replaceAll("-", "")}`;
     const rawSteps = Array.isArray(input.steps) ? input.steps : [];
-    const steps = rawSteps
-      .filter((step): step is Record<string, unknown> => typeof step === "object" && step !== null && !Array.isArray(step))
-      .filter((step) => typeof step.id === "string")
-      .map((step) => ({
-        id: String(step.id),
-        capability: typeof step.capability === "string" ? step.capability : undefined,
-        purpose: typeof step.purpose === "string" ? step.purpose : undefined,
-        dependsOn: Array.isArray(step.depends_on) ? step.depends_on.filter((id): id is string => typeof id === "string") : undefined,
-        mode: typeof step.mode === "string" ? step.mode : undefined,
-        approval: step.approval === "required" ? "required" as const : "none" as const,
-      }));
-    if (!steps.length) return c.json({ error: "flow.steps must contain at least one step" }, 400);
+    const definition = {
+      schema_version: 1,
+      workflow_id: flowId,
+      name: typeof input.name === "string" && input.name.trim() ? input.name : flowId,
+      kind: input.kind === "runbook" ? "runbook" : "guide",
+      status: "draft",
+      steps: rawSteps,
+    };
+    let plan;
+    try {
+      plan = compileWorkflow(definition, {
+        source: "agent_generated",
+        definitionRevision: body.definition_revision,
+      });
+    } catch (error) {
+      if (error instanceof WorkflowValidationError) {
+        return c.json({ error: "invalid_flow", issues: error.issues }, 400);
+      }
+      throw error;
+    }
+    const steps = plan.steps.map((step) => ({
+      id: step.id,
+      capability: step.capabilityId ?? undefined,
+      purpose: step.purpose ?? undefined,
+      dependsOn: step.dependsOn,
+      mode: step.risk,
+      approval: step.approval,
+      branches: step.branches,
+    }));
     const flow = catalog.save({
       flowId,
-      name: typeof input.name === "string" ? input.name : null,
+      name: typeof input.name === "string" && input.name.trim() ? input.name : flowId,
       kind: input.kind === "runbook" ? "runbook" : "guide",
       status: "candidate",
       source: "agent_generated",
@@ -66,6 +84,7 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
       depends_on: step.dependsOn ?? [],
       mode: step.mode ?? null,
       approval: step.approval ?? "none",
+      branches: step.branches ?? [],
     })),
     created_at: flow.createdAt,
     updated_at: flow.updatedAt,
