@@ -16,6 +16,7 @@ import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
 import { ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
 import { createProjectCatalogApp } from "./project-api.js";
+import { createWebWorkbenchApp } from "./web-workbench.js";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 const program = new Command();
@@ -127,6 +128,14 @@ program
       projectDiscovery,
       config.runner.token,
     );
+    const webWorkbenchApp = createWebWorkbenchApp({
+      store: workItemStore,
+      token: config.runner.token,
+      agents: Object.keys(config.backends),
+      workflows: [
+        { id: "price-change", name: "价格调整检查与执行" },
+      ],
+    });
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
@@ -183,6 +192,7 @@ program
         approvalService,
         runExecutor,
         projectCatalogApp,
+        webWorkbenchApp,
       ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,

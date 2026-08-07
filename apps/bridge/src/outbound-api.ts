@@ -32,10 +32,12 @@ export function createBridgeApp(
   approvalService?: ApprovalService,
   executor?: RunExecutor,
   projectCatalogApp?: Hono,
+  webWorkbenchApp?: Hono,
 ) {
   const app = createOutboundApp(bridge, token);
   app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
   if (projectCatalogApp) app.route("/", projectCatalogApp);
+  if (webWorkbenchApp) app.route("/workbench", webWorkbenchApp);
   return app;
 }
 
