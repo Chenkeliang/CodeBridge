@@ -196,7 +196,7 @@ pnpm run build
 pnpm test
 ```
 
-The monorepo contains `core`, `backends`, `work-items`, `workflow-engine`, `runner-host`, `runner-client`, `router`, `channel-feishu`, `channel-telegram`, and `apps/bridge`.
+The monorepo contains `core`, `backends`, `work-items`, `workflow-engine`, `policy`, `runner-host`, `runner-client`, `router`, `channel-feishu`, `channel-telegram`, and `apps/bridge`.
 
 ## License
 
