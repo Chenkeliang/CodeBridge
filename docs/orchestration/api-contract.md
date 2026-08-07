@@ -37,6 +37,12 @@
 
 完整草案见 [api.openapi.yaml](../../schemas/orchestration/api.openapi.yaml)。
 
+## 幂等与恢复
+
+创建 WorkItem、追加消息和创建 Run 都支持 `Idempotency-Key` 请求头。Key 与操作作用域一起持久化在 SQLite；重复请求返回第一次的 JSON 结果，不会重复写入事件或创建 Run。事件读取同时接受 `after_sequence` 和标准 `Last-Event-ID`，适合 Web、飞书和 Telegram 在断线后恢复时间线。
+
+Bridge 启动时会把上次进程遗留的 `running` Run 重新放回 `queued`，再由 Runner Executor 继续执行。Runner 输出先写入 Domain Event，再更新 Run 状态，因此客户端不需要依赖内存中的连接保持进度。
+
 ## 3. 通用规则
 
 - JSON 字段使用 `snake_case`，ID 使用带类型前缀的不透明字符串。

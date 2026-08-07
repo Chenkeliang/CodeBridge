@@ -152,4 +152,44 @@ describe("createWorkItemApp", () => {
       agentId: "pi-investigator",
     });
   });
+
+  it("returns the original result for repeated Idempotency-Key requests", async () => {
+    const { app, store } = makeApp();
+    const first = await app.request(
+      request("/v1/work-items", {
+        method: "POST",
+        headers: { "Idempotency-Key": "work-create-1" },
+        body: JSON.stringify(createBody),
+      }),
+    );
+    const firstBody = (await first.json()) as { id: string };
+    const second = await app.request(
+      request("/v1/work-items", {
+        method: "POST",
+        headers: { "Idempotency-Key": "work-create-1" },
+        body: JSON.stringify({ ...createBody, title: "different title" }),
+      }),
+    );
+    expect(second.status).toBe(201);
+    expect(((await second.json()) as { id: string }).id).toBe(firstBody.id);
+    expect(store.listWorkItems()).toHaveLength(1);
+  });
+
+  it("accepts Last-Event-ID as an event stream resume cursor", async () => {
+    const { app } = makeApp();
+    const created = await app.request(jsonRequest("/v1/work-items", createBody));
+    const workItem = (await created.json()) as { id: string };
+    const all = await app.request(request(`/v1/work-items/${workItem.id}/events`, { method: "GET" }));
+    const allText = await all.text();
+    const ids = [...allText.matchAll(/^id: (.+)$/gm)].map((match) => match[1]);
+    const resumed = await app.request(
+      request(`/v1/work-items/${workItem.id}/events`, {
+        method: "GET",
+        headers: { "Last-Event-ID": ids[0]! },
+      }),
+    );
+    const resumedText = await resumed.text();
+    expect(resumedText).toContain('"type":"MESSAGE_RECEIVED"');
+    expect(resumedText).not.toContain('"type":"WORK_ITEM_CREATED"');
+  });
 });

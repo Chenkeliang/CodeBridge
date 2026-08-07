@@ -226,6 +226,14 @@ export class SqliteEventStore {
 
       CREATE INDEX IF NOT EXISTS runs_work_item_created
         ON runs (work_item_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS idempotency_responses (
+        namespace TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        response TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (namespace, idempotency_key)
+      );
     `);
   }
 
@@ -331,6 +339,13 @@ export class SqliteEventStore {
     return rows.map(toDomainEvent);
   }
 
+  sequenceForEventId(workItemId: string, eventId: string): number {
+    const row = this.database
+      .prepare("SELECT sequence FROM domain_events WHERE work_item_id = ? AND event_id = ?")
+      .get(workItemId, eventId) as { sequence?: number } | undefined;
+    return row?.sequence ? Number(row.sequence) : 0;
+  }
+
   createRun(input: CreateRunInput): Run {
     const workItem = this.getWorkItem(input.workItemId);
     if (!workItem) {
@@ -405,6 +420,15 @@ export class SqliteEventStore {
     return rows.map(toRun);
   }
 
+  listRunsByStatus(statuses: RunStatus[]): Run[] {
+    if (!statuses.length) return [];
+    const placeholders = statuses.map(() => "?").join(", ");
+    const rows = this.database
+      .prepare(`SELECT * FROM runs WHERE status IN (${placeholders}) ORDER BY created_at ASC`)
+      .all(...statuses);
+    return rows.map(toRun);
+  }
+
   updateRunStatus(runId: string, status: RunStatus): Run {
     const now = new Date().toISOString();
     const result = this.database
@@ -412,6 +436,26 @@ export class SqliteEventStore {
       .run(status, now, runId);
     if (Number(result.changes) !== 1) throw new Error(`Run not found: ${runId}`);
     return this.getRun(runId)!;
+  }
+
+  requeueRun(runId: string): Run {
+    return this.updateRunStatus(runId, "queued");
+  }
+
+  putIdempotencyResponse(namespace: string, key: string, response: unknown): void {
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO idempotency_responses
+         (namespace, idempotency_key, response, created_at) VALUES (?, ?, ?, ?)`,
+      )
+      .run(namespace, key, JSON.stringify(response), new Date().toISOString());
+  }
+
+  getIdempotencyResponse(namespace: string, key: string): unknown | undefined {
+    const row = this.database
+      .prepare("SELECT response FROM idempotency_responses WHERE namespace = ? AND idempotency_key = ?")
+      .get(namespace, key) as { response?: string } | undefined;
+    return row?.response ? JSON.parse(row.response) : undefined;
   }
 
   close(): void {

@@ -117,6 +117,14 @@ program
         };
       },
     });
+    // A process crash can leave a Run marked running. There is no in-memory
+    // lease after restart, so move it back to the durable queue and resume it.
+    for (const staleRun of workItemStore.listRunsByStatus(["running"])) {
+      workItemStore.requeueRun(staleRun.id);
+    }
+    for (const queuedRun of workItemStore.listRunsByStatus(["queued"])) {
+      void runExecutor.execute(queuedRun.id).catch(() => {});
+    }
     const projectCatalog = new ProjectCatalogStore(
       path.join(dataDir, "project-catalog.sqlite"),
     );

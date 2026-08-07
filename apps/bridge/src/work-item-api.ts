@@ -35,6 +35,11 @@ export function createWorkItemApp(
   });
 
   app.post("/v1/work-items", async (c) => {
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = store.getIdempotencyResponse("create-work-item", idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 201);
+    }
     const body = await readJson(c);
     const input = parseCreateInput(body);
     if (!input) {
@@ -54,7 +59,9 @@ export function createWorkItemApp(
         actor: "user",
         payload: { message: input.message },
       });
-      return c.json(toApiWorkItem(workItem), 201);
+      const response = toApiWorkItem(workItem);
+      if (idempotencyKey) store.putIdempotencyResponse("create-work-item", idempotencyKey, response);
+      return c.json(response, 201);
     } catch (error) {
       return errorResponse(c, 400, "work_item_create_failed", messageOf(error));
     }
@@ -86,21 +93,26 @@ export function createWorkItemApp(
       return errorResponse(c, 400, "invalid_message", "message 必填");
     }
 
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = store.getIdempotencyResponse(`message:${workItemId}`, idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 202);
+    }
+
     const event = store.appendEvent({
       workItemId,
       type: "MESSAGE_RECEIVED",
       actor: body.actor === "channel" ? "channel" : "user",
       payload: { message: body.message },
     });
-    return c.json(
-      {
-        request_id: `req_${randomUUID().replaceAll("-", "")}`,
-        accepted: true,
-        event_id: event.eventId,
-        sequence: event.sequence,
-      },
-      202,
-    );
+    const response = {
+      request_id: `req_${randomUUID().replaceAll("-", "")}`,
+      accepted: true,
+      event_id: event.eventId,
+      sequence: event.sequence,
+    };
+    if (idempotencyKey) store.putIdempotencyResponse(`message:${workItemId}`, idempotencyKey, response);
+    return c.json(response, 202);
   });
 
   app.post("/v1/work-items/:work_item_id/runs", async (c) => {
@@ -126,6 +138,12 @@ export function createWorkItemApp(
       return errorResponse(c, 400, "invalid_run", "plan_id 无效");
     }
 
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = store.getIdempotencyResponse(`run:${workItemId}`, idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 202);
+    }
+
     try {
       const run = store.createRun({
         workItemId,
@@ -138,7 +156,9 @@ export function createWorkItemApp(
           // is the durable error channel for clients that created the Run.
         });
       }
-      return c.json({ run_id: run.id, status: run.status }, 202);
+      const response = { run_id: run.id, status: run.status };
+      if (idempotencyKey) store.putIdempotencyResponse(`run:${workItemId}`, idempotencyKey, response);
+      return c.json(response, 202);
     } catch (error) {
       return errorResponse(c, 400, "run_create_failed", messageOf(error));
     }
@@ -170,7 +190,10 @@ export function createWorkItemApp(
     if (!store.getWorkItem(workItemId)) {
       return errorResponse(c, 404, "work_item_not_found", "WorkItem 不存在");
     }
-    const afterSequenceValue = c.req.query("after_sequence") ?? "0";
+    const lastEventId = c.req.header("last-event-id");
+    const afterSequenceValue =
+      c.req.query("after_sequence") ??
+      (lastEventId ? String(store.sequenceForEventId(workItemId, lastEventId)) : "0");
     const afterSequence = Number(afterSequenceValue);
     if (!Number.isInteger(afterSequence) || afterSequence < 0) {
       return errorResponse(c, 400, "invalid_after_sequence", "after_sequence 无效");
