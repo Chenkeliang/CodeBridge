@@ -181,4 +181,29 @@ describe("session API", () => {
     catalog.close();
     workItems.close();
   });
+
+  it("deletes provider history before removing Session metadata", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const deleted: string[] = [];
+    const runner = {
+      deleteSession: async (agentId: string, cwd: string, providerSessionId: string) => {
+        deleted.push(agentId, cwd, providerSessionId);
+        return { ok: true };
+      },
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi", cwd: "/workspace", providerSessionId: "pi-session" });
+
+    const response = await app.request(`/v1/sessions/${session.id}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(response.status).toBe(204);
+    expect(deleted).toEqual(["pi", "/workspace", "pi-session"]);
+    expect(catalog.getSession(session.id)).toBeUndefined();
+    catalog.close();
+    workItems.close();
+  });
 });
