@@ -7,6 +7,7 @@ import {
   type WorkItemMode,
 } from "@codebridge/work-items";
 import type { ApprovalService } from "@codebridge/policy";
+import type { RunExecutor } from "@codebridge/run-executor";
 
 const WORK_ITEM_MODES: readonly WorkItemMode[] = [
   "investigation",
@@ -22,6 +23,7 @@ export function createWorkItemApp(
   store: SqliteEventStore,
   token: string,
   approvals?: ApprovalService,
+  executor?: RunExecutor,
 ) {
   const app = new Hono();
 
@@ -126,6 +128,12 @@ export function createWorkItemApp(
         mode: body.mode as WorkItemMode,
         planId: (body.plan_id as string | null | undefined) ?? null,
       });
+      if (executor) {
+        void executor.execute(run.id).catch(() => {
+          // RunExecutor persists the failure event and status. The event stream
+          // is the durable error channel for clients that created the Run.
+        });
+      }
       return c.json({ run_id: run.id, status: run.status }, 202);
     } catch (error) {
       return errorResponse(c, 400, "run_create_failed", messageOf(error));

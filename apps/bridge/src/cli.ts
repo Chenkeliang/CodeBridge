@@ -12,6 +12,8 @@ import { TelegramBridge } from "@codebridge/channel-telegram";
 import { createMemoryPlugin } from "@codebridge/memory-plugin";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { ApprovalService } from "@codebridge/policy";
+import { RunnerClient } from "@codebridge/runner-client";
+import { RunExecutor } from "@codebridge/run-executor";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 const program = new Command();
@@ -75,6 +77,43 @@ program
       workItemStore,
       path.join(dataDir, "approvals.sqlite"),
     );
+    const runnerClient = new RunnerClient({
+      baseUrl: config.runner.url,
+      token: config.runner.token,
+    });
+    const runExecutor = new RunExecutor(workItemStore, runnerClient, {
+      resolveRequest: (workItem, run) => {
+        const latestMessage = workItemStore
+          .listEvents(workItem.id)
+          .reverse()
+          .find((event) => event.type === "MESSAGE_RECEIVED")?.payload.message;
+        const scope = workItem.workspaceScope[0];
+        const cwd =
+          (scope && config.workspaces?.named?.[scope]) ??
+          (scope && path.isAbsolute(scope)
+            ? scope
+            : scope && config.workspaces?.root
+              ? path.join(config.workspaces.root, scope)
+              : undefined) ??
+          config.workspaces?.default ??
+          config.workspaces?.root ??
+          process.cwd();
+        const backendId =
+          workItem.agentId && config.backends[workItem.agentId]
+            ? workItem.agentId
+            : config.defaultBackend;
+        return {
+          runId: run.id,
+          sessionKey: {
+            chatId: workItem.conversationId,
+            backendId,
+            cwd,
+          },
+          prompt:
+            typeof latestMessage === "string" ? latestMessage : workItem.title,
+        };
+      },
+    });
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
@@ -128,6 +167,7 @@ program
         config.runner.token,
         workItemStore,
         approvalService,
+        runExecutor,
       ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,

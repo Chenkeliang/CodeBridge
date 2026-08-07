@@ -12,6 +12,7 @@
     { "path": "./packages/work-items" },
     { "path": "./packages/workflow-engine" },
     { "path": "./packages/policy" },
+    { "path": "./packages/run-executor" },
     { "path": "./apps/bridge" }
   ]
 }

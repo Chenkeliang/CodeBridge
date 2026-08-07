@@ -16,6 +16,8 @@
     "@codebridge/core": "workspace:*",
     "@codebridge/memory-plugin": "workspace:*",
     "@codebridge/policy": "workspace:*",
+    "@codebridge/run-executor": "workspace:*",
+    "@codebridge/runner-client": "workspace:*",
     "@codebridge/work-items": "workspace:*",
     "@hono/node-server": "^1.19.14",
     "commander": "^12.1.0",

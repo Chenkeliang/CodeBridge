@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { createWorkItemApp } from "./work-item-api.js";
 import { type SqliteEventStore } from "@codebridge/work-items";
 import type { ApprovalService } from "@codebridge/policy";
+import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
@@ -29,9 +30,10 @@ export function createBridgeApp(
   token: string,
   workItemStore: SqliteEventStore,
   approvalService?: ApprovalService,
+  executor?: RunExecutor,
 ) {
   const app = createOutboundApp(bridge, token);
-  app.route("/", createWorkItemApp(workItemStore, token, approvalService));
+  app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
   return app;
 }
 
