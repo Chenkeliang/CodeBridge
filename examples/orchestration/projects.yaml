@@ -1,0 +1,23 @@
+schema_version: 1
+
+# 正式项目清单由 Discovery Task 生成候选，经确认后写入。
+projects:
+  - project_id: equity-center
+    display_name: 权益中心
+    repository:
+      remote: gitlab.luojilab.com/rock/equity-center
+      default_branch: master
+    runtime:
+      language: go
+      host_binding: local-workspace
+    production:
+      deploy_service: rock/equity-center
+      log_service: equity-center
+      apm_service: equity-center
+    source_evidence:
+      - kind: git_remote
+        ref: observed-at-runtime
+      - kind: dcp_service
+        ref: observed-at-runtime
+    status: candidate
+    confidence: high

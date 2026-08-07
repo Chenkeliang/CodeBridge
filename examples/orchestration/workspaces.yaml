@@ -1,0 +1,17 @@
+schema_version: 1
+
+# 项目路径使用主机绑定或环境变量，不能把某台机器的绝对路径写入 Workflow。
+workspaces:
+  - id: commerce
+    name: 交易业务
+    project_ids: []
+    discovery:
+      enabled: true
+      sources: [current_workspace, git_remote, dcp, logs, apm]
+
+  - id: personal-products
+    name: 个人产品
+    project_ids: []
+    discovery:
+      enabled: true
+      sources: [current_workspace, git_remote]

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codebridge:orchestration:work-item:v1",
+  "title": "CodeBridge WorkItem",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "status",
+    "mode",
+    "conversation_id",
+    "workflow_id",
+    "workflow_revision",
+    "workspace_scope",
+    "context_revision",
+    "risk_level"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^wi_[A-Za-z0-9]+$" },
+    "title": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "created",
+        "exploring",
+        "planned",
+        "awaiting_input",
+        "awaiting_approval",
+        "executing",
+        "verifying",
+        "manual_review",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["investigation", "change", "review", "release", "observe"]
+    },
+    "conversation_id": { "type": "string", "pattern": "^conv_[A-Za-z0-9]+$" },
+    "workflow_id": { "type": ["string", "null"] },
+    "workflow_revision": { "type": ["string", "null"] },
+    "workspace_scope": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "identifiers": { "type": "object" },
+    "context_revision": { "type": "integer", "minimum": 1 },
+    "risk_level": {
+      "type": "string",
+      "enum": ["read_only", "workspace_write", "git_write", "production_write"]
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

@@ -183,6 +183,7 @@ RUNNER_TOKEN=... node scripts/test-acp-live.mjs --backend cursor
 | 手动 / Docker 快速开始 | [docs/zh-CN/quickstart.md](docs/zh-CN/quickstart.md) |
 | Model、Effort、Permission | [docs/zh-CN/model-effort.md](docs/zh-CN/model-effort.md) |
 | Docker Bridge + 宿主机 Runner | [docs/zh-CN/deploy/docker-host-runner.md](docs/zh-CN/deploy/docker-host-runner.md) |
+| 多项目 Agent 工作台设计基线 | [docs/orchestration/README.md](docs/orchestration/README.md) |
 | 完整配置 | [examples/config.full.yaml](examples/config.full.yaml) |
 | 安全策略 | [SECURITY.md](SECURITY.md) |
 
