@@ -10,6 +10,7 @@
     { "path": "./packages/channel-telegram" },
     { "path": "./packages/memory-plugin" },
     { "path": "./packages/work-items" },
+    { "path": "./packages/workflow-engine" },
     { "path": "./apps/bridge" }
   ]
 }
