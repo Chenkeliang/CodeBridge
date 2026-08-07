@@ -107,6 +107,9 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .send-button:hover { background:var(--accent); }
     .composer-context { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:3px 3px 8px; }
     .context-control, .context-chip { width:auto; min-height:28px; border:1px solid var(--line); border-radius:8px; background:#f7f9f7; color:var(--muted); padding:5px 8px; font-size:12px; }
+    .workspace-control { min-width:220px; }
+    .workspace-authorize { background:var(--accent-soft); color:var(--accent); border-color:transparent; cursor:pointer; }
+    .workspace-authorize:hover { border-color:var(--accent); }
     .context-control { outline:none; }
     .context-control:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
     .context-chip { display:inline-flex; align-items:center; flex:0 0 auto; }
@@ -147,6 +150,8 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
                 <select class="context-control" id="agent" aria-label="Agent"><option value="">Agent · 自动选择</option>${agentOptions}</select>
                 <select class="context-control" id="mode" aria-label="模式"><option value="auto">模式 · Agent 判断</option></select>
                 <select class="context-control" id="workflow" aria-label="Workflow">${workflowOptions}</select>
+                <input class="context-control workspace-control" id="workspace" aria-label="Folder / 工作目录" placeholder="Folder / 工作目录（可选）" autocomplete="off" />
+                <button class="context-control workspace-authorize" id="workspace-authorize" type="button">授权</button>
                 <span class="context-chip" id="model-chip">模型 · Agent 默认</span>
                 <span class="context-chip" id="workspace-chip">工作空间 · 自动发现</span>
               </div>
@@ -200,14 +205,13 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         const agentLabels = ${JSON.stringify(Object.fromEntries(agentProfiles.map((agent) => [agent.id, `${agent.name}${agent.status ? ` · ${agent.status}` : ''}`])))};
         $('work-list').innerHTML = agentIds.map((agentId) => '<section class="agent-group"><div class="agent-group-head"><strong>' + esc(agentLabels[agentId] || agentId) + '</strong><button class="agent-new" data-agent="' + esc(agentId) + '" aria-label="新建会话">＋</button></div>' + ((groups[agentId] || []).map((session) => '<button class="work-row ' + (state.selected === session.session_id ? 'active' : '') + '" data-id="' + esc(session.session_id) + '"><strong>' + esc(session.title || '新会话') + '</strong><small>' + esc(session.status) + ' · ' + esc(session.cwd || '工作空间自动发现') + '</small></button>').join('') || '<div class="empty">还没有会话</div>') + '</section>').join('');
         document.querySelectorAll('.work-row').forEach((button) => button.addEventListener('click', () => selectSession(button.dataset.id)));
-        document.querySelectorAll('.agent-new').forEach((button) => button.addEventListener('click', () => newSession(button.dataset.agent)));
+        document.querySelectorAll('.agent-new').forEach((button) => button.addEventListener('click', () => { void newSession(button.dataset.agent).catch((error) => { $('error').textContent = error.message; }); }));
       } catch (error) { $('work-list').innerHTML = '<div class="empty">无法读取：' + esc(error.message) + '</div>'; }
     }
     async function newSession(agentId) {
-      try {
-        const session = await api('/v1/sessions', { method:'POST', body: JSON.stringify({ agent_id: agentId || $('agent').value || ${JSON.stringify(agents[0] || '')} }) });
-        await selectSession(session.session_id);
-      } catch (error) { $('error').textContent = error.message; }
+      const cwd = $('workspace').value.trim();
+      const session = await api('/v1/sessions', { method:'POST', body: JSON.stringify({ agent_id: agentId || $('agent').value || ${JSON.stringify(agents[0] || '')}, ...(cwd ? { cwd } : {}) }) });
+      await selectSession(session.session_id);
     }
     async function selectSession(id) {
       state.selected = id; state.sequence = 0; state.session = null; $('work-form').hidden = true; $('reply-form').hidden = false; $('composer-title').textContent = 'Session';
@@ -223,6 +227,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         const scope = session.cwd || '';
         $('title').textContent = session.title || 'Session'; $('subtitle').textContent = 'Agent ' + agent + ' · ' + (session.status || 'idle'); $('status').textContent = session.status || 'idle'; $('status').className = 'status ' + (session.status === 'waiting' ? 'waiting' : '');
         $('mode').value = 'auto'; $('agent').value = agent; $('agent').disabled = true; $('workflow').value = session.flow_id || ''; $('reply-workflow').value = session.flow_id || '';
+        $('workspace').value = '';
         $('workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
         $('model-chip').textContent = '模型 · Agent 默认';
         $('reply-mode-chip').textContent = '模式 · Agent 判断';
@@ -240,7 +245,21 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value, flow_id: $('reply-workflow').value || null }) }); $('reply').value = ''; await startRun(); } catch (error) { $('reply-error').textContent = error.message; } });
     $('run-again').addEventListener('click', () => startRun().catch((error) => { $('reply-error').textContent = error.message; }));
     [['mention-button', 'message', '@'], ['command-button', 'message', '/'], ['attach-button', 'message', '@'], ['reply-mention-button', 'reply', '@'], ['reply-command-button', 'reply', '/'], ['reply-attach-button', 'reply', '@']].forEach(([button, input, token]) => $(button).addEventListener('click', () => insertToken(input, token)));
-    $('new-work').addEventListener('click', () => { state.selected = null; state.session = null; state.sequence = 0; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('model-chip').textContent = '模型 · Agent 默认'; $('workspace-chip').textContent = '工作空间 · 自动发现'; loadSessions(); });
+    $('workspace-authorize').addEventListener('click', async () => {
+      const input = $('workspace');
+      const path = input.value.trim();
+      $('error').textContent = '';
+      if (!path) { input.focus(); return; }
+      const button = $('workspace-authorize');
+      button.disabled = true;
+      try {
+        const result = await api('/v1/directories/authorize', { method:'POST', body: JSON.stringify({ path }) });
+        if (!result.ok) throw new Error(result.error || '工作目录授权失败');
+        input.value = result.path || path;
+      } catch (error) { $('error').textContent = error.message; }
+      finally { button.disabled = false; }
+    });
+    $('new-work').addEventListener('click', () => { state.selected = null; state.session = null; state.sequence = 0; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model-chip').textContent = '模型 · Agent 默认'; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; loadSessions(); });
     loadSessions(); loadFlows();
   </script>
 </body>
