@@ -106,6 +106,11 @@ program
           workItem.agentId && config.backends[workItem.agentId]
             ? workItem.agentId
             : config.defaultBackend;
+        const basePrompt =
+          typeof latestMessage === "string" ? latestMessage : workItem.title;
+        const prompt = workItem.workflowId
+          ? `[参考 Workflow: ${workItem.workflowId}]\n${basePrompt}`
+          : basePrompt;
         return {
           runId: run.id,
           sessionKey: {
@@ -113,8 +118,7 @@ program
             backendId,
             cwd,
           },
-          prompt:
-            typeof latestMessage === "string" ? latestMessage : workItem.title,
+          prompt,
         };
       },
     });
