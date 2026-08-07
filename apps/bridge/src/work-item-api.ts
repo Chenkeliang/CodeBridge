@@ -28,7 +28,7 @@ export function createWorkItemApp(
 ) {
   const app = new Hono();
 
-  app.use("*", async (c, next) => {
+  app.use("/v1/*", async (c, next) => {
     if (c.req.header("authorization") !== `Bearer ${token}`) {
       return errorResponse(c, 401, "unauthorized", "未授权");
     }
