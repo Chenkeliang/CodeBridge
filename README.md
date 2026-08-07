@@ -39,7 +39,7 @@ The Bridge and Runner are intentionally separate: the Bridge can be remote or co
 ### Requirements
 
 - macOS or Linux
-- Node.js ≥ 20, pnpm, and curl
+- Node.js ≥ 22.5, pnpm, and curl. The WorkItem Event Store uses Node's built-in `node:sqlite`.
 - At least one local agent CLI: `cursor-agent`, `claude`, or `codex`
 - A Feishu custom app with a bot, or a Telegram bot token
 

@@ -41,7 +41,7 @@ Bridge 与 Runner 分开设计：Bridge 可以放在 Docker 或远程机器，Ru
 ### 环境要求
 
 - macOS 或 Linux
-- Node.js ≥ 20、pnpm、curl
+- Node.js ≥ 22.5、pnpm、curl。WorkItem Event Store 使用 Node 内置的 `node:sqlite`。
 - 本机至少安装一个 CLI：`cursor-agent`、`claude` 或 `codex`
 - 一个已开启机器人的飞书企业自建应用，或一个 Telegram Bot token
 
