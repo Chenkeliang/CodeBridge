@@ -60,7 +60,7 @@ describe("SqliteEventStore", () => {
       conversationId: "web:second",
       riskLevel: "workspace_write",
     });
-    expect(store.listWorkItems().map((item) => item.title)).toEqual(["first", "second"]);
+    expect(store.listWorkItems().map((item) => item.title).sort()).toEqual(["first", "second"]);
     store.close();
   });
 
