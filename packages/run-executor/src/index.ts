@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
 import type { ApprovalService } from "@codebridge/policy";
 import {
@@ -157,4 +158,3 @@ function hashInput(workItemId: string, runId: string, title: string): string {
     .update(`${workItemId}:${runId}:${title}`)
     .digest("hex");
 }
-import { createHash } from "node:crypto";
