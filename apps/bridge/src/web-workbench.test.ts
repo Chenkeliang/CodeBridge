@@ -33,6 +33,9 @@ describe("web workbench", () => {
     expect(html).toContain("/v1/flows/candidates");
     expect(html).toContain('id="accept-project"');
     expect(html).toContain("/v1/projects/candidates/");
+    expect(html).toContain('id="session-fork"');
+    expect(html).toContain('id="session-close"');
+    expect(html).toContain('id="session-delete"');
     expect(html).not.toContain("模式 · 发布");
     expect(html).not.toContain("模式 · 调查");
     expect(html).not.toContain("权益");

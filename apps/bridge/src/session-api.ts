@@ -246,9 +246,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiSession(options.catalog.updateSession(session.id, { status: "closed" })!));
   });
 
-  app.delete("/v1/sessions/:session_id", (c) => {
+  app.delete("/v1/sessions/:session_id", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (options.runner && session.providerSessionId && session.cwd) {
+      const result = await options.runner.deleteSession(session.agentId, session.cwd, session.providerSessionId);
+      if (!result.ok) return c.json(result, 409);
+    }
     if (!options.catalog.deleteSession(session.id)) return c.json({ error: "session_not_found" }, 404);
     return c.body(null, 204);
   });
