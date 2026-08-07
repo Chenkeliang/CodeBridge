@@ -29,6 +29,7 @@ CodeBridge
 - 核心后端继续使用 Node.js + TypeScript，先建设模块化单体；Runner Host 保持独立进程。
 - Pi 优先通过 Node SDK 接入 Runner；`pi --mode rpc` 不是核心服务边界。Claude、Codex、Cursor 继续复用现有 ACP Backend。
 - 用户可以直接创建对话、选择 Agent，也可以选择 Workflow；不选 Workflow 时进入探索模式。
+- Web 采用聊天优先入口：模式、模型和工作空间是输入框周边的可选上下文，省略时由 Agent/Discovery 判断，不要求用户手工填写项目范围。
 - Conversation 是消息容器，WorkItem 是目标、项目范围、计划、权限、证据和执行状态的事实中心。
 - Workflow 是可选参考或受控 Runbook，不把未知工作强行固化为流程。
 - Skill 保持通行的 `SKILL.md` 结构，不强制脚本语言；CodeBridge 只负责加载、绑定、权限和审计。

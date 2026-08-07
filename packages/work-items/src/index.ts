@@ -21,6 +21,7 @@ export type WorkItemStatus =
   | "cancelled";
 
 export type WorkItemMode =
+  | "auto"
   | "investigation"
   | "change"
   | "review"

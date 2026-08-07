@@ -145,9 +145,7 @@ program
       store: workItemStore,
       token: config.runner.token,
       agents: Object.keys(config.backends),
-      workflows: [
-        { id: "price-change", name: "价格调整检查与执行" },
-      ],
+      workflows: [],
     });
 
     store.onChange((c) => {

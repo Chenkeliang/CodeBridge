@@ -78,6 +78,7 @@ Conversation（长期对话）
     ├── WorkspaceScope
     ├── WorkflowBinding（可为空）
     ├── Runs
+    │   ├── Auto (Agent 判定)
     │   ├── Investigation
     │   ├── Change
     │   ├── Review
@@ -96,9 +97,9 @@ Conversation 只代表消息容器。WorkItem 才是目标、项目范围、权�
 id: wi_01J...
 title: 得到贝退款支持小数的影响评估
 status: exploring
-mode: investigation
+mode: auto
 conversation_id: conv_01J...
-agent_id: pi-investigator
+agent_id: null
 workflow_id: null
 workflow_revision: null
 workspace_scope: []

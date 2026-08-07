@@ -11,6 +11,7 @@ import type { ApprovalService } from "@codebridge/policy";
 import type { RunExecutor } from "@codebridge/run-executor";
 
 const WORK_ITEM_MODES: readonly WorkItemMode[] = [
+  "auto",
   "investigation",
   "change",
   "review",
@@ -48,7 +49,7 @@ export function createWorkItemApp(
         c,
         400,
         "invalid_work_item",
-        "conversation_id、title、agent_id、mode 和 message 必填",
+        "conversation_id 和 message 必填；title、agent_id、mode 可由 Agent 自动判断",
       );
     }
 
@@ -227,14 +228,20 @@ function parseCreateInput(
     })
   | null {
   if (!body) return null;
-  const requiredStrings = ["conversation_id", "title", "agent_id", "message"];
+  const requiredStrings = ["conversation_id", "message"];
   if (requiredStrings.some((key) => !isNonEmptyString(body[key]))) {
     return null;
   }
-  if (
+  if (body.title !== undefined && body.title !== null && !isNonEmptyString(body.title)) {
+    return null;
+  }
+  if (body.agent_id !== undefined && body.agent_id !== null && !isNonEmptyString(body.agent_id)) {
+    return null;
+  }
+  if (body.mode !== undefined && body.mode !== null && (
     typeof body.mode !== "string" ||
     !WORK_ITEM_MODES.includes(body.mode as WorkItemMode)
-  ) {
+  )) {
     return null;
   }
   if (
@@ -260,10 +267,12 @@ function parseCreateInput(
   }
 
   return {
-    title: body.title as string,
-    mode: body.mode as WorkItemMode,
+    title: isNonEmptyString(body.title)
+      ? body.title
+      : deriveTitle(body.message as string),
+    mode: (body.mode as WorkItemMode | undefined) ?? "auto",
     conversationId: body.conversation_id as string,
-    agentId: body.agent_id as string,
+    agentId: (body.agent_id as string | null | undefined) ?? null,
     workflowId: (body.workflow_id as string | null | undefined) ?? null,
     workflowRevision: null,
     workspaceScope: (body.workspace_scope as string[] | undefined) ?? [],
@@ -271,6 +280,11 @@ function parseCreateInput(
     riskLevel: (body.risk_level as RiskLevel | undefined) ?? "read_only",
     message: body.message as string,
   };
+}
+
+function deriveTitle(message: string): string {
+  const compact = message.replace(/\s+/g, " ").trim();
+  return compact.length > 48 ? `${compact.slice(0, 47)}…` : compact;
 }
 
 async function readJson(
