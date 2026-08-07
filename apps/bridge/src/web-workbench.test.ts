@@ -36,6 +36,9 @@ describe("web workbench", () => {
     expect(html).toContain('id="session-fork"');
     expect(html).toContain('id="session-close"');
     expect(html).toContain('id="session-delete"');
+    expect(html).toContain('data-view="plan"');
+    expect(html).toContain('data-view="approval"');
+    expect(html).toContain('data-view="evidence"');
     expect(html).not.toContain("模式 · 发布");
     expect(html).not.toContain("模式 · 调查");
     expect(html).not.toContain("权益");
