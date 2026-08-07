@@ -297,6 +297,13 @@ export class SqliteEventStore {
     return row ? toWorkItem(row) : undefined;
   }
 
+  listWorkItems(): WorkItem[] {
+    const rows = this.database
+      .prepare("SELECT * FROM work_items ORDER BY updated_at DESC")
+      .all();
+    return rows.map(toWorkItem);
+  }
+
   appendEvent(input: AppendEventInput): DomainEvent {
     if (!this.getWorkItem(input.workItemId)) {
       throw new Error(`WorkItem not found: ${input.workItemId}`);

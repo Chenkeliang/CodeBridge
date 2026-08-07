@@ -60,6 +60,10 @@ export function createWorkItemApp(
     }
   });
 
+  app.get("/v1/work-items", (c) => {
+    return c.json({ work_items: store.listWorkItems().map(toApiWorkItem) });
+  });
+
   app.get("/v1/work-items/:work_item_id", (c) => {
     const workItem = store.getWorkItem(c.req.param("work_item_id"));
     if (!workItem) {

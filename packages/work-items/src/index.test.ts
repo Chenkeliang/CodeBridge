@@ -46,6 +46,24 @@ describe("SqliteEventStore", () => {
     store.close();
   });
 
+  it("lists WorkItems for a workbench inbox", () => {
+    const store = new SqliteEventStore(":memory:");
+    store.createWorkItem({
+      title: "first",
+      mode: "investigation",
+      conversationId: "web:first",
+      riskLevel: "read_only",
+    });
+    store.createWorkItem({
+      title: "second",
+      mode: "change",
+      conversationId: "web:second",
+      riskLevel: "workspace_write",
+    });
+    expect(store.listWorkItems().map((item) => item.title)).toEqual(["first", "second"]);
+    store.close();
+  });
+
   it("reopens the database and keeps the event sequence", () => {
     const databasePath = createDatabasePath();
     const firstStore = new SqliteEventStore(databasePath);
