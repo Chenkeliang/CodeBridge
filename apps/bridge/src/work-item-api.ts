@@ -6,6 +6,7 @@ import {
   type WorkItem,
   type WorkItemMode,
 } from "@codebridge/work-items";
+import type { ApprovalService } from "@codebridge/policy";
 
 const WORK_ITEM_MODES: readonly WorkItemMode[] = [
   "investigation",
@@ -15,9 +16,13 @@ const WORK_ITEM_MODES: readonly WorkItemMode[] = [
   "observe",
 ];
 
-type ErrorStatus = 400 | 401 | 404;
+type ErrorStatus = 400 | 401 | 404 | 409 | 503;
 
-export function createWorkItemApp(store: SqliteEventStore, token: string) {
+export function createWorkItemApp(
+  store: SqliteEventStore,
+  token: string,
+  approvals?: ApprovalService,
+) {
   const app = new Hono();
 
   app.use("*", async (c, next) => {
@@ -125,6 +130,27 @@ export function createWorkItemApp(store: SqliteEventStore, token: string) {
     } catch (error) {
       return errorResponse(c, 400, "run_create_failed", messageOf(error));
     }
+  });
+
+  app.post("/v1/runs/:run_id/approve", async (c) => {
+    if (!approvals) {
+      return errorResponse(c, 503, "approval_unavailable", "审批服务未配置");
+    }
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    const body = await readJson(c);
+    if (!body || typeof body.approval_id !== "string") {
+      return errorResponse(c, 400, "invalid_approval", "approval_id 必填");
+    }
+    const approval = approvals.get(body.approval_id);
+    if (!approval || approval.runId !== run.id) {
+      return errorResponse(c, 404, "approval_not_found", "审批记录不存在");
+    }
+    const granted = approvals.grant(approval.id, body.granted_by === "system" ? "system" : "user");
+    if (!granted || granted.status !== "granted") {
+      return errorResponse(c, 409, "approval_not_grantable", "审批已过期或已处理");
+    }
+    return c.json({ approval_id: granted.id, status: granted.status, granted_at: granted.grantedAt });
   });
 
   app.get("/v1/work-items/:work_item_id/events", (c) => {

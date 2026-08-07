@@ -11,6 +11,7 @@ import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
 import { TelegramBridge } from "@codebridge/channel-telegram";
 import { createMemoryPlugin } from "@codebridge/memory-plugin";
 import { SqliteEventStore } from "@codebridge/work-items";
+import { ApprovalService } from "@codebridge/policy";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 const program = new Command();
@@ -70,6 +71,10 @@ program
     const workItemStore = new SqliteEventStore(
       path.join(dataDir, "orchestration.sqlite"),
     );
+    const approvalService = new ApprovalService(
+      workItemStore,
+      path.join(dataDir, "approvals.sqlite"),
+    );
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
@@ -79,6 +84,7 @@ program
     const shutdown = async () => {
       await bridge?.disconnect();
       await telegram?.disconnect();
+      approvalService.close();
       workItemStore.close();
       process.exit(0);
     };
@@ -121,6 +127,7 @@ program
         },
         config.runner.token,
         workItemStore,
+        approvalService,
       ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,

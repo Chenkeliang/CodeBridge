@@ -11,6 +11,7 @@
     { "path": "./packages/memory-plugin" },
     { "path": "./packages/work-items" },
     { "path": "./packages/workflow-engine" },
+    { "path": "./packages/policy" },
     { "path": "./apps/bridge" }
   ]
 }

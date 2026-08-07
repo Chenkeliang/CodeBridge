@@ -15,6 +15,7 @@
     "@codebridge/channel-telegram": "workspace:*",
     "@codebridge/core": "workspace:*",
     "@codebridge/memory-plugin": "workspace:*",
+    "@codebridge/policy": "workspace:*",
     "@codebridge/work-items": "workspace:*",
     "@hono/node-server": "^1.19.14",
     "commander": "^12.1.0",
