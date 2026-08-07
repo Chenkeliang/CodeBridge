@@ -155,4 +155,30 @@ describe("session API", () => {
     catalog.close();
     workItems.close();
   });
+
+  it("starts project discovery asynchronously on the first message in a workspace Session", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    let observed: { workspacePath: string; workItemId?: string } | undefined;
+    const discovery = {
+      observe: async (workspacePath: string, workItemId?: string) => {
+        observed = { workspacePath, workItemId };
+        return {};
+      },
+    } as unknown as import("@codebridge/project-catalog").ProjectDiscovery;
+    const app = createSessionApp({ catalog, agents, workItems, discovery }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi", cwd: "/workspace" });
+
+    const response = await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ message: "检查当前目录" }),
+    });
+    expect(response.status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observed).toMatchObject({ workspacePath: "/workspace" });
+    expect(observed?.workItemId).toMatch(/^wi_/);
+    catalog.close();
+    workItems.close();
+  });
 });
