@@ -642,6 +642,7 @@ components:
         task_record_id: { type: [string, 'null'] }
         folder_id: { type: [string, 'null'] }
         flow_id: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
         flow_revision: { type: [string, 'null'] }
         cwd: { type: [string, 'null'] }
         additional_directories:
@@ -673,15 +674,13 @@ components:
           items: { type: string }
     StartSessionRun:
       type: object
-      required: [message]
       properties:
-        message: { type: string, minLength: 1 }
         flow_id: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
         mode:
           type: string
           enum: [auto]
           default: auto
-        model: { type: [string, 'null'] }
     Flow:
       type: object
       required: [flow_id, kind, status, source, definition_revision, steps]

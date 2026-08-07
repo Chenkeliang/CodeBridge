@@ -27,6 +27,8 @@ describe("web workbench", () => {
     expect(html).toContain("模式 · Agent 判断");
     expect(html).toContain('id="workspace"');
     expect(html).toContain('id="workspace-authorize"');
+    expect(html).toContain('id="model"');
+    expect(html).toContain('id="reply-model"');
     expect(html).toContain("Folder / 工作目录（可选）");
     expect(html).toContain("/v1/directories/authorize");
     expect(html).toContain('id="save-flow"');

@@ -35,11 +35,12 @@ describe("session API", () => {
     const create = await app.request("/v1/sessions", {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ agent_id: "pi" }),
+      body: JSON.stringify({ agent_id: "pi", model: "pi-model" }),
     });
     expect(create.status).toBe(201);
-    const session = (await create.json()) as { session_id: string; agent_id: string };
+    const session = (await create.json()) as { session_id: string; agent_id: string; model: string | null };
     expect(session.agent_id).toBe("pi");
+    expect(session.model).toBe("pi-model");
 
     const message = await app.request(`/v1/sessions/${session.session_id}/messages`, {
       method: "POST",

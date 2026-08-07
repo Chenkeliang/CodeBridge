@@ -10,6 +10,7 @@ export interface WebWorkbenchAgent {
   id: string;
   name: string;
   status?: string;
+  models?: string[];
 }
 
 export interface WebWorkbenchOptions {
@@ -37,6 +38,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   const workflows = options.workflows ?? [];
   const token = JSON.stringify(options.token).replace(/</g, "\\u003c");
   const agentOptions = agentProfiles.map((agent) => `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.name)}${agent.status ? ` · ${escapeHtml(agent.status)}` : ""}</option>`).join("");
+  const modelOptions = `<option value="">模型 · Agent 默认</option>${[...new Set(agentProfiles.flatMap((agent) => agent.models ?? []))].map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join("")}`;
   const workflowOptions = [
     `<option value="">Workflow · 自动发现</option>`,
     ...workflows.map((workflow) => `<option value="${escapeHtml(workflow.id)}">${escapeHtml(workflow.name)} · ${escapeHtml(workflow.id)}</option>`),
@@ -158,7 +160,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
                 <select class="context-control" id="workflow" aria-label="Workflow">${workflowOptions}</select>
                 <input class="context-control workspace-control" id="workspace" aria-label="Folder / 工作目录" placeholder="Folder / 工作目录（可选）" autocomplete="off" />
                 <button class="context-control workspace-authorize" id="workspace-authorize" type="button">授权</button>
-                <span class="context-chip" id="model-chip">模型 · Agent 默认</span>
+                <select class="context-control" id="model" aria-label="模型">${modelOptions}</select>
                 <span class="context-chip" id="workspace-chip">工作空间 · 自动发现</span>
               </div>
               <div class="input-shell">
@@ -172,7 +174,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
             <form class="chat-composer form-grid" id="reply-form" hidden>
               <div class="composer-head"><strong>继续对话</strong><span>补充事实或追问</span></div>
               <div class="composer-context">
-                <span class="context-chip" id="reply-mode-chip">模式 · Agent 判断</span><select class="context-control" id="reply-workflow" aria-label="Workflow">${workflowOptions}</select><span class="context-chip" id="reply-workspace-chip">工作空间 · 自动发现</span><span class="context-chip" id="reply-model-chip">模型 · Agent 默认</span>
+                <span class="context-chip" id="reply-mode-chip">模式 · Agent 判断</span><select class="context-control" id="reply-workflow" aria-label="Workflow">${workflowOptions}</select><span class="context-chip" id="reply-workspace-chip">工作空间 · 自动发现</span><select class="context-control" id="reply-model" aria-label="模型">${modelOptions}</select>
               </div>
               <div class="input-shell">
                 <div class="composer-tools"><button class="tool-button" id="reply-attach-button" type="button" aria-label="添加上下文">＋</button></div>
@@ -196,6 +198,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       if (!response.ok) throw new Error((await response.text()) || ('HTTP ' + response.status));
       return response.status === 204 ? null : response.json();
     };
+    const agentModels = ${JSON.stringify(Object.fromEntries(agentProfiles.map((agent) => [agent.id, agent.models ?? []])))};
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
     const label = (value) => ({ WORK_ITEM_CREATED:'创建', MESSAGE_RECEIVED:'消息', RUN_CREATED:'运行排队', RUN_STARTED:'运行开始', STEP_STARTED:'步骤开始', AGENT_EVENT:'Agent 事件', FLOW_PROPOSED:'流程建议', FLOW_SAVED_AS_CANDIDATE:'流程已保存', STEP_SUCCEEDED:'步骤完成', RUN_SUCCEEDED:'运行成功', RUN_FAILED:'运行失败', PROJECT_CANDIDATE_FOUND:'发现资源', APPROVAL_REQUESTED:'需要确认', APPROVAL_GRANTED:'已确认', WORK_ITEM_COMPLETED:'工作完成' }[value] || value);
     const modeLabel = (value) => ({ auto:'Agent 判断中', investigation:'调查', change:'修改', review:'Review', release:'发布', observe:'观察' }[value] || value || '待判断');
@@ -216,7 +219,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     }
     async function newSession(agentId) {
       const cwd = $('workspace').value.trim();
-      const session = await api('/v1/sessions', { method:'POST', body: JSON.stringify({ agent_id: agentId || $('agent').value || ${JSON.stringify(agents[0] || '')}, ...(cwd ? { cwd } : {}) }) });
+      const session = await api('/v1/sessions', { method:'POST', body: JSON.stringify({ agent_id: agentId || $('agent').value || ${JSON.stringify(agents[0] || '')}, model: $('model').value || null, ...(cwd ? { cwd } : {}) }) });
       await selectSession(session.session_id);
     }
     async function selectSession(id) {
@@ -234,13 +237,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         $('title').textContent = session.title || 'Session'; $('subtitle').textContent = 'Agent ' + agent + ' · ' + (session.status || 'idle'); $('status').textContent = session.status || 'idle'; $('status').className = 'status ' + (session.status === 'waiting' ? 'waiting' : '');
         $('session-resume').hidden = session.status !== 'closed';
         $('session-close').hidden = session.status === 'closed';
-        $('mode').value = 'auto'; $('agent').value = agent; $('agent').disabled = true; $('workflow').value = session.flow_id || ''; $('reply-workflow').value = session.flow_id || '';
+        $('mode').value = 'auto'; $('agent').value = agent; $('agent').disabled = true; $('workflow').value = session.flow_id || ''; $('reply-workflow').value = session.flow_id || ''; applyModels(agent); $('model').value = session.model || ''; $('reply-model').value = session.model || '';
         $('workspace').value = '';
         $('workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
-        $('model-chip').textContent = '模型 · Agent 默认';
         $('reply-mode-chip').textContent = '模式 · Agent 判断';
         $('reply-workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
-        $('reply-model-chip').textContent = '模型 · Agent 默认';
         const response = await fetch('/v1/sessions/' + encodeURIComponent(state.selected) + '/events?after_sequence=' + state.sequence, { headers: { authorization: 'Bearer ' + TOKEN } });
         const text = await response.text();
         const events = [...text.matchAll(/data: (\{.*\})/g)].map((match) => JSON.parse(match[1]));
@@ -312,9 +313,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       catch (error) { $('reply-error').textContent = error.message; }
     });
     document.querySelectorAll('.timeline-filter').forEach((button) => button.addEventListener('click', () => { state.view = button.dataset.view || 'all'; applyView(); }));
-    async function startRun() { if (!state.selected) return; await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/runs', { method:'POST', body: JSON.stringify({ flow_id: $('reply-workflow').value || $('workflow').value || null, mode: 'auto' }) }); await refreshSession(); }
-    $('work-form').addEventListener('submit', async (event) => { event.preventDefault(); $('error').textContent = ''; try { await newSession($('agent').value); await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('message').value, flow_id: $('workflow').value || null }) }); $('message').value = ''; await startRun(); } catch (error) { $('error').textContent = error.message; } });
-    $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value, flow_id: $('reply-workflow').value || null }) }); $('reply').value = ''; await startRun(); } catch (error) { $('reply-error').textContent = error.message; } });
+    function applyModels(agentId) { const models = agentModels[agentId] || []; const options = '<option value="">模型 · Agent 默认</option>' + models.map((model) => '<option value="' + esc(model) + '">' + esc(model) + '</option>').join(''); $('model').innerHTML = options; $('reply-model').innerHTML = options; }
+    $('agent').addEventListener('change', () => applyModels($('agent').value));
+    async function startRun() { if (!state.selected) return; await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/runs', { method:'POST', body: JSON.stringify({ flow_id: $('reply-workflow').value || $('workflow').value || null, model: $('reply-model').value || $('model').value || null, mode: 'auto' }) }); await refreshSession(); }
+    $('work-form').addEventListener('submit', async (event) => { event.preventDefault(); $('error').textContent = ''; try { await newSession($('agent').value); await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('message').value, flow_id: $('workflow').value || null, model: $('model').value || null }) }); $('message').value = ''; await startRun(); } catch (error) { $('error').textContent = error.message; } });
+    $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value, flow_id: $('reply-workflow').value || null, model: $('reply-model').value || null }) }); $('reply').value = ''; await startRun(); } catch (error) { $('reply-error').textContent = error.message; } });
     $('run-again').addEventListener('click', () => startRun().catch((error) => { $('reply-error').textContent = error.message; }));
     [['mention-button', 'message', '@'], ['command-button', 'message', '/'], ['attach-button', 'message', '@'], ['reply-mention-button', 'reply', '@'], ['reply-command-button', 'reply', '/'], ['reply-attach-button', 'reply', '@']].forEach(([button, input, token]) => $(button).addEventListener('click', () => insertToken(input, token)));
     $('workspace-authorize').addEventListener('click', async () => {
@@ -331,7 +334,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       } catch (error) { $('error').textContent = error.message; }
       finally { button.disabled = false; }
     });
-    $('new-work').addEventListener('click', () => { state.selected = null; state.session = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model-chip').textContent = '模型 · Agent 默认'; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; applyView(); loadSessions(); });
+    $('new-work').addEventListener('click', () => { state.selected = null; state.session = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model').value = ''; $('reply-model').value = ''; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; applyModels(''); applyView(); loadSessions(); });
     loadSessions(); loadFlows();
   </script>
 </body>
