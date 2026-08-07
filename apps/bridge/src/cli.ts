@@ -10,6 +10,7 @@ import {
 import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
 import { TelegramBridge } from "@codebridge/channel-telegram";
 import { createMemoryPlugin } from "@codebridge/memory-plugin";
+import { SqliteEventStore } from "@codebridge/work-items";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 const program = new Command();
@@ -66,6 +67,9 @@ program
           onLog: (m) => console.log(m),
         })
       : undefined;
+    const workItemStore = new SqliteEventStore(
+      path.join(dataDir, "orchestration.sqlite"),
+    );
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
@@ -75,6 +79,7 @@ program
     const shutdown = async () => {
       await bridge?.disconnect();
       await telegram?.disconnect();
+      workItemStore.close();
       process.exit(0);
     };
     process.on("SIGINT", shutdown);
@@ -85,9 +90,9 @@ program
 
     const apiPort = config.bridge?.apiPort ?? 19790;
     const { serve } = await import("@hono/node-server");
-    const { createOutboundApp } = await import("./outbound-api.js");
+    const { createBridgeApp } = await import("./outbound-api.js");
     serve({
-      fetch: createOutboundApp(
+      fetch: createBridgeApp(
         {
           sendOutboundFile: (chatId, rawPath, topicId) =>
             chatId.startsWith("telegram:")
@@ -115,6 +120,7 @@ program
                 : Promise.reject(new Error("飞书通道未配置")),
         },
         config.runner.token,
+        workItemStore,
       ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,

@@ -10,6 +10,7 @@
     "status",
     "mode",
     "conversation_id",
+    "agent_id",
     "workflow_id",
     "workflow_revision",
     "workspace_scope",
@@ -41,6 +42,7 @@
       "enum": ["investigation", "change", "review", "release", "observe"]
     },
     "conversation_id": { "type": "string", "pattern": "^conv_[A-Za-z0-9]+$" },
+    "agent_id": { "type": ["string", "null"] },
     "workflow_id": { "type": ["string", "null"] },
     "workflow_revision": { "type": ["string", "null"] },
     "workspace_scope": {

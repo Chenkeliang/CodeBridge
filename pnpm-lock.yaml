@@ -32,6 +32,9 @@ importers:
       '@codebridge/memory-plugin':
         specifier: workspace:*
         version: link:../../packages/memory-plugin
+      '@codebridge/work-items':
+        specifier: workspace:*
+        version: link:../../packages/work-items
       '@hono/node-server':
         specifier: ^1.19.14
         version: 1.19.14(hono@4.12.27)

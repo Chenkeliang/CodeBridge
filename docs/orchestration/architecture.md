@@ -98,6 +98,7 @@ title: 得到贝退款支持小数的影响评估
 status: exploring
 mode: investigation
 conversation_id: conv_01J...
+agent_id: pi-investigator
 workflow_id: null
 workflow_revision: null
 workspace_scope: []

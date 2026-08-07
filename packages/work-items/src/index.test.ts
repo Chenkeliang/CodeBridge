@@ -28,11 +28,13 @@ describe("SqliteEventStore", () => {
       title: "Investigate a missing entitlement",
       mode: "investigation",
       conversationId: "conv_01JTEST",
+      agentId: "pi-investigator",
       workspaceScope: ["equity-center"],
       riskLevel: "read_only",
     });
 
     expect(workItem.status).toBe("created");
+    expect(workItem.agentId).toBe("pi-investigator");
     expect(store.getWorkItem(workItem.id)).toEqual(workItem);
     expect(store.listEvents(workItem.id)).toHaveLength(1);
     expect(store.listEvents(workItem.id)[0]).toMatchObject({

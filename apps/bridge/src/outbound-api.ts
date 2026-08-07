@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { createWorkItemApp } from "./work-item-api.js";
+import { type SqliteEventStore } from "@codebridge/work-items";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
@@ -18,6 +20,17 @@ export interface OutboundBridge {
     text: string,
     topicId?: string,
   ): Promise<void>;
+}
+
+/** 装配现有出站能力和 WorkItem API，共享同一个本地 Bearer Token。 */
+export function createBridgeApp(
+  bridge: OutboundBridge,
+  token: string,
+  workItemStore: SqliteEventStore,
+) {
+  const app = createOutboundApp(bridge, token);
+  app.route("/", createWorkItemApp(workItemStore, token));
+  return app;
 }
 
 /**
