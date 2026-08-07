@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import {
   SqliteEventStore,
   type DomainEvent,
+  type RiskLevel,
   type WorkItem,
   type WorkItemMode,
 } from "@codebridge/work-items";
@@ -182,6 +183,8 @@ export function createWorkItemApp(
     if (!granted || granted.status !== "granted") {
       return errorResponse(c, 409, "approval_not_grantable", "审批已过期或已处理");
     }
+    store.requeueRun(run.id);
+    if (executor) void executor.execute(run.id).catch(() => {});
     return c.json({ approval_id: granted.id, status: granted.status, granted_at: granted.grantedAt });
   });
 
@@ -247,6 +250,14 @@ function parseCreateInput(
   if (body.identifiers !== undefined && !isRecord(body.identifiers)) {
     return null;
   }
+  if (
+    body.risk_level !== undefined &&
+    !["read_only", "workspace_write", "git_write", "production_write"].includes(
+      String(body.risk_level),
+    )
+  ) {
+    return null;
+  }
 
   return {
     title: body.title as string,
@@ -257,7 +268,7 @@ function parseCreateInput(
     workflowRevision: null,
     workspaceScope: (body.workspace_scope as string[] | undefined) ?? [],
     identifiers: (body.identifiers as Record<string, unknown> | undefined) ?? {},
-    riskLevel: "read_only",
+    riskLevel: (body.risk_level as RiskLevel | undefined) ?? "read_only",
     message: body.message as string,
   };
 }

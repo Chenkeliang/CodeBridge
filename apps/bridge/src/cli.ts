@@ -85,6 +85,7 @@ program
       token: config.runner.token,
     });
     const runExecutor = new RunExecutor(workItemStore, runnerClient, {
+      approvals: approvalService,
       resolveRequest: (workItem, run) => {
         const latestMessage = workItemStore
           .listEvents(workItem.id)

@@ -1,4 +1,5 @@
 import type { AgentEvent, RunRequest } from "@codebridge/core";
+import type { ApprovalService } from "@codebridge/policy";
 import {
   SqliteEventStore,
   type Run,
@@ -15,6 +16,7 @@ export interface RunnerStream {
 export interface RunExecutorOptions {
   resolveRequest: (workItem: WorkItem, run: Run) => RunRequest | Promise<RunRequest>;
   onEvent?: (run: Run, event: AgentEvent) => void;
+  approvals?: ApprovalService;
 }
 
 export class RunExecutor {
@@ -30,6 +32,34 @@ export class RunExecutor {
     if (initial.status !== "queued") return initial;
     const workItem = this.store.getWorkItem(initial.workItemId);
     if (!workItem) throw new Error(`WorkItem not found: ${initial.workItemId}`);
+
+    if (workItem.riskLevel === "production_write") {
+      if (!this.options.approvals) {
+        throw new Error("Approval service is required for production_write runs");
+      }
+      const inputHash = `sha256:${hashInput(workItem.id, runId, workItem.title)}`;
+      const existing = this.options.approvals
+        .listForRun(runId)
+        .find((approval) => approval.stepId === "run" && approval.inputHash === inputHash);
+      if (!existing || existing.status !== "granted") {
+        if (!existing || existing.status === "expired" || existing.status === "revoked" || existing.status === "consumed") {
+          this.options.approvals.request({
+            workItemId: workItem.id,
+            runId,
+            stepId: "run",
+            capabilityId: "run.production",
+            inputHash,
+            requestedBy: "system",
+          });
+        }
+        this.store.updateRunStatus(runId, "waiting");
+        return this.store.getRun(runId)!;
+      }
+      if (!this.options.approvals.consume(existing.id, runId, "run", inputHash)) {
+        this.store.updateRunStatus(runId, "waiting");
+        return this.store.getRun(runId)!;
+      }
+    }
 
     this.store.updateRunStatus(runId, "running");
     this.store.appendEvent({
@@ -121,3 +151,10 @@ export class RunExecutor {
     return this.store.getRun(runId)!;
   }
 }
+
+function hashInput(workItemId: string, runId: string, title: string): string {
+  return createHash("sha256")
+    .update(`${workItemId}:${runId}:${title}`)
+    .digest("hex");
+}
+import { createHash } from "node:crypto";
