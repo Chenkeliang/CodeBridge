@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { createSessionApp } from "./session-api.js";
+import type { RunnerClient } from "@codebridge/runner-client";
 
 const TOKEN = "session-token";
 const agents: AgentProfile[] = [
@@ -70,6 +71,19 @@ describe("session API", () => {
     });
     expect(response.status).toBe(200);
     expect((await response.json() as { sessions: unknown[] }).sessions).toHaveLength(1);
+    catalog.close();
+    workItems.close();
+  });
+
+  it("imports provider sessions into the Session Catalog on demand", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      listSessions: async () => ({ sessions: [{ id: "provider-1", backend: "codex", cwd: "/tmp/project", preview: "已有会话", updatedAt: "2026-08-07T00:00:00.000Z" }] }),
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/tmp/project" }, TOKEN);
+    const response = await app.request("/v1/sessions?import=true&agent_id=codex", { headers: { authorization: `Bearer ${TOKEN}` } });
+    expect((await response.json() as { sessions: Array<{ provider_session_id: string }> }).sessions[0]?.provider_session_id).toBe("provider-1");
     catalog.close();
     workItems.close();
   });

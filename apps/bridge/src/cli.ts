@@ -207,6 +207,7 @@ program
         workItems: workItemStore,
         executor: runExecutor,
         runner: runnerClient,
+        defaultCwd: config.workspaces?.default ?? config.workspaces?.root ?? process.cwd(),
       },
       config.runner.token,
     );
