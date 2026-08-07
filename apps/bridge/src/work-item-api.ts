@@ -92,6 +92,41 @@ export function createWorkItemApp(store: SqliteEventStore, token: string) {
     );
   });
 
+  app.post("/v1/work-items/:work_item_id/runs", async (c) => {
+    const workItemId = c.req.param("work_item_id");
+    const workItem = store.getWorkItem(workItemId);
+    if (!workItem) {
+      return errorResponse(c, 404, "work_item_not_found", "WorkItem 不存在");
+    }
+
+    const body = await readJson(c);
+    if (
+      !body ||
+      typeof body.mode !== "string" ||
+      !WORK_ITEM_MODES.includes(body.mode as WorkItemMode)
+    ) {
+      return errorResponse(c, 400, "invalid_run", "mode 必须是有效的 Run 模式");
+    }
+    if (
+      body.plan_id !== undefined &&
+      body.plan_id !== null &&
+      typeof body.plan_id !== "string"
+    ) {
+      return errorResponse(c, 400, "invalid_run", "plan_id 无效");
+    }
+
+    try {
+      const run = store.createRun({
+        workItemId,
+        mode: body.mode as WorkItemMode,
+        planId: (body.plan_id as string | null | undefined) ?? null,
+      });
+      return c.json({ run_id: run.id, status: run.status }, 202);
+    } catch (error) {
+      return errorResponse(c, 400, "run_create_failed", messageOf(error));
+    }
+  });
+
   app.get("/v1/work-items/:work_item_id/events", (c) => {
     const workItemId = c.req.param("work_item_id");
     if (!store.getWorkItem(workItemId)) {
