@@ -29,6 +29,7 @@ CodeBridge
 
 - 核心后端继续使用 Node.js + TypeScript，先建设模块化单体；Runner Host 保持独立进程。
 - Pi 优先通过 Node SDK 接入 Runner；`pi --mode rpc` 不是核心服务边界。Claude、Codex、Cursor 继续复用现有 ACP Backend。
+- Pi Node SDK Adapter 已在 `packages/backends` 和 `packages/runner-host` 落地；配置 `backends.pi.type: pi-sdk` 后才进入可执行状态，未配置时 Registry 保持 `needs_setup`。
 - 用户可以直接创建 Session；Agent、项目范围和 Flow 都由运行时或用户输入动态确定，页面和示例配置保持通用形状。
 - Web 采用聊天优先入口：模式、模型和工作空间是输入框周边的可选上下文，省略时由 Agent/Discovery 判断，不要求用户手工填写项目范围。
 - 页面导航严格采用 `Agent → Session`：Agent Profile 是分组，Session 是分组下的具体会话；二者不在同一级展示。

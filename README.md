@@ -2,7 +2,7 @@
 
 Self-hosted, multi-channel [Agent Client Protocol (ACP)](https://agentclientprotocol.com) gateway for coding agents.
 
-Control local **Cursor**, **Claude Code**, and **Codex** from Feishu or Telegram while your source code, Git credentials, MCP tools, and agent sessions stay on your own Mac/Linux host.
+Control local **Cursor**, **Claude Code**, **Codex**, and optionally **Pi** from Feishu or Telegram while your source code, Git credentials, MCP tools, and agent sessions stay on your own Mac/Linux host.
 
 [简体中文](README.zh-CN.md)
 
@@ -18,7 +18,7 @@ Telegram polling ─┘
 |-----------|----------------|
 | **Bridge** | Channel connections, access policy, slash commands, session routing, and reply presentation |
 | **Runner** | Host-side ACP sessions, agent processes, file/Git access, and permission handling |
-| **ACP adapters** | Cursor, Claude Code, and Codex protocol adapters |
+| **Agent adapters** | Cursor, Claude Code, and Codex ACP adapters plus the native Pi Node SDK adapter |
 
 The Bridge and Runner are intentionally separate: the Bridge can be remote or containerized, but the Runner stays next to the CLIs and files it needs to access.
 
@@ -39,7 +39,7 @@ The Bridge and Runner are intentionally separate: the Bridge can be remote or co
 ### Requirements
 
 - macOS or Linux
-- Node.js ≥ 22.5, pnpm, and curl. The WorkItem Event Store uses Node's built-in `node:sqlite`.
+- Node.js ≥ 22.19, pnpm, and curl. The WorkItem Event Store uses Node's built-in `node:sqlite`; the optional Pi SDK adapter follows Pi's Node runtime requirement.
 - At least one local agent CLI: `cursor-agent`, `claude`, or `codex`
 - A Feishu custom app with a bot, or a Telegram bot token
 
