@@ -2,8 +2,13 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
+import type { SessionCatalogStore } from "@codebridge/session-catalog";
 
-export function createFlowApp(catalog: FlowCatalogStore, token: string) {
+export interface FlowApiOptions {
+  sessions?: SessionCatalogStore;
+}
+
+export function createFlowApp(catalog: FlowCatalogStore, token: string, options: FlowApiOptions = {}) {
   const app = new Hono();
   app.use("/v1/*", async (c, next) => {
     if (c.req.header("authorization") !== `Bearer ${token}`) return c.json({ error: "unauthorized" }, 401);
@@ -13,6 +18,25 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string) {
   app.get("/v1/flows/:flow_id", (c) => {
     const flow = catalog.get(c.req.param("flow_id"));
     return flow ? c.json(toApiFlow(flow)) : c.json({ error: "flow_not_found" }, 404);
+  });
+  app.post("/v1/flows/:flow_id/apply", async (c) => {
+    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
+    const flow = catalog.get(c.req.param("flow_id"));
+    if (!flow) return c.json({ error: "flow_not_found" }, 404);
+    if (flow.status === "deprecated") return c.json({ error: "flow_deprecated" }, 409);
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const sessionId = typeof body?.session_id === "string" ? body.session_id : undefined;
+    if (!sessionId) return c.json({ error: "session_id is required" }, 400);
+    const session = options.sessions.getSession(sessionId);
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    options.sessions.updateSession(session.id, { flowId: flow.flowId });
+    return c.json({
+      request_id: `req_${randomUUID().replaceAll("-", "")}`,
+      accepted: true,
+      session_id: session.id,
+      flow_id: flow.flowId,
+      definition_revision: flow.definitionRevision,
+    });
   });
   app.post("/v1/flows/:flow_id/review", async (c) => {
     const flow = catalog.get(c.req.param("flow_id"));

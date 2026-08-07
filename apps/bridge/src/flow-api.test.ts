@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
+import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { createFlowApp } from "./flow-api.js";
 
 describe("flow API", () => {
@@ -87,6 +88,32 @@ describe("flow API", () => {
     });
     expect(approved.status).toBe(200);
     expect(await approved.json()).toMatchObject({ status: "published", review_status: "approved", git_revision: "abc123", definition_revision: "git:abc123" });
+    catalog.close();
+  });
+
+  it("binds a published Flow to the next Run of a Session", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    catalog.save({
+      flowId: "flow-bind",
+      name: "Bind me",
+      kind: "guide",
+      status: "published",
+      source: "git",
+      definitionRevision: "git:one",
+      steps: [{ id: "inspect", capability: "context.inspect", mode: "read_only" }],
+    });
+    const app = createFlowApp(catalog, "token", { sessions });
+    const response = await app.request("/v1/flows/flow-bind/apply", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ session_id: session.id }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ accepted: true, session_id: session.id, flow_id: "flow-bind", definition_revision: "git:one" });
+    expect(sessions.getSession(session.id)?.flowId).toBe("flow-bind");
+    sessions.close();
     catalog.close();
   });
 });
