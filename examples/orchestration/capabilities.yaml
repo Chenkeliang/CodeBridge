@@ -1,0 +1,93 @@
+schema_version: 1
+
+# Capability 是稳定合同，具体实现由 CodeBridge Adapter 绑定。
+capabilities:
+  - id: code.read
+    owner: codebridge
+    risk: read_only
+    adapters:
+      - kind: cli
+        ref: workspace-reader
+
+  - id: code.write.workspace
+    owner: codebridge
+    risk: workspace_write
+    adapters:
+      - kind: cli
+        ref: workspace-writer
+
+  - id: git.read
+    owner: codebridge
+    risk: read_only
+    adapters:
+      - kind: cli
+        ref: git
+
+  - id: shell.test.allowlisted
+    owner: codebridge
+    risk: workspace_write
+    adapters:
+      - kind: cli
+        ref: allowlisted-test-runner
+
+  - id: logs.read
+    owner: observability
+    risk: read_only
+    adapters:
+      - kind: mcp
+        ref: logs
+
+  - id: apm.read
+    owner: observability
+    risk: read_only
+    adapters:
+      - kind: mcp
+        ref: apm
+
+  - id: dcp.release.read
+    owner: release
+    risk: read_only
+    adapters:
+      - kind: skill
+        ref: dcp
+
+  - id: datamaster.lookup
+    owner: datamaster
+    risk: read_only
+    adapters:
+      - kind: skill
+        ref: datamaster
+      - kind: mcp
+        ref: datamaster
+
+  - id: price_rule.query
+    owner: pricing
+    risk: read_only
+    adapters:
+      - kind: skill
+        ref: pricing-rules
+
+  - id: price_rule.update
+    owner: pricing
+    risk: production_write
+    approval: required
+    adapters:
+      - kind: skill
+        ref: pricing-rules
+
+  - id: price_rule.set_default
+    owner: pricing
+    risk: production_write
+    approval: required
+    adapters:
+      - kind: skill
+        ref: pricing-rules
+
+  - id: logs.query
+    owner: observability
+    risk: read_only
+    adapters:
+      - kind: mcp
+        ref: dcp
+      - kind: skill
+        ref: dcp

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codebridge:orchestration:event:v1",
+  "title": "CodeBridge Domain Event",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "sequence",
+    "work_item_id",
+    "type",
+    "occurred_at",
+    "actor"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": { "type": "string", "pattern": "^evt_[A-Za-z0-9]+$" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "work_item_id": { "type": "string", "pattern": "^wi_[A-Za-z0-9]+$" },
+    "run_id": { "type": ["string", "null"] },
+    "type": {
+      "type": "string",
+      "enum": [
+        "WORK_ITEM_CREATED",
+        "DISCOVERY_STARTED",
+        "PROJECT_CANDIDATE_FOUND",
+        "PLAN_PROPOSED",
+        "PLAN_VALIDATED",
+        "APPROVAL_REQUESTED",
+        "APPROVAL_GRANTED",
+        "STEP_STARTED",
+        "STEP_SUCCEEDED",
+        "STEP_FAILED",
+        "BRANCH_SELECTED",
+        "VERIFICATION_COMPLETED",
+        "WORK_ITEM_COMPLETED"
+      ]
+    },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "actor": { "type": "string", "enum": ["user", "agent", "system", "adapter", "channel"] },
+    "target": { "type": ["string", "null"] },
+    "input_hash": { "type": ["string", "null"] },
+    "result_ref": { "type": ["string", "null"] },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}

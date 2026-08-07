@@ -183,6 +183,7 @@ RUNNER_TOKEN=... node scripts/test-acp-live.mjs --backend cursor
 | Manual / Docker quick start | [docs/zh-CN/quickstart.md](docs/zh-CN/quickstart.md) |
 | Model, effort, and permission | [docs/zh-CN/model-effort.md](docs/zh-CN/model-effort.md) |
 | Docker Bridge + host Runner | [docs/zh-CN/deploy/docker-host-runner.md](docs/zh-CN/deploy/docker-host-runner.md) |
+| Multi-project Agent workbench baseline | [docs/orchestration/README.md](docs/orchestration/README.md) |
 | Full config example | [examples/config.full.yaml](examples/config.full.yaml) |
 | Security policy | [SECURITY.md](SECURITY.md) |
 

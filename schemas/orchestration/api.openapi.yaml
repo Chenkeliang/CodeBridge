@@ -1,0 +1,374 @@
+openapi: 3.1.0
+info:
+  title: CodeBridge Orchestration API
+  version: 1.0.0-draft
+  description: |
+    WorkItem-centric API for multi-project conversations, plans, approvals and discovery.
+    This document is a design contract; it does not claim that these routes are implemented.
+  x-codebridge-status: draft
+servers:
+  - url: /
+paths:
+  /v1/work-items:
+    post:
+      operationId: createWorkItem
+      summary: Create a WorkItem
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkItem'
+      responses:
+        '201':
+          description: WorkItem created
+          content:
+            application/json:
+              schema:
+                $ref: './work-item.schema.json'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/work-items/{work_item_id}:
+    parameters:
+      - $ref: '#/components/parameters/WorkItemId'
+    get:
+      operationId: getWorkItem
+      summary: Get a WorkItem
+      responses:
+        '200':
+          description: Current WorkItem projection
+          content:
+            application/json:
+              schema:
+                $ref: './work-item.schema.json'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/work-items/{work_item_id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/WorkItemId'
+    post:
+      operationId: sendWorkItemMessage
+      summary: Send a user message or additional input
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  minLength: 1
+                actor:
+                  type: string
+                  enum: [user, channel]
+                identifiers:
+                  type: object
+      responses:
+        '202':
+          description: Message accepted; follow the event stream for progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/work-items/{work_item_id}/runs:
+    parameters:
+      - $ref: '#/components/parameters/WorkItemId'
+    post:
+      operationId: startRun
+      summary: Start a WorkItem run
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartRun'
+      responses:
+        '202':
+          description: Run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunReference'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/work-items/{work_item_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/WorkItemId'
+      - $ref: '#/components/parameters/LastEventId'
+    get:
+      operationId: streamWorkItemEvents
+      summary: Stream WorkItem events
+      responses:
+        '200':
+          description: Ordered SSE events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/runs/{run_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      operationId: approveRun
+      summary: Grant a scoped approval for the next protected step
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [step_id, input_hash, expires_at]
+              properties:
+                step_id:
+                  type: string
+                input_hash:
+                  type: string
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Approval recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/discovery/tasks:
+    post:
+      operationId: createDiscoveryTask
+      summary: Start asynchronous project discovery
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [work_item_id]
+              properties:
+                work_item_id:
+                  type: string
+                sources:
+                  type: array
+                  items:
+                    type: string
+                    enum: [current_workspace, git_remote, imports, dcp, logs, apm]
+      responses:
+        '202':
+          description: Discovery task accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskReference'
+  /v1/catalog/candidates:
+    get:
+      operationId: listCatalogCandidates
+      summary: List project candidates awaiting review
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [candidate, stale, rejected, accepted]
+      responses:
+        '200':
+          description: Candidate list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProjectCandidate'
+  /v1/catalog/candidates/{candidate_id}/accept:
+    parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: acceptCatalogCandidate
+      summary: Accept a project candidate and create a Git diff
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Catalog diff queued for review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  parameters:
+    WorkItemId:
+      in: path
+      name: work_item_id
+      required: true
+      schema:
+        type: string
+    RunId:
+      in: path
+      name: run_id
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema:
+        type: string
+    LastEventId:
+      in: header
+      name: Last-Event-ID
+      required: false
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: State or idempotency conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    CreateWorkItem:
+      type: object
+      required: [conversation_id, title, agent_id, mode, message]
+      properties:
+        conversation_id:
+          type: string
+        title:
+          type: string
+        agent_id:
+          type: string
+        mode:
+          type: string
+          enum: [investigation, change, review, release, observe]
+        workflow_id:
+          type: [string, 'null']
+        workspace_scope:
+          type: array
+          items:
+            type: string
+        message:
+          type: string
+        identifiers:
+          type: object
+    StartRun:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [investigation, change, review, release, observe]
+        plan_id:
+          type: [string, 'null']
+    Acknowledgement:
+      type: object
+      required: [request_id, accepted]
+      properties:
+        request_id:
+          type: string
+        accepted:
+          type: boolean
+    RunReference:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, waiting, succeeded, failed, cancelled]
+    TaskReference:
+      type: object
+      required: [task_id, status]
+      properties:
+        task_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, waiting, succeeded, failed, cancelled]
+    ProjectCandidate:
+      type: object
+      required: [candidate_id, project_id, status, confidence, sources]
+      properties:
+        candidate_id:
+          type: string
+        project_id:
+          type: string
+        repo:
+          type: [string, 'null']
+        deploy_service:
+          type: [string, 'null']
+        log_service:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [candidate, stale, rejected, accepted]
+        confidence:
+          type: string
+          enum: [low, medium, high]
+        sources:
+          type: array
+          items:
+            type: object
+            required: [kind, observed_at]
+            properties:
+              kind:
+                type: string
+              observed_at:
+                type: string
+                format: date-time
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable, request_id]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            retryable:
+              type: boolean
+            details:
+              type: object
+            request_id:
+              type: string

@@ -1,0 +1,27 @@
+schema_version: 1
+
+# 示例不含凭据。运行时由 CodeBridge Agent Adapter 解析。
+agents:
+  - id: pi-investigator
+    name: Pi Investigator
+    backend: pi
+    adapter: pi-sdk
+    default_mode: investigation
+    allowed_modes: [investigation, review, observe]
+    capabilities: [code.read, git.read, logs.read, apm.read]
+
+  - id: pi-developer
+    name: Pi Developer
+    backend: pi
+    adapter: pi-sdk
+    default_mode: change
+    allowed_modes: [investigation, change, review]
+    capabilities: [code.read, code.write.workspace, shell.test.allowlisted, git.read]
+
+  - id: pi-release-planner
+    name: Pi Release Planner
+    backend: pi
+    adapter: pi-sdk
+    default_mode: release
+    allowed_modes: [release, observe]
+    capabilities: [git.read, dcp.release.read, logs.read, apm.read]
