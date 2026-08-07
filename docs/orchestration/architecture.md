@@ -1,6 +1,6 @@
 # Agent 工作台架构基线
 
-状态：Draft baseline
+状态：v1 implementation baseline
 
 本文定义 CodeBridge 内部扩展的多项目 Agent 工作台。它面向代码调查、业务数据诊断、受控修改、发布计划和发布后观察，不是一个通用 BPM/DAG 平台。
 
@@ -62,12 +62,12 @@ packages/core
 packages/work-items
 packages/workflow-engine
 packages/project-catalog
-packages/skill-runtime
-packages/mcp-runtime
-packages/policy-engine
+packages/policy
+packages/run-executor
+apps/bridge (WorkItem、Discovery、Web API)
 ```
 
-其中 `packages/work-items` 已落地首个 WorkItem、Domain Event 和 SQLite Event Store 切片，但尚未接入 Bridge API。其余包按实际实现需要逐步提取，不要求一次性拆分。ACP 继续由现有 `backends`、`runner-client` 和 `runner-host` 承担，不新增重复的 ACP Runtime。
+`packages/work-items`、`workflow-engine`、`policy`、`run-executor` 和 `project-catalog` 已通过 Bridge 装配；Skill/MCP 仍作为现有 Agent/Capability Adapter 接入，不复制第三方能力目录。ACP 继续由现有 `backends`、`runner-client` 和 `runner-host` 承担，不新增重复的 ACP Runtime。
 
 ## 3. 核心对象
 
@@ -134,7 +134,7 @@ completed / failed / cancelled
 不维护一张假设永远正确的全局依赖图。维护轻量项目 Catalog，并由异步 Discovery Task 自动提出候选：
 
 ```text
-WorkItem 执行
+WorkItem 执行或 Web/飞书/Telegram 发起 Discovery Task
   → 发现 cwd、Git remote、import、HTTP URL、DCP 服务、SLS LogStore
   → ProjectDiscovered 事件
   → Candidate Builder 去重、补全、打置信度
@@ -159,7 +159,7 @@ confidence: high
 status: candidate
 ```
 
-发现结果先可以临时加入当前 WorkItem；正式写入 Catalog 默认需要确认。字段变化时标记 `stale`，提示更新，不静默覆盖。
+发现结果先可以临时加入当前 WorkItem；正式写入 Catalog 默认需要确认。字段变化时提示更新，不静默覆盖；Catalog Store 保留候选和正式项目两张表，正式记录只能通过显式 accept 写入。
 
 ## 6. Workflow、DSL、Skill、MCP
 
@@ -206,7 +206,7 @@ Understand → Discover → Plan → Approve → Act → Verify → Record
 
 ## 8. 部署和移植
 
-第一阶段是模块化单体：
+当前 v1 是模块化单体：
 
 ```text
 CodeBridge Gateway + WorkItem Engine + SQLite

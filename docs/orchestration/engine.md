@@ -53,7 +53,8 @@ steps:
         next: update_rule
       - when: rule_exists == false
         next: use_default
-      - otherwise: manual_review
+      - when: otherwise
+        next: manual_review
 
   - id: update_rule
     capability: price_rule.update

@@ -101,6 +101,10 @@ telegram:
 
 完整配置见 [examples/config.full.yaml](examples/config.full.yaml)。
 
+### Web Workbench
+
+Bridge 启动后可在本机打开 `http://127.0.0.1:19790/workbench/`。它和飞书、Telegram 共用 WorkItem、Run、审批和事件流：可以选择 Agent、选择一条 Workflow 或进入探索模式，继续对话并观察执行时间线。页面只绑定本地 Bridge，不把代码或凭据上传到云端。
+
 ## 手机优先的命令
 
 `/menu` 和 `/help` 默认只返回短菜单，适合手机；发送 `/help full` 查看分组完整帮助。
