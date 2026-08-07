@@ -1,8 +1,8 @@
 # CodeBridge Orchestration 设计基线
 
-状态：首个可运行基线；WorkItem、Domain Event、SQLite Event Store、Workflow DSL/Plan IR、Capability Policy、Approval Record、Runner 执行闭环、Project Catalog/Discovery、幂等与重启恢复、WorkItem API、queued Run API 和 Web Workbench 已落地。
+状态：Session-first 架构规范；当前运行时仍使用 WorkItem/Run 作为内部持久化和兼容 API，Web 的目标入口是 Agent 分组下的 Session，Workflow 是与 Agents 平级的可选资源。
 
-本目录是 CodeBridge 多项目 Agent 工作台的设计规范入口，也是这套架构文档的唯一事实源。CodeBridge 是主项目；不再维护一套独立的 orchestration 服务，也不复制现有 Bridge、Runner、ACP 或 Channel 实现。
+本目录是 CodeBridge 多项目 Agent 工作台的设计规范入口，也是这套架构文档的唯一事实源。Orchestration 作为 CodeBridge 内部模块运行，与现有 Bridge、Runner、ACP 和 Channel 共享同一版本事实源。
 
 ## 目标架构
 
@@ -14,8 +14,9 @@ CodeBridge
 │   ├── ACP Backends
 │   └── Feishu / Telegram Channels
 └── 增量能力
-    ├── WorkItem Engine
-    ├── Workflow / Plan IR
+    ├── Agent Registry / Session Catalog
+    ├── Flow / Workflow / Plan IR
+    ├── Run / Event Runtime
     ├── Project Catalog / Discovery
     ├── Policy / Approval
     ├── Skill / MCP Capability Runtime
@@ -28,28 +29,32 @@ CodeBridge
 
 - 核心后端继续使用 Node.js + TypeScript，先建设模块化单体；Runner Host 保持独立进程。
 - Pi 优先通过 Node SDK 接入 Runner；`pi --mode rpc` 不是核心服务边界。Claude、Codex、Cursor 继续复用现有 ACP Backend。
-- 用户可以直接创建对话、选择 Agent，也可以选择 Workflow；不选 Workflow 时进入探索模式。
+- 用户可以直接创建 Session；Agent、项目范围和 Flow 都由运行时或用户输入动态确定，页面和示例配置保持通用形状。
 - Web 采用聊天优先入口：模式、模型和工作空间是输入框周边的可选上下文，省略时由 Agent/Discovery 判断，不要求用户手工填写项目范围。
-- Conversation 是消息容器，WorkItem 是目标、项目范围、计划、权限、证据和执行状态的事实中心。
-- Workflow 是可选参考或受控 Runbook，不把未知工作强行固化为流程。
+- 页面导航严格采用 `Agent → Session`：Agent Profile 是分组，Session 是分组下的具体会话；二者不在同一级展示。
+- `Flows` 与 `Agents` 平级。Flow 可在右侧主面板附加到当前 Session 的下一次 Run，不成为 Agent 或 Session 的子节点。
+- Codex、Pi、Cursor、Claude Code 和其他 ACP/SDK/CLI Agent 都是一等 Agent Profile；适配器类型由 Registry 动态声明。
+- 未知工作先由 Agent 为当前 Session 生成临时 Flow/Plan；只有用户确认或重复使用后才沉淀为可复用 Workflow。
+- WorkItem 表和 API 作为后台 Task Record 的持久化实现，承载异步、审批、证据和恢复状态；用户主导航始终是 Agent 分组下的 Session。
+- 每个 Session 固定绑定一个 Agent；不同 Agent 通过左侧分组分别打开独立 Session，跨会话资料通过显式上下文和产物引用传递。
 - Skill 保持通行的 `SKILL.md` 结构，不强制脚本语言；CodeBridge 只负责加载、绑定、权限和审计。
 - MCP、Skill、CLI、HTTP 都是 Capability 的实现适配器，不进入 Workflow 的业务语义。
-- 不维护一张假设永久正确的全局代码依赖图；使用轻量 Project Catalog、运行时证据和异步 Discovery Candidate。
-- 自生成只产生 Project、Workflow、Skill/Eval 候选，经过 Review 和 Git 记录后才成为正式资产。
+- 多项目关系以轻量 Project Catalog、运行时证据和异步 Discovery Candidate 为事实来源，随代码和环境变化持续校准。
+- 自生成先产生当前 Session 的临时 Flow，再按需提议 Project、Workflow、Skill/Eval 候选；经过 Review 和 Git 记录后才成为正式资产。
 - 每个小功能都在独立特性分支上完成并提交；只有完成且获得用户明确授权后，才合并或提交到 `main`。
-- 第一阶段不引入 LangGraph、Temporal、Camunda 或通用 DAG 引擎。
+- 第一阶段使用轻量 Session/Run Runtime；未来通过稳定的 Plan IR 接入需要的 Durable Engine。
 
 ## 目录
 
 ```text
-docs/orchestration/       架构、交互、引擎和治理规范
-schemas/orchestration/    稳定 JSON 契约和 OpenAPI 基线
-examples/orchestration/   Agent、项目、能力和 Workflow 示例
+docs/orchestration/          架构、交互、引擎和治理规范
+schemas/orchestration/       稳定 JSON 契约和 OpenAPI 基线
+examples/orchestration/     非业务的配置形状参考（保持通用）
 ```
 
-示例不是生产配置，不包含凭据，也不代表相关项目已经注册。
+示例不是生产配置，不包含凭据，也不代表相关项目或 Agent 已经注册。仓库不提供可运行的业务流程示例；Workflow 由用户输入、Agent 发现或受控目录动态提供。
 
-旧的 `/Users/keliang/mypy/orchestration/` 只保留迁移指针，不再作为规范来源。
+`/Users/keliang/mypy/orchestration/` 仅保留迁移指针；规范来源为本目录。
 
 ## 阅读顺序
 
@@ -57,11 +62,12 @@ examples/orchestration/   Agent、项目、能力和 Workflow 示例
 2. [架构基线](architecture.md)
 3. [CodeBridge 集成边界](codebridge-integration.md)
 4. [接口规范](api-contract.md)
-5. [WorkItem 与 DSL 引擎](engine.md)
+5. [Flow、Run 与 DSL 引擎](engine.md)
 6. [项目发现和自生成](self-generation.md)
 7. [交互建议](interaction.md)
 8. [设计规范](design-system.md)
 9. [扩展性与移植性](extensibility-portability.md)
+10. [多 Agent 运行时调研](agent-runtime-research.md)
 
 ## 已落地切片
 

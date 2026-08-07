@@ -2,34 +2,34 @@
 
 ## 1. 目标
 
-系统可以从实际工作中生成三类候选资产：
+系统从当前 Session 的实际工作中生成临时 Flow，并在具备复用价值时提议沉淀为正式资产：
 
-1. Project Candidate：发现新的项目、部署服务、日志入口。
-2. Workflow Candidate：从一次或多次任务中提炼流程草稿。
+1. Project Candidate：发现新的项目、目录、服务或外部入口。
+2. Flow Candidate：从一次或多次 Run 中提炼可复用流程草稿。
 3. Skill/Eval Candidate：识别需要沉淀的领域能力和回归问题。
 
-“自生成”只生成候选，不直接把模型输出变成生产规则、正式 Workflow 或可执行权限。
+生成过程先服务当前 Session，再决定是否进入共享 Catalog。当前工作可以立即获得结构化计划，不必预先知道标准流程。
 
 ## 2. 触发事件
 
 ```text
+用户在 Session 输入新的目标
 当前目录首次出现
-Git remote 未登记
-DCP/SLS/APM 查询发现新服务
-WorkItem 跨项目调用
-同类任务重复出现
-任务完成并产生稳定 Plan
-工具调用失败或路由误判
+Git remote 或外部资源未登记
+Run 产生新的稳定分支
+同类目标重复出现
+Run 完成并形成稳定 Plan
+工具调用失败或路由被用户修正
 ```
 
-这些事件由 WorkItem Runtime 写入 Event Log，再由后台 Discovery Task 异步处理，不阻塞当前对话。
+新目标进入 Session 后，Agent 首先提出 `ephemeral Flow`；Project Discovery、Flow Candidate 和 Skill/Eval Candidate 由 Run Event Log 触发异步任务，不阻塞当前对话。
 
 ## 3. Project Discovery 流程
 
 ```text
 采集证据
   ↓
-规范化标识（repo、service、log、environment）
+规范化标识（目录、repo、service、environment）
   ↓
 去重和冲突检测
   ↓
@@ -37,81 +37,107 @@ WorkItem 跨项目调用
   ↓
 写入 Candidate Store，并生成 Catalog YAML Diff
   ↓
-提示用户确认
+在当前 Session 的上下文面板提示
   ↓
-生成 Git Diff
+用户确认
   ↓
-注册或驳回
+生成 Git Diff 并登记
 ```
 
-候选必须说明每个字段来自哪里：当前目录、Git remote、DCP 查询、SLS 查询、代码引用或用户输入。
+候选必须说明每个字段来自哪里：当前目录、Git remote、运行时引用、外部查询或用户输入。
 
-高置信度不代表可以静默覆盖正式配置。默认策略仍是“自动发现、人工确认、Git 记录”。
+高置信度表示证据充分，正式登记仍由用户确认完成。
 
-## 4. Workflow Candidate 流程
-
-任务完成后，系统对本次事件和 Plan 做归纳：
+## 4. 临时 Flow 生成
 
 ```text
-WorkItem completed
+用户目标
   ↓
-提取实际步骤和工具调用
+Agent 理解目标、上下文和风险
   ↓
-区分固定步骤与偶然步骤
+生成 ephemeral Flow
   ↓
-提取输入、分支、审批和验证
+Schema / Policy 校验
   ↓
-生成 Workflow Candidate
+显示步骤、分支、待确认项
+  ↓
+用户继续调整或创建 Run
+```
+
+临时 Flow 至少记录：
+
+- 来源 Session 和 Run。
+- Agent Profile 和模型。
+- 输入摘要和上下文版本。
+- 步骤、分支和能力 ID。
+- 每一步的风险和审批条件。
+- 生成时间和内容摘要。
+
+临时 Flow 不自动写入共享 Workflow Catalog，也不自动获得新的能力权限。
+
+## 5. Flow Candidate 晋级
+
+当用户选择“保存为 Workflow”，或系统发现同一类 Flow 重复出现时，生成 Candidate：
+
+```text
+ephemeral Flow
+  ↓
+提取稳定步骤、分支、输入和边界
+  ↓
+生成 Flow Candidate
+  ↓
+Schema 校验、静态检查、回归评测
   ↓
 用户 Review
   ↓
-加入 Git 并建立评测案例
+Git 提交并发布 Workflow
 ```
 
-候选 Workflow 必须包含：
+Candidate 必须包含：
 
-- 适用场景和排除场景。
-- 必填业务标识。
-- 只读步骤和写入步骤。
+- 适用范围和排除条件。
+- 输入和上下文来源。
+- 只读、工作区写入、Git 写入和生产写入边界。
 - 分支事实来源。
-- 预检、审批、验证和回滚。
-- 至少一条真实成功案例和一条近邻反例。
+- 预检、审批、验证和回滚要求。
+- 生成来源、内容摘要和版本。
 
-不要因为一次偶然操作就固化流程。只有路径稳定、边界清晰、重复出现后，才适合发布为 Runbook。
+一次偶然的 Agent 操作只能形成 ephemeral Flow；重复出现、边界清晰且通过评测后，才适合发布为 Workflow。
 
-## 5. Skill Candidate 与评测
+## 6. Skill Candidate 与评测
 
-当出现以下情况时，生成 Skill Candidate：
+当出现以下情况时生成 Skill Candidate：
 
 - 多个 Workflow 重复使用同一领域知识。
 - 同一个系统的 ID 解析、查询和安全边界重复出现。
 - Agent 经常把相邻 Skill 路由错误。
 - 工具调用需要稳定的输入校验和结果解释。
 
-Skill Candidate 先进入业务 Skill 的 Review 流程；必须补充正例、近邻反例和排除条件，才能进入中央 Router。
+Skill Candidate 先进入 Skill Review；补充正例、近邻反例和排除条件后，才能进入中央 Router。
 
-## 6. 自生成的安全边界
+## 7. 自生成安全边界
 
-模型不得自动生成并启用以下内容：
-
-- 生产凭据。
-- 无审批的生产写入能力。
-- 任意 Shell 脚本。
-- 未验证的项目映射。
-- 未经过评测的高风险 Workflow。
-- 自动修改现有 Workflow 的正式版本。
-
-生成内容统一进入 Candidate 状态，经过 Schema、静态检查、回归评测和用户确认后才成为正式资产。
-
-## 7. 反馈闭环
+生成内容统一经过以下边界：
 
 ```text
-执行记录
-  → 失败/误判/用户修正
-  → 生成 Eval Candidate
-  → 运行路由和 Workflow 回归
-  → Review
-  → 更新 Skill/Card/Workflow
+生成
+  → Schema
+  → Policy
+  → 风险和权限检查
+  → 用户确认或 Review
+  → Git 版本化
+  → 发布
 ```
 
-运行时不自我改写生产行为。自生成是“提案系统”，不是“自修改系统”。
+模型生成的 Flow 不能自行创建凭据、提升生产权限、写入未验证的项目映射或修改已发布 Workflow。运行时不自我改写生产行为；自生成是提案和沉淀机制。
+
+## 8. 反馈闭环
+
+```text
+Session / Run 事件
+  → 失败、误判或用户修正
+  → Flow / Eval Candidate
+  → 路由和 Flow 回归
+  → Review
+  → 更新 Skill / Flow / Workflow
+```

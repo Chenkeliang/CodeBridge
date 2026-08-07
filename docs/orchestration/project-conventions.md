@@ -8,7 +8,7 @@
 | 业务 Skill | `keliang-business-skills` |
 | Skill 校验、路由评测、发布编译 | `skill-control-plane` |
 | Agent/Workspace/Catalog/Workflow 定义 | CodeBridge Git 仓库 |
-| Conversation/WorkItem/Run 状态 | CodeBridge Runtime SQLite |
+| Session/TaskRecord/Run 状态 | CodeBridge Runtime SQLite |
 | 日志/APM/DCP 线上事实 | 对应线上平台 |
 
 不要把运行时状态写回 Git，也不要把 Skill 内容复制到多个项目后分别维护。
@@ -78,6 +78,6 @@ main
 
 - 每个 Step 需要唯一 `idempotency_key`。
 - 工具调用必须产生事件，不以聊天文本作为状态事实。
-- 进程重启后从 SQLite Event Log 恢复 WorkItem。
+- 进程重启后从 SQLite Event Log 恢复未完成的 Run，并更新关联 TaskRecord。
 - 不确定的分支进入 `manual_review`，不自动猜测。
-- 不把厂商 Agent Session 作为唯一恢复手段，恢复依赖 ContextSnapshot。
+- 厂商 Agent Session 负责原生会话恢复；Run 的进度和证据恢复依赖 ContextSnapshot 与 Event Log。

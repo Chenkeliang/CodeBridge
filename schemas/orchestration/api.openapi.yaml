@@ -3,12 +3,234 @@ info:
   title: CodeBridge Orchestration API
   version: 1.0.0-draft
   description: |
-    WorkItem-centric API for multi-project conversations, plans, approvals and discovery.
-    The local Bridge implements the v1 routes used by Web, Feishu and Telegram.
-  x-codebridge-status: implemented-baseline
+    Session-first API for Agent sessions, folders, flows, runs, approvals and discovery.
+    TaskRecord/WorkItem routes remain available as an internal compatibility surface.
+  x-codebridge-status: session-first-target
 servers:
   - url: /
 paths:
+  /v1/agents:
+    get:
+      operationId: listAgents
+      summary: List registered Agent Profiles
+      responses:
+        '200':
+          description: Agent Profiles grouped in the Web navigation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agents]
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentProfile'
+  /v1/agents/{agent_id}:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+    get:
+      operationId: getAgent
+      summary: Get an Agent Profile and dynamic capabilities
+      responses:
+        '200':
+          description: Agent Profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentProfile'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions:
+    get:
+      operationId: listSessions
+      summary: List sessions grouped by Agent Profile
+      parameters:
+        - in: query
+          name: agent_id
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+      responses:
+        '200':
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentSession'
+    post:
+      operationId: createSession
+      summary: Create a session fixed to one Agent Profile
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSession'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/sessions/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getSession
+      summary: Get a session and its current context
+      responses:
+        '200':
+          description: Session projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSession'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions/{session_id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: sendSessionMessage
+      summary: Send a message to the current Agent Session
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionMessage'
+      responses:
+        '202':
+          description: Message accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+  /v1/sessions/{session_id}/runs:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: createSessionRun
+      summary: Create a Run with an optional Flow binding
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartSessionRun'
+      responses:
+        '202':
+          description: Run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunReference'
+  /v1/sessions/{session_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - $ref: '#/components/parameters/LastEventId'
+    get:
+      operationId: streamSessionEvents
+      summary: Stream ordered Session and Run events
+      responses:
+        '200':
+          description: Ordered SSE events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/flows:
+    get:
+      operationId: listFlows
+      summary: List Flow and Workflow definitions
+      responses:
+        '200':
+          description: Flow Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flows]
+                properties:
+                  flows:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Flow'
+  /v1/flows/{flow_id}:
+    parameters:
+      - $ref: '#/components/parameters/FlowId'
+    get:
+      operationId: getFlow
+      summary: Get a Flow definition and revision
+      responses:
+        '200':
+          description: Flow definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/flows/{flow_id}/apply:
+    parameters:
+      - $ref: '#/components/parameters/FlowId'
+    post:
+      operationId: applyFlow
+      summary: Apply a Flow to the next Run of a Session
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id: { type: string }
+      responses:
+        '200':
+          description: Flow binding recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+  /v1/flows/candidates:
+    post:
+      operationId: saveFlowCandidate
+      summary: Save a Session-generated Flow as a Candidate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlowCandidateRequest'
+      responses:
+        '201':
+          description: Flow Candidate saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
   /v1/work-items:
     get:
       operationId: listWorkItems
@@ -236,6 +458,24 @@ paths:
           $ref: '#/components/responses/NotFound'
 components:
   parameters:
+    AgentId:
+      in: path
+      name: agent_id
+      required: true
+      schema:
+        type: string
+    SessionId:
+      in: path
+      name: session_id
+      required: true
+      schema:
+        type: string
+    FlowId:
+      in: path
+      name: flow_id
+      required: true
+      schema:
+        type: string
     WorkItemId:
       in: path
       name: work_item_id
@@ -280,6 +520,116 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
   schemas:
+    AgentProfile:
+      type: object
+      required: [agent_id, display_name, adapter, status, capabilities, models, session_features]
+      properties:
+        agent_id: { type: string }
+        display_name: { type: string }
+        adapter:
+          type: string
+          enum: [sdk, acp, cli]
+        status:
+          type: string
+          enum: [healthy, unavailable, needs_setup]
+        capabilities:
+          type: array
+          items: { type: string }
+        models:
+          type: array
+          items: { type: string }
+        session_features:
+          type: array
+          items: { type: string }
+        definition_revision: { type: [string, 'null'] }
+    AgentSession:
+      type: object
+      required: [session_id, agent_id, provider_session_id, folder_id, flow_id, status]
+      properties:
+        session_id: { type: string }
+        agent_id: { type: string }
+        provider_session_id: { type: string }
+        folder_id: { type: [string, 'null'] }
+        flow_id: { type: [string, 'null'] }
+        flow_revision: { type: [string, 'null'] }
+        cwd: { type: [string, 'null'] }
+        additional_directories:
+          type: array
+          items: { type: string }
+        title: { type: [string, 'null'] }
+        status:
+          type: string
+          enum: [active, idle, closed, unavailable]
+        last_seen: { type: [string, 'null'], format: date-time }
+    CreateSession:
+      type: object
+      required: [agent_id]
+      properties:
+        agent_id: { type: string }
+        folder_id: { type: [string, 'null'] }
+        cwd: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        title: { type: [string, 'null'] }
+    SessionMessage:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, minLength: 1 }
+        flow_id: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        references:
+          type: array
+          items: { type: string }
+    StartSessionRun:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, minLength: 1 }
+        flow_id: { type: [string, 'null'] }
+        mode:
+          type: string
+          enum: [auto]
+          default: auto
+        model: { type: [string, 'null'] }
+    Flow:
+      type: object
+      required: [flow_id, kind, status, source, definition_revision, steps]
+      properties:
+        flow_id: { type: string }
+        name: { type: [string, 'null'] }
+        kind:
+          type: string
+          enum: [ephemeral, guide, runbook]
+        status:
+          type: string
+          enum: [draft, candidate, published, deprecated]
+        source:
+          type: string
+          enum: [agent_generated, user_selected, git]
+        definition_revision: { type: string }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [id]
+            properties:
+              id: { type: string }
+              capability: { type: [string, 'null'] }
+              purpose: { type: [string, 'null'] }
+              depends_on:
+                type: array
+                items: { type: string }
+        session_id: { type: [string, 'null'] }
+    FlowCandidateRequest:
+      type: object
+      required: [session_id, definition_revision]
+      properties:
+        session_id: { type: string }
+        run_id: { type: [string, 'null'] }
+        definition_revision: { type: string }
+        flow:
+          type: object
+          additionalProperties: true
     CreateWorkItem:
       type: object
       required: [conversation_id, message]
