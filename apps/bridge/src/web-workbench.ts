@@ -220,7 +220,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       await selectSession(session.session_id);
     }
     async function selectSession(id) {
-      state.selected = id; state.sequence = 0; state.session = null; $('work-form').hidden = true; $('reply-form').hidden = false; $('session-actions').hidden = false; $('composer-title').textContent = 'Session';
+      state.selected = id; state.sequence = 0; state.session = null; state.ephemeralFlow = null; state.projectCandidateId = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('work-form').hidden = true; $('reply-form').hidden = false; $('session-actions').hidden = false; $('composer-title').textContent = 'Session';
       await refreshSession(); loadSessions();
       clearInterval(state.timer); state.timer = setInterval(refreshSession, 1200);
     }
