@@ -188,7 +188,9 @@ program
         status: profile ? "healthy" : "needs_setup",
         capabilities: profile ? ["session", "workspace", "run"] : [],
         models: profile?.model ? [profile.model] : [],
-        sessionFeatures: profile ? ["resume", "close", "delete"] : [],
+        sessionFeatures: profile
+          ? ["resume", "close", "delete", ...(profile.type === "pi-sdk" ? ["fork"] : [])]
+          : [],
       });
     });
     const agentProfiles: AgentProfile[] = registry.list();

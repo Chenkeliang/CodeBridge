@@ -156,6 +156,32 @@ paths:
             text/event-stream:
               schema:
                 type: string
+  /v1/sessions/{session_id}/fork:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: forkSession
+      summary: Create a provider-supported branch Session under the same Agent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_cwd: { type: string }
+                title: { type: [string, 'null'] }
+      responses:
+        '201':
+          description: Forked Session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSession'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /v1/flows:
     get:
       operationId: listFlows

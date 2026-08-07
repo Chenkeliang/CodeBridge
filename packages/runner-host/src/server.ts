@@ -11,11 +11,13 @@ import {
   runAcpSession,
   closePiSession,
   deletePiSession,
+  forkPiSession,
   listPiConfigOptions,
   listPiSessions,
   runPiSession,
   type PiRunHandleRef,
   type PiSession,
+  type PiSessionLifecycleResult,
   type CliSessionSummary,
 } from "@codebridge/backends";
 import type {
@@ -41,6 +43,8 @@ export interface RunnerHostOptions {
   dataDir?: string;
   /** Test/embedding hook; production uses the native Pi Node SDK factory. */
   piSessionFactory?: (ctx: RunContext) => Promise<PiSession>;
+  /** Test/embedding hook for provider-native session fork. */
+  piSessionForker?: typeof forkPiSession;
 }
 
 interface ActiveRun {
@@ -294,6 +298,38 @@ export class RunnerHost {
     sessionId: string,
   ): Promise<{ ok: boolean; error?: string }> {
     return this.manageSession("delete", backendId, cwd, sessionId);
+  }
+
+  async forkSession(
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+    targetCwd: string,
+  ): Promise<PiSessionLifecycleResult> {
+    if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+      return { ok: false, error: `Session ${sessionId} 正在运行，请先停止后重试` };
+    }
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { ok: false, error: `Unknown backend: ${backendId}` };
+    const source = resolveRunCwd(cwd);
+    if ("error" in source) return { ok: false, error: source.error };
+    const target = resolveRunCwd(targetCwd);
+    if ("error" in target) return { ok: false, error: target.error };
+    if (profile.type !== "pi-sdk") {
+      return { ok: false, error: `${backendId} 未声明 Session fork 能力` };
+    }
+    try {
+      return await (this.options.piSessionForker ?? forkPiSession)(
+        source.cwd,
+        sessionId,
+        target.cwd,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        error: `Pi session/fork failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   private async manageSession(
@@ -730,6 +766,24 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
     const result = await host.closeSession(body.backend, body.cwd, c.req.param("id"));
     return c.json(result, result.ok ? 200 : 409);
+  });
+
+  app.post("/sessions/:id/fork", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      backend?: string;
+      cwd?: string;
+      targetCwd?: string;
+    };
+    if (!body.backend || !body.cwd || !body.targetCwd) {
+      return c.json({ error: "backend, cwd and targetCwd are required" }, 400);
+    }
+    const result = await host.forkSession(
+      body.backend,
+      body.cwd,
+      c.req.param("id"),
+      body.targetCwd,
+    );
+    return c.json(result, result.ok ? 201 : 409);
   });
 
   app.delete("/sessions/:id", async (c) => {

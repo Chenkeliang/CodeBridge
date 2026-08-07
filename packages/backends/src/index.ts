@@ -49,6 +49,7 @@ export {
 export {
   closePiSession,
   deletePiSession,
+  forkPiSession,
   listPiSessions,
   listPiConfigOptions,
   mapPiEvent,

@@ -50,7 +50,7 @@ CodeBridge 的 `Session.provider_session_id` 保存 Pi 的 `AgentSession.session
 - Pi 的模型认证、模型目录和 skills/extensions 仍由 Pi SDK 的本地配置负责；CodeBridge 不复制凭据。
 - `additional_directories` 在 Runner 层完成绝对路径校验并保留在 RunContext；Pi 原生工具使用自己的绝对路径解析，暂不引入供应商特有的目录参数。
 - Policy/Approval 仍位于 Runner/Bridge 之上；Pi 的 Prompt 不能单独授予生产能力。
-- Pi 的 fork/clone/tree UI 和统一 Session 分支 API 是下一切片，不能把当前的 `SessionManager.open` 误认为已完成 Web 分支能力。
+- Pi 的 provider-native fork 和 `/v1/sessions/{session_id}/fork` 已完成；Web 仍需要补充分支入口和更完整的 tree/clone 视图，不能把当前 fork API 误认为已经完成全部分支 UI。
 
 ## 测试边界
 

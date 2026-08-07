@@ -1,12 +1,25 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { afterEach } from "vitest";
 import type { AgentEvent, RunContext } from "@codebridge/core";
 import {
+  forkPiSession,
   mapPiEvent,
   probePiSdk,
   runPiSession,
   type PiRunHandleRef,
   type PiSession,
 } from "./pi-session-runner.js";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
 
 function context(overrides: Partial<RunContext> = {}): RunContext {
   return {
@@ -114,6 +127,33 @@ describe("Pi event mapping", () => {
 });
 
 describe("Pi session runner", () => {
+  it("forks a persisted provider session into a new project directory", async () => {
+    const sourceCwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-source-"));
+    const targetCwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-target-"));
+    tempDirs.push(sourceCwd, targetCwd);
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const source = SessionManager.create(sourceCwd);
+    source.appendMessage({
+      role: "user",
+      content: "seed conversation",
+      timestamp: Date.now(),
+    } as never);
+    await fs.mkdir(path.dirname(source.getSessionFile()!), { recursive: true });
+    await fs.writeFile(
+      source.getSessionFile()!,
+      `${JSON.stringify(source.getHeader())}\n${source
+        .getEntries()
+        .map((entry) => JSON.stringify(entry))
+        .join("\n")}\n`,
+    );
+
+    const forked = await forkPiSession(sourceCwd, source.getSessionId(), targetCwd);
+
+    expect(forked).toMatchObject({ ok: true, cwd: targetCwd });
+    expect(forked.sessionId).toBeTruthy();
+    expect(forked.sessionId).not.toBe(source.getSessionId());
+  });
+
   it("checks SDK/session storage without starting a model run", async () => {
     await expect(probePiSdk("/tmp")).resolves.toEqual({
       ok: true,

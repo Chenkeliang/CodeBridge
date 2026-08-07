@@ -31,6 +31,29 @@ describe("RunnerClient steering", () => {
 });
 
 describe("RunnerClient session lifecycle", () => {
+  it("forks a provider session into a target directory", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, sessionId: "pi-fork", cwd: "/target" }), {
+        status: 201,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.forkSession("pi", "/source", "s1", "/target")).resolves.toEqual({
+      ok: true,
+      sessionId: "pi-fork",
+      cwd: "/target",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/sessions/s1/fork",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ backend: "pi", cwd: "/source", targetCwd: "/target" }),
+      }),
+    );
+  });
+
   it("posts close for an explicit session id", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
