@@ -7,6 +7,7 @@ import type {
 import type { SqliteEventStore } from "@codebridge/work-items";
 import type { RunExecutor } from "@codebridge/run-executor";
 import type { RunnerClient } from "@codebridge/runner-client";
+import type { ProjectDiscovery } from "@codebridge/project-catalog";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
@@ -14,6 +15,7 @@ export interface SessionApiOptions {
   workItems: SqliteEventStore;
   executor?: RunExecutor;
   runner?: RunnerClient;
+  discovery?: ProjectDiscovery;
   defaultCwd?: string;
 }
 
@@ -127,6 +129,19 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       title: session.title ?? deriveTitle(body.message),
       status: "active",
     });
+    if (!task && options.discovery && session.cwd) {
+      void options.discovery.observe(session.cwd, workItem.id).catch((error) => {
+        options.workItems.appendEvent({
+          workItemId: workItem.id,
+          type: "AGENT_EVENT",
+          actor: "system",
+          payload: {
+            kind: "discovery_failed",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      });
+    }
     return c.json(
       {
         request_id: `req_${randomUUID().replaceAll("-", "")}`,

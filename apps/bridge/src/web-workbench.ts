@@ -174,7 +174,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
                 <div class="input-actions"><button class="tool-button" id="reply-mention-button" type="button" aria-label="引用上下文">@</button><button class="tool-button" id="reply-command-button" type="button" aria-label="插入命令">/</button><button class="send-button" type="submit" aria-label="发送">↑</button></div>
               </div>
               <div class="error" id="reply-error"></div>
-              <div class="actions"><button class="secondary" id="run-again" type="button">再次运行</button><button class="secondary" id="save-flow" type="button" hidden>保存为 Workflow Candidate</button></div>
+              <div class="actions"><button class="secondary" id="run-again" type="button">再次运行</button><button class="secondary" id="save-flow" type="button" hidden>保存为 Workflow Candidate</button><button class="secondary" id="accept-project" type="button" hidden>确认登记发现的资源</button></div>
             </form>
           </section>
         </div>
@@ -183,7 +183,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   </div>
   <script>
     const TOKEN = __TOKEN__;
-    const state = { selected: null, sequence: 0, timer: null, session: null, ephemeralFlow: null };
+    const state = { selected: null, sequence: 0, timer: null, session: null, ephemeralFlow: null, projectCandidateId: null };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
       const response = await fetch(url, { ...init, headers: { authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json', ...(init.headers || {}) } });
@@ -243,10 +243,15 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       const target = $('timeline');
       if (target.querySelector('.timeline-empty')) target.innerHTML = '';
       target.insertAdjacentHTML('beforeend', events.map((event) => '<article class="event"><time>' + esc(new Date(event.occurred_at).toLocaleTimeString()) + '</time><div class="event-body"><strong>' + esc(label(event.type)) + '</strong><pre>' + esc(JSON.stringify(event.payload || {}, null, 2)) + '</pre></div></article>').join(''));
-      const proposal = [...events].reverse().find((event) => event.type === 'FLOW_PROPOSED' && event.payload && typeof event.payload.flow === 'object');
+      const proposal = [...events].reverse().find((event) => event.type === 'FLOW_PROPOSED' && event.payload && event.payload.flow && typeof event.payload.flow === 'object' && !Array.isArray(event.payload.flow));
       if (proposal) {
         state.ephemeralFlow = { flow: proposal.payload.flow, definition_revision: typeof proposal.payload.definition_revision === 'string' ? proposal.payload.definition_revision : 'event:' + proposal.event_id };
         $('save-flow').hidden = false;
+      }
+      const candidate = [...events].reverse().find((event) => event.type === 'PROJECT_CANDIDATE_FOUND' && typeof event.payload?.candidate_id === 'string');
+      if (candidate) {
+        state.projectCandidateId = candidate.payload.candidate_id;
+        $('accept-project').hidden = false;
       }
       target.scrollTop = target.scrollHeight;
     }
@@ -260,6 +265,18 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         state.ephemeralFlow = null;
         button.hidden = true;
         await loadFlows();
+      } catch (error) { $('reply-error').textContent = error.message; }
+      finally { button.disabled = false; }
+    });
+    $('accept-project').addEventListener('click', async () => {
+      if (!state.projectCandidateId) return;
+      const button = $('accept-project');
+      button.disabled = true;
+      $('reply-error').textContent = '';
+      try {
+        await api('/v1/projects/candidates/' + encodeURIComponent(state.projectCandidateId) + '/accept', { method:'POST', body: '{}' });
+        state.projectCandidateId = null;
+        button.hidden = true;
       } catch (error) { $('reply-error').textContent = error.message; }
       finally { button.disabled = false; }
     });
@@ -282,7 +299,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       } catch (error) { $('error').textContent = error.message; }
       finally { button.disabled = false; }
     });
-    $('new-work').addEventListener('click', () => { state.selected = null; state.session = null; state.sequence = 0; state.ephemeralFlow = null; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model-chip').textContent = '模型 · Agent 默认'; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; loadSessions(); });
+    $('new-work').addEventListener('click', () => { state.selected = null; state.session = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model-chip').textContent = '模型 · Agent 默认'; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; loadSessions(); });
     loadSessions(); loadFlows();
   </script>
 </body>
