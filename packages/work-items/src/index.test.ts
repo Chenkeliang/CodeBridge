@@ -166,4 +166,39 @@ describe("SqliteEventStore", () => {
     );
     store.close();
   });
+
+  it("persists idempotency responses and requeues interrupted runs", () => {
+    const databasePath = createDatabasePath();
+    const store = new SqliteEventStore(databasePath);
+    const workItem = store.createWorkItem({
+      title: "recover",
+      mode: "investigation",
+      conversationId: "web:recover",
+      riskLevel: "read_only",
+    });
+    const run = store.createRun({ workItemId: workItem.id, mode: workItem.mode });
+    store.updateRunStatus(run.id, "running");
+    store.putIdempotencyResponse("create-run", "key-1", { run_id: run.id });
+    expect(store.getIdempotencyResponse("create-run", "key-1")).toEqual({ run_id: run.id });
+    expect(store.listRunsByStatus(["running"])).toHaveLength(1);
+    expect(store.requeueRun(run.id).status).toBe("queued");
+    store.close();
+    const reopened = new SqliteEventStore(databasePath);
+    expect(reopened.getIdempotencyResponse("create-run", "key-1")).toEqual({ run_id: run.id });
+    reopened.close();
+  });
+
+  it("resolves an event id to a sequence for Last-Event-ID", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "events",
+      mode: "observe",
+      conversationId: "web:events",
+      riskLevel: "read_only",
+    });
+    const event = store.appendEvent({ workItemId: item.id, type: "MESSAGE_RECEIVED", actor: "user", payload: { message: "hi" } });
+    expect(store.sequenceForEventId(item.id, event.eventId)).toBe(event.sequence);
+    expect(store.sequenceForEventId(item.id, "evt_missing")).toBe(0);
+    store.close();
+  });
 });
