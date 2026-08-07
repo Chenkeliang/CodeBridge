@@ -179,9 +179,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   </script>
 </body>
 </html>`
-    .replace("__TOKEN__", token)
-    .replace("<option value=\"__AGENTS__\">", agentOptions)
-    .replace("__WORKFLOWS__", workflowOptions);
+    .replace("__TOKEN__", token);
 }
 
 function escapeHtml(value: string): string {

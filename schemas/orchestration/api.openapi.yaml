@@ -4,12 +4,28 @@ info:
   version: 1.0.0-draft
   description: |
     WorkItem-centric API for multi-project conversations, plans, approvals and discovery.
-    This document is a design contract; it does not claim that these routes are implemented.
-  x-codebridge-status: draft
+    The local Bridge implements the v1 routes used by Web, Feishu and Telegram.
+  x-codebridge-status: implemented-baseline
 servers:
   - url: /
 paths:
   /v1/work-items:
+    get:
+      operationId: listWorkItems
+      summary: List WorkItems for the workbench inbox
+      responses:
+        '200':
+          description: WorkItem projections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [work_items]
+                properties:
+                  work_items:
+                    type: array
+                    items:
+                      $ref: './work-item.schema.json'
     post:
       operationId: createWorkItem
       summary: Create a WorkItem
@@ -129,15 +145,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [step_id, input_hash, expires_at]
+              required: [approval_id]
               properties:
-                step_id:
+                approval_id:
                   type: string
-                input_hash:
-                  type: string
-                expires_at:
-                  type: string
-                  format: date-time
       responses:
         '200':
           description: Approval recorded
@@ -159,15 +170,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [work_item_id]
+              required: [workspace_path]
               properties:
+                workspace_path:
+                  type: string
                 work_item_id:
                   type: string
-                sources:
-                  type: array
-                  items:
-                    type: string
-                    enum: [current_workspace, git_remote, imports, dcp, logs, apm]
       responses:
         '202':
           description: Discovery task accepted
@@ -175,7 +183,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskReference'
-  /v1/catalog/candidates:
+  /v1/projects:
+    get:
+      operationId: listProjects
+      summary: List registered projects
+      responses:
+        '200':
+          description: Registered project list
+  /v1/projects/candidates:
     get:
       operationId: listCatalogCandidates
       summary: List project candidates awaiting review
@@ -192,13 +207,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [candidates]
                 properties:
-                  items:
+                  candidates:
                     type: array
                     items:
                       $ref: '#/components/schemas/ProjectCandidate'
-  /v1/catalog/candidates/{candidate_id}/accept:
+  /v1/projects/candidates/{candidate_id}/accept:
     parameters:
       - in: path
         name: candidate_id
@@ -211,8 +226,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '202':
-          description: Catalog diff queued for review
+        '201':
+          description: Candidate registered
           content:
             application/json:
               schema:

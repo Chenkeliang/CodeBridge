@@ -62,14 +62,14 @@ examples/orchestration/   Agent、项目、能力和 Workflow 示例
 8. [设计规范](design-system.md)
 9. [扩展性与移植性](extensibility-portability.md)
 
-## 实施顺序
+## 已落地切片
 
-设计通过 Review 后，按以下顺序实现最小闭环：
+当前代码已经按以下顺序实现并保留独立特性分支提交：
 
 1. WorkItem、Event、Plan IR 和 SQLite Store。
 2. Capability Registry、Policy 和 Approval。
-3. 复用现有 Runner 执行只读调查，再增加受控工作区写入。
-4. Web Workbench 与现有飞书、Telegram 共享同一事件流。
-5. Project Discovery 和 Workflow Candidate 后台任务。
+3. 复用现有 Runner 执行 Agent，并回写事件。
+4. Project Discovery、候选确认和 Catalog Store。
+5. Web Workbench、幂等键和重启恢复。
 
-每一步都应以本目录的 Schema 和兼容性测试为边界。未来是否提取 Rust 核心或接入 Durable Engine，由运行数据决定，不提前建立第二套 Runtime。
+每一步都以本目录的 Schema 和兼容性测试为边界。未来是否提取 Rust 核心或接入 Durable Engine，由运行数据决定，不提前建立第二套 Runtime。
