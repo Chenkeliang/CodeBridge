@@ -60,10 +60,22 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       return c.json({ error: "agent_unavailable", status: agent.status }, 409);
     }
     const sessionBody = body ?? {};
+    const requestedCwd = asNullableString(sessionBody.cwd);
+    let cwd = requestedCwd;
+    if (requestedCwd && options.runner) {
+      const authorization = await options.runner.authorizeDirectory(requestedCwd);
+      if (!authorization.ok) {
+        return c.json(
+          { error: "workspace_not_authorized", detail: authorization.error ?? "目录无法访问" },
+          403,
+        );
+      }
+      cwd = authorization.path ?? requestedCwd;
+    }
     const session = options.catalog.createSession({
       agentId: agent.agentId,
       folderId: asNullableString(sessionBody.folder_id),
-      cwd: asNullableString(sessionBody.cwd),
+      cwd,
       title: asNullableString(sessionBody.title),
     });
     return c.json(toApiSession(session), 201);

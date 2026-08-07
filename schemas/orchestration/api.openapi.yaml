@@ -431,6 +431,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskReference'
+  /v1/directories/authorize:
+    post:
+      operationId: authorizeDirectory
+      summary: Ask the Runner to validate and authorize a workspace directory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+      responses:
+        '200':
+          description: Canonical authorized directory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: true }
+                  path: { type: string }
+        '403':
+          description: Directory is not authorized
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: false }
+                  error: { type: string }
   /v1/projects:
     get:
       operationId: listProjects

@@ -25,6 +25,10 @@ describe("web workbench", () => {
     expect(html).not.toContain('id="cancel-new"');
     expect(html).toContain('id="mode"');
     expect(html).toContain("模式 · Agent 判断");
+    expect(html).toContain('id="workspace"');
+    expect(html).toContain('id="workspace-authorize"');
+    expect(html).toContain("Folder / 工作目录（可选）");
+    expect(html).toContain("/v1/directories/authorize");
     expect(html).not.toContain("模式 · 发布");
     expect(html).not.toContain("模式 · 调查");
     expect(html).not.toContain("权益");

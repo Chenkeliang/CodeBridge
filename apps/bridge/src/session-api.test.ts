@@ -114,4 +114,45 @@ describe("session API", () => {
     catalog.close();
     workItems.close();
   });
+
+  it("authorizes and canonicalizes an optional Session workspace", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      authorizeDirectory: async (directory: string) => ({ ok: true, path: `/canonical${directory}` }),
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    const response = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "pi", cwd: "/workspace" }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ cwd: "/canonical/workspace" });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("rejects a Session workspace when Runner authorization fails", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      authorizeDirectory: async () => ({ ok: false, error: "permission denied" }),
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    const response = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "pi", cwd: "/private" }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: "workspace_not_authorized" });
+    expect(catalog.listSessions("pi")).toHaveLength(0);
+    catalog.close();
+    workItems.close();
+  });
 });
