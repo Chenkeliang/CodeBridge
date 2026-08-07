@@ -23,6 +23,8 @@ describe("web workbench", () => {
     expect(html).not.toContain('id="cancel-new"');
     expect(html).toContain('id="mode"');
     expect(html).toContain("模式 · Agent 判断");
+    expect(html).not.toContain("模式 · 发布");
+    expect(html).not.toContain("模式 · 调查");
     expect(html).not.toContain("权益");
     expect(html).not.toContain("订单号");
     expect(html).not.toContain("日志片段");

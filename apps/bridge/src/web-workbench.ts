@@ -131,7 +131,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
               <div class="composer-head"><strong id="composer-title">新对话</strong><span>自然语言输入</span></div>
               <div class="composer-context">
                 <select class="context-control" id="agent" aria-label="Agent"><option value="">Agent · 自动选择</option>${agentOptions}</select>
-                <select class="context-control" id="mode" aria-label="模式"><option value="auto">模式 · Agent 判断</option><option value="investigation">模式 · 调查</option><option value="change">模式 · 修改</option><option value="review">模式 · Review</option><option value="release">模式 · 发布</option><option value="observe">模式 · 观察</option></select>
+                <select class="context-control" id="mode" aria-label="模式"><option value="auto">模式 · Agent 判断</option></select>
                 <select class="context-control" id="workflow" aria-label="Workflow">${workflowOptions}</select>
                 <span class="context-chip" id="model-chip">模型 · Agent 默认</span>
                 <span class="context-chip" id="workspace-chip">工作空间 · 自动发现</span>
