@@ -37,6 +37,11 @@ export type DomainEventType =
   | "WORK_ITEM_CREATED"
   | "MESSAGE_RECEIVED"
   | "RUN_CREATED"
+  | "AGENT_EVENT"
+  | "RUN_STARTED"
+  | "RUN_SUCCEEDED"
+  | "RUN_FAILED"
+  | "RUN_CANCELLED"
   | "DISCOVERY_STARTED"
   | "PROJECT_CANDIDATE_FOUND"
   | "PLAN_PROPOSED"
@@ -360,6 +365,7 @@ export class SqliteEventStore {
         );
       this.appendEventInTransaction({
         workItemId: run.workItemId,
+        runId: run.id,
         type: "RUN_CREATED",
         actor: "system",
         target: run.id,
@@ -390,6 +396,15 @@ export class SqliteEventStore {
       )
       .all(workItemId);
     return rows.map(toRun);
+  }
+
+  updateRunStatus(runId: string, status: RunStatus): Run {
+    const now = new Date().toISOString();
+    const result = this.database
+      .prepare("UPDATE runs SET status = ?, updated_at = ? WHERE id = ?")
+      .run(status, now, runId);
+    if (Number(result.changes) !== 1) throw new Error(`Run not found: ${runId}`);
+    return this.getRun(runId)!;
   }
 
   close(): void {

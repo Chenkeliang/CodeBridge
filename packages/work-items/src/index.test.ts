@@ -129,4 +129,23 @@ describe("SqliteEventStore", () => {
     });
     store.close();
   });
+
+  it("updates a Run status for executor recovery", () => {
+    const store = new SqliteEventStore(":memory:");
+    const workItem = store.createWorkItem({
+      title: "execute",
+      mode: "change",
+      conversationId: "web:run",
+      riskLevel: "workspace_write",
+    });
+    const run = store.createRun({ workItemId: workItem.id, mode: "change" });
+
+    expect(store.listEvents(workItem.id).at(-1)?.runId).toBe(run.id);
+    expect(store.updateRunStatus(run.id, "running").status).toBe("running");
+    expect(store.updateRunStatus(run.id, "succeeded").status).toBe("succeeded");
+    expect(() => store.updateRunStatus("run_missing", "failed")).toThrow(
+      "Run not found",
+    );
+    store.close();
+  });
 });

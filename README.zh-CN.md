@@ -196,7 +196,7 @@ pnpm run build
 pnpm test
 ```
 
-这是一个 pnpm monorepo，包含 `core`、`backends`、`work-items`、`workflow-engine`、`policy`、`runner-host`、`runner-client`、`router`、`channel-feishu`、`channel-telegram` 和 `apps/bridge`。
+这是一个 pnpm monorepo，包含 `core`、`backends`、`work-items`、`workflow-engine`、`policy`、`run-executor`、`runner-host`、`runner-client`、`router`、`channel-feishu`、`channel-telegram` 和 `apps/bridge`。
 
 ## License
 
