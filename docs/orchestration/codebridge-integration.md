@@ -22,6 +22,10 @@ CodeBridge 是产品、运行时和协议实现的主项目。Orchestration 是 
 ```text
 packages/work-items
 packages/workflow-engine
+packages/agent-registry
+packages/session-catalog
+packages/flow-catalog
+packages/run-runtime
 packages/project-catalog
 packages/skill-runtime
 packages/mcp-runtime
@@ -37,20 +41,20 @@ Web / Feishu / Telegram
           ↓
        Bridge API
           ↓
- WorkItem Application Service ← Event Store / Artifact Store
+ Session Application Service ← Event Store / Artifact Store
           ↓
- Workflow Plan IR + Policy / Approval
+ Flow / Workflow Plan IR + Policy / Approval
           ↓
- Runner Client → Runner Host
+ Run Runtime → Runner Client → Runner Host
                    ├── Agent Adapter: ACP / Pi SDK
                    └── Capability Adapter: Skill / MCP / CLI / HTTP
 ```
 
 规则：
 
-- Channel 不直接调用 Skill、MCP 或生产系统。
+- Channel 将消息转换为 Session/Run 命令，再由 Bridge 统一调用 Capability。
 - Workflow 不直接启动进程，只声明 Capability ID、风险和控制条件。
-- Agent 可以提出 Plan 和工具调用请求，WorkItem Runtime 决定能否执行。
+- Agent 可以提出 Flow、Plan 和工具调用请求，Run Runtime 决定能否执行。
 - Policy/Approval 位于所有有副作用调用之前，不能只靠 Agent Prompt 约束。
 - 模块状态变化写入 Event Store；UI 和 Channel 订阅事件，不各自维护状态机。
 
@@ -74,7 +78,7 @@ Web / Feishu / Telegram
 模块之间只共享以下稳定合同：
 
 ```text
-WorkItem / Run / Step
+Session / Run / Step / TaskRecord
 Plan IR / Capability ID
 Approval / Evidence / Artifact
 Domain Event / ContextSnapshot
@@ -92,7 +96,7 @@ core ← project-catalog ← work-items
 core ← runner-client ← work-items
 ```
 
-禁止领域包反向依赖 `apps/bridge`。Runner Host 不直接写 WorkItem 数据库，只通过 Runner Protocol 回传事件和结果。
+领域包依赖稳定合同；Runner Host 通过 Runner Protocol 回传事件和结果，Bridge Runtime 负责 Session、Run 和 TaskRecord 的持久化。
 
 ## 5. 版本和同步
 
@@ -101,9 +105,9 @@ core ← runner-client ← work-items
 - 领域 Schema 使用显式 `schema_version`。
 - HTTP API 使用 `/v1` 主版本路径。
 - Runner 握手携带 `protocol_version`、`runner_version` 和支持的 Capability。
-- Workflow 创建 WorkItem 时固定 `definition_revision`，后续更新不改变正在执行的实例。
+- Run 创建时固定 Flow 的 `definition_revision`，后续更新不改变正在执行的实例。
 - Skill 和 MCP 记录来源、版本和内容摘要；默认不复制第三方 Skill 内容。
-- 首个 SQLite Event Store 使用 Node 内置 `node:sqlite`，该 WorkItem 包要求 Node.js `>=22.5.0`；若需要继续支持更旧 Node，由 Store Adapter 替换数据库驱动，不改变领域合同。
+- 首个 SQLite Event Store 使用 Node 内置 `node:sqlite`，该 Event Store 要求 Node.js `>=22.5.0`；若需要继续支持更旧 Node，由 Store Adapter 替换数据库驱动，不改变领域合同。
 
 项目变更遵循特性分支规则：每个小功能先从生产基线创建独立分支，在分支上完成、验证并提交；只有功能完成且得到用户明确允许后，才合并或提交到 `main`。Orchestration 文档、Schema 和示例也遵循同一规则。
 
@@ -114,7 +118,7 @@ core ← runner-client ← work-items
 每次修改公共合同至少验证：
 
 1. JSON Schema 和 OpenAPI 可解析。
-2. 当前版本能读取上一兼容版本的 WorkItem、Event 和 Workflow。
+2. 当前版本能读取上一兼容版本的 Session、TaskRecord、Event 和 Workflow。
 3. Bridge 与 Runner 的版本握手能拒绝不兼容协议。
-4. Workflow 中的 Capability、Step 依赖和 Branch 目标存在。
+4. Workflow/Flow 中的 Capability、Step 依赖和 Branch 目标存在。
 5. ACP、Pi SDK、Skill 或 MCP Adapter 的故障都会形成标准失败事件，而不是丢失在聊天文本中。

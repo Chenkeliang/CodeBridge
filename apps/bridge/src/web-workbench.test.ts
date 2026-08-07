@@ -15,7 +15,7 @@ describe("web workbench", () => {
     expect(html).toContain("Agent");
     expect(html).toContain("Workflow");
     expect(html).toContain("Agent · 自动选择");
-    expect(html).toContain("Workflow · 自动生成");
+    expect(html).toContain("Workflow · 自动发现");
     expect(html).toContain("Agent 会先理解目标，再决定合适的上下文与下一步");
     expect(html).not.toContain('<label>模式');
     expect(html).not.toContain('<label>项目范围');
@@ -30,6 +30,7 @@ describe("web workbench", () => {
     expect(html).not.toContain("日志片段");
     expect(html).not.toContain("示例");
     expect(html).not.toContain("price-change");
+    expect(html).not.toContain("自动生成");
     expect(html).toContain("/v1/work-items");
     store.close();
   });

@@ -4,7 +4,7 @@
 
 关键词：清晰、克制、可审计、强层级、低噪声。
 
-它是工程操作工作台，不是聊天气泡 Demo，也不是充满紫色渐变的 AI 营销页。界面应该让用户快速回答：现在处理哪个任务、涉及哪些项目、已经做了什么、下一步是否需要我确认。
+它是工程操作工作台，不是聊天气泡 Demo，也不是充满紫色渐变的 AI 营销页。界面应该让用户快速回答：当前使用哪个 Agent、当前打开哪个 Session、已经做了什么、下一步是否需要我确认。
 
 ## 2. 视觉基线
 
@@ -53,7 +53,7 @@
 - 页面最大宽度建议 `1400px`，移动端使用单列布局。
 - 使用 CSS Grid 组织主布局，避免复杂的百分比 Flex 计算。
 - 用边线、分组和留白表达层级，只有需要浮起或确认的内容才使用卡片。
-- 数字、订单号、SKU 和时间使用等宽数字，方便对齐和核对。
+- 数字、外部标识和时间使用等宽数字，方便对齐和核对；不要预设某一业务领域的字段名称。
 
 ## 5. 动效规则
 
@@ -68,7 +68,11 @@
 核心组件优先建设：
 
 ```text
-WorkItemHeader
+AgentGroup
+SessionList
+SessionHeader
+FlowPicker
+FlowDetail
 ContextPanel
 ProjectDiscoveryCard
 PlanTimeline
@@ -76,6 +80,7 @@ EvidenceViewer
 ApprovalPanel
 DiffViewer
 RunStatus
+TaskRecordPanel
 ```
 
 每个组件必须设计成功、加载、空、错误、等待权限五种状态。组件只负责展示和交互，任务状态由 Runtime 提供，不在 UI 内复制一份流程状态机。

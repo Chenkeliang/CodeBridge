@@ -5,7 +5,9 @@
 核心层只依赖稳定的领域对象和事件：
 
 ```text
-WorkItem
+AgentProfile
+Session
+Flow
 Run
 Step
 Plan IR
@@ -21,13 +23,13 @@ Event
 
 ```text
 ChannelAdapter       Web / Feishu / Telegram
-AgentAdapter         Pi / Claude / Codex
+AgentAdapter         Codex / Pi / Cursor / Claude Code / custom
 CapabilityAdapter    Skill / MCP / CLI / HTTP
 HostAdapter          macOS / Windows / Linux
 StoreAdapter         SQLite / PostgreSQL（未来）
 ```
 
-增加一个 Agent、渠道或外部系统时，优先增加 Adapter 和 Profile，不修改 WorkItem 生命周期。
+增加一个 Agent、渠道或外部系统时，优先增加 Adapter 和 Profile，不修改 Session、Flow 和 Run 生命周期。
 
 ## 3. 迁移策略
 
@@ -42,7 +44,7 @@ Git DSL → Schema Validator → Plan IR → Executor
 - 单机阶段使用 SQLite 和轻量 Runtime。
 - 多实例阶段可替换 Store 和 Executor。
 - 需要长时间、跨机器、强重试时再接 Durable Engine。
-- Agent 后端更换不影响历史 WorkItem 的 ContextSnapshot 和 Evidence。
+- Agent 后端更换不影响历史 Session 的 ContextSnapshot、Run 和 Evidence；Flow 的定义版本独立于 Agent。
 
 ## 4. 不可完全移植的部分
 

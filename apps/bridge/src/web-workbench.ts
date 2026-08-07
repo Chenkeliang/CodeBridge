@@ -30,7 +30,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   const token = JSON.stringify(options.token).replace(/</g, "\\u003c");
   const agentOptions = agents.map((agent) => `<option value="${escapeHtml(agent)}">${escapeHtml(agent)}</option>`).join("");
   const workflowOptions = [
-    `<option value="">Workflow · 自动生成</option>`,
+    `<option value="">Workflow · 自动发现</option>`,
     ...workflows.map((workflow) => `<option value="${escapeHtml(workflow.id)}">${escapeHtml(workflow.name)} · ${escapeHtml(workflow.id)}</option>`),
   ].join("");
 
@@ -195,8 +195,10 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         state.item = item;
         const agent = item.agent_id || '自动选择';
         const scope = (item.workspace_scope || []).join(', ');
-        $('title').textContent = item.title; $('subtitle').textContent = item.workflow_id ? 'Workflow ' + item.workflow_id + ' · Agent ' + agent : '探索模式 · Agent ' + agent; $('status').textContent = item.status; $('status').className = 'status ' + (item.status.includes('awaiting') ? 'waiting' : '');
-        $('mode').value = item.mode || 'auto'; $('agent').value = item.agent_id || ''; $('workflow').value = item.workflow_id || '';
+        $('title').textContent = item.title; $('subtitle').textContent = item.workflow_id ? 'Workflow ' + item.workflow_id + ' · Agent ' + agent : 'Agent ' + agent + ' · 上下文由运行时发现'; $('status').textContent = item.status; $('status').className = 'status ' + (item.status.includes('awaiting') ? 'waiting' : '');
+        // Mode is Agent-owned. Runtime classification remains metadata and
+        // never becomes a user-selectable workflow mode.
+        $('mode').value = 'auto'; $('agent').value = item.agent_id || ''; $('workflow').value = item.workflow_id || '';
         $('workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
         $('model-chip').textContent = '模型 · ' + agent;
         $('reply-mode-chip').textContent = '模式 · ' + modeLabel(item.mode);

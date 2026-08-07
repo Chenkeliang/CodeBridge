@@ -1,122 +1,181 @@
-# 交互建议
+# 交互规范
 
 ## 1. 产品定位
 
-Web 是完整工作台；飞书和 Telegram 是轻量入口、进度通知和审批通道。三者共享同一个 Conversation、WorkItem 和 Event Stream。
+Web 是完整工作台；飞书和 Telegram 是轻量入口、进度通知和审批通道。所有入口共享 Agent Profile、Session、Folder、Flow、Run 和 Event 的同一套领域合同。
 
-## 2. Web 核心页面
+用户的核心心智模型只有三层：
 
-### 新建 Work：聊天优先
+```text
+Agent   = 由谁工作
+Session = 与这个 Agent 的哪个会话窗口
+Flow    = 当前工作可参考的流程
+```
 
-Web 的主界面应该是一个持续对话窗口，而不是要求用户先填写 WorkItem 元数据的表单：
+TaskRecord/WorkItem 是后台执行记录，在出现异步、审批、证据或恢复需求时由 Runtime 创建或补充，不作为新建对话的前置表单。
+
+## 2. Web 导航层级
+
+左侧导航严格采用 Agent 分组：
+
+```text
+Agents
+  Codex
+    Session 1
+    Session 2
+  Pi
+    Session 1
+  Cursor
+    Session 1
+  Claude Code
+    Session 1
+
+Flows
+  Flow 1
+  Flow 2
+
+Tasks（可选）
+  需要长期跟踪的执行记录
+```
+
+规则：
+
+- Agent Profile 是会话分组；Session 只出现在所属 Agent 下。
+- Codex、Pi、Cursor、Claude Code 和其他注册 Agent 使用相同导航结构。
+- Flows 与 Agents 平级，是独立的流程资源库。
+- 点击 Agent 的“新建会话”时，Session 自动固定绑定该 Agent。
+- 点击已有 Session 时，右侧主面板恢复该 Agent 的原生会话、目录和消息历史。
+- 点击 Flow 时打开流程详情；通过“应用到当前会话”将它作为下一次 Run 的上下文。
+
+页面统一称为 Session。Conversation、provider session、ACP session 等内部名称不直接暴露给用户。
+
+## 3. 主面板
+
+右侧主面板是当前 Session 的持续对话窗口：
 
 ```text
 ┌──────────────────────────────────────────────┐
-│  对话时间线 / Agent 输出 / Plan / 审批         │
+│ Agent 名称 · Session 标题                     │
+│ [模型] [工作目录] [Flow：自动发现]             │
+├──────────────────────────────────────────────┤
+│ 对话消息、Agent 计划、运行状态、审批和产物      │
 │                                              │
-│  [Agent · 自动] [模式 · Agent 判断]            │
-│  [Workflow · 可选] [模型 · 默认] [工作空间 · 自动]│
-│  ＋  输入任务… @项目 /命令                 ↑  │
+│                                              │
+├──────────────────────────────────────────────┤
+│ ＋  输入目标、补充上下文或调整计划          ↑  │
 └──────────────────────────────────────────────┘
 ```
 
-用户只需要描述目标。Agent、Workflow、模式、模型和工作空间都是输入框周边的可选上下文；不填写模式和项目范围时，服务端使用 `auto` 和空范围，交给 Agent/Discovery 判断。项目范围不能再通过自由文本手工拼写，项目引用使用输入框内的 `@` 语法。
+输入框周边的控件都是可选上下文：
 
-标题从第一句话生成，`agent_id`、`title` 和 `mode` 都不是聊天入口的必填字段。选择 Workflow 只是给 Agent 一条参考流程，不会替代对话中的判断。
+- Agent：新建 Session 时由左侧分组确定，已有 Session 显示为只读身份。
+- 模型：从当前 Agent Adapter 动态读取，可选覆盖。
+- 工作目录：通过 Folder 选择器、目录授权或资源引用添加。
+- Flow：选择已有 Flow、查看当前临时 Flow，或保持“自动发现”。
 
-### Workbench
+用户只需要输入自然语言目标。Agent 在时间线中说明它理解到的目标、所需目录、风险、临时 Flow 和下一步；用户可以直接继续对话调整。
 
-建议使用“左侧会话列表 + 中央聊天窗口”的布局，而不是堆叠很多创建字段：
+## 4. Flow 选择和当前 Session 的关系
 
-```text
-左：Conversation / WorkItem 列表
-中：对话、当前任务进度和输入框周边的上下文控制
-```
-
-Agent 判断出来的内容进入时间线和上下文摘要，不要求用户预先填写：
-
-- Context：目标、标识、假设、待确认问题。
-- Projects：已注册项目和新发现候选。
-- Plan：步骤、当前分支、下一步。
-- Evidence：日志、SQL 结果、代码位置、线上版本。
-- Changes：Git diff、测试结果、ReleaseSet。
-
-### 项目发现卡片
+Flow 与 Session 是关联关系，不是页面层级关系：
 
 ```text
-发现新项目 equity-center
-代码：已从 Git remote 确认
-DCP：已找到对应服务
-日志：已找到 LogStore
-置信度：高
-
-[加入当前 Work] [注册到 Catalog] [查看证据] [忽略]
+当前 Session
+  ├── Run 1 → Flow A
+  ├── Run 2 → 自动生成的临时 Flow
+  └── Run 3 → Flow B
 ```
 
-用户不需要手工填写字段，只有冲突字段才进入编辑状态。
+选择 Flow 的效果是：
 
-### 审批交互
+1. 在下一次 Run 创建时固定 Flow 的 `definition_revision`。
+2. 将 Flow 的步骤、分支、能力和风险显示在当前时间线或上下文面板。
+3. 允许 Agent 根据实际证据提出偏离、补充或暂停。
 
-审批必须显示：
+Flow 本身不承载当前执行状态；执行状态属于 Run 和 Event。
 
-- 将要执行的动作。
-- 目标项目和环境。
-- 输入摘要和影响范围。
-- 预期结果。
-- 回滚方式。
-- 过期时间。
+## 5. 新建和恢复 Session
 
-按钮使用明确动词：`批准执行`、`拒绝`、`修改计划`，避免只显示“确定”。
+### 新建
 
-## 3. 飞书和 Telegram
+用户可以通过以下入口新建 Session：
 
-建议支持：
+- 点击某个 Agent 分组旁的“新建会话”。
+- 点击全局“新建会话”，再选择 Agent。
+- 从目录或已有会话详情中选择“使用此 Agent 新建”。
+
+新建时只需要 Agent 和可选目录。标题、模型、Flow、项目范围由用户输入或运行时动态补充。
+
+### 恢复
+
+Session 列表支持：
+
+- 最近使用和按 Agent 筛选。
+- 按目录、标题和更新时间搜索。
+- 继续、关闭、删除、分支和复制（由 Agent Adapter 声明能力）。
+- 显示 Agent 健康状态、Session 状态和最后活动时间。
+
+切换 Agent 会打开另一个 Session。当前 Session 的消息、目录和 Flow 绑定保持不变。
+
+## 6. 临时 Flow 和 Workflow 沉淀
+
+未知工作进入 Session 后，Agent 先生成临时 Flow：
 
 ```text
-/task 新问题：...
-/status
-/plan
-/approve
-/reject
-/projects
-/save-workflow
+自然语言目标
+  ↓
+理解上下文和风险
+  ↓
+生成 ephemeral Flow/Plan
+  ↓
+用户确认或调整
+  ↓
+Run 执行
 ```
 
-长内容、代码 Diff 和证据详情提供 Web 链接；消息通道只显示摘要、进度和需要用户决定的内容。
+当前 Flow 可以在右侧查看、编辑本次分支、暂停或继续。用户认为它值得复用时，选择“保存为 Workflow”；系统生成 Candidate，经过 Schema 检查、评测、Review 和 Git 记录后，进入 Flow Catalog。
 
-## 4. 任务边界
+## 7. 项目和目录
 
-如果检测到目标、项目或环境明显变化，提示：
+Folder 是独立资源，不要求用户在每次对话里手写项目路径：
 
-```text
-这可能是一个新 WorkItem：
-当前：会员权益排查
-新输入：生产改价
+- 通过目录选择器添加主目录。
+- 通过授权接口确认 Runner 可以访问目录。
+- 通过资源引用补充额外目录。
+- Discovery 在 Session 运行中发现 Git remote、服务、日志或 APM 入口后，以候选卡片呈现。
 
-[继续当前任务] [创建新任务]
-```
+发现结果先成为当前 Session 的上下文，用户确认后才登记到 Project Catalog。目录和项目字段的来源、置信度、观察时间都显示在证据面板。
 
-不能因为模型判断就静默切换任务。
+## 8. 任务记录和运行状态
 
-## 5. 必备状态
-
-所有异步操作都需要完整状态：
+Run 是一次实际执行尝试，状态为：
 
 ```text
 queued / running / waiting / succeeded / failed / cancelled
 ```
 
-每个状态都要有：
+当 Run 需要跨项目、异步等待、审批、证据或重启恢复时，Runtime 创建 TaskRecord。TaskRecord 可以在左侧 Tasks 分组中显示，但它始终关联已有 Session，不取代 Session。
 
-- 当前阶段。
-- 最近一次事件。
-- 下一步动作。
-- 预计是否需要用户输入。
-- 失败时的恢复建议。
+任务记录卡片只显示通用字段：
 
-## 6. 空、加载和错误状态
+```text
+目标标题
+所属 Agent / Session
+当前状态
+最近事件
+下一步
+```
 
-- 空状态：说明如何创建第一个 WorkItem，不显示无意义的占位数据。
-- 加载状态：使用与内容结构一致的 Skeleton，不使用无限旋转掩盖等待。
-- 错误状态：说明失败对象、已完成步骤、可重试性和人工处理入口。
-- 权限等待：明确显示“等待系统目录授权”或“等待生产审批”，不能只显示连接中。
+页面不预置任何业务字段或示例流程。
+
+## 9. 飞书和 Telegram
+
+消息通道使用与 Web 相同的 Session ID、Flow ID、Run ID 和 Event Sequence：
+
+- 普通消息继续当前 Session。
+- 需要新 Agent 时创建对应 Agent 的新 Session。
+- 需要选择 Flow 时发送 Flow 引用或由 Agent 自动发现。
+- 长内容、Diff、证据和目录选择回到 Web。
+- 审批只针对具体 Run、Step、Capability 和环境。
+
+通道只负责交互适配，不建立自己的 Agent、Session 或 Flow 状态机。
