@@ -307,7 +307,7 @@ export class SqliteEventStore {
 
   listWorkItems(): WorkItem[] {
     const rows = this.database
-      .prepare("SELECT * FROM work_items ORDER BY updated_at DESC")
+      .prepare("SELECT * FROM work_items ORDER BY updated_at DESC, rowid ASC")
       .all();
     return rows.map(toWorkItem);
   }
