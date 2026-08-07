@@ -146,6 +146,7 @@ program
             cwd,
           },
           prompt,
+          model: linkedSession?.model ?? undefined,
           resumeSessionId: linkedSession?.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
         };
@@ -202,6 +203,7 @@ program
         id: agent.agentId,
         name: agent.displayName,
         status: agent.status,
+        models: agent.models,
       })),
       workflows: [],
     });

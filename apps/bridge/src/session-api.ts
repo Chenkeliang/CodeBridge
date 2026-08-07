@@ -81,6 +81,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     }
     const session = options.catalog.createSession({
       agentId: agent.agentId,
+      model: asNullableString(sessionBody.model),
       folderId: asNullableString(sessionBody.folder_id),
       cwd,
       title: asNullableString(sessionBody.title),
@@ -115,6 +116,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const flowId = Object.hasOwn(body, "flow_id")
       ? asNullableString(body.flow_id)
       : session.flowId;
+    const model = Object.hasOwn(body, "model") ? asNullableString(body.model) : session.model;
     const workItem =
       task ??
       options.workItems.createWorkItem({
@@ -138,6 +140,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     options.catalog.updateSession(session.id, {
       taskRecordId: workItem.id,
       flowId,
+      model,
       title: session.title ?? deriveTitle(body.message),
       status: "active",
     });
@@ -180,8 +183,9 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const flowId = body && Object.hasOwn(body, "flow_id")
       ? asNullableString(body.flow_id)
       : session.flowId;
+    const model = body && Object.hasOwn(body, "model") ? asNullableString(body.model) : session.model;
     if (task.workflowId !== flowId) options.workItems.updateWorkflowBinding(task.id, flowId);
-    options.catalog.updateSession(session.id, { flowId });
+    options.catalog.updateSession(session.id, { flowId, model });
     const run = options.workItems.createRun({
       workItemId: task.id,
       mode: "auto",
@@ -219,6 +223,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const forked = options.catalog.createSession({
       agentId: session.agentId,
       providerSessionId: result.sessionId,
+      model: asNullableString(body?.model) ?? session.model,
       folderId: session.folderId,
       cwd: result.cwd ?? targetCwd,
       additionalDirectories: session.additionalDirectories,
@@ -338,6 +343,7 @@ function toApiSession(session: ReturnType<SessionCatalogStore["getSession"]>): R
     provider_session_id: session.providerSessionId,
     task_record_id: session.taskRecordId,
     flow_id: session.flowId,
+    model: session.model,
     folder_id: session.folderId,
     cwd: session.cwd,
     additional_directories: session.additionalDirectories,

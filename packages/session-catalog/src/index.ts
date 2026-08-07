@@ -26,6 +26,7 @@ export interface AgentSession {
   providerSessionId: string | null;
   taskRecordId: string | null;
   flowId: string | null;
+  model: string | null;
   folderId: string | null;
   cwd: string | null;
   additionalDirectories: string[];
@@ -41,6 +42,7 @@ export interface CreateSessionInput {
   providerSessionId?: string | null;
   taskRecordId?: string | null;
   flowId?: string | null;
+  model?: string | null;
   folderId?: string | null;
   cwd?: string | null;
   additionalDirectories?: string[];
@@ -69,6 +71,7 @@ export class SessionCatalogStore {
         provider_session_id TEXT,
         task_record_id TEXT,
         flow_id TEXT,
+        model TEXT,
         folder_id TEXT,
         cwd TEXT,
         additional_directories TEXT NOT NULL,
@@ -90,6 +93,11 @@ export class SessionCatalogStore {
     } catch {
       // Existing databases already contain the Flow binding column.
     }
+    try {
+      this.database.exec("ALTER TABLE agent_sessions ADD COLUMN model TEXT");
+    } catch {
+      // Existing databases already contain the model override column.
+    }
   }
 
   createSession(input: CreateSessionInput): AgentSession {
@@ -101,6 +109,7 @@ export class SessionCatalogStore {
       providerSessionId: input.providerSessionId ?? null,
       taskRecordId: input.taskRecordId ?? null,
       flowId: input.flowId ?? null,
+      model: input.model ?? null,
       folderId: input.folderId ?? null,
       cwd: input.cwd ?? null,
       additionalDirectories: [...(input.additionalDirectories ?? [])],
@@ -112,9 +121,9 @@ export class SessionCatalogStore {
     this.database
       .prepare(
         `INSERT INTO agent_sessions (
-          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, folder_id, cwd,
+          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, model, folder_id, cwd,
           additional_directories, title, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -123,6 +132,7 @@ export class SessionCatalogStore {
         session.providerSessionId,
         session.taskRecordId,
         session.flowId,
+        session.model,
         session.folderId,
         session.cwd,
         JSON.stringify(session.additionalDirectories),
@@ -167,6 +177,7 @@ export class SessionCatalogStore {
       providerSessionId: input.providerSessionId ?? existing.providerSessionId,
       taskRecordId: input.taskRecordId ?? existing.taskRecordId,
       flowId: input.flowId !== undefined ? input.flowId : existing.flowId,
+      model: input.model !== undefined ? input.model : existing.model,
       folderId: input.folderId ?? existing.folderId,
       cwd: input.cwd ?? existing.cwd,
       additionalDirectories: input.additionalDirectories ?? existing.additionalDirectories,
@@ -176,13 +187,14 @@ export class SessionCatalogStore {
     };
     this.database
       .prepare(
-        `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, flow_id = ?, folder_id = ?, cwd = ?,
+        `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, flow_id = ?, model = ?, folder_id = ?, cwd = ?,
          additional_directories = ?, title = ?, status = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.providerSessionId,
         next.taskRecordId,
         next.flowId,
+        next.model,
         next.folderId,
         next.cwd,
         JSON.stringify(next.additionalDirectories),
@@ -212,6 +224,7 @@ function toSession(row: SqliteRow): AgentSession {
     providerSessionId: row.provider_session_id === null ? null : String(row.provider_session_id),
     taskRecordId: row.task_record_id === null ? null : String(row.task_record_id),
     flowId: row.flow_id === null ? null : String(row.flow_id),
+    model: row.model === null || row.model === undefined ? null : String(row.model),
     folderId: row.folder_id === null ? null : String(row.folder_id),
     cwd: row.cwd === null ? null : String(row.cwd),
     additionalDirectories: JSON.parse(String(row.additional_directories)) as string[],
