@@ -11,6 +11,7 @@
     { "path": "../../packages/memory-plugin" },
     { "path": "../../packages/work-items" },
     { "path": "../../packages/session-catalog" },
-    { "path": "../../packages/flow-catalog" }
+    { "path": "../../packages/flow-catalog" },
+    { "path": "../../packages/agent-registry" }
   ]
 }

@@ -18,6 +18,7 @@
     "@codebridge/policy": "workspace:*",
     "@codebridge/project-catalog": "workspace:*",
     "@codebridge/flow-catalog": "workspace:*",
+    "@codebridge/agent-registry": "workspace:*",
     "@codebridge/session-catalog": "workspace:*",
     "@codebridge/run-executor": "workspace:*",
     "@codebridge/runner-client": "workspace:*",
