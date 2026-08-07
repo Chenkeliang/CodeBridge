@@ -155,6 +155,14 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiSession(options.catalog.updateSession(session.id, { status: "active" })!));
   });
 
+  app.post("/v1/directories/authorize", async (c) => {
+    if (!options.runner) return c.json({ ok: false, error: "runner_unavailable" }, 503);
+    const body = await readJson(c);
+    if (!body || typeof body.path !== "string" || !body.path.trim()) return c.json({ ok: false, error: "path is required" }, 400);
+    const result = await options.runner.authorizeDirectory(body.path);
+    return c.json(result, result.ok ? 200 : 403);
+  });
+
   app.get("/v1/sessions/:session_id/events", (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);

@@ -21,4 +21,21 @@ describe("flow API", () => {
     expect((await response.json() as { flows: Array<{ flow_id: string }> }).flows[0]?.flow_id).toBe("flow-a");
     catalog.close();
   });
+
+  it("saves a Session-generated Flow as a candidate", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const app = createFlowApp(catalog, "token");
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: "sess_1",
+        definition_revision: "sha256:one",
+        flow: { flow_id: "flow-candidate", name: "当前流程", steps: [{ id: "inspect" }] },
+      }),
+    });
+    expect(response.status).toBe(201);
+    expect((await response.json() as { status: string; flow_id: string })).toMatchObject({ status: "candidate", flow_id: "flow-candidate" });
+    catalog.close();
+  });
 });
