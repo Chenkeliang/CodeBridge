@@ -67,7 +67,7 @@ packages/mcp-runtime
 packages/policy-engine
 ```
 
-这些包按实际实现需要逐步提取，不要求一次性拆分。ACP 继续由现有 `backends`、`runner-client` 和 `runner-host` 承担，不新增重复的 ACP Runtime。
+其中 `packages/work-items` 已落地首个 WorkItem、Domain Event 和 SQLite Event Store 切片，但尚未接入 Bridge API。其余包按实际实现需要逐步提取，不要求一次性拆分。ACP 继续由现有 `backends`、`runner-client` 和 `runner-host` 承担，不新增重复的 ACP Runtime。
 
 ## 3. 核心对象
 

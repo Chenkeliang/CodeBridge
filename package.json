@@ -5,7 +5,7 @@
   "description": "自托管多通道 ACP 网关：从飞书或 Telegram 远程驱动本机 Cursor、Claude Code、Codex",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.5.0"
   },
   "scripts": {
     "build": "pnpm -r run build",

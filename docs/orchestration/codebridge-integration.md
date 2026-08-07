@@ -103,6 +103,7 @@ core ← runner-client ← work-items
 - Runner 握手携带 `protocol_version`、`runner_version` 和支持的 Capability。
 - Workflow 创建 WorkItem 时固定 `definition_revision`，后续更新不改变正在执行的实例。
 - Skill 和 MCP 记录来源、版本和内容摘要；默认不复制第三方 Skill 内容。
+- 首个 SQLite Event Store 使用 Node 内置 `node:sqlite`，该 WorkItem 包要求 Node.js `>=22.5.0`；若需要继续支持更旧 Node，由 Store Adapter 替换数据库驱动，不改变领域合同。
 
 项目变更遵循特性分支规则：每个小功能先从生产基线创建独立分支，在分支上完成、验证并提交；只有功能完成且得到用户明确允许后，才合并或提交到 `main`。Orchestration 文档、Schema 和示例也遵循同一规则。
 
