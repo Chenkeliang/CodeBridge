@@ -69,7 +69,7 @@ Web 不应把“工作模式”“项目范围”做成必填表单，但需要�
 4. `Flow`：查询 Flow Catalog；右侧主面板选择 Flow 并绑定到下一次 Run。没有选择时，Agent 生成当前 Session 的 ephemeral Flow。
 5. `TaskRecord`：当 Run 需要异步、审批、证据或恢复时，由 Runtime 自动创建后台记录；用户可在 Tasks 视图中查看，但不需要先创建它。
 
-当前 CodeBridge 已有 Runner 的 session/list、session close/delete、目录授权和 ACP additionalDirectories 能力，也有 Channel 侧 `/resume`、`/cd`、`/root`、`/backend` 逻辑；缺口是把这些能力通过统一 Web Session API 暴露，并建立 Pi SDK Adapter。当前配置和 Runner 只注册 Cursor、Claude、Codex，尚未真正注册或执行 Pi，这也是 Web 中看不到 Pi 的直接原因。
+当前 CodeBridge 已有 Runner 的 session/list、session close/delete、目录授权和 ACP additionalDirectories 能力，也有 Channel 侧 `/resume`、`/cd`、`/root`、`/backend` 逻辑；Pi Node SDK Adapter 已接入 Runner，使用 `AgentSession` 创建、恢复和执行原生 Pi Session。Pi 仍需在配置中显式注册，未配置时 Web Registry 仅显示 `needs_setup`，不会虚构为可执行。
 
 ## 4. 对 CodeBridge 的落地结论
 
