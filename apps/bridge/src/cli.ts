@@ -217,7 +217,7 @@ program
       },
       config.runner.token,
     );
-    const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token);
+    const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token, { sessions: sessionCatalog });
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
