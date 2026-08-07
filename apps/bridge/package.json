@@ -20,6 +20,7 @@
     "@codebridge/flow-catalog": "workspace:*",
     "@codebridge/agent-registry": "workspace:*",
     "@codebridge/session-catalog": "workspace:*",
+    "@codebridge/workflow-engine": "workspace:*",
     "@codebridge/run-executor": "workspace:*",
     "@codebridge/runner-client": "workspace:*",
     "@codebridge/work-items": "workspace:*",

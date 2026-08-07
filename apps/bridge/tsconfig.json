@@ -12,6 +12,7 @@
     { "path": "../../packages/work-items" },
     { "path": "../../packages/session-catalog" },
     { "path": "../../packages/flow-catalog" },
+    { "path": "../../packages/workflow-engine" },
     { "path": "../../packages/agent-registry" }
   ]
 }

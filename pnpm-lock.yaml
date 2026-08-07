@@ -56,6 +56,9 @@ importers:
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../../packages/work-items
+      '@codebridge/workflow-engine':
+        specifier: workspace:*
+        version: link:../../packages/workflow-engine
       '@hono/node-server':
         specifier: ^1.19.14
         version: 1.19.14(hono@4.12.27)
