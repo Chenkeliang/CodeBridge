@@ -35,6 +35,9 @@ importers:
       '@codebridge/policy':
         specifier: workspace:*
         version: link:../../packages/policy
+      '@codebridge/project-catalog':
+        specifier: workspace:*
+        version: link:../../packages/project-catalog
       '@codebridge/run-executor':
         specifier: workspace:*
         version: link:../../packages/run-executor
@@ -127,6 +130,22 @@ importers:
         version: 5.9.3
 
   packages/policy:
+    dependencies:
+      '@codebridge/work-items':
+        specifier: workspace:*
+        version: link:../work-items
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.0)
+
+  packages/project-catalog:
     dependencies:
       '@codebridge/work-items':
         specifier: workspace:*

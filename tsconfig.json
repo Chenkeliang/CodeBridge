@@ -13,6 +13,7 @@
     { "path": "./packages/workflow-engine" },
     { "path": "./packages/policy" },
     { "path": "./packages/run-executor" },
+    { "path": "./packages/project-catalog" },
     { "path": "./apps/bridge" }
   ]
 }

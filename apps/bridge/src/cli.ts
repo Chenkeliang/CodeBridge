@@ -14,6 +14,8 @@ import { SqliteEventStore } from "@codebridge/work-items";
 import { ApprovalService } from "@codebridge/policy";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
+import { ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
+import { createProjectCatalogApp } from "./project-api.js";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 const program = new Command();
@@ -114,6 +116,17 @@ program
         };
       },
     });
+    const projectCatalog = new ProjectCatalogStore(
+      path.join(dataDir, "project-catalog.sqlite"),
+    );
+    const projectDiscovery = new ProjectDiscovery(projectCatalog, {
+      events: workItemStore,
+    });
+    const projectCatalogApp = createProjectCatalogApp(
+      projectCatalog,
+      projectDiscovery,
+      config.runner.token,
+    );
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
@@ -124,6 +137,7 @@ program
       await bridge?.disconnect();
       await telegram?.disconnect();
       approvalService.close();
+      projectDiscovery.close();
       workItemStore.close();
       process.exit(0);
     };
@@ -168,6 +182,7 @@ program
         workItemStore,
         approvalService,
         runExecutor,
+        projectCatalogApp,
       ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,

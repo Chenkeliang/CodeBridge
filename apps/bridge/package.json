@@ -16,6 +16,7 @@
     "@codebridge/core": "workspace:*",
     "@codebridge/memory-plugin": "workspace:*",
     "@codebridge/policy": "workspace:*",
+    "@codebridge/project-catalog": "workspace:*",
     "@codebridge/run-executor": "workspace:*",
     "@codebridge/runner-client": "workspace:*",
     "@codebridge/work-items": "workspace:*",

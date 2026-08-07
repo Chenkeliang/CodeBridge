@@ -31,9 +31,11 @@ export function createBridgeApp(
   workItemStore: SqliteEventStore,
   approvalService?: ApprovalService,
   executor?: RunExecutor,
+  projectCatalogApp?: Hono,
 ) {
   const app = createOutboundApp(bridge, token);
   app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
+  if (projectCatalogApp) app.route("/", projectCatalogApp);
   return app;
 }
 
