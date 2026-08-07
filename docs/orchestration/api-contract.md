@@ -1,8 +1,6 @@
 # Orchestration 接口规范
 
-状态：v1 设计基线；WorkItem 创建、查询、消息、Run 创建和 SSE 事件读取已实现，Agent 执行、审批和 Discovery 路由仍待接入。
-
-当前实现是本地工作台切片，尚未实现跨进程幂等键存储；在开放到生产写入前，必须补齐 `Idempotency-Key` 的持久化去重。
+状态：v1 implemented baseline；WorkItem、Run、Agent 执行、审批、Discovery、幂等恢复和 Web Workbench 已接入本地 Bridge。
 
 ## 1. 协议选择
 
@@ -26,14 +24,15 @@
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `POST` | `/v1/work-items` | 在 Conversation 中创建 WorkItem |
+| `GET` | `/v1/work-items` | 获取工作台收件箱列表 |
 | `GET` | `/v1/work-items/{work_item_id}` | 获取当前状态和固定的定义版本 |
 | `POST` | `/v1/work-items/{work_item_id}/messages` | 发送用户消息或补充输入 |
 | `POST` | `/v1/work-items/{work_item_id}/runs` | 开始调查、修改、Review、发布或观察 Run |
 | `GET` | `/v1/work-items/{work_item_id}/events` | 订阅有序 SSE 事件流 |
 | `POST` | `/v1/runs/{run_id}/approve` | 对指定动作授予短期审批 |
 | `POST` | `/v1/discovery/tasks` | 创建异步项目发现任务 |
-| `GET` | `/v1/catalog/candidates` | 查询待确认的项目候选 |
-| `POST` | `/v1/catalog/candidates/{candidate_id}/accept` | 接受候选并生成 Catalog Diff |
+| `GET` | `/v1/projects/candidates` | 查询待确认的项目候选 |
+| `POST` | `/v1/projects/candidates/{candidate_id}/accept` | 接受候选并登记正式项目 |
 
 完整草案见 [api.openapi.yaml](../../schemas/orchestration/api.openapi.yaml)。
 
