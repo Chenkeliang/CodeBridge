@@ -16,6 +16,7 @@
     { "path": "./packages/project-catalog" },
     { "path": "./packages/session-catalog" },
     { "path": "./packages/flow-catalog" },
+    { "path": "./packages/agent-registry" },
     { "path": "./apps/bridge" }
   ]
 }

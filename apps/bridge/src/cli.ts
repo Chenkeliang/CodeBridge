@@ -17,6 +17,7 @@ import { RunExecutor } from "@codebridge/run-executor";
 import { ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
+import { AgentRegistry } from "@codebridge/agent-registry";
 import { createProjectCatalogApp } from "./project-api.js";
 import { createWebWorkbenchApp } from "./web-workbench.js";
 import { createSessionApp } from "./session-api.js";
@@ -171,7 +172,8 @@ program
     );
     const knownAgents = ["codex", "pi", "cursor", "claude"];
     const agentIds = [...new Set([...knownAgents, ...Object.keys(config.backends)])];
-    const agentProfiles: AgentProfile[] = agentIds.map((agentId) => {
+    const registry = new AgentRegistry();
+    agentIds.forEach((agentId) => {
       const profile = config.backends[agentId];
       const displayNames: Record<string, string> = {
         codex: "Codex",
@@ -179,7 +181,7 @@ program
         cursor: "Cursor",
         claude: "Claude Code",
       };
-      return {
+      registry.register({
         agentId,
         displayName: displayNames[agentId] ?? agentId,
         adapter: agentId === "pi" ? "sdk" : profile?.type === "generic-spawn" ? "cli" : "acp",
@@ -187,8 +189,9 @@ program
         capabilities: profile ? ["session", "workspace", "run"] : [],
         models: profile?.model ? [profile.model] : [],
         sessionFeatures: profile ? ["resume", "close", "delete"] : [],
-      };
+      });
     });
+    const agentProfiles: AgentProfile[] = registry.list();
     const webWorkbenchApp = createWebWorkbenchApp({
       store: workItemStore,
       token: config.runner.token,
