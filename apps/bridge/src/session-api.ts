@@ -14,6 +14,7 @@ export interface SessionApiOptions {
   workItems: SqliteEventStore;
   executor?: RunExecutor;
   runner?: RunnerClient;
+  defaultCwd?: string;
 }
 
 export function createSessionApp(options: SessionApiOptions, token: string) {
@@ -35,13 +36,17 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiAgent(agent));
   });
 
-  app.get("/v1/sessions", (c) => {
+  app.get("/v1/sessions", async (c) => {
     const agentId = c.req.query("agent_id");
+    const importSessions = c.req.query("import") === "true";
+    const cwd = c.req.query("cwd") ?? options.defaultCwd;
+    const sync = importSessions && cwd ? await syncProviderSessions(options, profiles, agentId, cwd) : undefined;
     return c.json({
       sessions: options.catalog.listSessions(agentId).map((session) => ({
         ...toApiSession(session),
         agent: profiles.get(session.agentId)?.displayName ?? session.agentId,
       })),
+      provider_errors: sync?.errors ?? [],
     });
   });
 
@@ -143,6 +148,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json({ run_id: run.id, status: run.status }, 202);
   });
 
+  app.post("/v1/sessions/:session_id/resume", (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (!session.providerSessionId) return c.json({ error: "provider_session_not_bound" }, 409);
+    return c.json(toApiSession(options.catalog.updateSession(session.id, { status: "active" })!));
+  });
+
   app.get("/v1/sessions/:session_id/events", (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
@@ -180,6 +192,45 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   });
 
   return app;
+}
+
+async function syncProviderSessions(
+  options: SessionApiOptions,
+  profiles: Map<string, AgentProfile>,
+  agentId: string | undefined,
+  cwd: string,
+): Promise<{ errors: string[] }> {
+  if (!options.runner) return { errors: [] };
+  const ids = agentId ? [agentId] : [...profiles.keys()];
+  const errors: string[] = [];
+  for (const id of ids) {
+    const profile = profiles.get(id);
+    if (!profile || profile.status !== "healthy") continue;
+    try {
+      const result = await options.runner.listSessions(id, cwd, { all: true, limit: 100 });
+      for (const provider of result.sessions) {
+        const existing = options.catalog.getByProviderSession(id, provider.id);
+        const session = existing ?? options.catalog.createSession({
+          agentId: id,
+          providerSessionId: provider.id,
+          cwd: provider.cwd,
+          additionalDirectories: provider.additionalDirectories,
+          title: provider.preview || null,
+        });
+        options.catalog.updateSession(session.id, {
+          providerSessionId: provider.id,
+          cwd: provider.cwd,
+          additionalDirectories: provider.additionalDirectories,
+          title: provider.preview || session.title,
+          status: "idle",
+        });
+      }
+      if (result.error) errors.push(result.error);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return { errors };
 }
 
 function toApiAgent(agent: AgentProfile): Record<string, unknown> {
