@@ -282,17 +282,21 @@ components:
   schemas:
     CreateWorkItem:
       type: object
-      required: [conversation_id, title, agent_id, mode, message]
+      required: [conversation_id, message]
       properties:
         conversation_id:
           type: string
         title:
           type: string
+          description: Optional display title; generated from the first message when omitted.
         agent_id:
-          type: string
+          type: [string, 'null']
+          description: Optional Agent hint; the configured default is used when omitted.
         mode:
           type: string
-          enum: [investigation, change, review, release, observe]
+          enum: [auto, investigation, change, review, release, observe]
+          default: auto
+          description: Optional orchestration hint; auto lets the Agent classify the work.
         workflow_id:
           type: [string, 'null']
         workspace_scope:
@@ -312,7 +316,8 @@ components:
       properties:
         mode:
           type: string
-          enum: [investigation, change, review, release, observe]
+          enum: [auto, investigation, change, review, release, observe]
+          default: auto
         plan_id:
           type: [string, 'null']
     Acknowledgement:

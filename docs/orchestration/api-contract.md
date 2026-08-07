@@ -53,19 +53,18 @@ Bridge 启动时会把上次进程遗留的 `running` Run 重新放回 `queued`�
 
 ## 4. 创建 WorkItem
 
+聊天入口只要求会话 ID 和第一句话。`title`、`agent_id`、`mode` 和 `workspace_scope` 都是可选上下文；省略时分别生成标题、使用配置默认 Agent、使用 `auto`，并让 Agent/Discovery 判断项目范围。
+
 ```json
 {
   "conversation_id": "conv_01J...",
-  "title": "排查会员权益未到账",
-  "agent_id": "pi-investigator",
-  "mode": "investigation",
+  "mode": "auto",
   "workflow_id": null,
-  "workspace_scope": ["equity-center"],
   "message": "用户 123 的权益为什么没有到账？"
 }
 ```
 
-`workflow_id` 可以为空。为空时 WorkItem 进入 `exploring`，由 Agent 提出临时 Plan；选择 Workflow 时，服务端固定其 Git revision。
+`mode` 是 Agent 的初始提示，不是安全授权；`auto` 表示先判断工作模式、风险和项目范围。`workflow_id` 可以为空。为空时 WorkItem 进入 `exploring`，由 Agent 提出临时 Plan；选择 Workflow 时，服务端固定其 Git revision。
 
 ## 5. 事件流和恢复
 

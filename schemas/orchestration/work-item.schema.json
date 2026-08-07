@@ -39,7 +39,7 @@
     },
     "mode": {
       "type": "string",
-      "enum": ["investigation", "change", "review", "release", "observe"]
+      "enum": ["auto", "investigation", "change", "review", "release", "observe"]
     },
     "conversation_id": { "type": "string", "pattern": "^conv_[A-Za-z0-9]+$" },
     "agent_id": { "type": ["string", "null"] },

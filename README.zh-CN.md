@@ -103,7 +103,7 @@ telegram:
 
 ### Web Workbench
 
-Bridge 启动后可在本机打开 `http://127.0.0.1:19790/workbench/`。它和飞书、Telegram 共用 WorkItem、Run、审批和事件流：可以选择 Agent、选择一条 Workflow 或进入探索模式，继续对话并观察执行时间线。页面只绑定本地 Bridge，不把代码或凭据上传到云端。
+Bridge 启动后可在本机打开 `http://127.0.0.1:19790/workbench/`。它和飞书、Telegram 共用 WorkItem、Run 和事件流：像普通 Agent 工作台一样直接输入目标，输入框周边的 Agent、模式、Workflow 和工作空间只是可选上下文；没有已发现的定义时交给 Agent 自动判断。页面只绑定本地 Bridge，不把代码或凭据上传到云端。
 
 ## 手机优先的命令
 

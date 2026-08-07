@@ -60,6 +60,30 @@ const createBody = {
 };
 
 describe("createWorkItemApp", () => {
+  it("accepts a chat-first WorkItem without user routing metadata", async () => {
+    const { app, store } = makeApp();
+    const response = await app.request(
+      jsonRequest("/v1/work-items", {
+        conversation_id: "conv_01JCHATFIRST",
+        message: "帮我分析这个目标，并说明下一步怎么做",
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      title: "帮我分析这个目标，并说明下一步怎么做",
+      mode: "auto",
+      agent_id: null,
+      workspace_scope: [],
+    });
+
+    const workItem = store.listWorkItems()[0]!;
+    const runResponse = await app.request(
+      jsonRequest(`/v1/work-items/${workItem.id}/runs`, { mode: "auto" }),
+    );
+    expect(runResponse.status).toBe(202);
+  });
+
   it("creates a WorkItem and records the initial message", async () => {
     const { app, store } = makeApp();
     const response = await app.request(

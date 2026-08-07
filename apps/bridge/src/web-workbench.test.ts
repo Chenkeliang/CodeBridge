@@ -3,21 +3,31 @@ import { SqliteEventStore } from "@codebridge/work-items";
 import { createWebWorkbenchApp } from "./web-workbench.js";
 
 describe("web workbench", () => {
-  it("serves a local conversation workbench with agent and workflow selectors", async () => {
+  it("serves a chat-first workbench with optional agent and workflow context", async () => {
     const store = new SqliteEventStore(":memory:");
     const app = createWebWorkbenchApp({
       store,
       token: "web-token",
-      agents: ["pi-investigator", "pi-developer"],
-      workflows: [{ id: "price-change", name: "价格调整" }],
     });
     const response = await app.request("/");
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("Agent");
     expect(html).toContain("Workflow");
-    expect(html).toContain("pi-investigator");
-    expect(html).toContain("价格调整");
+    expect(html).toContain("Agent · 自动选择");
+    expect(html).toContain("Workflow · 自动生成");
+    expect(html).toContain("Agent 会先理解目标，再决定合适的上下文与下一步");
+    expect(html).not.toContain('<label>模式');
+    expect(html).not.toContain('<label>项目范围');
+    expect(html).not.toContain('id="work-title"');
+    expect(html).not.toContain('id="cancel-new"');
+    expect(html).toContain('id="mode"');
+    expect(html).toContain("模式 · Agent 判断");
+    expect(html).not.toContain("权益");
+    expect(html).not.toContain("订单号");
+    expect(html).not.toContain("日志片段");
+    expect(html).not.toContain("示例");
+    expect(html).not.toContain("price-change");
     expect(html).toContain("/v1/work-items");
     store.close();
   });
