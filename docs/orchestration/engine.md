@@ -46,6 +46,8 @@ deprecated
 - `published` 是可被多个 Agent Session 选择的 Git 版本化 Workflow。
 - `deprecated` 保留历史版本，新的 Run 不再默认选择。
 
+Candidate 的 Review 由 `POST /v1/flows/{flow_id}/review` 完成。批准时必须提供已审核定义对应的 `git_revision`；服务端才会把状态切换为 `published`，并将 `definition_revision` 固定为 `git:<revision>`。拒绝只保留 Candidate 及其 `review_status`，不会覆盖已有正式 Workflow。
+
 ## 4. 第一阶段 DSL 最小语法
 
 字段形状如下；具体业务流程由用户输入、受控目录或审核后的 Candidate 提供：

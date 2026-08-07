@@ -9,7 +9,12 @@
     "workflow_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
     "name": { "type": "string", "minLength": 1 },
     "kind": { "type": "string", "enum": ["guide", "runbook"] },
-    "status": { "type": "string", "enum": ["draft", "published", "deprecated"] },
+    "status": { "type": "string", "enum": ["draft", "candidate", "published", "deprecated"] },
+    "definition_revision": { "type": "string" },
+    "source": { "type": "string", "enum": ["agent_generated", "user_selected", "git"] },
+    "review_status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+    "git_revision": { "type": ["string", "null"] },
+    "validation_issues": { "type": "array", "items": { "type": "string" } },
     "description": { "type": "string" },
     "inputs": {
       "type": "array",

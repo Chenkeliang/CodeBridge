@@ -39,6 +39,7 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `GET` | `/v1/flows/{flow_id}` | 获取 Flow 内容和版本 |
 | `POST` | `/v1/flows/{flow_id}/apply` | 将 Flow 绑定到当前 Session 的下一次 Run |
 | `POST` | `/v1/flows/candidates` | 保存当前 Session 生成的 Flow Candidate |
+| `POST` | `/v1/flows/{flow_id}/review` | 通过 Review 决定 Candidate 是否发布，并记录 Git revision |
 | `POST` | `/v1/discovery/tasks` | 创建异步项目或目录发现任务 |
 | `GET` | `/v1/projects/candidates` | 查询待确认的项目候选 |
 | `POST` | `/v1/projects/candidates/{candidate_id}/accept` | 接受候选并登记正式项目 |
