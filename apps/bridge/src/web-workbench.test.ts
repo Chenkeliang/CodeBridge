@@ -12,7 +12,9 @@ describe("web workbench", () => {
     const response = await app.request("/");
     expect(response.status).toBe(200);
     const html = await response.text();
-    expect(html).toContain("Agent");
+    expect(html).toContain("Agents");
+    expect(html).toContain("Flows");
+    expect(html).toContain("New session");
     expect(html).toContain("Workflow");
     expect(html).toContain("Agent · 自动选择");
     expect(html).toContain("Workflow · 自动发现");
@@ -31,7 +33,8 @@ describe("web workbench", () => {
     expect(html).not.toContain("示例");
     expect(html).not.toContain("price-change");
     expect(html).not.toContain("自动生成");
-    expect(html).toContain("/v1/work-items");
+    expect(html).toContain("/v1/sessions");
+    expect(html).not.toContain("@ 委派");
     store.close();
   });
 });

@@ -306,6 +306,22 @@ export class SqliteEventStore {
     return row ? toWorkItem(row) : undefined;
   }
 
+  updateWorkflowBinding(
+    workItemId: string,
+    workflowId: string | null,
+    workflowRevision: string | null = null,
+  ): WorkItem | undefined {
+    if (!this.getWorkItem(workItemId)) return undefined;
+    this.database
+      .prepare(
+        `UPDATE work_items
+         SET workflow_id = ?, workflow_revision = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(workflowId, workflowRevision, new Date().toISOString(), workItemId);
+    return this.getWorkItem(workItemId);
+  }
+
   listWorkItems(): WorkItem[] {
     const rows = this.database
       .prepare("SELECT * FROM work_items ORDER BY updated_at DESC, rowid ASC")

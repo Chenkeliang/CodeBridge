@@ -15,8 +15,12 @@ import { ApprovalService } from "@codebridge/policy";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
 import { ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
+import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
+import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { createProjectCatalogApp } from "./project-api.js";
 import { createWebWorkbenchApp } from "./web-workbench.js";
+import { createSessionApp } from "./session-api.js";
+import { createFlowApp } from "./flow-api.js";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 
 const program = new Command();
@@ -76,6 +80,10 @@ program
     const workItemStore = new SqliteEventStore(
       path.join(dataDir, "orchestration.sqlite"),
     );
+    const sessionCatalog = new SessionCatalogStore(
+      path.join(dataDir, "sessions.sqlite"),
+    );
+    const flowCatalog = new FlowCatalogStore(path.join(dataDir, "flows.sqlite"));
     const approvalService = new ApprovalService(
       workItemStore,
       path.join(dataDir, "approvals.sqlite"),
@@ -86,12 +94,29 @@ program
     });
     const runExecutor = new RunExecutor(workItemStore, runnerClient, {
       approvals: approvalService,
+      onEvent: (run, event) => {
+        if (event.type !== "session") return;
+        const workItem = workItemStore.getWorkItem(run.workItemId);
+        if (!workItem || !workItem.conversationId.startsWith("conv_")) return;
+        const session = sessionCatalog.getSession(
+          `sess_${workItem.conversationId.slice("conv_".length)}`,
+        );
+        if (session) {
+          sessionCatalog.updateSession(session.id, {
+            providerSessionId: event.sessionId,
+            status: "active",
+          });
+        }
+      },
       resolveRequest: (workItem, run) => {
+        const linkedSession = workItem.conversationId.startsWith("conv_")
+          ? sessionCatalog.getSession(`sess_${workItem.conversationId.slice("conv_".length)}`)
+          : undefined;
         const latestMessage = workItemStore
           .listEvents(workItem.id)
           .reverse()
           .find((event) => event.type === "MESSAGE_RECEIVED")?.payload.message;
-        const scope = workItem.workspaceScope[0];
+        const scope = linkedSession?.cwd ?? workItem.workspaceScope[0];
         const cwd =
           (scope && config.workspaces?.named?.[scope]) ??
           (scope && path.isAbsolute(scope)
@@ -102,9 +127,10 @@ program
           config.workspaces?.default ??
           config.workspaces?.root ??
           process.cwd();
+        const requestedBackend = linkedSession?.agentId ?? workItem.agentId;
         const backendId =
-          workItem.agentId && config.backends[workItem.agentId]
-            ? workItem.agentId
+          requestedBackend && config.backends[requestedBackend]
+            ? requestedBackend
             : config.defaultBackend;
         const basePrompt =
           typeof latestMessage === "string" ? latestMessage : workItem.title;
@@ -119,6 +145,8 @@ program
             cwd,
           },
           prompt,
+          resumeSessionId: linkedSession?.providerSessionId ?? undefined,
+          additionalDirectories: linkedSession?.additionalDirectories,
         };
       },
     });
@@ -141,12 +169,48 @@ program
       projectDiscovery,
       config.runner.token,
     );
+    const knownAgents = ["codex", "pi", "cursor", "claude"];
+    const agentIds = [...new Set([...knownAgents, ...Object.keys(config.backends)])];
+    const agentProfiles: AgentProfile[] = agentIds.map((agentId) => {
+      const profile = config.backends[agentId];
+      const displayNames: Record<string, string> = {
+        codex: "Codex",
+        pi: "Pi",
+        cursor: "Cursor",
+        claude: "Claude Code",
+      };
+      return {
+        agentId,
+        displayName: displayNames[agentId] ?? agentId,
+        adapter: agentId === "pi" ? "sdk" : profile?.type === "generic-spawn" ? "cli" : "acp",
+        status: profile ? "healthy" : "needs_setup",
+        capabilities: profile ? ["session", "workspace", "run"] : [],
+        models: profile?.model ? [profile.model] : [],
+        sessionFeatures: profile ? ["resume", "close", "delete"] : [],
+      };
+    });
     const webWorkbenchApp = createWebWorkbenchApp({
       store: workItemStore,
       token: config.runner.token,
-      agents: Object.keys(config.backends),
+      agents: agentProfiles.map((agent) => agent.agentId),
+      agentProfiles: agentProfiles.map((agent) => ({
+        id: agent.agentId,
+        name: agent.displayName,
+        status: agent.status,
+      })),
       workflows: [],
     });
+    const sessionCatalogApp = createSessionApp(
+      {
+        catalog: sessionCatalog,
+        agents: agentProfiles,
+        workItems: workItemStore,
+        executor: runExecutor,
+        runner: runnerClient,
+      },
+      config.runner.token,
+    );
+    const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token);
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
@@ -158,6 +222,8 @@ program
       await telegram?.disconnect();
       approvalService.close();
       projectDiscovery.close();
+      sessionCatalog.close();
+      flowCatalog.close();
       workItemStore.close();
       process.exit(0);
     };
@@ -204,6 +270,8 @@ program
         runExecutor,
         projectCatalogApp,
         webWorkbenchApp,
+        sessionCatalogApp,
+        flowCatalogApp,
       ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,
