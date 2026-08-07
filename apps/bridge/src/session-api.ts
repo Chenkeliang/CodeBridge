@@ -155,6 +155,33 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiSession(options.catalog.updateSession(session.id, { status: "active" })!));
   });
 
+  app.post("/v1/sessions/:session_id/fork", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    if (!session.providerSessionId || !session.cwd) {
+      return c.json({ error: "provider_session_not_bound" }, 409);
+    }
+    const body = await readJson(c);
+    const targetCwd = asNullableString(body?.target_cwd) ?? session.cwd;
+    const result = await options.runner.forkSession(
+      session.agentId,
+      session.cwd,
+      session.providerSessionId,
+      targetCwd,
+    );
+    if (!result.ok || !result.sessionId) return c.json(result, 409);
+    const forked = options.catalog.createSession({
+      agentId: session.agentId,
+      providerSessionId: result.sessionId,
+      folderId: session.folderId,
+      cwd: result.cwd ?? targetCwd,
+      additionalDirectories: session.additionalDirectories,
+      title: asNullableString(body?.title) ?? session.title,
+    });
+    return c.json(toApiSession(forked), 201);
+  });
+
   app.post("/v1/directories/authorize", async (c) => {
     if (!options.runner) return c.json({ ok: false, error: "runner_unavailable" }, 503);
     const body = await readJson(c);

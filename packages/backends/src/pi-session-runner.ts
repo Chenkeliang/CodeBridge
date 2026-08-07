@@ -36,6 +36,9 @@ export interface PiSessionRunnerOptions {
 export interface PiSessionLifecycleResult {
   ok: boolean;
   error?: string;
+  sessionId?: string;
+  cwd?: string;
+  title?: string | null;
 }
 
 /** Map Pi's event stream to CodeBridge's provider-neutral event contract. */
@@ -225,6 +228,22 @@ export async function closePiSession(
 ): Promise<PiSessionLifecycleResult> {
   const session = await findPiSession(cwd, sessionId);
   return session ? { ok: true } : { ok: false, error: "Pi session not found" };
+}
+
+export async function forkPiSession(
+  sourceCwd: string,
+  sessionId: string,
+  targetCwd: string,
+): Promise<PiSessionLifecycleResult> {
+  const source = await findPiSession(sourceCwd, sessionId);
+  if (!source) return { ok: false, error: "Pi session not found" };
+  const fork = SessionManager.forkFrom(source.path, targetCwd);
+  return {
+    ok: true,
+    sessionId: fork.getSessionId(),
+    cwd: targetCwd,
+    title: source.name ?? (source.firstMessage || null),
+  };
 }
 
 export async function deletePiSession(

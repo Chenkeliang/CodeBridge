@@ -265,6 +265,31 @@ describe("RunnerHost session lifecycle", () => {
 });
 
 describe("RunnerHost Pi SDK backend", () => {
+  it("forks a Pi provider session into a target directory", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-fork-"));
+    const sourceCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-source-"));
+    const targetCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-target-"));
+    tmpDirs.push(dataDir, sourceCwd, targetCwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      piSessionForker: async (_cwd, _sessionId, target) => ({
+        ok: true,
+        sessionId: "pi-forked",
+        cwd: target,
+      }),
+    });
+
+    await expect(host.forkSession("pi", sourceCwd, "pi-source", targetCwd)).resolves.toMatchObject({
+      ok: true,
+      cwd: fs.realpathSync(targetCwd),
+    });
+    host.shutdown();
+  });
+
   it("lists Pi sessions without spawning an ACP process", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-list-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-list-"));

@@ -87,4 +87,31 @@ describe("session API", () => {
     catalog.close();
     workItems.close();
   });
+
+  it("creates a new Session from a provider-native fork", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      forkSession: async () => ({ ok: true, sessionId: "pi-forked", cwd: "/tmp/target" }),
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+    const source = catalog.createSession({ agentId: "pi", cwd: "/tmp/source", providerSessionId: "pi-source" });
+
+    const response = await app.request(`/v1/sessions/${source.id}/fork`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ target_cwd: "/tmp/target" }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      agent_id: "pi",
+      provider_session_id: "pi-forked",
+      cwd: "/tmp/target",
+      status: "idle",
+    });
+    expect(catalog.listSessions("pi")).toHaveLength(2);
+    catalog.close();
+    workItems.close();
+  });
 });
