@@ -179,6 +179,9 @@ importers:
       '@codebridge/core':
         specifier: workspace:*
         version: link:../core
+      '@codebridge/policy':
+        specifier: workspace:*
+        version: link:../policy
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../work-items

@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@codebridge/core": "workspace:*",
+    "@codebridge/policy": "workspace:*",
     "@codebridge/work-items": "workspace:*"
   },
   "devDependencies": {

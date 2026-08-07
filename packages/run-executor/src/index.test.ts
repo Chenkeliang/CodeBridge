@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
 import { SqliteEventStore } from "@codebridge/work-items";
+import { ApprovalService } from "@codebridge/policy";
 import { RunExecutor } from "./index.js";
 
 class FakeRunner {
@@ -76,6 +77,36 @@ describe("RunExecutor", () => {
     await expect(executor.execute(run.id)).rejects.toThrow("runner offline");
     expect(store.getRun(run.id)?.status).toBe("failed");
     expect(store.getWorkItem(item.id)?.status).toBe("failed");
+    store.close();
+  });
+
+  it("pauses production work until a scoped approval is granted", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "release",
+      mode: "release",
+      conversationId: "web:release",
+      riskLevel: "production_write",
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode });
+    const approvals = new ApprovalService(store, ":memory:");
+    const executor = new RunExecutor(store, new FakeRunner([{ type: "done", exitCode: 0 }]), {
+      approvals,
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "发布",
+      }),
+    });
+
+    expect((await executor.execute(run.id)).status).toBe("waiting");
+    const approval = approvals.listForRun(run.id)[0];
+    expect(approval?.status).toBe("requested");
+    approvals.grant(approval!.id, "user");
+    store.requeueRun(run.id);
+    expect((await executor.execute(run.id)).status).toBe("succeeded");
+    expect(approvals.get(approval!.id)?.status).toBe("consumed");
+    approvals.close();
     store.close();
   });
 });

@@ -303,6 +303,9 @@ components:
           type: string
         identifiers:
           type: object
+        risk_level:
+          type: string
+          enum: [read_only, workspace_write, git_write, production_write]
     StartRun:
       type: object
       required: [mode]
@@ -340,17 +343,23 @@ components:
           enum: [queued, running, waiting, succeeded, failed, cancelled]
     ProjectCandidate:
       type: object
-      required: [candidate_id, project_id, status, confidence, sources]
+      required: [id, project_id, status, confidence, evidence, observed_at]
       properties:
-        candidate_id:
+        id:
           type: string
         project_id:
           type: string
-        repo:
+        display_name:
+          type: [string, 'null']
+        repository_remote:
+          type: [string, 'null']
+        language:
           type: [string, 'null']
         deploy_service:
           type: [string, 'null']
         log_service:
+          type: [string, 'null']
+        apm_service:
           type: [string, 'null']
         status:
           type: string
@@ -358,17 +367,18 @@ components:
         confidence:
           type: string
           enum: [low, medium, high]
-        sources:
+        evidence:
           type: array
           items:
             type: object
-            required: [kind, observed_at]
+            required: [kind, ref]
             properties:
-              kind:
-                type: string
-              observed_at:
-                type: string
-                format: date-time
+              kind: { type: string }
+              ref: { type: string }
+              value: { type: string }
+        observed_at:
+          type: string
+          format: date-time
     ErrorResponse:
       type: object
       required: [error]
