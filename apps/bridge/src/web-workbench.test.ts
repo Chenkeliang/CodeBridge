@@ -29,6 +29,8 @@ describe("web workbench", () => {
     expect(html).toContain('id="workspace-authorize"');
     expect(html).toContain("Folder / 工作目录（可选）");
     expect(html).toContain("/v1/directories/authorize");
+    expect(html).toContain('id="save-flow"');
+    expect(html).toContain("/v1/flows/candidates");
     expect(html).not.toContain("模式 · 发布");
     expect(html).not.toContain("模式 · 调查");
     expect(html).not.toContain("权益");
