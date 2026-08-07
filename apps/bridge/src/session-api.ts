@@ -61,6 +61,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (agent.status !== "healthy") {
       return c.json({ error: "agent_unavailable", status: agent.status }, 409);
     }
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = options.workItems.getIdempotencyResponse("session:create", idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 201);
+    }
     const sessionBody = body ?? {};
     const requestedCwd = asNullableString(sessionBody.cwd);
     let cwd = requestedCwd;
@@ -80,7 +85,9 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       cwd,
       title: asNullableString(sessionBody.title),
     });
-    return c.json(toApiSession(session), 201);
+    const response = toApiSession(session);
+    if (idempotencyKey) options.workItems.putIdempotencyResponse("session:create", idempotencyKey, response);
+    return c.json(response, 201);
   });
 
   app.get("/v1/sessions/:session_id", (c) => {
@@ -95,6 +102,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!session) return c.json({ error: "session_not_found" }, 404);
     if (!body || typeof body.message !== "string" || !body.message.trim()) {
       return c.json({ error: "message is required" }, 400);
+    }
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = options.workItems.getIdempotencyResponse(`session:message:${session.id}`, idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 202);
     }
 
     const task = session.taskRecordId
@@ -142,17 +154,16 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         });
       });
     }
-    return c.json(
-      {
+    const response = {
         request_id: `req_${randomUUID().replaceAll("-", "")}`,
         accepted: true,
         session_id: session.id,
         task_record_id: workItem.id,
         event_id: event.eventId,
         sequence: event.sequence,
-      },
-      202,
-    );
+      };
+    if (idempotencyKey) options.workItems.putIdempotencyResponse(`session:message:${session.id}`, idempotencyKey, response);
+    return c.json(response, 202);
   });
 
   app.post("/v1/sessions/:session_id/runs", async (c) => {
@@ -161,6 +172,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const body = await readJson(c);
     const task = session.taskRecordId ? options.workItems.getWorkItem(session.taskRecordId) : undefined;
     if (!task) return c.json({ error: "message_required", message: "先向 Session 发送消息" }, 409);
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = options.workItems.getIdempotencyResponse(`session:run:${session.id}`, idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 202);
+    }
     const flowId = body && Object.hasOwn(body, "flow_id")
       ? asNullableString(body.flow_id)
       : session.flowId;
@@ -172,7 +188,9 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       agentId: session.agentId,
     });
     if (options.executor) void options.executor.execute(run.id).catch(() => {});
-    return c.json({ run_id: run.id, status: run.status }, 202);
+    const response = { run_id: run.id, status: run.status };
+    if (idempotencyKey) options.workItems.putIdempotencyResponse(`session:run:${session.id}`, idempotencyKey, response);
+    return c.json(response, 202);
   });
 
   app.post("/v1/sessions/:session_id/resume", (c) => {
@@ -225,7 +243,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         headers: { "cache-control": "no-cache", "content-type": "text/event-stream; charset=utf-8" },
       });
     }
-    const after = Number(c.req.query("after_sequence") ?? "0");
+    const after = Number(c.req.query("after_sequence") ?? c.req.header("last-event-id") ?? "0");
     if (!Number.isInteger(after) || after < 0) return c.json({ error: "invalid_after_sequence" }, 400);
     const stream = options.workItems
       .listEvents(session.taskRecordId, after)

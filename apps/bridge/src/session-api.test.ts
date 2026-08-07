@@ -206,4 +206,59 @@ describe("session API", () => {
     catalog.close();
     workItems.close();
   });
+
+  it("resumes the Session event stream from Last-Event-ID", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    const message = await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ message: "事件恢复" }),
+    });
+    const taskId = (await message.json() as { task_record_id: string }).task_record_id;
+    workItems.appendEvent({ workItemId: taskId, type: "AGENT_EVENT", actor: "agent", payload: { text: "继续" } });
+    const response = await app.request(`/v1/sessions/${session.id}/events`, {
+      headers: { authorization: `Bearer ${TOKEN}`, "Last-Event-ID": "1" },
+    });
+    expect(await response.text()).toContain("AGENT_EVENT");
+    catalog.close();
+    workItems.close();
+  });
+
+  it("makes Session creation, messages and Runs idempotent", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const createInit = {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", "Idempotency-Key": "session-1" },
+      body: JSON.stringify({ agent_id: "pi" }),
+    };
+    const firstCreate = await app.request("/v1/sessions", createInit);
+    const secondCreate = await app.request("/v1/sessions", createInit);
+    const session = await firstCreate.json() as { session_id: string };
+    expect((await secondCreate.json() as { session_id: string }).session_id).toBe(session.session_id);
+    const messageInit = {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", "Idempotency-Key": "message-1" },
+      body: JSON.stringify({ message: "同一个消息" }),
+    };
+    const firstMessage = await app.request(`/v1/sessions/${session.session_id}/messages`, messageInit);
+    const secondMessage = await app.request(`/v1/sessions/${session.session_id}/messages`, messageInit);
+    const firstMessageBody = await firstMessage.json() as { task_record_id: string };
+    expect(await secondMessage.json()).toEqual(firstMessageBody);
+    const runInit = {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", "Idempotency-Key": "run-1" },
+      body: JSON.stringify({}),
+    };
+    const firstRun = await app.request(`/v1/sessions/${session.session_id}/runs`, runInit);
+    const secondRun = await app.request(`/v1/sessions/${session.session_id}/runs`, runInit);
+    expect(await secondRun.json()).toEqual(await firstRun.json());
+    expect(workItems.listRuns(firstMessageBody.task_record_id)).toHaveLength(1);
+    catalog.close();
+    workItems.close();
+  });
 });
