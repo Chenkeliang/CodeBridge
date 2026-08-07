@@ -14,8 +14,10 @@ describe("flow catalog", () => {
       steps: [{ id: "inspect" }],
     });
     expect(store.get("flow-a")).toEqual(flow);
+    expect(flow.reviewStatus).toBe("pending");
+    expect(flow.gitRevision).toBeNull();
     expect(store.list()).toHaveLength(1);
-    expect(store.save({ ...flow, status: "published", definitionRevision: "sha256:two" }).status).toBe("published");
+    expect(store.save({ ...flow, status: "published", definitionRevision: "sha256:two", reviewStatus: "approved", gitRevision: "abc" })).toMatchObject({ reviewStatus: "approved", gitRevision: "abc" });
     store.close();
   });
 });

@@ -14,6 +14,28 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string) {
     const flow = catalog.get(c.req.param("flow_id"));
     return flow ? c.json(toApiFlow(flow)) : c.json({ error: "flow_not_found" }, 404);
   });
+  app.post("/v1/flows/:flow_id/review", async (c) => {
+    const flow = catalog.get(c.req.param("flow_id"));
+    if (!flow) return c.json({ error: "flow_not_found" }, 404);
+    if (flow.status !== "candidate") return c.json({ error: "flow_not_reviewable" }, 409);
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const decision = body?.decision;
+    if (decision !== "approve" && decision !== "reject") {
+      return c.json({ error: "decision must be approve or reject" }, 400);
+    }
+    if (decision === "approve" && (typeof body?.git_revision !== "string" || !body.git_revision.trim())) {
+      return c.json({ error: "git_revision is required when approving a Flow" }, 400);
+    }
+    const reviewed = catalog.save({
+      ...flow,
+      status: decision === "approve" ? "published" : "candidate",
+      source: decision === "approve" ? "git" : flow.source,
+      definitionRevision: decision === "approve" ? `git:${body!.git_revision}` : flow.definitionRevision,
+      reviewStatus: decision === "approve" ? "approved" : "rejected",
+      gitRevision: decision === "approve" ? String(body!.git_revision) : flow.gitRevision,
+    });
+    return c.json(toApiFlow(reviewed));
+  });
   app.post("/v1/flows/candidates", async (c) => {
     const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
     if (!body || typeof body.session_id !== "string" || typeof body.definition_revision !== "string") {
@@ -60,6 +82,8 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string) {
       status: "candidate",
       source: "agent_generated",
       definitionRevision: body.definition_revision,
+      reviewStatus: "pending",
+      validationIssues: [],
       steps,
     });
     return c.json(toApiFlow(flow), 201);
@@ -77,6 +101,9 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
     status: flow.status,
     source: flow.source,
     definition_revision: flow.definitionRevision,
+    review_status: flow.reviewStatus,
+    git_revision: flow.gitRevision,
+    validation_issues: flow.validationIssues,
     steps: flow.steps.map((step) => ({
       id: step.id,
       capability: step.capability ?? null,

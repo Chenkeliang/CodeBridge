@@ -214,6 +214,35 @@ paths:
                 $ref: '#/components/schemas/Flow'
         '404':
           $ref: '#/components/responses/NotFound'
+  /v1/flows/{flow_id}/review:
+    parameters:
+      - $ref: '#/components/parameters/FlowId'
+    post:
+      operationId: reviewFlow
+      summary: Approve or reject a Workflow Candidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision:
+                  type: string
+                  enum: [approve, reject]
+                git_revision:
+                  type: [string, 'null']
+                  description: Required for approval; points to the reviewed Git definition.
+      responses:
+        '200':
+          description: Updated Flow review state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /v1/flows/{flow_id}/apply:
     parameters:
       - $ref: '#/components/parameters/FlowId'
@@ -669,6 +698,13 @@ components:
           type: string
           enum: [agent_generated, user_selected, git]
         definition_revision: { type: string }
+        review_status:
+          type: string
+          enum: [pending, approved, rejected]
+        git_revision: { type: [string, 'null'] }
+        validation_issues:
+          type: array
+          items: { type: string }
         steps:
           type: array
           items:
@@ -681,6 +717,14 @@ components:
               depends_on:
                 type: array
                 items: { type: string }
+              branches:
+                type: array
+                items:
+                  type: object
+                  required: [when, next]
+                  properties:
+                    when: { type: string }
+                    next: { type: string }
         session_id: { type: [string, 'null'] }
     FlowCandidateRequest:
       type: object

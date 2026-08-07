@@ -9,6 +9,7 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
 export type FlowKind = "ephemeral" | "guide" | "runbook";
 export type FlowStatus = "draft" | "candidate" | "published" | "deprecated";
 export type FlowSource = "agent_generated" | "user_selected" | "git";
+export type FlowReviewStatus = "pending" | "approved" | "rejected";
 export interface FlowStep {
   id: string;
   capability?: string;
@@ -26,6 +27,9 @@ export interface FlowRecord {
   status: FlowStatus;
   source: FlowSource;
   definitionRevision: string;
+  reviewStatus: FlowReviewStatus;
+  gitRevision: string | null;
+  validationIssues: string[];
   steps: FlowStep[];
   createdAt: string;
   updatedAt: string;
@@ -48,14 +52,24 @@ export class FlowCatalogStore {
         status TEXT NOT NULL,
         source TEXT NOT NULL,
         definition_revision TEXT NOT NULL,
+        review_status TEXT NOT NULL DEFAULT 'pending',
+        git_revision TEXT,
+        validation_issues TEXT NOT NULL DEFAULT '[]',
         steps TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
     `);
+    for (const statement of [
+      "ALTER TABLE flows ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'",
+      "ALTER TABLE flows ADD COLUMN git_revision TEXT",
+      "ALTER TABLE flows ADD COLUMN validation_issues TEXT NOT NULL DEFAULT '[]'",
+    ]) {
+      try { this.database.exec(statement); } catch { /* Existing databases already contain the column. */ }
+    }
   }
 
-  save(input: Omit<FlowRecord, "schemaVersion" | "createdAt" | "updatedAt"> & Partial<Pick<FlowRecord, "createdAt" | "updatedAt">>): FlowRecord {
+  save(input: Omit<FlowRecord, "schemaVersion" | "createdAt" | "updatedAt" | "reviewStatus" | "gitRevision" | "validationIssues"> & Partial<Pick<FlowRecord, "createdAt" | "updatedAt" | "reviewStatus" | "gitRevision" | "validationIssues">>): FlowRecord {
     const current = this.get(input.flowId);
     const now = new Date().toISOString();
     const record: FlowRecord = {
@@ -66,17 +80,22 @@ export class FlowCatalogStore {
       status: input.status,
       source: input.source,
       definitionRevision: input.definitionRevision,
+      reviewStatus: input.reviewStatus ?? current?.reviewStatus ?? (input.status === "published" ? "approved" : "pending"),
+      gitRevision: input.gitRevision ?? current?.gitRevision ?? null,
+      validationIssues: input.validationIssues ?? current?.validationIssues ?? [],
       steps: input.steps.map((step) => ({ ...step })),
       createdAt: current?.createdAt ?? input.createdAt ?? now,
       updatedAt: input.updatedAt ?? now,
     };
     this.database.prepare(`
-      INSERT INTO flows (flow_id, schema_version, name, kind, status, source, definition_revision, steps, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO flows (flow_id, schema_version, name, kind, status, source, definition_revision, review_status, git_revision, validation_issues, steps, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(flow_id) DO UPDATE SET schema_version=excluded.schema_version, name=excluded.name,
         kind=excluded.kind, status=excluded.status, source=excluded.source,
-        definition_revision=excluded.definition_revision, steps=excluded.steps, updated_at=excluded.updated_at
-    `).run(record.flowId, record.schemaVersion, record.name, record.kind, record.status, record.source, record.definitionRevision, JSON.stringify(record.steps), record.createdAt, record.updatedAt);
+        definition_revision=excluded.definition_revision, review_status=excluded.review_status,
+        git_revision=excluded.git_revision, validation_issues=excluded.validation_issues,
+        steps=excluded.steps, updated_at=excluded.updated_at
+    `).run(record.flowId, record.schemaVersion, record.name, record.kind, record.status, record.source, record.definitionRevision, record.reviewStatus, record.gitRevision, JSON.stringify(record.validationIssues), JSON.stringify(record.steps), record.createdAt, record.updatedAt);
     return record;
   }
 
@@ -103,6 +122,9 @@ function toFlow(row: Row): FlowRecord {
     status: String(row.status) as FlowStatus,
     source: String(row.source) as FlowSource,
     definitionRevision: String(row.definition_revision),
+    reviewStatus: String(row.review_status ?? "pending") as FlowReviewStatus,
+    gitRevision: row.git_revision === null || row.git_revision === undefined ? null : String(row.git_revision),
+    validationIssues: JSON.parse(String(row.validation_issues ?? "[]")) as string[],
     steps: JSON.parse(String(row.steps)) as FlowStep[],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),

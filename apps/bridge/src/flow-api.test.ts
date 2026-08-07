@@ -60,4 +60,33 @@ describe("flow API", () => {
     expect(catalog.get("invalid-flow")).toBeUndefined();
     catalog.close();
   });
+
+  it("requires a Git revision before publishing a candidate", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    catalog.save({
+      flowId: "flow-review",
+      name: "Review me",
+      kind: "guide",
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision: "sha256:one",
+      steps: [{ id: "inspect", capability: "context.inspect", mode: "read_only" }],
+    });
+    const app = createFlowApp(catalog, "token");
+    const missingRevision = await app.request("/v1/flows/flow-review/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve" }),
+    });
+    expect(missingRevision.status).toBe(400);
+
+    const approved = await app.request("/v1/flows/flow-review/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "abc123" }),
+    });
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toMatchObject({ status: "published", review_status: "approved", git_revision: "abc123", definition_revision: "git:abc123" });
+    catalog.close();
+  });
 });
