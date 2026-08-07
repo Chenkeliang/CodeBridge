@@ -19,7 +19,7 @@ export function createProjectCatalogApp(
   const app = new Hono();
   const tasks = new Map<string, Task>();
 
-  app.use("*", async (c, next) => {
+  app.use("/v1/*", async (c, next) => {
     if (c.req.header("authorization") !== `Bearer ${token}`) {
       return c.json({ error: { code: "unauthorized", message: "未授权" } }, 401);
     }

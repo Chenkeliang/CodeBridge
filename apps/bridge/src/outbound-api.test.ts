@@ -8,6 +8,7 @@ import {
   createOutboundApp,
   type OutboundBridge,
 } from "./outbound-api.js";
+import { createWebWorkbenchApp } from "./web-workbench.js";
 
 const TOKEN = "test-token-12345";
 
@@ -140,5 +141,51 @@ describe("createOutboundApp", () => {
     expect(response.status).toBe(201);
     store.close();
     fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("serves the Workbench shell without a bearer token", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const webWorkbenchApp = createWebWorkbenchApp({ store, token: TOKEN });
+    const { bridge } = makeApp();
+    const app = createBridgeApp(
+      bridge,
+      TOKEN,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      webWorkbenchApp,
+    );
+
+    const response = await app.request("/workbench/");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(await response.text()).toContain("CodeBridge Workbench");
+    store.close();
+  });
+
+  it("keeps API and outbound routes protected when the Workbench is public", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const webWorkbenchApp = createWebWorkbenchApp({ store, token: TOKEN });
+    const { bridge } = makeApp();
+    const app = createBridgeApp(
+      bridge,
+      TOKEN,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      webWorkbenchApp,
+    );
+
+    const workItemsResponse = await app.request("/v1/work-items");
+    expect(workItemsResponse.status).toBe(401);
+
+    const outboundResponse = await app.request(
+      new Request("http://localhost/outbound/file", { method: "POST" }),
+    );
+    expect(outboundResponse.status).toBe(401);
+    store.close();
   });
 });
