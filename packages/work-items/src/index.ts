@@ -36,6 +36,7 @@ export type RiskLevel =
 export type DomainEventType =
   | "WORK_ITEM_CREATED"
   | "MESSAGE_RECEIVED"
+  | "RUN_CREATED"
   | "DISCOVERY_STARTED"
   | "PROJECT_CANDIDATE_FOUND"
   | "PLAN_PROPOSED"
@@ -114,6 +115,34 @@ export interface AppendEventInput {
   payload?: Record<string, unknown>;
 }
 
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface Run {
+  schemaVersion: 1;
+  id: string;
+  workItemId: string;
+  mode: WorkItemMode;
+  status: RunStatus;
+  agentId: string | null;
+  planId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateRunInput {
+  id?: string;
+  workItemId: string;
+  mode: WorkItemMode;
+  agentId?: string | null;
+  planId?: string | null;
+}
+
 type SqliteRow = Record<string, unknown>;
 
 const STATUS_BY_EVENT: Partial<Record<DomainEventType, WorkItemStatus>> = {
@@ -176,6 +205,22 @@ export class SqliteEventStore {
 
       CREATE INDEX IF NOT EXISTS domain_events_work_item_sequence
         ON domain_events (work_item_id, sequence);
+
+      CREATE TABLE IF NOT EXISTS runs (
+        id TEXT PRIMARY KEY,
+        schema_version INTEGER NOT NULL,
+        work_item_id TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        agent_id TEXT,
+        plan_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (work_item_id) REFERENCES work_items(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS runs_work_item_created
+        ON runs (work_item_id, created_at);
     `);
   }
 
@@ -274,6 +319,79 @@ export class SqliteEventStore {
     return rows.map(toDomainEvent);
   }
 
+  createRun(input: CreateRunInput): Run {
+    const workItem = this.getWorkItem(input.workItemId);
+    if (!workItem) {
+      throw new Error(`WorkItem not found: ${input.workItemId}`);
+    }
+
+    const now = new Date().toISOString();
+    const run: Run = {
+      schemaVersion: 1,
+      id: input.id ?? createId("run"),
+      workItemId: input.workItemId,
+      mode: input.mode,
+      status: "queued",
+      agentId: input.agentId ?? workItem.agentId,
+      planId: input.planId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      this.database
+        .prepare(
+          `INSERT INTO runs (
+            id, schema_version, work_item_id, mode, status, agent_id,
+            plan_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          run.id,
+          run.schemaVersion,
+          run.workItemId,
+          run.mode,
+          run.status,
+          run.agentId,
+          run.planId,
+          run.createdAt,
+          run.updatedAt,
+        );
+      this.appendEventInTransaction({
+        workItemId: run.workItemId,
+        type: "RUN_CREATED",
+        actor: "system",
+        target: run.id,
+        payload: {
+          mode: run.mode,
+          agent_id: run.agentId,
+          plan_id: run.planId,
+        },
+      });
+      this.database.exec("COMMIT;");
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+
+    return run;
+  }
+
+  getRun(runId: string): Run | undefined {
+    const row = this.database.prepare("SELECT * FROM runs WHERE id = ?").get(runId);
+    return row ? toRun(row) : undefined;
+  }
+
+  listRuns(workItemId: string): Run[] {
+    const rows = this.database
+      .prepare(
+        "SELECT * FROM runs WHERE work_item_id = ? ORDER BY created_at ASC",
+      )
+      .all(workItemId);
+    return rows.map(toRun);
+  }
+
   close(): void {
     if (this.database.isOpen) this.database.close();
   }
@@ -334,7 +452,7 @@ export class SqliteEventStore {
 
 }
 
-function createId(prefix: "wi" | "evt"): string {
+function createId(prefix: "wi" | "evt" | "run"): string {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }
 
@@ -373,5 +491,19 @@ function toDomainEvent(row: SqliteRow): DomainEvent {
     inputHash: row.input_hash === null ? null : String(row.input_hash),
     resultRef: row.result_ref === null ? null : String(row.result_ref),
     payload: JSON.parse(String(row.payload)) as Record<string, unknown>,
+  };
+}
+
+function toRun(row: SqliteRow): Run {
+  return {
+    schemaVersion: Number(row.schema_version) as 1,
+    id: String(row.id),
+    workItemId: String(row.work_item_id),
+    mode: String(row.mode) as WorkItemMode,
+    status: String(row.status) as RunStatus,
+    agentId: row.agent_id === null ? null : String(row.agent_id),
+    planId: row.plan_id === null ? null : String(row.plan_id),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }

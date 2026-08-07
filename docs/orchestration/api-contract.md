@@ -1,6 +1,6 @@
 # Orchestration 接口规范
 
-状态：v1 设计基线；WorkItem 创建、查询、消息和 SSE 事件读取已实现，Run、审批和 Discovery 路由仍待接入。
+状态：v1 设计基线；WorkItem 创建、查询、消息、Run 创建和 SSE 事件读取已实现，Agent 执行、审批和 Discovery 路由仍待接入。
 
 当前实现是本地工作台切片，尚未实现跨进程幂等键存储；在开放到生产写入前，必须补齐 `Idempotency-Key` 的持久化去重。
 

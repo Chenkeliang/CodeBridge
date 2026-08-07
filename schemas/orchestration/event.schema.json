@@ -23,6 +23,7 @@
       "enum": [
         "WORK_ITEM_CREATED",
         "MESSAGE_RECEIVED",
+        "RUN_CREATED",
         "DISCOVERY_STARTED",
         "PROJECT_CANDIDATE_FOUND",
         "PLAN_PROPOSED",

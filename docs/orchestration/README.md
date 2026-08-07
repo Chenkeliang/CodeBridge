@@ -1,6 +1,6 @@
 # CodeBridge Orchestration 设计基线
 
-状态：Draft baseline；WorkItem、Domain Event 和 SQLite Event Store 的首个实现切片已落地，Workflow Runtime、Discovery 和 Web API 仍未接入。
+状态：Draft baseline；WorkItem、Domain Event、SQLite Event Store、WorkItem API 和 queued Run API 的首个实现切片已落地，Workflow 执行、Agent 调度、审批、Discovery 和 Web UI 仍未接入。
 
 本目录是 CodeBridge 多项目 Agent 工作台的设计规范入口，也是这套架构文档的唯一事实源。CodeBridge 是主项目；不再维护一套独立的 orchestration 服务，也不复制现有 Bridge、Runner、ACP 或 Channel 实现。
 

@@ -98,4 +98,35 @@ describe("SqliteEventStore", () => {
     expect(store.getWorkItem(workItem.id)?.status).toBe("completed");
     store.close();
   });
+
+  it("creates a queued Run linked to the WorkItem", () => {
+    const store = new SqliteEventStore(createDatabasePath());
+    const workItem = store.createWorkItem({
+      id: "wi_01JRUN",
+      title: "Investigate a payment issue",
+      mode: "investigation",
+      conversationId: "conv_01JRUN",
+      agentId: "pi-investigator",
+      riskLevel: "read_only",
+    });
+
+    const run = store.createRun({
+      workItemId: workItem.id,
+      mode: "investigation",
+    });
+
+    expect(run).toMatchObject({
+      workItemId: workItem.id,
+      mode: "investigation",
+      agentId: "pi-investigator",
+      status: "queued",
+    });
+    expect(store.getRun(run.id)).toEqual(run);
+    expect(store.listRuns(workItem.id)).toEqual([run]);
+    expect(store.listEvents(workItem.id).at(-1)).toMatchObject({
+      type: "RUN_CREATED",
+      target: run.id,
+    });
+    store.close();
+  });
 });

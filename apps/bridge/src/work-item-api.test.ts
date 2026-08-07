@@ -129,4 +129,27 @@ describe("createWorkItemApp", () => {
     );
     expect(missing.status).toBe(404);
   });
+
+  it("creates a queued Run for the selected Agent", async () => {
+    const { app, store } = makeApp();
+    const created = await app.request(jsonRequest("/v1/work-items", createBody));
+    const workItem = (await created.json()) as { id: string };
+
+    const response = await app.request(
+      jsonRequest(`/v1/work-items/${workItem.id}/runs`, {
+        mode: "investigation",
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    const result = (await response.json()) as {
+      run_id: string;
+      status: string;
+    };
+    expect(result.status).toBe("queued");
+    expect(store.getRun(result.run_id)).toMatchObject({
+      workItemId: workItem.id,
+      agentId: "pi-investigator",
+    });
+  });
 });
