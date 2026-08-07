@@ -29,6 +29,9 @@ importers:
       '@codebridge/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@codebridge/flow-catalog':
+        specifier: workspace:*
+        version: link:../../packages/flow-catalog
       '@codebridge/memory-plugin':
         specifier: workspace:*
         version: link:../../packages/memory-plugin
@@ -44,6 +47,9 @@ importers:
       '@codebridge/runner-client':
         specifier: workspace:*
         version: link:../../packages/runner-client
+      '@codebridge/session-catalog':
+        specifier: workspace:*
+        version: link:../../packages/session-catalog
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../../packages/work-items
@@ -118,6 +124,18 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+
+  packages/flow-catalog:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.0)
 
   packages/memory-plugin:
     dependencies:
@@ -227,6 +245,18 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+
+  packages/session-catalog:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.0)
 
   packages/work-items:
     devDependencies:

@@ -28,7 +28,7 @@ interface OutboundAppOptions {
   publicPathPrefixes?: string[];
 }
 
-/** 装配现有出站能力和 WorkItem API，共享同一个本地 Bearer Token。 */
+/** 装配出站能力、兼容 TaskRecord API 和 Session-first API，共享同一个本地 Bearer Token。 */
 export function createBridgeApp(
   bridge: OutboundBridge,
   token: string,
@@ -37,11 +37,15 @@ export function createBridgeApp(
   executor?: RunExecutor,
   projectCatalogApp?: Hono,
   webWorkbenchApp?: Hono,
+  sessionCatalogApp?: Hono,
+  flowCatalogApp?: Hono,
 ) {
   const app = createOutboundApp(bridge, token, {
     publicPathPrefixes: webWorkbenchApp ? ["/workbench"] : [],
   });
   app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
+  if (sessionCatalogApp) app.route("/", sessionCatalogApp);
+  if (flowCatalogApp) app.route("/", flowCatalogApp);
   if (projectCatalogApp) app.route("/", projectCatalogApp);
   if (webWorkbenchApp) {
     app.route("/workbench", webWorkbenchApp);

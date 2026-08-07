@@ -64,6 +64,21 @@ describe("SqliteEventStore", () => {
     store.close();
   });
 
+  it("updates the optional Workflow binding used by later Runs", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "task",
+      mode: "auto",
+      conversationId: "conv_flow",
+      riskLevel: "read_only",
+    });
+    expect(store.updateWorkflowBinding(item.id, "review-flow", "git:abc")).toMatchObject({
+      workflowId: "review-flow",
+      workflowRevision: "git:abc",
+    });
+    store.close();
+  });
+
   it("reopens the database and keeps the event sequence", () => {
     const databasePath = createDatabasePath();
     const firstStore = new SqliteEventStore(databasePath);

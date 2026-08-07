@@ -549,6 +549,7 @@ components:
         session_id: { type: string }
         agent_id: { type: string }
         provider_session_id: { type: string }
+        task_record_id: { type: [string, 'null'] }
         folder_id: { type: [string, 'null'] }
         flow_id: { type: [string, 'null'] }
         flow_revision: { type: [string, 'null'] }

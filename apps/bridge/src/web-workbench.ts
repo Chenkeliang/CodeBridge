@@ -6,10 +6,17 @@ export interface WebWorkbenchWorkflow {
   name: string;
 }
 
+export interface WebWorkbenchAgent {
+  id: string;
+  name: string;
+  status?: string;
+}
+
 export interface WebWorkbenchOptions {
   store: SqliteEventStore;
   token: string;
   agents?: string[];
+  agentProfiles?: WebWorkbenchAgent[];
   workflows?: WebWorkbenchWorkflow[];
 }
 
@@ -26,9 +33,10 @@ export function createWebWorkbenchApp(options: WebWorkbenchOptions) {
 
 function renderWorkbench(options: WebWorkbenchOptions): string {
   const agents = options.agents ?? [];
+  const agentProfiles: WebWorkbenchAgent[] = options.agentProfiles ?? agents.map((id) => ({ id, name: id }));
   const workflows = options.workflows ?? [];
   const token = JSON.stringify(options.token).replace(/</g, "\\u003c");
-  const agentOptions = agents.map((agent) => `<option value="${escapeHtml(agent)}">${escapeHtml(agent)}</option>`).join("");
+  const agentOptions = agentProfiles.map((agent) => `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.name)}${agent.status ? ` · ${escapeHtml(agent.status)}` : ""}</option>`).join("");
   const workflowOptions = [
     `<option value="">Workflow · 自动发现</option>`,
     ...workflows.map((workflow) => `<option value="${escapeHtml(workflow.id)}">${escapeHtml(workflow.name)} · ${escapeHtml(workflow.id)}</option>`),
@@ -55,7 +63,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .inbox-head h2 { margin:0; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
     .new-button { background:var(--ink); color:#fff; border-radius:7px; padding:7px 10px; transition:transform .2s ease, background .2s ease; }
     .new-button:hover { background:var(--accent); transform:translateY(-1px); }
-    .work-list { display:grid; gap:5px; overflow:auto; }
+    .work-list { display:grid; gap:12px; overflow:auto; }
+    .agent-group { display:grid; gap:4px; }
+    .agent-group-head { display:flex; align-items:center; justify-content:space-between; padding:6px 8px; color:var(--ink); }
+    .agent-group-head strong { font-size:13px; }
+    .agent-new { background:transparent; color:var(--accent); font-size:16px; padding:0 4px; }
     .work-row { display:grid; gap:3px; text-align:left; padding:12px 10px; border-radius:8px; background:transparent; color:var(--ink); }
     .work-row:hover, .work-row.active { background:#e4e9e5; }
     .work-row strong { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -115,8 +127,10 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   <div class="shell">
     <aside class="sidebar">
       <div class="brand"><strong>CodeBridge</strong><span>WORKBENCH / 01</span></div>
-      <div class="inbox-head"><h2>Work items</h2><button class="new-button" id="new-work">New</button></div>
-      <div class="work-list" id="work-list"><div class="empty">正在读取工作项…</div></div>
+      <div class="inbox-head"><h2>Agents</h2><button class="new-button" id="new-work">New session</button></div>
+      <div class="work-list" id="work-list"><div class="empty">正在读取 Agent 会话…</div></div>
+      <div class="inbox-head"><h2>Flows</h2></div>
+      <div class="work-list" id="flow-list"><div class="empty">Flow 会在当前会话中自动发现或由你选择。</div></div>
     </aside>
     <main class="main">
       <div class="workspace">
@@ -147,7 +161,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
             <form class="chat-composer form-grid" id="reply-form" hidden>
               <div class="composer-head"><strong>继续对话</strong><span>补充事实或追问</span></div>
               <div class="composer-context">
-                <span class="context-chip" id="reply-mode-chip">模式 · Agent 判断</span><span class="context-chip" id="reply-workspace-chip">工作空间 · 自动发现</span><span class="context-chip" id="reply-model-chip">模型 · Agent 默认</span>
+                <span class="context-chip" id="reply-mode-chip">模式 · Agent 判断</span><select class="context-control" id="reply-workflow" aria-label="Workflow">${workflowOptions}</select><span class="context-chip" id="reply-workspace-chip">工作空间 · 自动发现</span><span class="context-chip" id="reply-model-chip">模型 · Agent 默认</span>
               </div>
               <div class="input-shell">
                 <div class="composer-tools"><button class="tool-button" id="reply-attach-button" type="button" aria-label="添加上下文">＋</button></div>
@@ -164,7 +178,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   </div>
   <script>
     const TOKEN = __TOKEN__;
-    const state = { selected: null, sequence: 0, timer: null, item: null };
+    const state = { selected: null, sequence: 0, timer: null, session: null };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
       const response = await fetch(url, { ...init, headers: { authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json', ...(init.headers || {}) } });
@@ -175,49 +189,59 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     const label = (value) => ({ WORK_ITEM_CREATED:'创建', MESSAGE_RECEIVED:'消息', RUN_CREATED:'运行排队', RUN_STARTED:'运行开始', STEP_STARTED:'步骤开始', AGENT_EVENT:'Agent 事件', STEP_SUCCEEDED:'步骤完成', RUN_SUCCEEDED:'运行成功', RUN_FAILED:'运行失败', PROJECT_CANDIDATE_FOUND:'发现资源', APPROVAL_REQUESTED:'需要确认', APPROVAL_GRANTED:'已确认', WORK_ITEM_COMPLETED:'工作完成' }[value] || value);
     const modeLabel = (value) => ({ auto:'Agent 判断中', investigation:'调查', change:'修改', review:'Review', release:'发布', observe:'观察' }[value] || value || '待判断');
     const insertToken = (id, token) => { const input = $(id); const start = input.selectionStart ?? input.value.length; const end = input.selectionEnd ?? start; input.value = input.value.slice(0, start) + token + input.value.slice(end); input.focus(); input.selectionStart = input.selectionEnd = start + token.length; };
-    async function loadItems() {
+    function applyFlows(flows) { const options = '<option value="">Workflow · 自动发现</option>' + flows.map((flow) => '<option value="' + esc(flow.flow_id) + '">' + esc(flow.name || flow.flow_id) + ' · ' + esc(flow.flow_id) + '</option>').join(''); $('workflow').innerHTML = options; $('reply-workflow').innerHTML = options; }
+    async function loadFlows() { try { const result = await api('/v1/flows'); const flows = result.flows || []; applyFlows(flows); $('flow-list').innerHTML = flows.length ? flows.map((flow) => '<button class="work-row flow-row" data-flow="' + esc(flow.flow_id) + '"><strong>' + esc(flow.name || flow.flow_id) + '</strong><small>' + esc(flow.status) + ' · ' + esc(flow.kind) + '</small></button>').join('') : '<div class="empty">当前没有已登记的 Flow；在 Session 中可以自动发现。</div>'; document.querySelectorAll('.flow-row').forEach((button) => button.addEventListener('click', () => { $('workflow').value = button.dataset.flow; $('reply-workflow').value = button.dataset.flow; })); } catch (error) { $('flow-list').innerHTML = '<div class="empty">无法读取 Flow：' + esc(error.message) + '</div>'; } }
+    async function loadSessions() {
       try {
-        const result = await api('/v1/work-items');
-        const list = result.work_items || [];
-        $('work-list').innerHTML = list.length ? list.map((item) => '<button class="work-row ' + (state.selected === item.id ? 'active' : '') + '" data-id="' + esc(item.id) + '"><strong>' + esc(item.title) + '</strong><small>' + esc(item.status) + ' · ' + esc(modeLabel(item.mode)) + '</small></button>').join('') : '<div class="empty">还没有 WorkItem。点击 New 开始一次可恢复的对话。</div>';
-        document.querySelectorAll('.work-row').forEach((button) => button.addEventListener('click', () => selectItem(button.dataset.id)));
+        const result = await api('/v1/sessions');
+        const sessions = result.sessions || [];
+        const groups = sessions.reduce((map, session) => { (map[session.agent_id] ||= []).push(session); return map; }, {});
+        const agentIds = [...new Set([${JSON.stringify(agentProfiles.map((agent) => agent.id))}, ...Object.keys(groups)].flat())];
+        const agentLabels = ${JSON.stringify(Object.fromEntries(agentProfiles.map((agent) => [agent.id, `${agent.name}${agent.status ? ` · ${agent.status}` : ''}`])))};
+        $('work-list').innerHTML = agentIds.map((agentId) => '<section class="agent-group"><div class="agent-group-head"><strong>' + esc(agentLabels[agentId] || agentId) + '</strong><button class="agent-new" data-agent="' + esc(agentId) + '" aria-label="新建会话">＋</button></div>' + ((groups[agentId] || []).map((session) => '<button class="work-row ' + (state.selected === session.session_id ? 'active' : '') + '" data-id="' + esc(session.session_id) + '"><strong>' + esc(session.title || '新会话') + '</strong><small>' + esc(session.status) + ' · ' + esc(session.cwd || '工作空间自动发现') + '</small></button>').join('') || '<div class="empty">还没有会话</div>') + '</section>').join('');
+        document.querySelectorAll('.work-row').forEach((button) => button.addEventListener('click', () => selectSession(button.dataset.id)));
+        document.querySelectorAll('.agent-new').forEach((button) => button.addEventListener('click', () => newSession(button.dataset.agent)));
       } catch (error) { $('work-list').innerHTML = '<div class="empty">无法读取：' + esc(error.message) + '</div>'; }
     }
-    async function selectItem(id) {
-      state.selected = id; state.sequence = 0; state.item = null; $('work-form').hidden = true; $('reply-form').hidden = false; $('composer-title').textContent = 'Conversation';
-      await refreshItem(); loadItems();
-      clearInterval(state.timer); state.timer = setInterval(refreshItem, 1200);
+    async function newSession(agentId) {
+      try {
+        const session = await api('/v1/sessions', { method:'POST', body: JSON.stringify({ agent_id: agentId || $('agent').value || ${JSON.stringify(agents[0] || '')} }) });
+        await selectSession(session.session_id);
+      } catch (error) { $('error').textContent = error.message; }
     }
-    async function refreshItem() {
+    async function selectSession(id) {
+      state.selected = id; state.sequence = 0; state.session = null; $('work-form').hidden = true; $('reply-form').hidden = false; $('composer-title').textContent = 'Session';
+      await refreshSession(); loadSessions();
+      clearInterval(state.timer); state.timer = setInterval(refreshSession, 1200);
+    }
+    async function refreshSession() {
       if (!state.selected) return;
       try {
-        const item = await api('/v1/work-items/' + encodeURIComponent(state.selected));
-        state.item = item;
-        const agent = item.agent_id || '自动选择';
-        const scope = (item.workspace_scope || []).join(', ');
-        $('title').textContent = item.title; $('subtitle').textContent = item.workflow_id ? 'Workflow ' + item.workflow_id + ' · Agent ' + agent : 'Agent ' + agent + ' · 上下文由运行时发现'; $('status').textContent = item.status; $('status').className = 'status ' + (item.status.includes('awaiting') ? 'waiting' : '');
-        // Mode is Agent-owned. Runtime classification remains metadata and
-        // never becomes a user-selectable workflow mode.
-        $('mode').value = 'auto'; $('agent').value = item.agent_id || ''; $('workflow').value = item.workflow_id || '';
+        const session = await api('/v1/sessions/' + encodeURIComponent(state.selected));
+        state.session = session;
+        const agent = session.agent_id || '自动选择';
+        const scope = session.cwd || '';
+        $('title').textContent = session.title || 'Session'; $('subtitle').textContent = 'Agent ' + agent + ' · ' + (session.status || 'idle'); $('status').textContent = session.status || 'idle'; $('status').className = 'status ' + (session.status === 'waiting' ? 'waiting' : '');
+        $('mode').value = 'auto'; $('agent').value = agent; $('agent').disabled = true; $('workflow').value = session.flow_id || ''; $('reply-workflow').value = session.flow_id || '';
         $('workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
-        $('model-chip').textContent = '模型 · ' + agent;
-        $('reply-mode-chip').textContent = '模式 · ' + modeLabel(item.mode);
+        $('model-chip').textContent = '模型 · Agent 默认';
+        $('reply-mode-chip').textContent = '模式 · Agent 判断';
         $('reply-workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
-        $('reply-model-chip').textContent = '模型 · ' + agent;
-        const response = await fetch('/v1/work-items/' + encodeURIComponent(state.selected) + '/events?after_sequence=' + state.sequence, { headers: { authorization: 'Bearer ' + TOKEN } });
+        $('reply-model-chip').textContent = '模型 · Agent 默认';
+        const response = await fetch('/v1/sessions/' + encodeURIComponent(state.selected) + '/events?after_sequence=' + state.sequence, { headers: { authorization: 'Bearer ' + TOKEN } });
         const text = await response.text();
         const events = [...text.matchAll(/data: (\{.*\})/g)].map((match) => JSON.parse(match[1]));
         if (events.length) { state.sequence = events[events.length - 1].sequence; renderEvents(events); }
       } catch (error) { $('error').textContent = error.message; $('reply-error').textContent = error.message; }
     }
     function renderEvents(events) { const target = $('timeline'); if (target.querySelector('.timeline-empty')) target.innerHTML = ''; target.insertAdjacentHTML('beforeend', events.map((event) => '<article class="event"><time>' + esc(new Date(event.occurred_at).toLocaleTimeString()) + '</time><div class="event-body"><strong>' + esc(label(event.type)) + '</strong><pre>' + esc(JSON.stringify(event.payload || {}, null, 2)) + '</pre></div></article>').join('')); target.scrollTop = target.scrollHeight; }
-    async function startRun() { if (!state.selected) return; await api('/v1/work-items/' + encodeURIComponent(state.selected) + '/runs', { method:'POST', body: JSON.stringify({ mode: state.item?.mode || 'auto' }) }); await refreshItem(); }
-    $('work-form').addEventListener('submit', async (event) => { event.preventDefault(); $('error').textContent = ''; try { const body = { conversation_id: 'conv_' + crypto.randomUUID().replaceAll('-', ''), workflow_id: $('workflow').value || null, mode: $('mode').value, message: $('message').value }; if ($('agent').value) body.agent_id = $('agent').value; const item = await api('/v1/work-items', { method:'POST', body: JSON.stringify(body) }); $('message').value = ''; await selectItem(item.id); await startRun(); } catch (error) { $('error').textContent = error.message; } });
-    $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { await api('/v1/work-items/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value }) }); $('reply').value = ''; await startRun(); } catch (error) { $('reply-error').textContent = error.message; } });
+    async function startRun() { if (!state.selected) return; await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/runs', { method:'POST', body: JSON.stringify({ flow_id: $('reply-workflow').value || $('workflow').value || null, mode: 'auto' }) }); await refreshSession(); }
+    $('work-form').addEventListener('submit', async (event) => { event.preventDefault(); $('error').textContent = ''; try { await newSession($('agent').value); await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('message').value, flow_id: $('workflow').value || null }) }); $('message').value = ''; await startRun(); } catch (error) { $('error').textContent = error.message; } });
+    $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value, flow_id: $('reply-workflow').value || null }) }); $('reply').value = ''; await startRun(); } catch (error) { $('reply-error').textContent = error.message; } });
     $('run-again').addEventListener('click', () => startRun().catch((error) => { $('reply-error').textContent = error.message; }));
     [['mention-button', 'message', '@'], ['command-button', 'message', '/'], ['attach-button', 'message', '@'], ['reply-mention-button', 'reply', '@'], ['reply-command-button', 'reply', '/'], ['reply-attach-button', 'reply', '@']].forEach(([button, input, token]) => $(button).addEventListener('click', () => insertToken(input, token)));
-    $('new-work').addEventListener('click', () => { state.selected = null; state.item = null; state.sequence = 0; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新对话'; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('model-chip').textContent = '模型 · Agent 默认'; $('workspace-chip').textContent = '工作空间 · 自动发现'; loadItems(); });
-    loadItems();
+    $('new-work').addEventListener('click', () => { state.selected = null; state.session = null; state.sequence = 0; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('model-chip').textContent = '模型 · Agent 默认'; $('workspace-chip').textContent = '工作空间 · 自动发现'; loadSessions(); });
+    loadSessions(); loadFlows();
   </script>
 </body>
 </html>`
