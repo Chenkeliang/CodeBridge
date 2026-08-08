@@ -1,7 +1,7 @@
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, type AgentEvent } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "./bridge.js";
 
@@ -130,6 +130,10 @@ async function renderThroughSdk(chunks: string[]): Promise<string> {
 }
 
 describe("FeishuBridge streaming", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("persists the streaming card until it is finalized", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-stream-"));
     const bridge = new FeishuBridge({
@@ -141,14 +145,19 @@ describe("FeishuBridge streaming", () => {
 
     bridge.channel = {
       async stream(_chatId, input) {
+        const capturePending = () => {
+          pendingWhileStreaming = fs.existsSync(pendingPath)
+            ? JSON.parse(fs.readFileSync(pendingPath, "utf8"))
+            : undefined;
+        };
         await input.markdown({
           messageId: "card-message-1",
           async append() {
-            pendingWhileStreaming = fs.existsSync(pendingPath)
-              ? JSON.parse(fs.readFileSync(pendingPath, "utf8"))
-              : undefined;
+            capturePending();
           },
-          async setContent() {},
+          async setContent() {
+            capturePending();
+          },
         });
       },
     };
@@ -221,6 +230,218 @@ describe("FeishuBridge streaming", () => {
     await expect(
       renderThroughSdk(["692818", "820925", "5382", "277A"]),
     ).resolves.toBe("6928188209255382277A");
+  });
+
+  it("shows compact live status with thinking off without leaking thoughts", async () => {
+    vi.useFakeTimers();
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as TestableBridge;
+    let rendered = "";
+    let releaseAgent!: () => void;
+    let agentWaiting!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      agentWaiting = resolve;
+    });
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append(chunk) {
+            rendered = sdkMergeStreamingText(rendered, chunk);
+          },
+          async setContent(full) {
+            rendered = full;
+          },
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        yield { type: "thought_delta", text: "内部思考内容不能展示" };
+        yield { type: "tool_start", name: "Bash", toolCallId: "tool-1" };
+        agentWaiting();
+        await release;
+        yield { type: "text_delta", text: "任务完成" };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    const running = bridge.streamAgentReply(
+      {
+        messageId: "message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    );
+    await waiting;
+
+    expect(rendered).toContain("执行中");
+    expect(rendered).not.toContain("内部思考内容不能展示");
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(rendered).toContain("任务连接保持");
+    expect(rendered).toContain("Bash");
+    expect(rendered).not.toContain("内部思考内容不能展示");
+
+    releaseAgent();
+    await running;
+    expect(rendered).toBe("任务完成");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps the agent result when a periodic status refresh fails", async () => {
+    vi.useFakeTimers();
+    const logs: string[] = [];
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+      onLog: (message) => logs.push(message),
+    }) as unknown as TestableBridge;
+    let rendered = "";
+    let statusWrites = 0;
+    let releaseAgent!: () => void;
+    let agentWaiting!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      agentWaiting = resolve;
+    });
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append(chunk) {
+            rendered = sdkMergeStreamingText(rendered, chunk);
+          },
+          async setContent(full) {
+            statusWrites += 1;
+            if (statusWrites === 2) throw new Error("temporary card error");
+            rendered = full;
+          },
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        agentWaiting();
+        await release;
+        yield { type: "text_delta", text: "最终结果仍然送达" };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    const running = bridge.streamAgentReply(
+      {
+        messageId: "message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    );
+    await waiting;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    releaseAgent();
+    await running;
+
+    expect(rendered).toBe("最终结果仍然送达");
+    expect(logs).toContain(
+      "飞书任务状态刷新失败（不影响 Agent 运行）：temporary card error",
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not let an in-flight status refresh overwrite the final result", async () => {
+    vi.useFakeTimers();
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as TestableBridge;
+    let rendered = "";
+    let statusWrites = 0;
+    let releaseAgent!: () => void;
+    let agentWaiting!: () => void;
+    let releaseStatusWrite!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      agentWaiting = resolve;
+    });
+    const delayedStatusWrite = new Promise<void>((resolve) => {
+      releaseStatusWrite = resolve;
+    });
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append(chunk) {
+            rendered = sdkMergeStreamingText(rendered, chunk);
+          },
+          async setContent(full) {
+            statusWrites += 1;
+            if (statusWrites === 2) await delayedStatusWrite;
+            rendered = full;
+          },
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        agentWaiting();
+        await release;
+        yield { type: "text_delta", text: "最终结果" };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    let runSettled = false;
+    const running = bridge.streamAgentReply(
+      {
+        messageId: "message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    ).then(() => {
+      runSettled = true;
+    });
+    await waiting;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    releaseAgent();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runSettled).toBe(false);
+    releaseStatusWrite();
+    await running;
+    expect(rendered).toBe("最终结果");
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
