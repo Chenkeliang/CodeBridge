@@ -27,6 +27,17 @@ describe("CodeBridge defaults", () => {
   it("uses the renamed data directory", () => {
     expect(DEFAULT_DATA_DIR).toMatch(/\.codebridge$/);
   });
+
+  it("allows six-hour tasks while keeping no-output and stall watchdogs short", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      runnerHost: {},
+    });
+
+    expect(config.runnerHost?.acpPromptTimeoutMs).toBe(6 * 60 * 60_000);
+    expect(config.runnerHost?.acpNoOutputTimeoutMs).toBe(10 * 60_000);
+    expect(config.runnerHost?.acpStallTimeoutMs).toBe(30 * 60_000);
+  });
 });
 
 describe("resolveRequireMention", () => {

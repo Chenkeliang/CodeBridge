@@ -80,12 +80,12 @@ export const ConfigSchema = z.object({
       acpPermissionPolicy: z
         .enum(["auto_allow", "prompt_deny", "prompt_feishu"])
         .default("auto_allow"),
-      /** 一轮无结束信号的总超时（ms），到点判 fatal */
+      /** 一轮无结束信号的总超时（ms）；长任务可运行 6 小时，和停滞检测分开 */
       acpPromptTimeoutMs: z
         .number()
         .int()
         .positive()
-        .default(40 * 60_000),
+        .default(6 * 60 * 60_000),
       /** 从发 prompt 起完全无任何输出的超时（ms） */
       acpNoOutputTimeoutMs: z
         .number()
@@ -166,7 +166,7 @@ export function defaultConfig(): AppConfig {
       codex: {
         type: "codex",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.9"],
+        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.14"],
         // 不钉 model：OpenAI 轮换模型名很快，钉了必过期；用适配器默认，会话内 /model 切
       },
     },

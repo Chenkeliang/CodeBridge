@@ -9,6 +9,7 @@ import { RunOrchestrator } from "./orchestrator.js";
 const tmpDirs: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   for (const dir of tmpDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -86,6 +87,103 @@ describe("RunOrchestrator session persistence", () => {
 });
 
 describe("RunOrchestrator ACP capabilities", () => {
+  it("exposes the latest real ACP checkpoint for status queries", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    tmpDirs.push(dataDir);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    let release!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (orchestrator as unknown as { client: unknown }).client = {
+      run: async function* () {
+        yield {
+          type: "text_delta",
+          text: "P3 正在接入",
+          messageId: "checkpoint-1",
+          phase: "commentary",
+        } as const;
+        yield {
+          type: "text_delta",
+          text: "板块成分股 Web 下钻",
+          messageId: "checkpoint-1",
+          phase: "commentary",
+        } as const;
+        await wait;
+        yield { type: "done", exitCode: 0 } as const;
+      },
+    };
+
+    const stream = orchestrator.runAgent("chat1", undefined, "continue");
+    await expect(stream.next()).resolves.toMatchObject({
+      value: { type: "text_delta", phase: "commentary" },
+    });
+    await expect(stream.next()).resolves.toMatchObject({
+      value: { type: "text_delta", phase: "commentary" },
+    });
+
+    expect(orchestrator.activeRunStatus("chat1")).toMatchObject({
+      currentPhase: "任务检查点",
+      lastCheckpoint: "P3 正在接入板块成分股 Web 下钻",
+    });
+
+    release();
+    for await (const _event of stream) {
+      // drain
+    }
+  });
+
+  it("counts ACP tool events as real activity without inventing a checkpoint", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-09T05:00:00.000Z"));
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
+    tmpDirs.push(dataDir);
+    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
+    let release!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (orchestrator as unknown as { client: unknown }).client = {
+      run: async function* () {
+        yield {
+          type: "tool_start",
+          toolCallId: "t1",
+          name: "cargo test",
+        } as const;
+        yield {
+          type: "tool_update",
+          toolCallId: "t1",
+          name: "cargo test",
+          status: "in_progress",
+        } as const;
+        await wait;
+        yield { type: "done", exitCode: 0 } as const;
+      },
+    };
+
+    const stream = orchestrator.runAgent("chat1", undefined, "continue");
+    vi.advanceTimersByTime(90_000);
+    await expect(stream.next()).resolves.toMatchObject({
+      value: { type: "tool_start", name: "cargo test" },
+    });
+    vi.advanceTimersByTime(60_000);
+    await expect(stream.next()).resolves.toMatchObject({
+      value: { type: "tool_update", name: "cargo test" },
+    });
+
+    expect(orchestrator.activeRunStatus("chat1")).toMatchObject({
+      lastActivityAt: Date.parse("2026-08-09T05:02:30.000Z"),
+      currentPhase: "工具执行：cargo test",
+    });
+    expect(orchestrator.activeRunStatus("chat1")?.lastCheckpoint).toBeUndefined();
+
+    release();
+    for await (const _event of stream) {
+      // drain
+    }
+    vi.useRealTimers();
+  });
+
   it("steers the active chat run", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
     tmpDirs.push(dataDir);

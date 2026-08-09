@@ -146,8 +146,8 @@ async function waitMs(ms: number, isAborted: () => boolean): Promise<void> {
   }
 }
 
-/** 防止 ACP prompt 永不结束导致 Runner SSE / 飞书会话队列假死；可经 config 覆盖 */
-const ACP_PROMPT_TIMEOUT_MS = 40 * 60 * 1000;
+/** 长任务总上限；无输出与中途停滞由下面两个更短的 watchdog 独立处理。 */
+const ACP_PROMPT_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 /** 从发 prompt 起这么久仍无任何输出，视为卡住（常见于 session/load 或看图）；可经 config 覆盖 */
 const ACP_NO_OUTPUT_TIMEOUT_MS = 10 * 60 * 1000;
 /** 已有输出后这么久没有新事件，视为 mid-turn 卡死（如 tool 调用卡死）；可经 config 覆盖 */

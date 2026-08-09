@@ -1,7 +1,11 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { AppConfig, BackendConfigOption } from "@codebridge/core";
+import type {
+  ActiveRunStatus,
+  AppConfig,
+  BackendConfigOption,
+} from "@codebridge/core";
 import type { CliSessionSummary } from "@codebridge/runner-client";
 import {
   type CommandHelpFormat,
@@ -40,6 +44,7 @@ export interface SlashContext {
   cancelActiveRun?: () => Promise<boolean>;
   hasActiveRun?: () => boolean;
   activeRunElapsedMs?: () => number | undefined;
+  activeRunStatus?: () => ActiveRunStatus | undefined;
   steerActiveRun?: (
     prompt: string,
   ) => Promise<{ ok: boolean; outcome?: string; error?: string }>;
@@ -228,7 +233,10 @@ export async function handleSlashCommand(
       );
       const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
       const profile = ctx.config.backends[key.backendId];
-      const elapsedMs = ctx.activeRunElapsedMs?.();
+      const activeStatus = ctx.activeRunStatus?.();
+      const elapsedMs = activeStatus
+        ? Date.now() - activeStatus.startedAt
+        : ctx.activeRunElapsedMs?.();
       const runnerActive =
         elapsedMs !== undefined
           ? `是（已运行 ${formatElapsed(elapsedMs)}，请稍候再追问；需要中断请发 \`/stop\`）`
@@ -243,11 +251,22 @@ export async function handleSlashCommand(
           `**effort**: ${runOpts.effort ?? "(ACP 默认)"}${binding.effort ? " _(会话覆盖)_" : profile?.effort ? " _(配置默认)_" : ""}`,
           `**mode/permission**: ${runOpts.mode ?? "(ACP 默认)"}${binding.mode ? " _(会话覆盖)_" : profile?.claudePermissionMode ? " _(配置默认)_" : ""}`,
           `**additionalDirectories**: ${binding.additionalDirectories?.length ? binding.additionalDirectories.join(", ") : "(none)"}`,
-          `**thinking**: ${(binding.showThinking ?? true) ? "on（显示思考/工具过程）" : "off（只显示最终答案）"}`,
+          `**thinking**: ${(binding.showThinking ?? true) ? "on（显示思考/工具过程）" : "off（隐藏内部思考/工具，保留进度与最终答案）"}`,
           `**sessionId**: ${rec?.sessionId ?? "(none)"}`,
           `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
           `**runnerActive**: ${runnerActive}`,
-        ].join("\n"),
+          activeStatus
+            ? `**currentPhase**: ${activeStatus.currentPhase}`
+            : undefined,
+          activeStatus
+            ? `**lastRealActivity**: ${formatElapsed(Date.now() - activeStatus.lastActivityAt)}之前`
+            : undefined,
+          activeStatus?.lastCheckpoint
+            ? `**lastCheckpoint**: ${activeStatus.lastCheckpoint}`
+            : undefined,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n"),
       };
     }
 
@@ -883,7 +902,7 @@ function handleThinking(ctx: SlashContext, arg: string): SlashResult {
     return {
       type: "reply",
       text: [
-        `思考过程展示: ${current ? "**on**（显示思考与工具调用过程）" : "**off**（卡片只显示最终答案）"}`,
+        `思考过程展示: ${current ? "**on**（显示思考与工具调用过程）" : "**off**（隐藏内部思考/工具，保留进度与最终答案）"}`,
         "",
         "用法: `/thinking on|off`",
       ].join("\n"),
@@ -904,7 +923,7 @@ function handleThinking(ctx: SlashContext, arg: string): SlashResult {
     type: "reply",
     text: on
       ? "已开启思考过程展示：卡片会显示思考与工具调用过程，`---` 分隔线之后是最终答案。"
-      : "已关闭思考过程展示：卡片只显示最终答案（思考与工具过程不再进卡片）。下一条消息生效。",
+      : "已关闭思考过程展示：隐藏内部思考与工具过程，保留进度检查点和最终答案。下一条消息生效。",
   };
 }
 
