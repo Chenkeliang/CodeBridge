@@ -357,7 +357,7 @@ describe("runActivePromptTurn", () => {
       runActivePromptTurn(fakeActiveSession(queue), [], {
         permissionPolicy: "auto_allow",
         isAborted: () => false,
-        postStopProbeMs: 120,
+        postStopProbeMs: 300,
         postStopQuietMs: 1_000,
         postStopMaxMs: 2_000,
       }),
@@ -369,7 +369,7 @@ describe("runActivePromptTurn", () => {
     queue.enqueue(usageNoise);
 
     const events = await done;
-    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(Date.now() - startedAt).toBeLessThan(800);
     expect(events).toContainEqual({ type: "usage_update", used: 10, size: 100 });
   });
 

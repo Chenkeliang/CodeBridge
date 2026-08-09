@@ -20,6 +20,34 @@ describe("createFeishuStreamPresenter", () => {
     expect(part?.text).toBe("hello");
   });
 
+  it("routes Codex commentary to the progress zone", () => {
+    const { present } = createFeishuStreamPresenter({ showThinking: false });
+    const part = present({
+      type: "text_delta",
+      text: "P3 正在接入板块下钻",
+      messageId: "m1",
+      phase: "commentary",
+    });
+
+    expect(part).toEqual({
+      zone: "progress",
+      text: "P3 正在接入板块下钻",
+      messageId: "m1",
+    });
+  });
+
+  it("keeps Codex final answers in the result zone", () => {
+    const { present } = createFeishuStreamPresenter({ showThinking: false });
+    expect(
+      present({
+        type: "text_delta",
+        text: "最终结果",
+        messageId: "m2",
+        phase: "final_answer",
+      }),
+    ).toEqual({ zone: "result", text: "最终结果", messageId: "m2" });
+  });
+
   it("routes thought to thinking zone", () => {
     const { present } = createFeishuStreamPresenter();
     const part = present({ type: "thought_delta", text: "内部推理" });

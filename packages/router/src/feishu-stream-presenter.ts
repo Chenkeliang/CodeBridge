@@ -1,14 +1,15 @@
 import type { AgentEvent } from "@codebridge/core";
 
-export type FeishuStreamZone = "thinking" | "result";
+export type FeishuStreamZone = "thinking" | "progress" | "result";
 
 export interface FeishuStreamPart {
   zone: FeishuStreamZone;
   text: string;
+  messageId?: string;
 }
 
 export interface FeishuStreamPresenterOptions {
-  /** false 时丢弃思考/工具事件，卡片只呈现最终答案（/thinking off）；缺省 true */
+  /** false 时隐藏内部思考/工具，但保留进度检查点与最终答案；缺省 true */
   showThinking?: boolean;
 }
 
@@ -70,6 +71,13 @@ export function createFeishuStreamPresenter(
       case "thought_delta":
         return showThinking ? { zone: "thinking", text: event.text } : null;
       case "text_delta": {
+        if (event.phase === "commentary") {
+          return {
+            zone: "progress",
+            text: event.text,
+            messageId: event.messageId,
+          };
+        }
         let text = event.text;
         if (
           event.messageId &&
@@ -87,7 +95,7 @@ export function createFeishuStreamPresenter(
           2,
           text.match(/\n*$/)?.[0].length ?? 0,
         );
-        return { zone: "result", text };
+        return { zone: "result", text, messageId: event.messageId };
       }
       case "plan": {
         if (!showThinking) return null;

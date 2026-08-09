@@ -22,6 +22,11 @@ type TestableBridge = {
       input: StreamInput,
       options: { replyTo: string },
     ): Promise<void>;
+    send?(
+      chatId: string,
+      input: { markdown: string },
+      options: { replyTo?: string },
+    ): Promise<void>;
   };
   orchestrator: {
     router: {
@@ -230,6 +235,202 @@ describe("FeishuBridge streaming", () => {
     await expect(
       renderThroughSdk(["692818", "820925", "5382", "277A"]),
     ).resolves.toBe("6928188209255382277A");
+  });
+
+  it("does not block ACP event consumption on a slow Feishu card write", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as TestableBridge;
+    let reachedDone = false;
+    let releaseWrite!: () => void;
+    const blockedWrite = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append() {},
+          async setContent() {
+            await blockedWrite;
+          },
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        yield { type: "text_delta", text: "最终结果" };
+        reachedDone = true;
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    const running = bridge.streamAgentReply(
+      {
+        messageId: "message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    );
+
+    await vi.waitFor(() => expect(reachedDone).toBe(true));
+    releaseWrite();
+    await running;
+  });
+
+  it("shows only the latest commentary checkpoint before the final answer", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as TestableBridge;
+    let rendered = "";
+    let releaseAgent!: () => void;
+    let checkpointsEmitted!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
+    const emitted = new Promise<void>((resolve) => {
+      checkpointsEmitted = resolve;
+    });
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append(chunk) {
+            rendered = sdkMergeStreamingText(rendered, chunk);
+          },
+          async setContent(full) {
+            rendered = full;
+          },
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        yield {
+          type: "text_delta",
+          text: "P2 已完成",
+          messageId: "checkpoint-1",
+          phase: "commentary",
+        };
+        yield {
+          type: "text_delta",
+          text: "P3 正在推进",
+          messageId: "checkpoint-2",
+          phase: "commentary",
+        };
+        checkpointsEmitted();
+        await release;
+        yield {
+          type: "text_delta",
+          text: "全部完成",
+          messageId: "final-1",
+          phase: "final_answer",
+        };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    const running = bridge.streamAgentReply(
+      {
+        messageId: "message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    );
+    await emitted;
+    await vi.waitFor(() => expect(rendered).toContain("P3 正在推进"));
+    expect(rendered).not.toContain("P2 已完成");
+
+    releaseAgent();
+    await running;
+    expect(rendered).toBe("全部完成");
+  });
+
+  it("sends a sparse progress message without counting it as Agent activity", async () => {
+    vi.useFakeTimers();
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as TestableBridge;
+    const notices: string[] = [];
+    let releaseAgent!: () => void;
+    let checkpointEmitted!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
+    const emitted = new Promise<void>((resolve) => {
+      checkpointEmitted = resolve;
+    });
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append() {},
+          async setContent() {},
+        });
+      },
+      async send(_chatId, input) {
+        notices.push(input.markdown);
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        yield {
+          type: "text_delta",
+          text: "P3 正在推进",
+          messageId: "checkpoint-1",
+          phase: "commentary",
+        };
+        checkpointEmitted();
+        await release;
+        yield { type: "text_delta", text: "完成", phase: "final_answer" };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    const running = bridge.streamAgentReply(
+      {
+        messageId: "message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    );
+    await emitted;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("任务仍在运行");
+    expect(notices[0]).toContain("P3 正在推进");
+
+    releaseAgent();
+    await running;
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("shows compact live status with thinking off without leaking thoughts", async () => {
