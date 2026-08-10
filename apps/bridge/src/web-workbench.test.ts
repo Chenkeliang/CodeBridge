@@ -1,0 +1,56 @@
+import { describe, expect, it } from "vitest";
+import { SqliteEventStore } from "@codebridge/work-items";
+import { createWebWorkbenchApp } from "./web-workbench.js";
+
+describe("web workbench", () => {
+  it("serves a chat-first workbench with optional agent and workflow context", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({
+      store,
+      token: "web-token",
+    });
+    const response = await app.request("/");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("Agents");
+    expect(html).toContain("Flows");
+    expect(html).toContain("New session");
+    expect(html).toContain("Workflow");
+    expect(html).toContain("Agent · 自动选择");
+    expect(html).toContain("Workflow · 自动发现");
+    expect(html).toContain("Agent 会先理解目标，再决定合适的上下文与下一步");
+    expect(html).not.toContain('<label>模式');
+    expect(html).not.toContain('<label>项目范围');
+    expect(html).not.toContain('id="work-title"');
+    expect(html).not.toContain('id="cancel-new"');
+    expect(html).toContain('id="mode"');
+    expect(html).toContain("模式 · Agent 判断");
+    expect(html).toContain('id="workspace"');
+    expect(html).toContain('id="workspace-authorize"');
+    expect(html).toContain('id="model"');
+    expect(html).toContain('id="reply-model"');
+    expect(html).toContain("Folder / 工作目录（可选）");
+    expect(html).toContain("/v1/directories/authorize");
+    expect(html).toContain('id="save-flow"');
+    expect(html).toContain("/v1/flows/candidates");
+    expect(html).toContain('id="accept-project"');
+    expect(html).toContain("/v1/projects/candidates/");
+    expect(html).toContain('id="session-fork"');
+    expect(html).toContain('id="session-close"');
+    expect(html).toContain('id="session-delete"');
+    expect(html).toContain('data-view="plan"');
+    expect(html).toContain('data-view="approval"');
+    expect(html).toContain('data-view="evidence"');
+    expect(html).not.toContain("模式 · 发布");
+    expect(html).not.toContain("模式 · 调查");
+    expect(html).not.toContain("权益");
+    expect(html).not.toContain("订单号");
+    expect(html).not.toContain("日志片段");
+    expect(html).not.toContain("示例");
+    expect(html).not.toContain("price-change");
+    expect(html).not.toContain("自动生成");
+    expect(html).toContain("/v1/sessions");
+    expect(html).not.toContain("@ 委派");
+    store.close();
+  });
+});

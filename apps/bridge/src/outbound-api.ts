@@ -1,4 +1,8 @@
 import { Hono } from "hono";
+import { createWorkItemApp } from "./work-item-api.js";
+import { type SqliteEventStore } from "@codebridge/work-items";
+import type { ApprovalService } from "@codebridge/policy";
+import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
@@ -20,14 +24,56 @@ export interface OutboundBridge {
   ): Promise<void>;
 }
 
+interface OutboundAppOptions {
+  publicPathPrefixes?: string[];
+}
+
+/** 装配出站能力、兼容 TaskRecord API 和 Session-first API，共享同一个本地 Bearer Token。 */
+export function createBridgeApp(
+  bridge: OutboundBridge,
+  token: string,
+  workItemStore: SqliteEventStore,
+  approvalService?: ApprovalService,
+  executor?: RunExecutor,
+  projectCatalogApp?: Hono,
+  webWorkbenchApp?: Hono,
+  sessionCatalogApp?: Hono,
+  flowCatalogApp?: Hono,
+) {
+  const app = createOutboundApp(bridge, token, {
+    publicPathPrefixes: webWorkbenchApp ? ["/workbench"] : [],
+  });
+  app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
+  if (sessionCatalogApp) app.route("/", sessionCatalogApp);
+  if (flowCatalogApp) app.route("/", flowCatalogApp);
+  if (projectCatalogApp) app.route("/", projectCatalogApp);
+  if (webWorkbenchApp) {
+    app.route("/workbench", webWorkbenchApp);
+    app.route("/workbench/", webWorkbenchApp);
+  }
+  return app;
+}
+
 /**
  * Bridge 本地出站 API：Agent 子进程内的 fcb 命令通过它把文件/消息发回飞书。
  * 仅监听 127.0.0.1，Bearer 复用 runner token。
  */
-export function createOutboundApp(bridge: OutboundBridge, token: string) {
+export function createOutboundApp(
+  bridge: OutboundBridge,
+  token: string,
+  options: OutboundAppOptions = {},
+) {
   const app = new Hono();
+  const publicPathPrefixes = options.publicPathPrefixes ?? [];
 
   app.use("*", async (c, next) => {
+    const isPublicPath = publicPathPrefixes.some(
+      (prefix) => c.req.path === prefix || c.req.path.startsWith(`${prefix}/`),
+    );
+    if (isPublicPath) {
+      await next();
+      return;
+    }
     const auth = c.req.header("authorization");
     if (auth !== `Bearer ${token}`) {
       return c.json({ error: "unauthorized" }, 401);
