@@ -99,6 +99,66 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(response, 201);
   });
 
+  app.post("/v1/channels/:channel/conversations/:conversation_id/messages", async (c) => {
+    const body = await readJson(c);
+    if (!body || typeof body.message !== "string" || !body.message.trim()) {
+      return c.json({ error: "message is required" }, 400);
+    }
+    const channel = c.req.param("channel");
+    const conversationId = c.req.param("conversation_id");
+    let session = options.catalog.getChannelSession(channel, conversationId);
+    if (!session) {
+      const requestedAgent = typeof body.agent_id === "string" ? currentProfiles().get(body.agent_id) : undefined;
+      const agent = requestedAgent ?? currentAgents().find((candidate) => candidate.status === "healthy");
+      if (!agent) return c.json({ error: "agent_unavailable" }, 409);
+      session = options.catalog.createSession({
+        agentId: agent.agentId,
+        model: asNullableString(body.model),
+        cwd: asNullableString(body.cwd) ?? options.defaultCwd ?? null,
+        title: asNullableString(body.title),
+      });
+      options.catalog.bindChannelConversation(channel, conversationId, session.id);
+    }
+    const idempotencyKey = c.req.header("idempotency-key");
+    const childHeaders = {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      ...(idempotencyKey ? { "idempotency-key": `${idempotencyKey}:message` } : {}),
+    };
+    const messageResponse = await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: childHeaders,
+      body: JSON.stringify({
+        message: body.message,
+        flow_id: asNullableString(body.flow_id),
+        model: asNullableString(body.model),
+      }),
+    });
+    if (!messageResponse.ok) return c.json(await messageResponse.json(), messageResponse.status as 400 | 404 | 409 | 503);
+    const messageResult = await messageResponse.json() as { task_record_id: string };
+    const runResponse = await app.request(`/v1/sessions/${session.id}/runs`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        ...(idempotencyKey ? { "idempotency-key": `${idempotencyKey}:run` } : {}),
+      },
+      body: JSON.stringify({
+        flow_id: asNullableString(body.flow_id),
+        model: asNullableString(body.model),
+      }),
+    });
+    if (!runResponse.ok) return c.json(await runResponse.json(), runResponse.status as 400 | 404 | 409 | 503);
+    const runResult = await runResponse.json() as Record<string, unknown>;
+    return c.json({
+      channel,
+      conversation_id: conversationId,
+      session_id: session.id,
+      task_record_id: messageResult.task_record_id,
+      ...runResult,
+    }, 202);
+  });
+
   app.get("/v1/sessions/:session_id", (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);

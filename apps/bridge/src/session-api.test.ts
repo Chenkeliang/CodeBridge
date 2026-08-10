@@ -105,6 +105,29 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("maps channel conversations onto the same Session Message and Run contracts", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const send = (message: string) => app.request("/v1/channels/feishu/conversations/chat%3Atopic/messages", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ message, agent_id: "pi" }),
+    });
+
+    const first = await send("第一条");
+    expect(first.status).toBe(202);
+    const firstBody = await first.json() as { session_id: string; task_record_id: string; run_id: string };
+    const secondBody = await (await send("第二条")).json() as typeof firstBody;
+    expect(secondBody.session_id).toBe(firstBody.session_id);
+    expect(secondBody.task_record_id).toBe(firstBody.task_record_id);
+    expect(secondBody.run_id).not.toBe(firstBody.run_id);
+    expect(catalog.getChannelSession("feishu", "chat:topic")?.id).toBe(firstBody.session_id);
+    expect(workItems.listRuns(firstBody.task_record_id)).toHaveLength(2);
+    catalog.close();
+    workItems.close();
+  });
+
   it("imports provider sessions into the Session Catalog on demand", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

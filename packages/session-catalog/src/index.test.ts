@@ -37,4 +37,14 @@ describe("session catalog", () => {
     expect(store.getSession(session.id)).toBeUndefined();
     store.close();
   });
+
+  it("binds an external channel conversation to the same Session contract", () => {
+    const store = new SessionCatalogStore(":memory:");
+    const session = store.createSession({ agentId: "pi" });
+    const binding = store.bindChannelConversation("feishu", "chat:topic", session.id);
+    expect(binding).toMatchObject({ channel: "feishu", conversationId: "chat:topic", sessionId: session.id });
+    expect(store.getChannelSession("feishu", "chat:topic")).toEqual(session);
+    expect(store.bindChannelConversation("feishu", "chat:topic", session.id).createdAt).toBe(binding.createdAt);
+    store.close();
+  });
 });
