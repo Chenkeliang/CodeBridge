@@ -76,4 +76,38 @@ describe("project catalog API", () => {
     expect(body?.candidate_id).toMatch(/^pc_/);
     discovery.close();
   });
+
+  it("exposes a reviewable catalog diff and drift resolution", async () => {
+    const catalog = new ProjectCatalogStore(":memory:");
+    const first = catalog.saveCandidate({
+      projectId: "catalog-api",
+      repositoryRemote: "gitlab/rock/catalog-api",
+      language: "go",
+      confidence: "high",
+      evidence: [{ kind: "test", ref: "first" }],
+    });
+    catalog.acceptCandidate(first.id);
+    catalog.saveCandidate({
+      projectId: "catalog-api",
+      repositoryRemote: "gitlab/rock/catalog-api-new",
+      language: "go",
+      confidence: "high",
+      evidence: [{ kind: "test", ref: "second" }],
+    });
+    const discovery = new ProjectDiscovery(catalog);
+    const app = createProjectCatalogApp(catalog, discovery, TOKEN);
+
+    const diff = await app.request(request(`/v1/projects/candidates/${first.id}/diff`));
+    expect(diff.status).toBe(200);
+    expect((await diff.json()) as { unified: string }).toMatchObject({
+      unified: expect.stringContaining("catalog/projects.yaml"),
+    });
+    const drifts = await app.request(request("/v1/projects/drifts?project_id=catalog-api"));
+    const driftList = (await drifts.json()) as { drifts: Array<{ id: string }> };
+    expect(driftList.drifts).toHaveLength(1);
+    const resolved = await app.request(request(`/v1/projects/drifts/${driftList.drifts[0]!.id}/resolve`, { method: "POST" }));
+    expect(resolved.status).toBe(200);
+    expect((await resolved.json()) as { drift: { status: string } }).toMatchObject({ drift: { status: "resolved" } });
+    discovery.close();
+  });
 });

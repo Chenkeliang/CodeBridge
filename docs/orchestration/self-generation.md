@@ -48,6 +48,13 @@ Run 完成并形成稳定 Plan
 
 高置信度表示证据充分，正式登记仍由用户确认完成。
 
+项目字段不会因为下一次扫描而静默改写。发现任务会读取可移植的
+`.codebridge/project.json`（也支持仓库根目录的 `codebridge.project.json`）来补充
+`deploy_service`、`log_service`、`apm_service` 和 `dependencies`；没有证据的字段保持为空。
+已登记项目出现新值时，Catalog 保存 `ProjectDrift`，Web/API 可以先预览
+`catalog/projects.yaml` 的 diff，再显式选择“应用”或“仅确认”。这使代码更新、服务迁移和
+依赖变化不会直接把后续工作带入错误映射。
+
 ## 4. 临时 Flow 生成
 
 ```text
