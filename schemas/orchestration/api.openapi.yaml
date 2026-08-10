@@ -488,6 +488,25 @@ paths:
                 $ref: '#/components/schemas/Acknowledgement'
         '409':
           $ref: '#/components/responses/Conflict'
+  /v1/runs/{run_id}/approvals:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: listRunApprovals
+      summary: List current and historical scoped approvals for a Run
+      responses:
+        '200':
+          description: Approval list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [approvals]
+                properties:
+                  approvals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Approval'
   /v1/runs/{run_id}/reject:
     parameters:
       - $ref: '#/components/parameters/RunId'
@@ -966,6 +985,28 @@ components:
         error: { type: [string, 'null'] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    Approval:
+      type: object
+      required: [id, run_id, step_id, capability_id, session_id, environment, target_resource, input_hash, status]
+      properties:
+        id: { type: string }
+        work_item_id: { type: string }
+        run_id: { type: string }
+        step_id: { type: string }
+        capability_id: { type: string }
+        session_id: { type: string }
+        environment: { type: string }
+        target_resource: { type: string }
+        input_hash: { type: string }
+        status:
+          type: string
+          enum: [requested, granted, consumed, expired, revoked]
+        requested_by: { type: string }
+        granted_by: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        granted_at: { type: [string, 'null'], format: date-time }
+        consumed_at: { type: [string, 'null'], format: date-time }
     ProjectCandidate:
       type: object
       required: [id, project_id, status, confidence, evidence, observed_at]

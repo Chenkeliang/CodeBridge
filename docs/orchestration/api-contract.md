@@ -139,6 +139,8 @@ session_id + run_id + step_id + capability_id
 
 审批默认单次使用、短期有效。Step 输入、目标环境或 Capability 发生变化后，原审批失效。批准接口只产生 `APPROVAL_GRANTED`，不等同于 Step 已成功执行；拒绝接口产生 `APPROVAL_REJECTED` 和 `RUN_CANCELLED`。
 
+审批记录固定绑定 `session_id + run_id + step_id + capability_id + environment + target_resource + input_hash`。`input_hash` 使用规范化后的完整输入、项目范围和 Step 定义计算，不再只依赖用户标题；任一绑定项变化都会产生新的审批请求。`GET /v1/runs/{run_id}/approvals` 返回该 Run 的当前和历史审批，供 Web 与外部 Channel 使用同一状态投影。
+
 ## 8. 错误合同
 
 ```json

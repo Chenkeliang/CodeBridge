@@ -189,6 +189,13 @@ export function createWorkItemApp(
     return c.json({ approval_id: granted.id, status: granted.status, granted_at: granted.grantedAt });
   });
 
+  app.get("/v1/runs/:run_id/approvals", (c) => {
+    if (!approvals) return errorResponse(c, 503, "approval_unavailable", "审批服务未配置");
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    return c.json({ approvals: approvals.listForRun(run.id).map(toApiApproval) });
+  });
+
   app.post("/v1/runs/:run_id/reject", async (c) => {
     if (!approvals) {
       return errorResponse(c, 503, "approval_unavailable", "审批服务未配置");
@@ -356,6 +363,27 @@ function toApiWorkItem(workItem: WorkItem): Record<string, unknown> {
     risk_level: workItem.riskLevel,
     created_at: workItem.createdAt,
     updated_at: workItem.updatedAt,
+  };
+}
+
+function toApiApproval(approval: ReturnType<ApprovalService["listForRun"]>[number]): Record<string, unknown> {
+  return {
+    id: approval.id,
+    work_item_id: approval.workItemId,
+    run_id: approval.runId,
+    step_id: approval.stepId,
+    capability_id: approval.capabilityId,
+    session_id: approval.sessionId,
+    environment: approval.environment,
+    target_resource: approval.targetResource,
+    input_hash: approval.inputHash,
+    status: approval.status,
+    requested_by: approval.requestedBy,
+    granted_by: approval.grantedBy,
+    created_at: approval.createdAt,
+    expires_at: approval.expiresAt,
+    granted_at: approval.grantedAt,
+    consumed_at: approval.consumedAt,
   };
 }
 

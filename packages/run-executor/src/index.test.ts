@@ -94,6 +94,7 @@ describe("RunExecutor", () => {
       title: "release",
       mode: "release",
       conversationId: "web:release",
+      workspaceScope: ["/tmp/project"],
       riskLevel: "production_write",
     });
     const run = store.createRun({ workItemId: item.id, mode: item.mode });
@@ -110,6 +111,12 @@ describe("RunExecutor", () => {
     expect((await executor.execute(run.id)).status).toBe("waiting");
     const approval = approvals.listForRun(run.id)[0];
     expect(approval?.status).toBe("requested");
+    expect(approval).toMatchObject({
+      sessionId: "web:release",
+      environment: "production",
+      targetResource: "/tmp/project",
+      inputHash: expect.stringMatching(/^sha256:/),
+    });
     approvals.grant(approval!.id, "user");
     store.requeueRun(run.id);
     expect((await executor.execute(run.id)).status).toBe("succeeded");
