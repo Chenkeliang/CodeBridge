@@ -328,6 +328,48 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("picks an additional directory without accepting a path from the browser", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      pickDirectory: async () => ({ ok: true, path: "/canonical/shared" }),
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi", cwd: "/workspace" });
+    const response = await app.request(`/v1/sessions/${session.id}/directories/pick`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      session_id: session.id,
+      additional_directories: ["/canonical/shared"],
+    });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("returns live Agent config options for a Session", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      listConfigOptions: async () => ({
+        options: [{ id: "model", name: "Model", type: "select", category: "model", values: [{ value: "model-1", name: "Model 1" }] }],
+      }),
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/workspace" }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    const response = await app.request(`/v1/sessions/${session.id}/config-options`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ options: [{ id: "model" }] });
+    catalog.close();
+    workItems.close();
+  });
+
   it("does not mutate additional directories when authorization is unavailable", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

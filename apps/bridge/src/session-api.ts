@@ -258,6 +258,21 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiSession(options.catalog.updateSession(session.id, { additionalDirectories })!));
   });
 
+  app.post("/v1/sessions/:session_id/directories/pick", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    const selected = await options.runner.pickDirectory();
+    if (!selected.ok) {
+      return c.json({ error: "directory_picker_failed", detail: selected.error }, 503);
+    }
+    if (selected.cancelled || !selected.path) return c.json({ cancelled: true });
+    const additionalDirectories = session.additionalDirectories.includes(selected.path)
+      ? session.additionalDirectories
+      : [...session.additionalDirectories, selected.path];
+    return c.json(toApiSession(options.catalog.updateSession(session.id, { additionalDirectories })!));
+  });
+
   app.delete("/v1/sessions/:session_id/directories", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
@@ -273,6 +288,15 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
     return c.json(toApiSession(session));
+  });
+
+  app.get("/v1/sessions/:session_id/config-options", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    const cwd = session.cwd ?? options.defaultCwd;
+    if (!cwd) return c.json({ options: [], error: "workspace_required" });
+    return c.json(await options.runner.listConfigOptions(session.agentId, cwd));
   });
 
   app.patch("/v1/sessions/:session_id", async (c) => {
