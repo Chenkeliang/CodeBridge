@@ -191,6 +191,16 @@ paths:
                 model: { type: [string, 'null'] }
                 cwd: { type: [string, 'null'] }
                 title: { type: [string, 'null'] }
+                attachments:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+                    required: [name, mime_type, data_base64]
+                    properties:
+                      name: { type: string, minLength: 1 }
+                      mime_type: { type: string }
+                      data_base64: { type: string }
       responses:
         '202':
           description: Channel message accepted and Run created

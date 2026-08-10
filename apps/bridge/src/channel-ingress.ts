@@ -32,6 +32,11 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
           cwd: message.cwd,
           model: message.model,
           flow_id: message.flowId,
+          attachments: message.attachments?.map((attachment) => ({
+            name: attachment.name,
+            mime_type: attachment.mimeType,
+            data_base64: attachment.dataBase64,
+          })),
         }),
       },
     );

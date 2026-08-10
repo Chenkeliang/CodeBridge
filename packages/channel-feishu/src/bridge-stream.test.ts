@@ -2,7 +2,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig, type AgentEvent } from "@codebridge/core";
+import { defaultConfig, type AgentEvent, type ChannelSessionIngress } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "./bridge.js";
 
 type StreamController = {
@@ -39,6 +39,7 @@ type TestableBridge = {
       prompt: string,
     ): AsyncGenerator<AgentEvent>;
   };
+  sessionIngress?: ChannelSessionIngress;
   streamAgentReply(
     message: FeishuMessage,
     prompt: string,
@@ -195,6 +196,37 @@ describe("FeishuBridge streaming", () => {
       },
     });
     expect(JSON.parse(fs.readFileSync(pendingPath, "utf8"))).toEqual({});
+  });
+
+  it("routes media messages through the shared Session ingress", async () => {
+    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir: os.tmpdir() }) as unknown as TestableBridge;
+    let received: Parameters<ChannelSessionIngress>[0] | undefined;
+    bridge.sessionIngress = async function* (message) {
+      received = message;
+      yield { type: "text_delta", text: "已读取" };
+      yield { type: "done", exitCode: 0 };
+    };
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({ messageId: "card-media-1", async append() {}, async setContent() {} });
+      },
+    };
+    bridge.orchestrator = {
+      router: { getBinding: () => ({ showThinking: false }) },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () { yield { type: "done", exitCode: 0 }; },
+    };
+
+    await bridge.streamAgentReply({
+      messageId: "media-message-1",
+      chatId: "chat-media",
+      chatType: "p2p",
+      senderId: "user-1",
+      content: "请看这个文件",
+      attachments: [{ name: "context.txt", mimeType: "text/plain", dataBase64: "aGVsbG8=" }],
+    }, "请看这个文件");
+
+    expect(received?.attachments).toEqual([{ name: "context.txt", mimeType: "text/plain", dataBase64: "aGVsbG8=" }]);
   });
 
   it("adds sparse official text-tag guidance to Feishu agent prompts", async () => {

@@ -7,7 +7,11 @@ describe("channel session ingress", () => {
     const app = new Hono();
     app.post("/v1/channels/:channel/conversations/:conversation/messages", async (c) => {
       expect(c.req.param("channel")).toBe("feishu");
-      expect(await c.req.json()).toMatchObject({ message: "hello", agent_id: "pi" });
+      expect(await c.req.json()).toMatchObject({
+        message: "hello",
+        agent_id: "pi",
+        attachments: [{ name: "context.txt", mime_type: "text/plain", data_base64: "aGVsbG8=" }],
+      });
       return c.json({ session_id: "sess_1", run_id: "run_1", event_sequence: 3 }, 202);
     });
     app.get("/v1/sessions/:session/events", (c) => {
@@ -29,6 +33,7 @@ describe("channel session ingress", () => {
       conversationId: "chat|topic",
       message: "hello",
       agentId: "pi",
+      attachments: [{ name: "context.txt", mimeType: "text/plain", dataBase64: "aGVsbG8=" }],
     })) events.push(event);
     expect(events).toEqual([
       { type: "text_delta", text: "ok" },

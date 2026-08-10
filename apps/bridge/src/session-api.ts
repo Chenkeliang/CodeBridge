@@ -147,6 +147,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         message: body.message,
         flow_id: asNullableString(body.flow_id),
         model: asNullableString(body.model),
+        attachments: body.attachments,
       }),
     });
     if (!messageResponse.ok) return c.json(await messageResponse.json(), messageResponse.status as 400 | 404 | 409 | 503);
