@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
 import {
@@ -48,6 +51,8 @@ describe("project catalog discovery", () => {
       projectId: "equity-center",
       repositoryRemote: "gitlab/rock/equity-center",
       language: "go",
+      deployService: "equity-center",
+      dependencies: ["account-center"],
       confidence: "high",
       evidence: [{ kind: "git_remote", ref: "first" }],
     });
@@ -56,6 +61,8 @@ describe("project catalog discovery", () => {
       projectId: "equity-center",
       repositoryRemote: "other/evil",
       language: "python",
+      deployService: "other-service",
+      dependencies: ["other-center"],
       confidence: "high",
       evidence: [{ kind: "git_remote", ref: "second" }],
     });
@@ -63,8 +70,70 @@ describe("project catalog discovery", () => {
     expect(catalog.getProject("equity-center")).toMatchObject({
       repositoryRemote: "gitlab/rock/equity-center",
       language: "go",
+      deployService: "equity-center",
+      dependencies: ["account-center"],
+    });
+    expect(catalog.listDrifts("equity-center")).toEqual([
+      expect.objectContaining({
+        projectId: "equity-center",
+        status: "open",
+        changes: expect.arrayContaining([
+          { field: "repositoryRemote", registered: "gitlab/rock/equity-center", observed: "other/evil" },
+          { field: "language", registered: "go", observed: "python" },
+          { field: "deployService", registered: "equity-center", observed: "other-service" },
+          { field: "dependencies", registered: ["account-center"], observed: ["other-center"] },
+        ]),
+      }),
+    ]);
+    const drift = catalog.listDrifts("equity-center")[0]!;
+    expect(catalog.resolveDrift(drift.id)?.status).toBe("resolved");
+    expect(catalog.listDrifts("equity-center")).toHaveLength(0);
+    catalog.saveCandidate({
+      projectId: "equity-center",
+      repositoryRemote: "other/evil",
+      language: "python",
+      deployService: "other-service",
+      dependencies: ["other-center"],
+      confidence: "high",
+      evidence: [{ kind: "git_remote", ref: "third" }],
+    });
+    expect(catalog.applyDrift(catalog.listDrifts("equity-center")[0]!.id)).toMatchObject({
+      repositoryRemote: "other/evil",
+      language: "python",
+      deployService: "other-service",
+      dependencies: ["other-center"],
     });
     catalog.close();
+  });
+
+  it("reads portable project metadata and previews a Git-reviewable catalog change", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-project-"));
+    fs.mkdirSync(path.join(workspace, ".codebridge"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "go.mod"), "module example/project\n");
+    fs.writeFileSync(path.join(workspace, ".codebridge/project.json"), JSON.stringify({
+      deploy_service: "project-api",
+      log_service: "project-api",
+      apm_service: "project-api",
+      dependencies: ["shared-api"],
+    }));
+    const catalog = new ProjectCatalogStore(":memory:");
+    const discovery = new ProjectDiscovery(catalog);
+
+    const candidate = await discovery.observe(workspace);
+    expect(candidate).toMatchObject({
+      language: "go",
+      deployService: "project-api",
+      logService: "project-api",
+      apmService: "project-api",
+      dependencies: ["shared-api"],
+    });
+    expect(catalog.previewCandidate(candidate.id)).toMatchObject({
+      path: "catalog/projects.yaml",
+      before: "",
+    });
+    expect(catalog.previewCandidate(candidate.id).unified).toContain("+    deploy_service: \"project-api\"");
+    discovery.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
   });
 
   it("persists discovery tasks and keeps their state in the catalog", () => {

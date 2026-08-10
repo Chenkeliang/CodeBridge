@@ -602,6 +602,41 @@ paths:
       responses:
         '200':
           description: Registered project list
+  /v1/projects/drifts:
+    get:
+      operationId: listProjectDrifts
+      summary: List project catalog drift observations
+      parameters:
+        - in: query
+          name: project_id
+          schema: { type: string }
+      responses:
+        '200':
+          description: Open project drift list
+  /v1/projects/drifts/{drift_id}/resolve:
+    parameters:
+      - in: path
+        name: drift_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: resolveProjectDrift
+      summary: Acknowledge a project catalog drift without applying it
+      responses:
+        '200': { description: Drift resolved }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/projects/drifts/{drift_id}/apply:
+    parameters:
+      - in: path
+        name: drift_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: applyProjectDrift
+      summary: Apply a reviewed drift to the local catalog projection
+      responses:
+        '200': { description: Drift applied }
+        '404': { $ref: '#/components/responses/NotFound' }
   /v1/projects/candidates:
     get:
       operationId: listCatalogCandidates
@@ -646,6 +681,18 @@ paths:
                 $ref: '#/components/schemas/Acknowledgement'
         '404':
           $ref: '#/components/responses/NotFound'
+  /v1/projects/candidates/{candidate_id}/diff:
+    parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema: { type: string }
+    get:
+      operationId: previewProjectCatalogDiff
+      summary: Preview the catalog YAML diff for a candidate
+      responses:
+        '200': { description: Catalog diff }
+        '404': { $ref: '#/components/responses/NotFound' }
 components:
   parameters:
     AgentId:
@@ -939,6 +986,9 @@ components:
           type: [string, 'null']
         apm_service:
           type: [string, 'null']
+        dependencies:
+          type: array
+          items: { type: string }
         status:
           type: string
           enum: [candidate, stale, rejected, accepted]

@@ -21,6 +21,18 @@ export function createProjectCatalogApp(
 
   app.get("/v1/projects/candidates", (c) => c.json({ candidates: catalog.listCandidates().map(toApiCandidate) }));
   app.get("/v1/projects", (c) => c.json({ projects: catalog.listProjects().map(toApiProject) }));
+  app.get("/v1/projects/drifts", (c) => {
+    const projectId = c.req.query("project_id");
+    return c.json({ drifts: catalog.listDrifts(projectId || undefined) });
+  });
+
+  app.get("/v1/projects/candidates/:candidate_id/diff", (c) => {
+    try {
+      return c.json(catalog.previewCandidate(c.req.param("candidate_id")));
+    } catch (error) {
+      return c.json({ error: { code: "candidate_not_found", message: messageOf(error) } }, 404);
+    }
+  });
 
   app.post("/v1/projects/candidates/:candidate_id/accept", (c) => {
     try {
@@ -28,6 +40,18 @@ export function createProjectCatalogApp(
     } catch (error) {
       return c.json({ error: { code: "candidate_not_found", message: messageOf(error) } }, 404);
     }
+  });
+
+  app.post("/v1/projects/drifts/:drift_id/resolve", (c) => {
+    const drift = catalog.resolveDrift(c.req.param("drift_id"));
+    if (!drift) return c.json({ error: { code: "drift_not_found", message: "Project drift 不存在" } }, 404);
+    return c.json({ drift });
+  });
+
+  app.post("/v1/projects/drifts/:drift_id/apply", (c) => {
+    const project = catalog.applyDrift(c.req.param("drift_id"));
+    if (!project) return c.json({ error: { code: "drift_not_found", message: "Project drift 不存在或已处理" } }, 404);
+    return c.json({ project: toApiProject(project) });
   });
 
   app.post("/v1/discovery/tasks", async (c) => {
@@ -80,6 +104,7 @@ function toApiCandidate(candidate: ReturnType<ProjectCatalogStore["listCandidate
     deploy_service: candidate.deployService,
     log_service: candidate.logService,
     apm_service: candidate.apmService,
+    dependencies: candidate.dependencies ?? [],
     confidence: candidate.confidence,
     status: candidate.status,
     evidence: candidate.evidence,
@@ -110,6 +135,7 @@ function toApiProject(project: ReturnType<ProjectCatalogStore["listProjects"]>[n
     deploy_service: project.deployService,
     log_service: project.logService,
     apm_service: project.apmService,
+    dependencies: project.dependencies ?? [],
     confidence: project.confidence,
     status: project.status,
     evidence: project.evidence,
