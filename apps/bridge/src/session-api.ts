@@ -8,6 +8,8 @@ import type { SqliteEventStore } from "@codebridge/work-items";
 import type { RunExecutor } from "@codebridge/run-executor";
 import type { RunnerClient } from "@codebridge/runner-client";
 import type { ProjectDiscovery } from "@codebridge/project-catalog";
+import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
+import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
@@ -16,6 +18,7 @@ export interface SessionApiOptions {
   executor?: RunExecutor;
   runner?: RunnerClient;
   discovery?: ProjectDiscovery;
+  flows?: FlowCatalogStore;
   defaultCwd?: string;
 }
 
@@ -184,15 +187,54 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       ? asNullableString(body.flow_id)
       : session.flowId;
     const model = body && Object.hasOwn(body, "model") ? asNullableString(body.model) : session.model;
-    if (task.workflowId !== flowId) options.workItems.updateWorkflowBinding(task.id, flowId);
+    const flow = flowId ? options.flows?.get(flowId) : undefined;
+    if (flowId && !flow) {
+      return c.json({ error: "flow_not_found", flow_id: flowId }, 404);
+    }
+    if (flow?.status === "deprecated") {
+      return c.json({ error: "flow_deprecated", flow_id: flowId }, 409);
+    }
+    let plan;
+    if (flow) {
+      try {
+        plan = compileWorkflow(toWorkflowDefinition(flow), {
+          source: flow.source === "agent_generated" ? "agent_generated" : "workflow",
+          definitionRevision: flow.definitionRevision,
+        });
+      } catch (error) {
+        if (error instanceof WorkflowValidationError) {
+          return c.json({ error: "invalid_flow", issues: error.issues }, 409);
+        }
+        throw error;
+      }
+    }
+    if (task.workflowId !== flowId || task.workflowRevision !== (flow?.definitionRevision ?? null)) {
+      options.workItems.updateWorkflowBinding(task.id, flowId, flow?.definitionRevision ?? null);
+    }
     options.catalog.updateSession(session.id, { flowId, model });
+    const runId = `run_${randomUUID().replaceAll("-", "")}`;
+    if (plan) {
+      options.workItems.savePlan({
+        ...plan,
+        sessionId: session.id,
+        runId,
+      });
+    }
     const run = options.workItems.createRun({
+      id: runId,
       workItemId: task.id,
       mode: "auto",
       agentId: session.agentId,
+      planId: plan?.planId ?? null,
+      workflowRevision: flow?.definitionRevision ?? null,
     });
     if (options.executor) void options.executor.execute(run.id).catch(() => {});
-    const response = { run_id: run.id, status: run.status };
+    const response = {
+      run_id: run.id,
+      status: run.status,
+      plan_id: run.planId,
+      workflow_revision: run.workflowRevision,
+    };
     if (idempotencyKey) options.workItems.putIdempotencyResponse(`session:run:${session.id}`, idempotencyKey, response);
     return c.json(response, 202);
   });
@@ -281,6 +323,26 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   });
 
   return app;
+}
+
+function toWorkflowDefinition(flow: FlowRecord): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    workflow_id: flow.flowId,
+    name: flow.name ?? flow.flowId,
+    kind: flow.kind === "runbook" ? "runbook" : "guide",
+    status: flow.status === "published" ? "published" : "draft",
+    inputs: [],
+    steps: flow.steps.map((step) => ({
+      id: step.id,
+      capability: step.capability,
+      purpose: step.purpose,
+      depends_on: step.dependsOn ?? [],
+      mode: step.mode,
+      approval: step.approval ?? "none",
+      branches: step.branches ?? [],
+    })),
+  };
 }
 
 async function syncProviderSessions(
