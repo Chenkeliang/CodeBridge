@@ -10,7 +10,7 @@ import {
 import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
 import { TelegramBridge } from "@codebridge/channel-telegram";
 import { createMemoryPlugin } from "@codebridge/memory-plugin";
-import { SqliteEventStore } from "@codebridge/work-items";
+import { SqliteEventStore, type PersistedPlanStep } from "@codebridge/work-items";
 import { ApprovalService } from "@codebridge/policy";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
@@ -109,7 +109,7 @@ program
           });
         }
       },
-      resolveRequest: (workItem, run) => {
+      resolveRequest: (workItem, run, step?: PersistedPlanStep) => {
         const linkedSession = workItem.conversationId.startsWith("conv_")
           ? sessionCatalog.getSession(`sess_${workItem.conversationId.slice("conv_".length)}`)
           : undefined;
@@ -135,9 +135,18 @@ program
             : config.defaultBackend;
         const basePrompt =
           typeof latestMessage === "string" ? latestMessage : workItem.title;
-        const prompt = workItem.workflowId
-          ? `[参考 Workflow: ${workItem.workflowId}]\n${basePrompt}`
-          : basePrompt;
+        const prompt = step
+          ? [
+              `[Workflow ${workItem.workflowId ?? "临时计划"}${run.workflowRevision ? ` @ ${run.workflowRevision}` : ""}]`,
+              `[执行步骤: ${step.id}]`,
+              `[Capability: ${step.capabilityId ?? "manual"}]`,
+              `[Risk: ${step.risk}]`,
+              step.purpose ? `[Purpose: ${step.purpose}]` : "",
+              basePrompt,
+            ].filter(Boolean).join("\n")
+          : workItem.workflowId
+            ? `[参考 Workflow: ${workItem.workflowId}]\n${basePrompt}`
+            : basePrompt;
         return {
           runId: run.id,
           sessionKey: {
@@ -215,6 +224,7 @@ program
         executor: runExecutor,
         runner: runnerClient,
         discovery: projectDiscovery,
+        flows: flowCatalog,
         defaultCwd: config.workspaces?.default ?? config.workspaces?.root ?? process.cwd(),
       },
       config.runner.token,
