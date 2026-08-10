@@ -21,6 +21,17 @@ export interface WebWorkbenchOptions {
   workflows?: WebWorkbenchWorkflow[];
 }
 
+const BUILTIN_AGENT_ICONS: Record<string, string> = {
+  codex: `<svg data-agent-icon="codex" aria-hidden="true" viewBox="0 0 2406 2406"><path d="M1 578.4C1 259.5 259.5 1 578.4 1h1249.1c319 0 577.5 258.5 577.5 577.4V2406H578.4C259.5 2406 1 2147.5 1 1828.6V578.4z" fill="#74aa9c"/><path id="codex-mark" d="M1107.3 299.1c-197.999 0-373.9 127.3-435.2 315.3L650 743.5v427.9c0 21.4 11 40.4 29.4 51.4l344.5 198.515V833.3h.1v-27.9L1372.7 604c33.715-19.52 70.44-32.857 108.47-39.828L1447.6 450.3C1361 353.5 1237.1 298.5 1107.3 299.1zm0 117.5-.6.6c79.699 0 156.3 27.5 217.6 78.4-2.5 1.2-7.4 4.3-11 6.1L952.8 709.3c-18.4 10.4-29.4 30-29.4 51.4V1248l-155.1-89.4V755.8c-.1-187.099 151.601-338.9 339-339.2z" fill="#fff"/><use href="#codex-mark" transform="rotate(60 1203 1203)"/><use href="#codex-mark" transform="rotate(120 1203 1203)"/><use href="#codex-mark" transform="rotate(180 1203 1203)"/><use href="#codex-mark" transform="rotate(240 1203 1203)"/><use href="#codex-mark" transform="rotate(300 1203 1203)"/></svg>`,
+  pi: `<svg data-agent-icon="pi" aria-hidden="true" viewBox="0 0 800 800"><path fill="currentColor" fill-rule="evenodd" d="M165.29 165.29h352.07V400H400v117.36H282.65v117.36H165.29zm117.36 117.36V400H400V282.65z"/><path fill="currentColor" d="M517.36 400h117.36v234.72H517.36z"/></svg>`,
+  cursor: `<svg data-agent-icon="cursor" aria-hidden="true" viewBox="0 0 24 24"><path fill="currentColor" d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.23.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23"/></svg>`,
+  claude: `<svg data-agent-icon="claude" aria-hidden="true" viewBox="0 0 24 24"><path fill="#D97757" d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></svg>`,
+};
+
+function toJavaScriptString(value: string): string {
+  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\r?\n/g, " ")}'`;
+}
+
 /**
  * A dependency-free local web surface. It deliberately uses the same HTTP
  * contracts as Feishu/Telegram instead of creating a second conversation path.
@@ -37,15 +48,15 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   const agentProfiles: WebWorkbenchAgent[] = options.agentProfiles ?? agents.map((id) => ({ id, name: id }));
   const workflows = options.workflows ?? [];
   const token = JSON.stringify(options.token).replace(/</g, "\\u003c");
-  const availableAgents = agentProfiles.filter((agent) => !agent.status || agent.status === "healthy");
-  const defaultAgentId = availableAgents[0]?.id ?? "";
-  const agentOptions = agentProfiles.map((agent) => `<option value="${escapeHtml(agent.id)}"${agent.status && agent.status !== "healthy" ? " disabled" : ""}>${escapeHtml(agent.name)}${agent.status ? ` · ${escapeHtml(agent.status)}` : ""}</option>`).join("");
   const models = [...new Set(agentProfiles.flatMap((agent) => agent.models ?? []))];
   const modelOptions = `<option value="">模型 · Agent 默认</option>${models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join("")}`;
   const workflowOptions = [
     `<option value="">Workflow · 自动发现</option>`,
     ...workflows.map((workflow) => `<option value="${escapeHtml(workflow.id)}">${escapeHtml(workflow.name)} · ${escapeHtml(workflow.id)}</option>`),
   ].join("");
+  const agentIconSource = Object.entries(BUILTIN_AGENT_ICONS)
+    .map(([id, markup]) => `${id}: ${toJavaScriptString(markup)}`)
+    .join(",");
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -69,18 +80,19 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .inbox-head { display:flex; justify-content:space-between; align-items:center; padding:0 8px; }
     .inbox-head h2 { margin:0; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
     .inbox-actions { display:flex; align-items:center; gap:6px; }
-    .new-button { background:var(--ink); color:#fff; border-radius:7px; padding:7px 10px; transition:transform .2s ease, background .2s ease; }
-    .new-button:hover { background:var(--accent); transform:translateY(-1px); }
     .sync-button { background:transparent; color:var(--muted); border-radius:7px; padding:7px 8px; }
     .sync-button:hover { background:#e4e9e5; color:var(--accent); }
     .work-list { display:grid; gap:12px; overflow:auto; }
-    #work-list { flex:1 1 auto; min-height:0; }
+    #work-list { flex:1 1 auto; min-height:0; align-content:start; }
     #flow-list { flex:0 0 auto; max-height:28dvh; }
     .agent-group { display:grid; gap:3px; }
     .agent-group-head { display:flex; align-items:center; gap:4px; padding:3px 4px; color:var(--ink); }
     .agent-toggle { min-width:0; flex:1; display:flex; align-items:center; gap:7px; padding:7px 6px; border-radius:8px; background:transparent; color:var(--ink); text-align:left; }
     .agent-toggle:hover { background:#e4e9e5; }
     .agent-toggle strong { font-size:14px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .agent-icon { flex:0 0 18px; width:18px; height:18px; display:grid; place-items:center; color:var(--ink); }
+    .agent-icon svg { display:block; width:18px; height:18px; }
+    .agent-icon-fallback { border:1px solid var(--line); border-radius:5px; font:700 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .agent-status, .agent-count { color:var(--muted); font:10px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .agent-count { margin-left:auto; }
     .agent-chevron { flex:0 0 14px; color:var(--muted); transition:transform .16s ease; }
@@ -138,9 +150,6 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .event-body strong { display:block; font-size:12px; letter-spacing:.04em; }
     .event-body pre { margin:5px 0 0; white-space:pre-wrap; word-break:break-word; color:var(--muted); font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .chat-composer { background:rgba(255,255,255,.94); border:1px solid var(--line); border-radius:16px; padding:12px; box-shadow:var(--shadow); }
-    .composer-head { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:2px 4px 10px; }
-    .composer-head strong { font-size:14px; letter-spacing:.02em; }
-    .composer-head span, .context-note { color:var(--muted); font-size:12px; }
     .form-grid { display:grid; gap:10px; }
     input, select, textarea { width:100%; border:1px solid var(--line); background:#fbfcfa; border-radius:7px; padding:9px 10px; color:var(--ink); outline:none; transition:border .2s ease, box-shadow .2s ease; }
     input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
@@ -154,14 +163,10 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .send-button:hover { background:var(--accent); }
     .composer-context { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:3px 3px 8px; }
     .context-control, .context-chip { width:auto; min-height:28px; border:1px solid var(--line); border-radius:8px; background:#f7f9f7; color:var(--muted); padding:5px 8px; font-size:12px; }
-    .workspace-control { min-width:220px; }
-    .workspace-authorize { background:var(--accent-soft); color:var(--accent); border-color:transparent; cursor:pointer; }
-    .workspace-authorize:hover { border-color:var(--accent); }
     .context-control { outline:none; }
     .context-control:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
     .context-chip { display:inline-flex; align-items:center; flex:0 0 auto; }
-    .context-note { display:flex; align-items:center; gap:7px; padding:3px 3px 0; }
-    .context-note::before { content:"✦"; color:var(--accent); }
+    .directory-note { color:var(--muted); font-size:12px; }
     .actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .flow-row-wrap { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px; align-items:center; }
     .flow-review { border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--accent); padding:5px 7px; font-size:11px; }
@@ -179,7 +184,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   <div class="shell">
     <aside class="sidebar">
       <div class="brand"><strong>CodeBridge</strong><span>WORKBENCH / 01</span></div>
-      <div class="inbox-head"><h2>Agents</h2><div class="inbox-actions"><button class="sync-button" id="sync-sessions" type="button">同步会话</button><button class="new-button" id="new-work" type="button">New session</button></div></div>
+      <div class="inbox-head"><h2>Agents</h2><div class="inbox-actions"><button class="sync-button" id="sync-sessions" title="从 Agent 导入已有会话" type="button">导入历史</button></div></div>
       <div class="work-list" id="work-list"><div class="empty">正在读取 Agent 会话…</div></div>
       <div class="inbox-head"><h2>Flows</h2></div>
       <div class="work-list" id="flow-list"><div class="empty">Flow 会在当前会话中自动发现或由你选择。</div></div>
@@ -187,47 +192,25 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     <main class="main">
       <div class="workspace">
         <header class="workspace-top">
-          <div><div class="eyebrow">Multi-project agent workspace</div><h1 id="title">把问题交给 Agent</h1><p class="subline" id="subtitle">描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。</p></div>
+          <div><div class="eyebrow">CodeBridge Workbench</div><h1 id="title">选择一个 Agent 开始</h1><p class="subline" id="subtitle" hidden></p></div>
           <div class="session-actions" id="session-actions" hidden><button class="session-action" id="session-resume" type="button">继续</button><button class="session-action" id="session-fork" type="button">分支</button><button class="session-action" id="session-directories" type="button">目录</button><button class="session-action" id="session-close" type="button">关闭</button><button class="session-action" id="session-delete" type="button">删除</button><span class="status" id="status">idle</span></div>
         </header>
         <div class="grid">
           <section class="conversation-column">
             <section class="directory-panel" id="directory-panel" hidden>
-              <div class="directory-head"><strong>Session context</strong><span class="context-note">附加目录会在下一次运行时生效</span></div>
+              <div class="directory-head"><strong>Session 目录</strong><span class="directory-note">下次运行时生效</span></div>
               <div class="directory-list" id="directory-list"><div class="empty">当前没有附加目录。</div></div>
-              <div class="directory-add"><input id="additional-directory" aria-label="附加目录" placeholder="输入需要授权的本机目录路径" autocomplete="off" /><button class="secondary" id="add-directory" type="button">添加目录</button></div>
+              <div class="directory-add"><input id="additional-directory" aria-label="附加目录" placeholder="输入要加入当前 Session 的目录路径" autocomplete="off" /><button class="secondary" id="add-directory" type="button">添加</button></div>
               <div class="error" id="directory-error"></div>
             </section>
-            <div class="timeline-toolbar" id="timeline-toolbar" hidden><button class="timeline-filter active" data-view="all" type="button">全部</button><button class="timeline-filter" data-view="plan" type="button">计划</button><button class="timeline-filter" data-view="approval" type="button">审批</button><button class="timeline-filter" data-view="evidence" type="button">证据</button><button class="timeline-filter" data-view="diff" type="button">Diff</button><button class="timeline-filter" data-view="test" type="button">测试</button></div><div class="timeline" id="timeline"><div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div></div>
-            <form class="chat-composer form-grid" id="work-form">
-              <div class="composer-head"><strong id="composer-title">新对话</strong><span>自然语言输入</span></div>
-              <div class="composer-context">
-                <select class="context-control" id="agent" aria-label="Agent"><option value="">Agent · 自动选择</option>${agentOptions}</select>
-                <select class="context-control" id="mode" aria-label="模式" hidden><option value="auto">模式 · Agent 判断</option></select>
-                <select class="context-control" id="workflow" aria-label="Workflow"${workflows.length ? "" : " hidden"}>${workflowOptions}</select>
-                <input class="context-control workspace-control" id="workspace" aria-label="Folder / 工作目录" placeholder="Folder / 工作目录（可选）" autocomplete="off" />
-                <button class="context-control workspace-authorize" id="workspace-authorize" type="button">授权</button>
-                <select class="context-control" id="model" aria-label="模型"${models.length ? "" : " hidden"}>${modelOptions}</select>
-                <span class="context-chip" id="workspace-chip">工作空间 · 自动发现</span>
-              </div>
-               <div class="input-shell">
-                 <div class="composer-tools"><button class="tool-button" id="attach-button" type="button" aria-label="添加文件">＋</button></div>
-                 <textarea class="message-input" id="message" required placeholder="输入任务… 试试 @资源 或 /命令"></textarea>
-                 <div class="input-actions"><button class="tool-button" id="mention-button" type="button" aria-label="引用上下文">@</button><button class="tool-button" id="command-button" type="button" aria-label="插入命令">/</button><button class="send-button" type="submit" aria-label="发送">↑</button></div>
-               </div>
-               <input id="attachment-picker" type="file" multiple hidden />
-               <div class="attachment-list" id="attachment-list"></div>
-              <div class="context-note">Agent 会先理解目标，再决定合适的上下文与下一步；周边选项只是可选提示。</div>
-              <div class="error" id="error"></div>
-            </form>
+            <div class="timeline-toolbar" id="timeline-toolbar" hidden><button class="timeline-filter active" data-view="all" type="button">全部</button><button class="timeline-filter" data-view="plan" type="button">计划</button><button class="timeline-filter" data-view="approval" type="button">审批</button><button class="timeline-filter" data-view="evidence" type="button">证据</button><button class="timeline-filter" data-view="diff" type="button">Diff</button><button class="timeline-filter" data-view="test" type="button">测试</button></div><div class="timeline" id="timeline"><div class="timeline-empty">选择左侧 Agent 创建 Session</div></div><div class="error" id="workbench-error"></div>
             <form class="chat-composer form-grid" id="reply-form" hidden>
-              <div class="composer-head"><strong>继续对话</strong><span>补充事实或追问</span></div>
               <div class="composer-context">
-                <span class="context-chip" id="reply-mode-chip">模式 · Agent 判断</span><select class="context-control" id="reply-workflow" aria-label="Workflow"${workflows.length ? "" : " hidden"}>${workflowOptions}</select><span class="context-chip" id="reply-workspace-chip">工作空间 · 自动发现</span><select class="context-control" id="reply-model" aria-label="模型"${models.length ? "" : " hidden"}>${modelOptions}</select>
+                <select class="context-control" id="reply-workflow" aria-label="Workflow"${workflows.length ? "" : " hidden"}>${workflowOptions}</select><span class="context-chip" id="reply-workspace-chip">工作空间 · 自动发现</span><select class="context-control" id="reply-model" aria-label="模型"${models.length ? "" : " hidden"}>${modelOptions}</select>
               </div>
                <div class="input-shell">
                  <div class="composer-tools"><button class="tool-button" id="reply-attach-button" type="button" aria-label="添加文件">＋</button></div>
-                 <textarea class="message-input" id="reply" placeholder="补充背景、约束或新的要求，告诉 Agent 下一步如何调整"></textarea>
+                 <textarea class="message-input" id="reply" placeholder="输入任务…"></textarea>
                  <div class="input-actions"><button class="tool-button" id="reply-mention-button" type="button" aria-label="引用上下文">@</button><button class="tool-button" id="reply-command-button" type="button" aria-label="插入命令">/</button><button class="send-button" type="submit" aria-label="发送">↑</button></div>
                </div>
                <input id="reply-attachment-picker" type="file" multiple hidden />
@@ -249,6 +232,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   </div>
   <script>
     const TOKEN = __TOKEN__;
+    const agentIcons = {${agentIconSource}};
     const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, view: 'all', collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
@@ -271,8 +255,8 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         reader.readAsDataURL(file);
       })));
     }
-    function applyFlows(flows) { const options = '<option value="">Workflow · 自动发现</option>' + flows.map((flow) => '<option value="' + esc(flow.flow_id) + '">' + esc(flow.name || flow.flow_id) + ' · ' + esc(flow.flow_id) + '</option>').join(''); $('workflow').innerHTML = options; $('reply-workflow').innerHTML = options; $('workflow').hidden = flows.length === 0; $('reply-workflow').hidden = flows.length === 0; }
-    async function loadFlows() { try { const result = await api('/v1/flows'); const flows = result.flows || []; applyFlows(flows); $('flow-list').innerHTML = flows.length ? flows.map((flow) => '<div class="flow-row-wrap"><button class="work-row flow-row" data-flow="' + esc(flow.flow_id) + '"><strong>' + esc(flow.name || flow.flow_id) + '</strong><small>' + esc(flow.status) + ' · ' + esc(flow.kind) + '</small></button>' + (flow.status === 'candidate' ? '<button class="flow-review" data-review-flow="' + esc(flow.flow_id) + '" type="button">审核</button>' : '') + '</div>').join('') : '<div class="empty">当前没有已登记的 Flow；在 Session 中可以自动发现。</div>'; document.querySelectorAll('.flow-row').forEach((button) => button.addEventListener('click', () => { $('workflow').value = button.dataset.flow; $('reply-workflow').value = button.dataset.flow; })); document.querySelectorAll('.flow-review').forEach((button) => button.addEventListener('click', () => reviewFlow(button.dataset.reviewFlow).catch((error) => { $('reply-error').textContent = error.message; }))); } catch (error) { $('flow-list').innerHTML = '<div class="empty">无法读取 Flow：' + esc(error.message) + '</div>'; } }
+    function applyFlows(flows) { const options = '<option value="">Workflow · 自动发现</option>' + flows.map((flow) => '<option value="' + esc(flow.flow_id) + '">' + esc(flow.name || flow.flow_id) + ' · ' + esc(flow.flow_id) + '</option>').join(''); $('reply-workflow').innerHTML = options; $('reply-workflow').hidden = flows.length === 0; }
+    async function loadFlows() { try { const result = await api('/v1/flows'); const flows = result.flows || []; applyFlows(flows); $('flow-list').innerHTML = flows.length ? flows.map((flow) => '<div class="flow-row-wrap"><button class="work-row flow-row" data-flow="' + esc(flow.flow_id) + '"><strong>' + esc(flow.name || flow.flow_id) + '</strong><small>' + esc(flow.status) + ' · ' + esc(flow.kind) + '</small></button>' + (flow.status === 'candidate' ? '<button class="flow-review" data-review-flow="' + esc(flow.flow_id) + '" type="button">审核</button>' : '') + '</div>').join('') : '<div class="empty">暂无 Flow</div>'; document.querySelectorAll('.flow-row').forEach((button) => button.addEventListener('click', () => { $('reply-workflow').value = button.dataset.flow; })); document.querySelectorAll('.flow-review').forEach((button) => button.addEventListener('click', () => reviewFlow(button.dataset.reviewFlow).catch((error) => { $('reply-error').textContent = error.message; }))); } catch (error) { $('flow-list').innerHTML = '<div class="empty">无法读取 Flow：' + esc(error.message) + '</div>'; } }
     async function reviewFlow(flowId) { const decision = window.confirm('发布这个 Workflow Candidate？\\n取消将保留 Candidate 不变。') ? 'approve' : 'reject'; const gitRevision = decision === 'approve' ? window.prompt('输入已审核的 Git revision') : null; if (decision === 'approve' && !gitRevision) return; await api('/v1/flows/' + encodeURIComponent(flowId) + '/review', { method:'POST', body: JSON.stringify({ decision, ...(gitRevision ? { git_revision: gitRevision } : {}) }) }); await loadFlows(); }
     async function syncSessions() {
       const button = $('sync-sessions');
@@ -302,10 +286,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
           const sessionsForAgent = groups[agentId] || [];
           const collapsed = state.collapsedAgents.has(agentId);
           const sessionsId = 'agent-sessions-' + index;
-          const newButton = canCreate ? '<button class="agent-new" data-agent="' + esc(agentId) + '" aria-label="新建会话" type="button">＋</button>' : '';
+          const newButton = canCreate ? '<button class="agent-new" data-agent="' + esc(agentId) + '" aria-label="新建 ' + esc(agentLabels[agentId] || agentId) + ' Session" type="button">＋</button>' : '';
           const sessionRows = sessionsForAgent.map((session) => '<button class="work-row ' + (state.selected === session.session_id ? 'active' : '') + '" data-id="' + esc(session.session_id) + '" type="button"><strong>' + esc(session.title || '新会话') + '</strong><small>' + esc(session.status) + ' · ' + esc(session.cwd || '工作空间自动发现') + '</small></button>').join('');
           const status = agentStatuses[agentId] ? '<span class="agent-status">' + esc(agentStatuses[agentId]) + '</span>' : '';
-          return '<section class="agent-group"><div class="agent-group-head"><button class="agent-toggle" data-agent-toggle="' + esc(agentId) + '" aria-expanded="' + String(!collapsed) + '" aria-controls="' + sessionsId + '" type="button"><span class="agent-chevron ' + (collapsed ? '' : 'expanded') + '">›</span><strong>' + esc(agentLabels[agentId] || agentId) + '</strong>' + status + '<span class="agent-count">' + sessionsForAgent.length + '</span></button>' + newButton + '</div><div class="agent-sessions" id="' + sessionsId + '"' + (collapsed ? ' hidden' : '') + '>' + (sessionRows || '<div class="empty">还没有会话</div>') + '</div></section>';
+          const icon = agentIcons[agentId] || '<span class="agent-icon-fallback" data-agent-icon="' + esc(agentId) + '">' + esc((agentLabels[agentId] || agentId).slice(0, 1).toUpperCase()) + '</span>';
+          return '<section class="agent-group"><div class="agent-group-head"><button class="agent-toggle" data-agent-toggle="' + esc(agentId) + '" aria-expanded="' + String(!collapsed) + '" aria-controls="' + sessionsId + '" type="button"><span class="agent-chevron ' + (collapsed ? '' : 'expanded') + '">›</span><span class="agent-icon" aria-hidden="true">' + icon + '</span><strong>' + esc(agentLabels[agentId] || agentId) + '</strong>' + status + '<span class="agent-count">' + sessionsForAgent.length + '</span></button>' + newButton + '</div><div class="agent-sessions" id="' + sessionsId + '"' + (collapsed ? ' hidden' : '') + '>' + (sessionRows || '<div class="empty">还没有会话</div>') + '</div></section>';
         }).join('');
         document.querySelectorAll('#work-list .work-row').forEach((button) => button.addEventListener('click', () => selectSession(button.dataset.id)));
         document.querySelectorAll('.agent-toggle').forEach((button) => button.addEventListener('click', () => {
@@ -318,16 +303,21 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
           if (sessions) sessions.hidden = !expanded;
           button.querySelector('.agent-chevron')?.classList.toggle('expanded', expanded);
         }));
-        document.querySelectorAll('.agent-new').forEach((button) => button.addEventListener('click', () => { void newSession(button.dataset.agent).catch((error) => { $('error').textContent = error.message; }); }));
+        document.querySelectorAll('.agent-new').forEach((button) => button.addEventListener('click', () => { void newSession(button.dataset.agent).catch((error) => { $('workbench-error').textContent = error.message; }); }));
       } catch (error) { $('work-list').innerHTML = '<div class="empty">无法读取：' + esc(error.message) + '</div>'; }
     }
     async function newSession(agentId) {
-      const cwd = $('workspace').value.trim();
-      const session = await api('/v1/sessions', { method:'POST', body: JSON.stringify({ agent_id: agentId || $('agent').value || ${JSON.stringify(defaultAgentId)}, model: $('model').value || null, ...(cwd ? { cwd } : {}) }) });
+      if (!agentId) return;
+      $('workbench-error').textContent = '';
+      const session = await api('/v1/sessions', { method:'POST', body: JSON.stringify({ agent_id: agentId }) });
       await selectSession(session.session_id);
     }
+    function resetWorkbench() {
+      state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer);
+      $('title').textContent = '选择一个 Agent 开始'; $('subtitle').textContent = ''; $('subtitle').hidden = true; $('session-actions').hidden = true; $('run-inspector').hidden = true; $('timeline-toolbar').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">没有待审核的目录变化。</div>'; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('reply-attachment-picker').value = ''; renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'); $('timeline').innerHTML = '<div class="timeline-empty">选择左侧 Agent 创建 Session</div>'; $('reply-form').hidden = true; $('reply-model').value = ''; $('workbench-error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyView(); loadSessions();
+    }
     async function selectSession(id) {
-      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('run-inspector').hidden = false; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('work-form').hidden = true; $('reply-form').hidden = false; $('session-actions').hidden = false; $('composer-title').textContent = 'Session';
+      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('run-inspector').hidden = false; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('timeline').innerHTML = '<div class="timeline-empty">暂无消息</div>'; $('reply-form').hidden = false; $('session-actions').hidden = false; $('workbench-error').textContent = '';
       $('timeline-toolbar').hidden = false;
       await refreshSession(true); void startEventStream(); loadSessions();
       void loadDrifts();
@@ -340,13 +330,10 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         state.session = session;
         const agent = session.agent_id || '自动选择';
         const scope = session.cwd || '';
-        $('title').textContent = session.title || 'Session'; $('subtitle').textContent = 'Agent ' + agent + ' · ' + (session.status || 'idle'); $('status').textContent = session.status || 'idle'; $('status').className = 'status ' + (session.status === 'waiting' ? 'waiting' : '');
+        $('title').textContent = session.title || 'Session'; $('subtitle').textContent = agent + ' · ' + (session.status || 'idle'); $('subtitle').hidden = false; $('status').textContent = session.status || 'idle'; $('status').className = 'status ' + (session.status === 'waiting' ? 'waiting' : '');
         $('session-resume').hidden = session.status !== 'closed';
         $('session-close').hidden = session.status === 'closed';
-        $('mode').value = 'auto'; $('agent').value = agent; $('agent').disabled = true; $('workflow').value = session.flow_id || ''; $('reply-workflow').value = session.flow_id || ''; applyModels(agent); $('model').value = session.model || ''; $('reply-model').value = session.model || '';
-         $('workspace').value = '';
-         $('workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
-         $('reply-mode-chip').textContent = '模式 · Agent 判断';
+        $('reply-workflow').value = session.flow_id || ''; applyModels(agent); $('reply-model').value = session.model || '';
          $('reply-workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
          renderDirectories(session);
          await refreshInspector();
@@ -356,7 +343,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
           const events = [...text.matchAll(/data: (\{.*\})/g)].map((match) => JSON.parse(match[1]));
           if (events.length) { state.sequence = events[events.length - 1].sequence; renderEvents(events); }
         }
-      } catch (error) { $('error').textContent = error.message; $('reply-error').textContent = error.message; }
+      } catch (error) { $('workbench-error').textContent = error.message; $('reply-error').textContent = error.message; }
     }
     function renderDirectories(session) {
       const directories = session.additional_directories || [];
@@ -547,7 +534,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     $('session-delete').addEventListener('click', async () => {
       if (!state.selected || !window.confirm('删除当前 Session？')) return;
       clearInterval(state.timer); state.eventAbort?.abort();
-      try { await api('/v1/sessions/' + encodeURIComponent(state.selected), { method:'DELETE' }); $('new-work').click(); }
+      try { await api('/v1/sessions/' + encodeURIComponent(state.selected), { method:'DELETE' }); resetWorkbench(); }
       catch (error) { $('reply-error').textContent = error.message; state.timer = setInterval(() => { void refreshSession(); }, 1200); void startEventStream(); }
     });
     $('session-directories').addEventListener('click', () => {
@@ -557,33 +544,14 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     $('add-directory').addEventListener('click', () => addDirectory());
     $('additional-directory').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); void addDirectory(); } });
     document.querySelectorAll('.timeline-filter').forEach((button) => button.addEventListener('click', () => { state.view = button.dataset.view || 'all'; applyView(); }));
-    function applyModels(agentId) { const models = agentModels[agentId] || []; const options = '<option value="">模型 · Agent 默认</option>' + models.map((model) => '<option value="' + esc(model) + '">' + esc(model) + '</option>').join(''); $('model').innerHTML = options; $('reply-model').innerHTML = options; $('model').hidden = models.length === 0; $('reply-model').hidden = models.length === 0; }
-    $('agent').addEventListener('change', () => applyModels($('agent').value));
-    async function startRun() { if (!state.selected) return; await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/runs', { method:'POST', body: JSON.stringify({ flow_id: $('reply-workflow').value || $('workflow').value || null, model: $('reply-model').value || $('model').value || null, mode: 'auto' }) }); await refreshSession(); }
-    $('work-form').addEventListener('submit', async (event) => { event.preventDefault(); $('error').textContent = ''; try { const attachments = await encodePendingAttachments('attachment-picker'); await newSession($('agent').value); await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('message').value, flow_id: $('workflow').value || null, model: $('model').value || null, ...(attachments.length ? { attachments } : {}) }) }); $('message').value = ''; $('attachment-picker').value = ''; renderPendingAttachments('attachment-picker', 'attachment-list'); await startRun(); state.eventAbort?.abort(); void startEventStream(); } catch (error) { $('error').textContent = error.message; } });
+    function applyModels(agentId) { const models = agentModels[agentId] || []; const options = '<option value="">模型 · Agent 默认</option>' + models.map((model) => '<option value="' + esc(model) + '">' + esc(model) + '</option>').join(''); $('reply-model').innerHTML = options; $('reply-model').hidden = models.length === 0; }
+    async function startRun() { if (!state.selected) return; await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/runs', { method:'POST', body: JSON.stringify({ flow_id: $('reply-workflow').value || null, model: $('reply-model').value || null, mode: 'auto' }) }); await refreshSession(); }
     $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { const attachments = await encodePendingAttachments('reply-attachment-picker'); await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value, flow_id: $('reply-workflow').value || null, model: $('reply-model').value || null, ...(attachments.length ? { attachments } : {}) }) }); $('reply').value = ''; $('reply-attachment-picker').value = ''; renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'); await startRun(); state.eventAbort?.abort(); void startEventStream(); } catch (error) { $('reply-error').textContent = error.message; } });
     $('run-again').addEventListener('click', () => startRun().catch((error) => { $('reply-error').textContent = error.message; }));
-    $('sync-sessions').addEventListener('click', () => syncSessions().catch((error) => { $('error').textContent = error.message; }));
-    [['mention-button', 'message', '@'], ['command-button', 'message', '/'], ['reply-mention-button', 'reply', '@'], ['reply-command-button', 'reply', '/']].forEach(([button, input, token]) => $(button).addEventListener('click', () => insertToken(input, token)));
-    $('attach-button').addEventListener('click', () => $('attachment-picker').click());
+    $('sync-sessions').addEventListener('click', () => syncSessions().catch((error) => { $('workbench-error').textContent = error.message; }));
+    [['reply-mention-button', 'reply', '@'], ['reply-command-button', 'reply', '/']].forEach(([button, input, token]) => $(button).addEventListener('click', () => insertToken(input, token)));
     $('reply-attach-button').addEventListener('click', () => $('reply-attachment-picker').click());
-    $('attachment-picker').addEventListener('change', () => renderPendingAttachments('attachment-picker', 'attachment-list'));
     $('reply-attachment-picker').addEventListener('change', () => renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'));
-    $('workspace-authorize').addEventListener('click', async () => {
-      const input = $('workspace');
-      const path = input.value.trim();
-      $('error').textContent = '';
-      if (!path) { input.focus(); return; }
-      const button = $('workspace-authorize');
-      button.disabled = true;
-      try {
-        const result = await api('/v1/directories/authorize', { method:'POST', body: JSON.stringify({ path }) });
-        if (!result.ok) throw new Error(result.error || '工作目录授权失败');
-        input.value = result.path || path;
-      } catch (error) { $('error').textContent = error.message; }
-      finally { button.disabled = false; }
-    });
-    $('new-work').addEventListener('click', () => { state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('run-inspector').hidden = true; $('timeline-toolbar').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">没有待审核的目录变化。</div>'; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('attachment-picker').value = ''; $('reply-attachment-picker').value = ''; renderPendingAttachments('attachment-picker', 'attachment-list'); renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'); $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model').value = ''; $('reply-model').value = ''; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyModels(''); applyView(); loadSessions(); });
     loadSessions(); loadFlows();
   </script>
 </body>
