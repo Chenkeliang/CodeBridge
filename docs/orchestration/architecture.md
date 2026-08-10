@@ -18,7 +18,7 @@ Session-first Agent Workbench
   + 事件和证据审计
 ```
 
-第一阶段采用轻量 Session/Run Runtime；未来如果出现跨机器长任务、复杂定时器或分布式重试，通过稳定的 Plan IR 接入 Durable Workflow Engine，保持用户可读的 Flow/Workflow 定义不变。
+第一阶段采用轻量 Session/Run Runtime；当前已将编译后的 Plan IR 持久化并按依赖、分支和审批驱动执行。未来如果出现跨机器长任务、复杂定时器或分布式重试，再把同一 Plan IR 接入 Durable Workflow Engine，保持用户可读的 Flow/Workflow 定义不变。
 
 ## 2. 总体拓扑
 

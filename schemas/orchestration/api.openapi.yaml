@@ -146,6 +146,13 @@ paths:
     parameters:
       - $ref: '#/components/parameters/SessionId'
       - $ref: '#/components/parameters/LastEventId'
+      - in: query
+        name: after_sequence
+        schema: { type: integer, minimum: 0, default: 0 }
+      - in: query
+        name: live
+        description: Keep the authenticated SSE response open for future events.
+        schema: { type: boolean, default: false }
     get:
       operationId: streamSessionEvents
       summary: Stream ordered Session and Run events
@@ -435,6 +442,35 @@ paths:
                 $ref: '#/components/schemas/Acknowledgement'
         '409':
           $ref: '#/components/responses/Conflict'
+  /v1/runs/{run_id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      operationId: rejectRun
+      summary: Reject a pending scoped approval and cancel its Run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approval_id]
+              properties:
+                approval_id: { type: string }
+                rejected_by: { type: string, enum: [user, system] }
+      responses:
+        '200':
+          description: Approval rejected and Run cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [approval_id, status]
+                properties:
+                  approval_id: { type: string }
+                  status: { type: string, const: revoked }
+        '409':
+          $ref: '#/components/responses/Conflict'
   /v1/discovery/tasks:
     post:
       operationId: createDiscoveryTask
@@ -460,6 +496,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskReference'
+  /v1/discovery/tasks/{task_id}:
+    parameters:
+      - in: path
+        name: task_id
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getDiscoveryTask
+      summary: Get durable project discovery task state
+      responses:
+        '200':
+          description: Discovery task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveryTask'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /v1/directories/authorize:
     post:
       operationId: authorizeDirectory
@@ -792,6 +846,10 @@ components:
         status:
           type: string
           enum: [queued, running, waiting, succeeded, failed, cancelled]
+        plan_id:
+          type: [string, 'null']
+        workflow_revision:
+          type: [string, 'null']
     TaskReference:
       type: object
       required: [task_id, status]
@@ -801,6 +859,20 @@ components:
         status:
           type: string
           enum: [queued, running, waiting, succeeded, failed, cancelled]
+    DiscoveryTask:
+      type: object
+      required: [task_id, status, workspace_path, created_at, updated_at]
+      properties:
+        task_id: { type: string }
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed]
+        workspace_path: { type: string }
+        work_item_id: { type: [string, 'null'] }
+        candidate_id: { type: [string, 'null'] }
+        error: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     ProjectCandidate:
       type: object
       required: [id, project_id, status, confidence, evidence, observed_at]

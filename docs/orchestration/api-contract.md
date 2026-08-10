@@ -34,7 +34,7 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `POST` | `/v1/sessions/{session_id}/fork` | 按 Agent 能力创建分支 Session |
 | `POST` | `/v1/sessions/{session_id}/close` | 关闭 Session |
 | `DELETE` | `/v1/sessions/{session_id}` | 删除 Session 元数据和可删除的本地历史 |
-| `GET` | `/v1/sessions/{session_id}/events` | 订阅 Session 和 Run 事件 |
+| `GET` | `/v1/sessions/{session_id}/events` | 读取或以 `live=true` 持续订阅 Session 和 Run 事件 |
 | `GET` | `/v1/flows` | 查询 Flow/Workflow Catalog |
 | `GET` | `/v1/flows/{flow_id}` | 获取 Flow 内容和版本 |
 | `POST` | `/v1/flows/{flow_id}/apply` | 将 Flow 绑定到当前 Session 的下一次 Run |
@@ -44,6 +44,8 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `GET` | `/v1/projects/candidates` | 查询待确认的项目候选 |
 | `POST` | `/v1/projects/candidates/{candidate_id}/accept` | 接受候选并登记正式项目 |
 | `POST` | `/v1/directories/authorize` | 请求 Runner 验证并授权工作目录 |
+| `POST` | `/v1/runs/{run_id}/approve` | 授予当前 Run 的单次审批令牌 |
+| `POST` | `/v1/runs/{run_id}/reject` | 拒绝审批并取消当前 Run |
 
 现有兼容接口：
 
@@ -130,7 +132,7 @@ session_id + run_id + step_id + capability_id
 + environment + input_hash + expires_at
 ```
 
-审批默认单次使用、短期有效。Step 输入、目标环境或 Capability 发生变化后，原审批失效。批准接口只产生 `APPROVAL_GRANTED`，不等同于 Step 已成功执行。
+审批默认单次使用、短期有效。Step 输入、目标环境或 Capability 发生变化后，原审批失效。批准接口只产生 `APPROVAL_GRANTED`，不等同于 Step 已成功执行；拒绝接口产生 `APPROVAL_REJECTED` 和 `RUN_CANCELLED`。
 
 ## 8. 错误合同
 
