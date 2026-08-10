@@ -11,7 +11,7 @@ import type { RunnerClient } from "@codebridge/runner-client";
 import type { ProjectDiscovery } from "@codebridge/project-catalog";
 import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
 import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
-import type { CapabilityRegistry } from "@codebridge/policy";
+import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
@@ -22,6 +22,7 @@ export interface SessionApiOptions {
   discovery?: ProjectDiscovery;
   flows?: FlowCatalogStore;
   capabilities?: CapabilityRegistry;
+  approvals?: ApprovalService;
   defaultCwd?: string;
 }
 
@@ -111,10 +112,18 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       const requestedAgent = typeof body.agent_id === "string" ? currentProfiles().get(body.agent_id) : undefined;
       const agent = requestedAgent ?? currentAgents().find((candidate) => candidate.status === "healthy");
       if (!agent) return c.json({ error: "agent_unavailable" }, 409);
+      let cwd = asNullableString(body.cwd);
+      if (cwd && options.runner) {
+        const authorization = await options.runner.authorizeDirectory(cwd);
+        if (!authorization.ok) {
+          return c.json({ error: "workspace_not_authorized", detail: authorization.error ?? "目录无法访问" }, 403);
+        }
+        cwd = authorization.path ?? cwd;
+      }
       session = options.catalog.createSession({
         agentId: agent.agentId,
         model: asNullableString(body.model),
-        cwd: asNullableString(body.cwd) ?? options.defaultCwd ?? null,
+        cwd: cwd ?? options.defaultCwd ?? null,
         title: asNullableString(body.title),
       });
       options.catalog.bindChannelConversation(channel, conversationId, session.id);
@@ -135,7 +144,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       }),
     });
     if (!messageResponse.ok) return c.json(await messageResponse.json(), messageResponse.status as 400 | 404 | 409 | 503);
-    const messageResult = await messageResponse.json() as { task_record_id: string };
+    const messageResult = await messageResponse.json() as { task_record_id: string; sequence: number };
     const runResponse = await app.request(`/v1/sessions/${session.id}/runs`, {
       method: "POST",
       headers: {
@@ -155,8 +164,69 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       conversation_id: conversationId,
       session_id: session.id,
       task_record_id: messageResult.task_record_id,
+      event_sequence: messageResult.sequence,
       ...runResult,
     }, 202);
+  });
+
+  app.post("/v1/channels/:channel/conversations/:conversation_id/cancel", (c) => {
+    const session = options.catalog.getChannelSession(c.req.param("channel"), c.req.param("conversation_id"));
+    if (!session?.taskRecordId) return c.json({ stopped: false });
+    const run = options.workItems.listRuns(session.taskRecordId).reverse().find((candidate) => ["queued", "running", "waiting"].includes(candidate.status));
+    if (!run) return c.json({ stopped: false });
+    if (options.executor) options.executor.cancelRun(run.id);
+    else {
+      options.workItems.updateRunStatus(run.id, "cancelled");
+      options.workItems.appendEvent({
+        workItemId: run.workItemId,
+        runId: run.id,
+        type: "RUN_CANCELLED",
+        actor: "channel",
+        target: run.id,
+      });
+    }
+    return c.json({ stopped: true, run_id: run.id });
+  });
+
+  app.post("/v1/channels/:channel/conversations/:conversation_id/reset", (c) => {
+    return c.json({
+      reset: options.catalog.unbindChannelConversation(
+        c.req.param("channel"),
+        c.req.param("conversation_id"),
+      ),
+    });
+  });
+
+  app.post("/v1/channels/:channel/conversations/:conversation_id/approval", async (c) => {
+    if (!options.approvals) return c.json({ resolved: false, error: "approval_unavailable" }, 503);
+    const session = options.catalog.getChannelSession(c.req.param("channel"), c.req.param("conversation_id"));
+    if (!session?.taskRecordId) return c.json({ resolved: false });
+    const run = options.workItems.listRuns(session.taskRecordId).reverse().find((candidate) => candidate.status === "waiting");
+    if (!run) return c.json({ resolved: false });
+    const pending = options.approvals.listForRun(run.id).find((approval) => approval.status === "requested");
+    if (!pending) return c.json({ resolved: false });
+    const body = await readJson(c);
+    const approve = body?.approve === true;
+    const record = approve ? options.approvals.grant(pending.id, "channel") : options.approvals.revoke(pending.id, "channel");
+    if (!record || (approve ? record.status !== "granted" : record.status !== "revoked")) return c.json({ resolved: false });
+    if (approve) {
+      options.workItems.requeueRun(run.id);
+      if (options.executor) void options.executor.execute(run.id).catch(() => {});
+    } else {
+      if (options.executor) options.executor.cancelRun(run.id);
+      else {
+        options.workItems.updateRunStatus(run.id, "cancelled");
+        options.workItems.appendEvent({
+          workItemId: run.workItemId,
+          runId: run.id,
+          type: "RUN_CANCELLED",
+          actor: "channel",
+          target: run.id,
+          payload: { approval_id: record.id, reason: "approval_rejected" },
+        });
+      }
+    }
+    return c.json({ resolved: true, approval_id: record.id });
   });
 
   app.get("/v1/sessions/:session_id", (c) => {

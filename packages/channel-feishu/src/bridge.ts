@@ -12,6 +12,7 @@ import {
   resolveRequireMention,
   type AgentEvent,
   type AppConfig,
+  type ChannelSessionIngress,
   type RunAttachment,
 } from "@codebridge/core";
 import {
@@ -65,6 +66,7 @@ export interface FeishuBridgeOptions {
   config: AppConfig;
   dataDir: string;
   onLog?: (msg: string) => void;
+  sessionIngress?: ChannelSessionIngress;
 }
 
 /** 降级时单条普通消息的最大字符数；结果超过就用 chunkMarkdown 分条发，避免撞飞书消息长度上限 */
@@ -213,9 +215,11 @@ export class FeishuBridge {
   private readonly mentionRegistry = new MentionRegistry();
   private readonly pendingStreams: JsonMapStore<PendingFeishuStream>;
   private disconnecting = false;
+  private sessionIngress?: ChannelSessionIngress;
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
+    this.sessionIngress = options.sessionIngress;
     this.pendingStreams = new JsonMapStore<PendingFeishuStream>(
       path.join(options.dataDir, "feishu-pending-streams.json"),
     );
@@ -227,6 +231,10 @@ export class FeishuBridge {
 
   get orchestratorRef(): RunOrchestrator {
     return this.orchestrator;
+  }
+
+  setSessionIngress(ingress: ChannelSessionIngress): void {
+    this.sessionIngress = ingress;
   }
 
   updateConfig(config: AppConfig) {
@@ -486,6 +494,9 @@ export class FeishuBridge {
         this.orchestrator.listSessions(msg.chatId, topicId, options),
       bindSession: (sessionId) =>
         this.orchestrator.bindSession(msg.chatId, topicId, sessionId),
+      resetSession: async () => {
+        await this.sessionIngress?.reset?.("feishu", this.chatKey(msg.chatId, topicId));
+      },
       closeSession: (sessionId) =>
         this.orchestrator.closeSession(msg.chatId, topicId, sessionId),
       deleteSession: (sessionId) =>
@@ -493,9 +504,13 @@ export class FeishuBridge {
       listConfigOptions: () =>
         this.orchestrator.listConfigOptions(msg.chatId, topicId),
       resolvePermission: (approve) =>
-        this.orchestrator.resolveActivePermission(msg.chatId, topicId, approve),
+        this.sessionIngress?.resolveApproval
+          ? this.sessionIngress.resolveApproval("feishu", this.chatKey(msg.chatId, topicId), approve)
+          : this.orchestrator.resolveActivePermission(msg.chatId, topicId, approve),
       cancelActiveRun: () =>
-        this.orchestrator.cancelActiveForChat(msg.chatId, topicId),
+        this.sessionIngress?.cancel
+          ? this.sessionIngress.cancel("feishu", this.chatKey(msg.chatId, topicId))
+          : this.orchestrator.cancelActiveForChat(msg.chatId, topicId),
       hasActiveRun: () =>
         this.orchestrator.hasActiveRun(msg.chatId, topicId),
       activeRunElapsedMs: () =>
@@ -754,19 +769,29 @@ export class FeishuBridge {
     ): Promise<void> => {
       agentConsumed = true;
       try {
-        for await (const event of this.orchestrator.runAgent(
-          msg.chatId,
-          topicId,
-          prompt,
-          msg.attachments,
-        )) {
+        const binding = this.orchestrator.router.getBinding(msg.chatId, topicId);
+        const events = this.sessionIngress && !msg.attachments?.length
+          ? this.sessionIngress({
+              channel: "feishu",
+              conversationId: this.chatKey(msg.chatId, topicId),
+              message: prompt,
+              agentId: binding.backendId,
+              cwd: binding.cwd,
+              model: binding.model,
+              idempotencyKey: msg.messageId,
+              signal: streamAbort.signal,
+            })
+          : this.orchestrator.runAgent(msg.chatId, topicId, prompt, msg.attachments);
+        for await (const event of events) {
           if (streamAbort.signal.aborted) return;
           onEvent(event);
           if (event.type === "permission_request") {
             // 独立消息比卡片内文字更醒目；等待期 runner 会在超时后自动拒绝
             void this.sendMarkdown(
               msg.chatId,
-              `🔐 Agent 请求权限：**${event.title}**\n回复 \`/approve\` 允许，\`/deny\` 拒绝（8 分钟未回复自动拒绝）。`,
+              this.sessionIngress
+                ? `🔐 Agent 请求权限：**${event.title}**`
+                : `🔐 Agent 请求权限：**${event.title}**\n回复 \`/approve\` 允许，\`/deny\` 拒绝（8 分钟未回复自动拒绝）。`,
               msg.messageId,
             ).catch(() => {});
             continue;

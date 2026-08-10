@@ -139,6 +139,25 @@ export type AgentEvent =
   | { type: "permission_request"; requestId: string; title: string }
   | { type: "done"; exitCode: number };
 
+export interface ChannelSessionMessage {
+  channel: string;
+  conversationId: string;
+  message: string;
+  agentId?: string;
+  cwd?: string;
+  model?: string;
+  flowId?: string;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}
+
+export interface ChannelSessionIngress {
+  (message: ChannelSessionMessage): AsyncGenerator<AgentEvent>;
+  cancel?(channel: string, conversationId: string): Promise<boolean>;
+  resolveApproval?(channel: string, conversationId: string, approve: boolean): Promise<boolean>;
+  reset?(channel: string, conversationId: string): Promise<boolean>;
+}
+
 export interface DoctorResult {
   ok: boolean;
   checks: Array<{ name: string; ok: boolean; message?: string }>;

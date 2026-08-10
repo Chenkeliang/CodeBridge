@@ -58,6 +58,8 @@ Web / Feishu / Telegram
 - Policy/Approval 位于所有有副作用调用之前，不能只靠 Agent Prompt 约束。
 - 模块状态变化写入 Event Store；UI 和 Channel 订阅事件，不各自维护状态机。
 
+内置飞书和 Telegram 的普通文本消息也通过统一 Channel ingress 创建或恢复 Session、追加 Message、创建 Run，并从 Session SSE 读取 Agent 事件。`/stop`、审批回应和 `/new` 通过同一 Channel Conversation 绑定控制当前 Run/Session。带媒体附件的飞书消息暂时保留现有 Router 路径，直到 Session Message 合同加入统一 Attachment 引用；不会为了迁移文本消息丢失图片能力。
+
 ## 3. ACP、Pi、Skill 和 MCP 的位置
 
 它们不是同一层：

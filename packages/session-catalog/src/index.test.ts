@@ -45,6 +45,8 @@ describe("session catalog", () => {
     expect(binding).toMatchObject({ channel: "feishu", conversationId: "chat:topic", sessionId: session.id });
     expect(store.getChannelSession("feishu", "chat:topic")).toEqual(session);
     expect(store.bindChannelConversation("feishu", "chat:topic", session.id).createdAt).toBe(binding.createdAt);
+    expect(store.unbindChannelConversation("feishu", "chat:topic")).toBe(true);
+    expect(store.getChannelSession("feishu", "chat:topic")).toBeUndefined();
     store.close();
   });
 });

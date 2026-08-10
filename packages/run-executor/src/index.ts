@@ -30,11 +30,21 @@ export interface RunExecutorOptions {
 }
 
 export class RunExecutor {
+  private readonly activeControllers = new Map<string, AbortController>();
+
   constructor(
     private readonly store: SqliteEventStore,
     private readonly runner: RunnerStream,
     private readonly options: RunExecutorOptions,
   ) {}
+
+  cancelRun(runId: string): Run {
+    const run = this.store.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+    if (["succeeded", "failed", "cancelled"].includes(run.status)) return run;
+    this.activeControllers.get(runId)?.abort();
+    return this.cancel(run.id, run.workItemId);
+  }
 
   async execute(runId: string, signal?: AbortSignal): Promise<Run> {
     const initial = this.store.getRun(runId);
@@ -86,9 +96,12 @@ export class RunExecutor {
       });
     }
 
+    const controller = new AbortController();
+    const activeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    this.activeControllers.set(runId, controller);
     try {
       if (plan) {
-        const waiting = await this.executePlan(workItem, initial, plan, signal);
+        const waiting = await this.executePlan(workItem, initial, plan, activeSignal);
         if (waiting) return this.store.getRun(runId)!;
       } else {
         this.store.appendEvent({
@@ -98,7 +111,7 @@ export class RunExecutor {
           actor: "system",
           target: runId,
         });
-        await this.executeStep(workItem, initial, null, signal);
+        await this.executeStep(workItem, initial, null, activeSignal);
         this.store.appendEvent({
           workItemId: workItem.id,
           runId,
@@ -107,7 +120,7 @@ export class RunExecutor {
           target: runId,
         });
       }
-      if (signal?.aborted) return this.cancel(runId, workItem.id);
+      if (activeSignal.aborted) return this.cancel(runId, workItem.id);
       this.store.updateRunStatus(runId, "succeeded");
       this.store.appendEvent({
         workItemId: workItem.id,
@@ -125,7 +138,7 @@ export class RunExecutor {
       });
       return this.store.getRun(runId)!;
     } catch (error) {
-      if (signal?.aborted) return this.cancel(runId, workItem.id);
+      if (activeSignal.aborted) return this.cancel(runId, workItem.id);
       this.store.updateRunStatus(runId, "failed");
       this.store.appendEvent({
         workItemId: workItem.id,
@@ -143,10 +156,14 @@ export class RunExecutor {
         target: runId,
       });
       throw error;
+    } finally {
+      if (this.activeControllers.get(runId) === controller) this.activeControllers.delete(runId);
     }
   }
 
   private cancel(runId: string, workItemId: string): Run {
+    const current = this.store.getRun(runId);
+    if (current?.status === "cancelled") return current;
     this.store.updateRunStatus(runId, "cancelled");
     this.store.appendEvent({
       workItemId,

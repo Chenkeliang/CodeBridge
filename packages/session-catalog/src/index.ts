@@ -227,6 +227,13 @@ export class SessionCatalogStore {
     return binding ? this.getSession(binding.sessionId) : undefined;
   }
 
+  unbindChannelConversation(channel: string, conversationId: string): boolean {
+    const result = this.database
+      .prepare("DELETE FROM channel_session_bindings WHERE channel = ? AND conversation_id = ?")
+      .run(channel, conversationId);
+    return Number(result.changes) > 0;
+  }
+
   updateSession(id: string, input: UpdateSessionInput): AgentSession | undefined {
     const existing = this.getSession(id);
     if (!existing) return undefined;

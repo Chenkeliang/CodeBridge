@@ -28,6 +28,7 @@ import { createWebWorkbenchApp } from "./web-workbench.js";
 import { createSessionApp } from "./session-api.js";
 import { createFlowApp } from "./flow-api.js";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
+import { createChannelSessionIngress } from "./channel-ingress.js";
 
 const program = new Command();
 
@@ -247,10 +248,14 @@ program
         discovery: projectDiscovery,
         flows: flowCatalog,
         capabilities: capabilityRegistry,
+        approvals: approvalService,
         defaultCwd: config.workspaces?.default ?? config.workspaces?.root ?? process.cwd(),
       },
       config.runner.token,
     );
+    const channelSessionIngress = createChannelSessionIngress(sessionCatalogApp, config.runner.token);
+    bridge?.setSessionIngress(channelSessionIngress);
+    telegram?.setSessionIngress(channelSessionIngress);
     const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token, {
       sessions: sessionCatalog,
       events: workItemStore,

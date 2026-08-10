@@ -157,16 +157,71 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [channel, conversation_id, session_id, task_record_id, run_id, status]
+                required: [channel, conversation_id, session_id, task_record_id, event_sequence, run_id, status]
                 properties:
                   channel: { type: string }
                   conversation_id: { type: string }
                   session_id: { type: string }
                   task_record_id: { type: string }
+                  event_sequence: { type: integer, minimum: 1 }
                   run_id: { type: string }
                   status: { type: string, enum: [queued, running, waiting, succeeded, failed, cancelled] }
                   plan_id: { type: [string, 'null'] }
                   workflow_revision: { type: [string, 'null'] }
+  /v1/channels/{channel}/conversations/{conversation_id}/cancel:
+    parameters:
+      - in: path
+        name: channel
+        required: true
+        schema: { type: string }
+      - in: path
+        name: conversation_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: cancelChannelRun
+      summary: Cancel the active Run bound to a channel conversation
+      responses:
+        '200': { description: Cancellation result }
+  /v1/channels/{channel}/conversations/{conversation_id}/approval:
+    parameters:
+      - in: path
+        name: channel
+        required: true
+        schema: { type: string }
+      - in: path
+        name: conversation_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: resolveChannelApproval
+      summary: Resolve the pending approval bound to a channel conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approve]
+              properties:
+                approve: { type: boolean }
+      responses:
+        '200': { description: Approval resolution result }
+  /v1/channels/{channel}/conversations/{conversation_id}/reset:
+    parameters:
+      - in: path
+        name: channel
+        required: true
+        schema: { type: string }
+      - in: path
+        name: conversation_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: resetChannelSession
+      summary: Unbind a channel conversation so the next message creates a new Session
+      responses:
+        '200': { description: Reset result }
   /v1/sessions/{session_id}/runs:
     parameters:
       - $ref: '#/components/parameters/SessionId'
