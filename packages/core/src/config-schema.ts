@@ -55,8 +55,29 @@ export const ProjectCatalogConfigSchema = z.object({
   catalogPath: z.string().min(1).default("catalog/projects.yaml"),
 });
 
+const McpServerCommonSchema = {
+  revision: z.string().min(1).optional(),
+  enabled: z.boolean().default(true),
+};
+
+export const McpServerConfigSchema = z.discriminatedUnion("transport", [
+  z.object({
+    transport: z.literal("stdio"),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    env: z.array(z.string().min(1)).optional(),
+    ...McpServerCommonSchema,
+  }),
+  z.object({
+    transport: z.literal("http"),
+    url: z.string().url(),
+    ...McpServerCommonSchema,
+  }),
+]);
+
 export const OrchestrationConfigSchema = z.object({
   projectCatalog: ProjectCatalogConfigSchema.optional(),
+  mcpServers: z.record(McpServerConfigSchema).optional(),
 });
 
 export const ConfigSchema = z.object({

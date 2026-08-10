@@ -107,4 +107,30 @@ describe("ACP-only backend configuration", () => {
       catalogPath: "catalog/projects.yaml",
     });
   });
+
+  it("accepts MCP server configuration without storing credential values", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      orchestration: {
+        mcpServers: {
+          logs: {
+            transport: "stdio",
+            command: "npx",
+            args: ["logs-mcp"],
+            env: ["LOGS_MCP_TOKEN"],
+            revision: "config:1",
+          },
+          catalog: {
+            transport: "http",
+            url: "https://mcp.example.test/api",
+          },
+        },
+      },
+    });
+    expect(config.orchestration?.mcpServers?.logs).toMatchObject({
+      command: "npx",
+      env: ["LOGS_MCP_TOKEN"],
+    });
+    expect(config.orchestration?.mcpServers?.catalog.transport).toBe("http");
+  });
 });

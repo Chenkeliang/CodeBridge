@@ -53,6 +53,11 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `POST` | `/v1/projects/candidates/{candidate_id}/accept` | 接受候选并登记正式项目 |
 | `POST` | `/v1/projects/candidates/{candidate_id}/proposals` | 在独立 Git 分支创建 Catalog 提案，不切换当前 checkout |
 | `POST` | `/v1/projects/catalog/sync` | 将已审核的 Git revision 同步为 SQLite 查询投影 |
+| `GET` | `/v1/mcp/servers` | 查询 MCP Server 配置摘要和健康状态 |
+| `POST` | `/v1/mcp/servers/{server_id}/discover` | 刷新 Server 的 Tool Candidate |
+| `GET` | `/v1/mcp/candidates` | 查询待审核 MCP Capability Candidate |
+| `POST` | `/v1/mcp/candidates/{candidate_id}/approve` | 显式绑定 Capability ID、风险、环境和 MCP Adapter |
+| `POST` | `/v1/mcp/candidates/{candidate_id}/reject` | 拒绝 MCP Capability Candidate |
 | `GET` | `/v1/projects/drifts` | 查询已登记项目的待审核字段变化 |
 | `POST` | `/v1/projects/drifts/{drift_id}/apply` | 显式应用已审核的目录变化 |
 | `POST` | `/v1/projects/drifts/{drift_id}/resolve` | 忽略本次目录变化但保留审计记录 |

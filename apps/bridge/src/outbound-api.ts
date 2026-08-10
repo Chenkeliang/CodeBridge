@@ -39,6 +39,7 @@ export function createBridgeApp(
   webWorkbenchApp?: Hono,
   sessionCatalogApp?: Hono,
   flowCatalogApp?: Hono,
+  mcpApp?: Hono,
 ) {
   const app = createOutboundApp(bridge, token, {
     publicPathPrefixes: webWorkbenchApp ? ["/workbench"] : [],
@@ -46,6 +47,7 @@ export function createBridgeApp(
   app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
   if (sessionCatalogApp) app.route("/", sessionCatalogApp);
   if (flowCatalogApp) app.route("/", flowCatalogApp);
+  if (mcpApp) app.route("/", mcpApp);
   if (projectCatalogApp) app.route("/", projectCatalogApp);
   if (webWorkbenchApp) {
     app.route("/workbench", webWorkbenchApp);
