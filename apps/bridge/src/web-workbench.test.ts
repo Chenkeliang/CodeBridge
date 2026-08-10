@@ -4,7 +4,7 @@ import { SqliteEventStore } from "@codebridge/work-items";
 import { createWebWorkbenchApp } from "./web-workbench.js";
 
 describe("web workbench", () => {
-  it("serves a chat-first workbench with optional agent and workflow context", async () => {
+  it("serves a chat-first workbench without duplicating Agent selection", async () => {
     const store = new SqliteEventStore(":memory:");
     const app = createWebWorkbenchApp({
       store,
@@ -15,23 +15,19 @@ describe("web workbench", () => {
     const html = await response.text();
     expect(html).toContain("Agents");
     expect(html).toContain("Flows");
-    expect(html).toContain("New session");
     expect(html).toContain("Workflow");
-    expect(html).toContain("Agent · 自动选择");
     expect(html).toContain("Workflow · 自动发现");
-    expect(html).toContain("Agent 会先理解目标，再决定合适的上下文与下一步");
+    expect(html).not.toContain('id="agent"');
+    expect(html).not.toContain("自然语言输入");
+    expect(html).not.toContain("描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。");
+    expect(html).not.toContain("发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。");
+    expect(html).not.toContain("补充背景、约束或新的要求");
+    expect(html).toContain("暂无消息");
     expect(html).not.toContain('<label>模式');
     expect(html).not.toContain('<label>项目范围');
     expect(html).not.toContain('id="work-title"');
     expect(html).not.toContain('id="cancel-new"');
-    expect(html).toContain('id="mode"');
-    expect(html).toContain("模式 · Agent 判断");
-    expect(html).toContain('id="workspace"');
-    expect(html).toContain('id="workspace-authorize"');
-    expect(html).toContain('id="model"');
     expect(html).toContain('id="reply-model"');
-    expect(html).toContain("Folder / 工作目录（可选）");
-    expect(html).toContain("/v1/directories/authorize");
     expect(html).toContain('id="save-flow"');
     expect(html).toContain("/v1/flows/candidates");
     expect(html).toContain('id="accept-project"');
@@ -62,9 +58,7 @@ describe("web workbench", () => {
     expect(html).toContain("/v1/projects/drifts");
     expect(html).toContain('data-drift-action="apply"');
     expect(html).toContain('data-drift-action="resolve"');
-    expect(html).toContain('id="attachment-picker"');
     expect(html).toContain('id="reply-attachment-picker"');
-    expect(html).toContain('id="attachment-list"');
     expect(html).toContain('id="reply-attachment-list"');
     expect(html).toContain("data_base64");
     expect(html).toContain("mime_type");
@@ -111,19 +105,20 @@ describe("web workbench", () => {
     const html = await (await app.request("/")).text();
 
     expect(html).toContain('id="sync-sessions"');
+    expect(html).toContain("导入历史");
+    expect(html).not.toContain("同步会话");
     expect(html).toContain("const result = await api('/v1/sessions');");
     expect(html).toContain("async function syncSessions()");
     store.close();
   });
 
-  it("hides context selectors that have no choices", async () => {
+  it("hides optional Session selectors that have no choices", async () => {
     const store = new SqliteEventStore(":memory:");
     const app = createWebWorkbenchApp({ store, token: "web-token" });
     const html = await (await app.request("/")).text();
 
-    expect(html).toMatch(/<select[^>]*id="mode"[^>]*hidden/);
-    expect(html).toMatch(/<select[^>]*id="workflow"[^>]*hidden/);
-    expect(html).toMatch(/<select[^>]*id="model"[^>]*hidden/);
+    expect(html).toMatch(/<select[^>]*id="reply-workflow"[^>]*hidden/);
+    expect(html).toMatch(/<select[^>]*id="reply-model"[^>]*hidden/);
     store.close();
   });
 
@@ -141,7 +136,7 @@ describe("web workbench", () => {
     const app = createWebWorkbenchApp({ store, token: "web-token" });
     const html = await (await app.request("/")).text();
 
-    expect(html).toContain("#work-list { flex:1 1 auto; min-height:0; }");
+    expect(html).toContain("#work-list { flex:1 1 auto; min-height:0; align-content:start; }");
     store.close();
   });
 
@@ -158,6 +153,29 @@ describe("web workbench", () => {
     expect(html).toContain('class="agent-sessions"');
     expect(html).toContain("state.collapsedAgents");
     expect(html).toContain("aria-expanded");
+    expect(html).toContain('aria-label="新建 ');
+    expect(html).toContain("+ ' Session\"");
+    store.close();
+  });
+
+  it("renders local brand icons for built-in Agents", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({
+      store,
+      token: "web-token",
+      agentProfiles: [
+        { id: "codex", name: "Codex" },
+        { id: "pi", name: "Pi" },
+        { id: "cursor", name: "Cursor" },
+        { id: "claude", name: "Claude Code" },
+      ],
+    });
+    const html = await (await app.request("/")).text();
+
+    for (const agentId of ["codex", "pi", "cursor", "claude"]) {
+      expect(html).toContain(`data-agent-icon="${agentId}"`);
+    }
+    expect(html).toContain("const agentIcons =");
     store.close();
   });
 
@@ -184,7 +202,7 @@ describe("web workbench", () => {
     });
     const html = await (await app.request("/")).text();
 
-    expect(html).toContain('<option value="pi" disabled>Pi · needs_setup</option>');
+    expect(html).not.toContain('aria-label="新建 Pi Session"');
     store.close();
   });
 
