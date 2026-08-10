@@ -197,6 +197,9 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .conversation-turn.agent .message-surface { max-width:820px; }
     .message-meta { color:var(--muted); font-size:11px; }
     .progress-message { max-width:820px; display:flex; gap:8px; align-items:flex-start; color:var(--muted); font-size:13px; }
+    .run-activity { font-size:12px; }
+    .run-activity::before { animation:activity-pulse 1.2s ease-in-out infinite; }
+    @keyframes activity-pulse { 0%,100% { opacity:.35; } 50% { opacity:1; } }
     .progress-message::before { content:""; flex:0 0 6px; width:6px; height:6px; margin-top:7px; border-radius:50%; background:var(--accent); }
     .tool-call { border:1px solid var(--line); border-radius:10px; background:#fafbf9; overflow:hidden; }
     .tool-call summary { list-style:none; display:flex; align-items:center; gap:8px; padding:9px 11px; cursor:pointer; }
@@ -330,7 +333,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   <script>
     const TOKEN = __TOKEN__;
     const agentIcons = {${agentIconSource}};
-    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, attachments: [], commands: [], resourceKey: null, showArchived: false, messageNodes: new Map(), toolNodes: new Map(), planNodes: new Map(), approvalNodes: new Map(), failedRuns: new Set(), collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
+    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, attachments: [], commands: [], commandState: 'idle', commandRequestId: 0, resourceKey: null, showArchived: false, messageNodes: new Map(), toolNodes: new Map(), planNodes: new Map(), approvalNodes: new Map(), runActivityNodes: new Map(), failedRuns: new Set(), collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
       const response = await fetch(url, { ...init, headers: { authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json', ...(init.headers || {}) } });
@@ -339,7 +342,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     };
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
     function resetConversationPresentation(emptyText) {
-      state.messageNodes.clear(); state.toolNodes.clear(); state.planNodes.clear(); state.approvalNodes.clear(); state.failedRuns.clear();
+      state.messageNodes.clear(); state.toolNodes.clear(); state.planNodes.clear(); state.approvalNodes.clear(); state.runActivityNodes.clear(); state.failedRuns.clear();
       $('timeline').innerHTML = '<div class="timeline-empty">' + esc(emptyText) + '</div>';
     }
     function renderPendingAttachments() { $('reply-attachment-list').innerHTML = state.attachments.map((file, index) => '<span class="attachment-chip">' + esc(file.name) + '<button class="attachment-remove" type="button" data-attachment-index="' + index + '" aria-label="移除 ' + esc(file.name) + '">×</button></span>').join(''); }
@@ -354,6 +357,14 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     }
     function closeComposerMenus() { $('command-menu').hidden = true; $('mention-menu').hidden = true; }
     function renderCommandMenu(query = '') {
+      if (state.commandState === 'loading') {
+        $('command-list').innerHTML = '<div class="empty">正在读取 Agent 命令…</div>';
+        return;
+      }
+      if (state.commandState === 'error') {
+        $('command-list').innerHTML = '<div class="empty">无法读取当前 Agent 的命令。请重试。</div>';
+        return;
+      }
       const normalized = query.toLowerCase();
       const commands = state.commands.filter((command) => !normalized || command.name.toLowerCase().includes(normalized) || command.description.toLowerCase().includes(normalized));
       $('command-list').innerHTML = commands.length
@@ -380,17 +391,31 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       $('reply-model').hidden = values.length === 0;
       $('reply-model').value = selectedModel || '';
     }
+    async function refreshCommands(session, query = '') {
+      const current = session || state.session;
+      if (!current?.session_id) { state.commands = []; state.commandState = 'idle'; renderCommandMenu(query); return; }
+      const requestId = ++state.commandRequestId;
+      state.commandState = 'loading';
+      renderCommandMenu(query);
+      try {
+        const result = await api('/v1/sessions/' + encodeURIComponent(current.session_id) + '/commands');
+        if (requestId !== state.commandRequestId || state.selected !== current.session_id) return;
+        state.commands = Array.isArray(result.commands) ? result.commands : [];
+        state.commandState = result.error && !state.commands.length ? 'error' : 'ready';
+      } catch {
+        if (requestId !== state.commandRequestId || state.selected !== current.session_id) return;
+        state.commands = [];
+        state.commandState = 'error';
+      }
+      renderCommandMenu(query);
+    }
     async function loadSessionResources(session) {
       const key = session.agent_id + ':' + (session.cwd || '');
-      if (state.resourceKey === key) { $('reply-model').value = session.model || ''; return; }
-      const [config, commands] = await Promise.all([
-        api('/v1/sessions/' + encodeURIComponent(session.session_id) + '/config-options').catch(() => ({ options: [] })),
-        api('/v1/sessions/' + encodeURIComponent(session.session_id) + '/commands').catch(() => ({ commands: [] })),
-      ]);
+      if (state.resourceKey === key) return;
+      const config = await api('/v1/sessions/' + encodeURIComponent(session.session_id) + '/config-options').catch(() => ({ options: [] }));
       applyModels(config.options || [], session.model);
-      state.commands = commands.commands || [];
       state.resourceKey = key;
-      renderCommandMenu();
+      await refreshCommands(session);
     }
     function applyFlows(flows) { const options = '<option value="">Workflow · 自动发现</option>' + flows.map((flow) => '<option value="' + esc(flow.flow_id) + '">' + esc(flow.name || flow.flow_id) + ' · ' + esc(flow.flow_id) + '</option>').join(''); $('reply-workflow').innerHTML = options; $('reply-workflow').hidden = flows.length === 0; }
     async function loadFlows() { try { const result = await api('/v1/flows'); const flows = result.flows || []; applyFlows(flows); $('flow-list').innerHTML = flows.length ? flows.map((flow) => '<div class="flow-row-wrap"><button class="work-row flow-row" data-flow="' + esc(flow.flow_id) + '"><strong>' + esc(flow.name || flow.flow_id) + '</strong><small>' + esc(flow.status) + ' · ' + esc(flow.kind) + '</small></button>' + (flow.status === 'candidate' ? '<button class="flow-review" data-review-flow="' + esc(flow.flow_id) + '" type="button">审核</button>' : '') + '</div>').join('') : '<div class="empty">暂无 Flow</div>'; document.querySelectorAll('.flow-row').forEach((button) => button.addEventListener('click', () => { $('reply-workflow').value = button.dataset.flow; })); document.querySelectorAll('.flow-review').forEach((button) => button.addEventListener('click', () => reviewFlow(button.dataset.reviewFlow).catch((error) => { $('reply-error').textContent = error.message; }))); } catch (error) { $('flow-list').innerHTML = '<div class="empty">无法读取 Flow：' + esc(error.message) + '</div>'; } }
@@ -537,11 +562,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       await selectSession(session.session_id);
     }
     function resetWorkbench() {
-      state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.resourceKey = null; clearInterval(state.timer);
+      state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.resourceKey = null; state.commandState = 'idle'; state.commandRequestId++; clearInterval(state.timer);
       $('title').textContent = '选择 Agent 新建 Session'; $('subtitle').textContent = ''; $('subtitle').hidden = true; $('session-actions').hidden = true; $('session-menu').open = false; $('session-menu').hidden = true; $('session-fork').hidden = true; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('conversation-column').classList.remove('empty-session'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('run-again').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">没有待审核的目录变化。</div>'; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; state.attachments = []; state.commands = []; $('reply-attachment-picker').value = ''; renderPendingAttachments(); closeComposerMenus(); resetConversationPresentation('选择左侧 Agent 创建 Session'); $('reply-form').hidden = true; $('reply-model').value = ''; $('reply-model').hidden = true; $('workbench-error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; loadSessions();
     }
     async function selectSession(id) {
-      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.resourceKey = null; state.attachments = []; state.commands = []; renderPendingAttachments(); closeComposerMenus(); $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('session-menu').open = false; $('session-menu').hidden = true; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('conversation-column').classList.add('empty-session'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('session-fork').hidden = true; $('run-again').hidden = true; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; resetConversationPresentation('暂无消息'); $('reply-form').hidden = false; $('session-actions').hidden = false; $('workbench-error').textContent = '';
+      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.resourceKey = null; state.commandState = 'idle'; state.commandRequestId++; state.attachments = []; state.commands = []; $('reply').value = ''; renderPendingAttachments(); closeComposerMenus(); $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('session-menu').open = false; $('session-menu').hidden = true; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('conversation-column').classList.add('empty-session'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('session-fork').hidden = true; $('run-again').hidden = true; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; resetConversationPresentation('暂无消息'); $('reply-form').hidden = false; $('session-actions').hidden = false; $('workbench-error').textContent = '';
       await refreshSession(true); void startEventStream(); loadSessions();
       void loadDrifts();
       clearInterval(state.timer); state.timer = setInterval(() => { void refreshSession(); }, 1200);
@@ -795,6 +820,20 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       appendConversation('<section class="run-notice' + (isError ? ' error-notice' : '') + '"><strong>' + esc(title) + '</strong><p>' + esc(message) + '</p></section>');
       return true;
     }
+    function renderRunActivity(event) {
+      if (!event.run_id || state.runActivityNodes.has(event.run_id)) return false;
+      const node = appendConversation('<article class="progress-message run-activity"><div class="message-surface">正在处理</div></article>');
+      state.runActivityNodes.set(event.run_id, node);
+      return true;
+    }
+    function finishRunActivity(event) {
+      if (!event.run_id) return false;
+      const node = state.runActivityNodes.get(event.run_id);
+      if (!node) return false;
+      node.remove();
+      state.runActivityNodes.delete(event.run_id);
+      return true;
+    }
     function renderAgentEvent(event) {
       const agentEvent = event.payload?.event;
       if (!agentEvent || typeof agentEvent !== 'object') return false;
@@ -835,9 +874,12 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       for (const event of events) {
         if (event.type === 'MESSAGE_RECEIVED') renderUserMessage(event);
         else if (event.type === 'AGENT_EVENT') renderAgentEvent(event);
+        else if (event.type === 'RUN_STARTED') renderRunActivity(event);
+        else if (event.type === 'RUN_SUCCEEDED' || event.type === 'RUN_CANCELLED') finishRunActivity(event);
         else if (event.type === 'APPROVAL_REQUESTED') renderApprovalRequest(event);
         else if (event.type === 'APPROVAL_GRANTED' || event.type === 'APPROVAL_REJECTED') renderApprovalResolution(event);
         else if (event.type === 'RUN_FAILED' && event.run_id && !state.failedRuns.has(event.run_id)) {
+          finishRunActivity(event);
           state.failedRuns.add(event.run_id);
           renderRunNotice('运行失败', '本次任务未完成。请打开运行详情查看原因，或调整配置后重试。', true);
         }
@@ -857,7 +899,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       const resolvedApproval = [...events].reverse().find((event) => event.type === 'APPROVAL_GRANTED' || event.type === 'APPROVAL_REJECTED');
       if (resolvedApproval) { state.approval = null; $('approve-run').hidden = true; $('reject-run').hidden = true; }
       const commandUpdate = [...events].reverse().find((event) => event.type === 'AGENT_EVENT' && event.payload?.event?.type === 'available_commands_update');
-      if (commandUpdate) { state.commands = commandUpdate.payload.event.availableCommands || []; renderCommandMenu(); }
+      if (commandUpdate) { state.commands = commandUpdate.payload.event.availableCommands || []; state.commandState = 'ready'; renderCommandMenu(); }
       if (events.some((event) => event.run_id)) void refreshInspector(true).catch((error) => { $('reply-error').textContent = error.message; });
       target.scrollTop = target.scrollHeight;
     }
@@ -921,9 +963,9 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     $('run-again').addEventListener('click', () => startRun().catch((error) => { $('reply-error').textContent = error.message; }));
     $('session-view-toggle').addEventListener('click', () => { state.showArchived = !state.showArchived; $('session-view-toggle').textContent = state.showArchived ? '当前' : '已归档'; $('session-view-toggle').title = state.showArchived ? '显示当前 Session' : '显示已归档 Session'; resetWorkbench(); });
     $('sync-sessions').addEventListener('click', () => syncSessions().catch((error) => { $('workbench-error').textContent = error.message; }));
-    $('reply-command-button').addEventListener('click', () => { const open = $('command-menu').hidden; closeComposerMenus(); if (open) { renderCommandMenu(); $('command-menu').hidden = false; } });
+    $('reply-command-button').addEventListener('click', () => { const open = $('command-menu').hidden; closeComposerMenus(); if (open) { $('command-menu').hidden = false; void refreshCommands(state.session); } });
     $('reply-mention-button').addEventListener('click', () => { const open = $('mention-menu').hidden; closeComposerMenus(); $('mention-menu').hidden = !open; });
-    $('reply').addEventListener('input', () => { const input = $('reply'); const before = input.value.slice(0, input.selectionStart ?? input.value.length); const match = before.match(/(?:^|\\s)\\/([^\\s]*)$/); if (match) { $('mention-menu').hidden = true; renderCommandMenu(match[1] || ''); $('command-menu').hidden = false; } else $('command-menu').hidden = true; });
+    $('reply').addEventListener('input', () => { const input = $('reply'); const before = input.value.slice(0, input.selectionStart ?? input.value.length); const match = before.match(/(?:^|\\s)\\/([^\\s]*)$/); if (match) { $('mention-menu').hidden = true; $('command-menu').hidden = false; if (!match[1] && state.commandState !== 'loading') void refreshCommands(state.session, match[1] || ''); else renderCommandMenu(match[1] || ''); } else $('command-menu').hidden = true; });
     $('reply').addEventListener('keydown', (event) => { if (event.key === 'Escape') closeComposerMenus(); });
     document.querySelectorAll('[data-context-action]').forEach((button) => button.addEventListener('click', () => { closeComposerMenus(); if (button.dataset.contextAction === 'attach') $('reply-attachment-picker').click(); else if (button.dataset.contextAction === 'directory') { $('directory-panel').hidden = false; void pickDirectory(); } }));
     $('reply-attach-button').addEventListener('click', () => $('reply-attachment-picker').click());
