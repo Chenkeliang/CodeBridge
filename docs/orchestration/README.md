@@ -75,7 +75,7 @@ examples/orchestration/     非业务的配置形状参考（保持通用）
 当前代码已经按以下顺序实现并保留独立特性分支提交：
 
 1. WorkItem、Event、Plan IR 和 SQLite Store。
-2. Capability Registry、Policy 和 Approval。
+2. Capability Registry、Capability Runtime、Policy 和 Approval。
 3. 复用现有 Runner 执行 Agent，并回写事件。
 4. Project Discovery、候选确认和 Catalog Store。
 5. Web Workbench、幂等键和重启恢复。

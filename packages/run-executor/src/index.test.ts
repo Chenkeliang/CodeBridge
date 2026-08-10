@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
 import { SqliteEventStore } from "@codebridge/work-items";
-import { ApprovalService, CapabilityRegistry, PolicyEngine } from "@codebridge/policy";
+import {
+  ApprovalService,
+  CapabilityRegistry,
+  CapabilityRuntime,
+  FunctionCapabilityAdapter,
+  PolicyEngine,
+} from "@codebridge/policy";
 import { RunExecutor } from "./index.js";
 
 class FakeRunner {
@@ -203,6 +209,58 @@ describe("RunExecutor", () => {
     await expect(executor.execute(run.id)).rejects.toThrow("Unknown capability: missing.inspect");
     expect(store.getRun(run.id)?.status).toBe("failed");
     capabilities.close();
+    store.close();
+  });
+
+  it("executes a registered capability adapter without sending the step to an Agent", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "lookup",
+      mode: "investigation",
+      conversationId: "web:capability",
+      identifiers: { id: "value" },
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_capability",
+      source: "workflow",
+      workflowId: "capability-flow",
+      definitionRevision: "git:capability",
+      steps: [{
+        id: "lookup",
+        capabilityId: "catalog.lookup",
+        risk: "read_only",
+        dependsOn: [],
+        guard: null,
+        approval: "none",
+        branches: [],
+        purpose: null,
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.lookup", ({ input }) => ({ output: input.identifiers })),
+    ]);
+    const executor = new RunExecutor(store, runner, {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "should not run",
+      }),
+    });
+
+    expect((await executor.execute(run.id)).status).toBe("succeeded");
+    expect(runner.prompts).toEqual([]);
+    expect(store.listEvents(item.id).find((event) => event.type === "AGENT_EVENT")).toMatchObject({
+      actor: "adapter",
+      target: "catalog.lookup",
+      payload: { adapter: "local.lookup", output: { id: "value" } },
+    });
+    registry.close();
     store.close();
   });
 
