@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { SessionCatalogStore } from "@codebridge/session-catalog";
+import { SqliteEventStore } from "@codebridge/work-items";
 import { createFlowApp } from "./flow-api.js";
 
 describe("flow API", () => {
@@ -113,6 +114,54 @@ describe("flow API", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ accepted: true, session_id: session.id, flow_id: "flow-bind", definition_revision: "git:one" });
     expect(sessions.getSession(session.id)?.flowId).toBe("flow-bind");
+    sessions.close();
+    catalog.close();
+  });
+
+  it("records Flow selection and candidate persistence on the Session event stream", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    const workItem = events.createWorkItem({
+      title: "flow events",
+      mode: "auto",
+      conversationId: "conv_flow_events",
+      riskLevel: "read_only",
+    });
+    const session = sessions.createSession({ agentId: "pi", taskRecordId: workItem.id });
+    catalog.save({
+      flowId: "flow-select",
+      name: "Select",
+      kind: "guide",
+      status: "published",
+      source: "git",
+      definitionRevision: "git:select",
+      steps: [{ id: "inspect", capability: "context.inspect", mode: "read_only" }],
+    });
+    const app = createFlowApp(catalog, "token", { sessions, events });
+    await app.request("/v1/flows/flow-select/apply", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ session_id: session.id }),
+    });
+    await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: session.id,
+        definition_revision: "agent:one",
+        flow: {
+          flow_id: "flow-generated",
+          steps: [{ id: "inspect", capability: "context.inspect", mode: "read_only" }],
+        },
+      }),
+    });
+
+    expect(events.listEvents(workItem.id).filter((event) => event.type.startsWith("FLOW_")).map((event) => event.type)).toEqual([
+      "FLOW_SELECTED",
+      "FLOW_SAVED_AS_CANDIDATE",
+    ]);
+    events.close();
     sessions.close();
     catalog.close();
   });

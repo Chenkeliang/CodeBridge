@@ -3,9 +3,11 @@ import { Hono } from "hono";
 import type { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
+import type { SqliteEventStore } from "@codebridge/work-items";
 
 export interface FlowApiOptions {
   sessions?: SessionCatalogStore;
+  events?: SqliteEventStore;
 }
 
 export function createFlowApp(catalog: FlowCatalogStore, token: string, options: FlowApiOptions = {}) {
@@ -30,6 +32,15 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     const session = options.sessions.getSession(sessionId);
     if (!session) return c.json({ error: "session_not_found" }, 404);
     options.sessions.updateSession(session.id, { flowId: flow.flowId });
+    if (options.events && session.taskRecordId) {
+      options.events.appendEvent({
+        workItemId: session.taskRecordId,
+        type: "FLOW_SELECTED",
+        actor: "user",
+        target: flow.flowId,
+        payload: { flow_id: flow.flowId, definition_revision: flow.definitionRevision },
+      });
+    }
     return c.json({
       request_id: `req_${randomUUID().replaceAll("-", "")}`,
       accepted: true,
@@ -110,6 +121,20 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       validationIssues: [],
       steps,
     });
+    const session = options.sessions?.getSession(String(body.session_id));
+    if (options.events && session?.taskRecordId) {
+      options.events.appendEvent({
+        workItemId: session.taskRecordId,
+        type: "FLOW_SAVED_AS_CANDIDATE",
+        actor: "user",
+        target: flow.flowId,
+        payload: {
+          flow_id: flow.flowId,
+          definition_revision: flow.definitionRevision,
+          review_status: flow.reviewStatus,
+        },
+      });
+    }
     return c.json(toApiFlow(flow), 201);
   });
   return app;

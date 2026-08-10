@@ -243,7 +243,10 @@ program
       },
       config.runner.token,
     );
-    const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token, { sessions: sessionCatalog });
+    const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token, {
+      sessions: sessionCatalog,
+      events: workItemStore,
+    });
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
