@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
+import { CapabilityRegistry } from "@codebridge/policy";
 import { createSessionApp } from "./session-api.js";
 import type { RunnerClient } from "@codebridge/runner-client";
 
@@ -268,6 +269,7 @@ describe("session API", () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     const flows = new FlowCatalogStore(":memory:");
+    const capabilities = new CapabilityRegistry();
     flows.save({
       flowId: "review-change",
       name: "Review change",
@@ -287,7 +289,7 @@ describe("session API", () => {
         },
       ],
     });
-    const app = createSessionApp({ catalog, agents, workItems, flows }, TOKEN);
+    const app = createSessionApp({ catalog, agents, workItems, flows, capabilities }, TOKEN);
     const session = catalog.createSession({ agentId: "pi", cwd: "/workspace" });
     const message = await app.request(`/v1/sessions/${session.id}/messages`, {
       method: "POST",
@@ -321,6 +323,9 @@ describe("session API", () => {
       ],
     });
     expect(workItems.listEvents(taskId).map((event) => event.type)).toContain("PLAN_VALIDATED");
+    expect(capabilities.get("context.inspect")).toMatchObject({ adapter: "agent", risk: "read_only" });
+    expect(capabilities.get("workspace.change")).toMatchObject({ adapter: "agent", risk: "workspace_write" });
+    capabilities.close();
     flows.close();
     catalog.close();
     workItems.close();
