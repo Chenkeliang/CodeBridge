@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
+import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { createSessionApp } from "./session-api.js";
 import type { RunnerClient } from "@codebridge/runner-client";
 
@@ -259,6 +260,68 @@ describe("session API", () => {
     const secondRun = await app.request(`/v1/sessions/${session.session_id}/runs`, runInit);
     expect(await secondRun.json()).toEqual(await firstRun.json());
     expect(workItems.listRuns(firstMessageBody.task_record_id)).toHaveLength(1);
+    catalog.close();
+    workItems.close();
+  });
+
+  it("compiles the selected Workflow revision into a persisted Run Plan", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const flows = new FlowCatalogStore(":memory:");
+    flows.save({
+      flowId: "review-change",
+      name: "Review change",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "git:abc123",
+      reviewStatus: "approved",
+      gitRevision: "abc123",
+      steps: [
+        { id: "inspect", capability: "context.inspect", mode: "read_only" },
+        {
+          id: "change",
+          capability: "workspace.change",
+          mode: "workspace_write",
+          dependsOn: ["inspect"],
+        },
+      ],
+    });
+    const app = createSessionApp({ catalog, agents, workItems, flows }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi", cwd: "/workspace" });
+    const message = await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ message: "检查后修改", flow_id: "review-change" }),
+    });
+    const taskId = (await message.json() as { task_record_id: string }).task_record_id;
+
+    const response = await app.request(`/v1/sessions/${session.id}/runs`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ flow_id: "review-change" }),
+    });
+
+    expect(response.status).toBe(202);
+    const body = await response.json() as { run_id: string; plan_id: string; workflow_revision: string };
+    const run = workItems.getRun(body.run_id)!;
+    expect(body).toMatchObject({ plan_id: run.planId, workflow_revision: "git:abc123" });
+    expect(workItems.getWorkItem(taskId)).toMatchObject({
+      workflowId: "review-change",
+      workflowRevision: "git:abc123",
+    });
+    expect(workItems.getPlanForRun(run.id)).toMatchObject({
+      planId: run.planId,
+      workflowId: "review-change",
+      definitionRevision: "git:abc123",
+      sessionId: session.id,
+      steps: [
+        { id: "inspect", capabilityId: "context.inspect" },
+        { id: "change", capabilityId: "workspace.change", dependsOn: ["inspect"] },
+      ],
+    });
+    expect(workItems.listEvents(taskId).map((event) => event.type)).toContain("PLAN_VALIDATED");
+    flows.close();
     catalog.close();
     workItems.close();
   });
