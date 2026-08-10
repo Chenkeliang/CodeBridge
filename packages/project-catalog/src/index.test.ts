@@ -66,4 +66,27 @@ describe("project catalog discovery", () => {
     });
     catalog.close();
   });
+
+  it("persists discovery tasks and keeps their state in the catalog", () => {
+    const catalog = new ProjectCatalogStore(":memory:");
+    const task = catalog.createDiscoveryTask({
+      id: "dst_01JTEST",
+      workspacePath: "/workspace/project",
+      workItemId: "wi_01JTEST",
+    });
+    expect(task).toMatchObject({
+      id: "dst_01JTEST",
+      status: "queued",
+      workspacePath: "/workspace/project",
+      workItemId: "wi_01JTEST",
+    });
+    expect(catalog.updateDiscoveryTask(task.id, { status: "running" })).toMatchObject({ status: "running" });
+    expect(catalog.updateDiscoveryTask(task.id, { status: "succeeded", candidateId: "pc_01JTEST" })).toMatchObject({
+      status: "succeeded",
+      candidateId: "pc_01JTEST",
+    });
+    expect(catalog.getDiscoveryTask(task.id)).toMatchObject({ candidateId: "pc_01JTEST" });
+    expect(catalog.listDiscoveryTasks()).toHaveLength(1);
+    catalog.close();
+  });
 });

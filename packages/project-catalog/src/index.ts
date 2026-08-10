@@ -12,6 +12,30 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
 export type CandidateStatus = "candidate" | "accepted" | "rejected";
 export type ProjectStatus = "registered" | "deprecated";
 export type DiscoveryConfidence = "low" | "medium" | "high";
+export type DiscoveryTaskStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface DiscoveryTask {
+  id: string;
+  status: DiscoveryTaskStatus;
+  workspacePath: string;
+  workItemId: string | null;
+  candidateId: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateDiscoveryTaskInput {
+  id?: string;
+  workspacePath: string;
+  workItemId?: string | null;
+}
+
+export interface UpdateDiscoveryTaskInput {
+  status?: DiscoveryTaskStatus;
+  candidateId?: string | null;
+  error?: string | null;
+}
 
 export interface ProjectEvidence {
   kind: string;
@@ -87,7 +111,20 @@ export class ProjectCatalogStore {
         evidence TEXT NOT NULL,
         registered_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS discovery_tasks (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        work_item_id TEXT,
+        candidate_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
+    this.database
+      .prepare("UPDATE discovery_tasks SET status = 'queued', updated_at = ? WHERE status = 'running'")
+      .run(new Date().toISOString());
   }
 
   saveCandidate(input: ProjectCandidateInput): ProjectCandidate {
@@ -202,6 +239,59 @@ export class ProjectCatalogStore {
 
   listProjects(): ProjectRecord[] {
     return (this.database.prepare("SELECT * FROM projects ORDER BY id ASC").all() as Record<string, unknown>[]).map(toProject);
+  }
+
+  createDiscoveryTask(input: CreateDiscoveryTaskInput): DiscoveryTask {
+    if (!input.workspacePath.trim()) throw new Error("workspace path must not be empty");
+    const now = new Date().toISOString();
+    const task: DiscoveryTask = {
+      id: input.id ?? `dst_${randomUUID().replaceAll("-", "")}`,
+      status: "queued",
+      workspacePath: input.workspacePath,
+      workItemId: input.workItemId ?? null,
+      candidateId: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.database
+      .prepare(
+        `INSERT INTO discovery_tasks (
+          id, status, workspace_path, work_item_id, candidate_id, error, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(task.id, task.status, task.workspacePath, task.workItemId, task.candidateId, task.error, task.createdAt, task.updatedAt);
+    return task;
+  }
+
+  getDiscoveryTask(id: string): DiscoveryTask | undefined {
+    const row = this.database.prepare("SELECT * FROM discovery_tasks WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? toDiscoveryTask(row) : undefined;
+  }
+
+  listDiscoveryTasks(statuses?: DiscoveryTaskStatus[]): DiscoveryTask[] {
+    const rows = statuses?.length
+      ? this.database
+          .prepare(`SELECT * FROM discovery_tasks WHERE status IN (${statuses.map(() => "?").join(", ")}) ORDER BY created_at ASC`)
+          .all(...statuses)
+      : this.database.prepare("SELECT * FROM discovery_tasks ORDER BY created_at DESC").all();
+    return (rows as Record<string, unknown>[]).map(toDiscoveryTask);
+  }
+
+  updateDiscoveryTask(id: string, input: UpdateDiscoveryTaskInput): DiscoveryTask {
+    const current = this.getDiscoveryTask(id);
+    if (!current) throw new Error(`Discovery task not found: ${id}`);
+    const next: DiscoveryTask = {
+      ...current,
+      status: input.status ?? current.status,
+      candidateId: input.candidateId === undefined ? current.candidateId : input.candidateId,
+      error: input.error === undefined ? current.error : input.error,
+      updatedAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare("UPDATE discovery_tasks SET status = ?, candidate_id = ?, error = ?, updated_at = ? WHERE id = ?")
+      .run(next.status, next.candidateId, next.error, next.updatedAt, id);
+    return next;
   }
 
   close(): void {
@@ -326,6 +416,19 @@ function toProject(row: Record<string, unknown>): ProjectRecord {
     id: String(row.id),
     status: String(row.status) as ProjectStatus,
     registeredAt: String(row.registered_at),
+  };
+}
+
+function toDiscoveryTask(row: Record<string, unknown>): DiscoveryTask {
+  return {
+    id: String(row.id),
+    status: String(row.status) as DiscoveryTaskStatus,
+    workspacePath: String(row.workspace_path),
+    workItemId: row.work_item_id === null ? null : String(row.work_item_id),
+    candidateId: row.candidate_id === null ? null : String(row.candidate_id),
+    error: row.error === null ? null : String(row.error),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 

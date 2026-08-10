@@ -42,6 +42,7 @@ describe("project catalog API", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     expect(((await status!.json()) as { status: string }).status).toBe("succeeded");
+    expect(catalog.getDiscoveryTask(task.task_id)).toMatchObject({ status: "succeeded" });
     const candidates = await app.request(request("/v1/projects/candidates"));
     const candidateList = (await candidates.json()) as { candidates: Array<{ id: string }> };
     expect(candidateList.candidates).toHaveLength(1);
@@ -51,6 +52,28 @@ describe("project catalog API", () => {
     );
     expect(accepted.status).toBe(201);
     expect(((await accepted.json()) as { id: string }).id).toBe("equity-center");
+    discovery.close();
+  });
+
+  it("resumes a durable discovery task when the API process starts", async () => {
+    const catalog = new ProjectCatalogStore(":memory:");
+    const task = catalog.createDiscoveryTask({ workspacePath: "/tmp/resume-project" });
+    catalog.updateDiscoveryTask(task.id, { status: "running" });
+    const discovery = new ProjectDiscovery(catalog, {
+      reader: async () => ({ language: "node", evidence: [] }),
+    });
+    const app = createProjectCatalogApp(catalog, discovery, TOKEN);
+
+    let body: { status: string; candidate_id?: string | null } | undefined;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const response = await app.request(request(`/v1/discovery/tasks/${task.id}`));
+      body = await response.json() as typeof body;
+      if (body?.status === "succeeded") break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(body).toMatchObject({ status: "succeeded" });
+    expect(body?.candidate_id).toMatch(/^pc_/);
     discovery.close();
   });
 });

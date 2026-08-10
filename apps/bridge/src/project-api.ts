@@ -1,15 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
-
-type TaskStatus = "queued" | "running" | "succeeded" | "failed";
-type Task = {
-  id: string;
-  status: TaskStatus;
-  workspacePath: string;
-  candidateId?: string;
-  error?: string;
-};
+import type {
+  DiscoveryTask,
+  ProjectCatalogStore,
+  ProjectDiscovery,
+} from "@codebridge/project-catalog";
 
 export function createProjectCatalogApp(
   catalog: ProjectCatalogStore,
@@ -17,7 +11,6 @@ export function createProjectCatalogApp(
   token: string,
 ) {
   const app = new Hono();
-  const tasks = new Map<string, Task>();
 
   app.use("/v1/*", async (c, next) => {
     if (c.req.header("authorization") !== `Bearer ${token}`) {
@@ -38,37 +31,39 @@ export function createProjectCatalogApp(
   });
 
   app.post("/v1/discovery/tasks", async (c) => {
-    const body = (await c.req.json().catch(() => null)) as { workspace_path?: unknown } | null;
+    const body = (await c.req.json().catch(() => null)) as { workspace_path?: unknown; work_item_id?: unknown } | null;
     if (!body || typeof body.workspace_path !== "string" || !body.workspace_path.trim()) {
       return c.json({ error: { code: "invalid_discovery", message: "workspace_path 必填" } }, 400);
     }
-    const task: Task = {
-      id: `dst_${randomUUID().replaceAll("-", "")}`,
-      status: "queued",
+    const task = catalog.createDiscoveryTask({
       workspacePath: body.workspace_path,
-    };
-    tasks.set(task.id, task);
-    void (async () => {
-      task.status = "running";
-      try {
-        const candidate = await discovery.observe(task.workspacePath);
-        task.status = "succeeded";
-        task.candidateId = candidate.id;
-      } catch (error) {
-        task.status = "failed";
-        task.error = messageOf(error);
-      }
-    })();
+      workItemId: typeof body.work_item_id === "string" ? body.work_item_id : null,
+    });
+    launchTask(task);
     return c.json({ task_id: task.id, status: task.status }, 202);
   });
 
   app.get("/v1/discovery/tasks/:task_id", (c) => {
-    const task = tasks.get(c.req.param("task_id"));
+    const task = catalog.getDiscoveryTask(c.req.param("task_id"));
     if (!task) return c.json({ error: { code: "task_not_found", message: "Discovery task 不存在" } }, 404);
-    return c.json(task);
+    return c.json(toApiTask(task));
   });
 
+  for (const task of catalog.listDiscoveryTasks(["queued", "running"])) launchTask(task);
+
   return app;
+
+  function launchTask(task: DiscoveryTask): void {
+    catalog.updateDiscoveryTask(task.id, { status: "running", error: null });
+    void (async () => {
+      try {
+        const candidate = await discovery.observe(task.workspacePath, task.workItemId ?? undefined);
+        catalog.updateDiscoveryTask(task.id, { status: "succeeded", candidateId: candidate.id, error: null });
+      } catch (error) {
+        catalog.updateDiscoveryTask(task.id, { status: "failed", error: messageOf(error) });
+      }
+    })();
+  }
 }
 
 function messageOf(error: unknown): string {
@@ -89,6 +84,19 @@ function toApiCandidate(candidate: ReturnType<ProjectCatalogStore["listCandidate
     status: candidate.status,
     evidence: candidate.evidence,
     observed_at: candidate.observedAt,
+  };
+}
+
+function toApiTask(task: DiscoveryTask) {
+  return {
+    task_id: task.id,
+    status: task.status,
+    workspace_path: task.workspacePath,
+    work_item_id: task.workItemId,
+    candidate_id: task.candidateId,
+    error: task.error,
+    created_at: task.createdAt,
+    updated_at: task.updatedAt,
   };
 }
 
