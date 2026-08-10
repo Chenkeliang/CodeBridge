@@ -41,6 +41,16 @@ export interface RunRequest {
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
 
+export type AgentMessagePhase = "commentary" | "final_answer";
+
+export interface ActiveRunStatus {
+  runId: string;
+  startedAt: number;
+  lastActivityAt: number;
+  currentPhase: string;
+  lastCheckpoint?: string;
+}
+
 export interface RunState {
   runId: string;
   status: RunStatus;
@@ -68,7 +78,12 @@ export interface AgentAvailableCommand {
 }
 
 export type AgentEvent =
-  | { type: "text_delta"; text: string; messageId?: string }
+  | {
+      type: "text_delta";
+      text: string;
+      messageId?: string;
+      phase?: AgentMessagePhase;
+    }
   | { type: "thought_delta"; text: string; messageId?: string }
   | {
       type: "tool_start";

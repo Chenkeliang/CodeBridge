@@ -21,7 +21,7 @@ const AGENTS = {
   },
   codex: {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp@1.1.9"],
+    args: ["-y", "@agentclientprotocol/codex-acp@1.1.14"],
   },
 };
 

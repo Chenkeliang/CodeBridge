@@ -2,11 +2,19 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const tmpDirs: string[] = [];
+let inheritedDataDir: string | undefined;
+
+beforeEach(() => {
+  inheritedDataDir = process.env.DATA_DIR;
+  delete process.env.DATA_DIR;
+});
 
 afterEach(() => {
+  if (inheritedDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = inheritedDataDir;
   for (const dir of tmpDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -40,7 +48,7 @@ function writeStatefulLaunchctl(
     [
       `state=${JSON.stringify(stateDir)}`,
       `delay=${delayedUnloadChecks}`,
-      '[ -z "${ORDER_LOG:-}" ] || echo "launchctl $1 $2" >> "$ORDER_LOG"',
+      '[ -z "${ORDER_LOG:-}" ] || echo "launchctl $*" >> "$ORDER_LOG"',
       'case "$1" in',
       '  print) label="${2##*/}"; if [ "$delay" -gt 0 ] && [ -f "$state/.booted" ] && [ -f "$state/$label" ]; then count=$(cat "$state/.count" 2>/dev/null || echo 0); if [ "$count" -lt "$delay" ]; then echo $((count + 1)) > "$state/.count"; exit 0; fi; rm -f "$state/$label"; fi; [ -f "$state/$label" ] ;;',
       '  bootout) value="${3:-$2}"; label="${value##*/}"; label="${label%.plist}"; if [ "$delay" -gt 0 ]; then touch "$state/.booted"; else rm -f "$state/$label"; fi ;;',
@@ -487,6 +495,64 @@ describe("start.sh status", () => {
     expect(
       fs.readFileSync(path.join(agentsDir, "com.codebridge.runner.plist"), "utf8"),
     ).toContain("com.codebridge.runner");
+  });
+
+  it("kickstarts loaded launchd services once and rate-limits repeated restart checks", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-guard-home-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-start-guard-bin-"));
+    tmpDirs.push(home, binDir);
+    sandboxProcessCommands(binDir);
+    const dataDir = path.join(home, ".codebridge");
+    const agentsDir = path.join(home, "Library", "LaunchAgents");
+    const orderLog = path.join(home, "launchctl.log");
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dataDir, "config.yaml"),
+      [
+        "feishu:",
+        "  appId: cli_test",
+        "  appSecret: secret_test",
+        "runner:",
+        "  token: runner_test",
+      ].join("\n"),
+    );
+    fs.writeFileSync(path.join(agentsDir, "com.codebridge.runner.plist"), "runner");
+    fs.writeFileSync(path.join(agentsDir, "com.codebridge.bridge.plist"), "bridge");
+    writeStatefulLaunchctl(binDir, ["com.codebridge.runner", "com.codebridge.bridge"]);
+    writeCommand(binDir, "node", `exec ${JSON.stringify(process.execPath)} "$@"`);
+    writeCommand(binDir, "pnpm", "exit 0");
+
+    const env = {
+      ...process.env,
+      HOME: home,
+      ORDER_LOG: orderLog,
+      PATH: `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
+    };
+    execFileSync("/bin/bash", ["scripts/start.sh", "restart"], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      encoding: "utf8",
+      env,
+    });
+    const repeated = execFileSync("/bin/bash", ["scripts/start.sh", "restart"], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      encoding: "utf8",
+      env,
+    });
+
+    const operations = fs.readFileSync(orderLog, "utf8");
+    expect(operations).toContain("launchctl kickstart -k");
+    expect(operations).not.toContain("launchctl bootout");
+    expect(operations.match(/launchctl kickstart -k/g)).toHaveLength(2);
+    expect(
+      operations
+        .split("\n")
+        .filter((line) => line.includes("launchctl kickstart -k")),
+    ).toEqual([
+      "launchctl kickstart -k gui/501/com.codebridge.bridge",
+      "launchctl kickstart -k gui/501/com.codebridge.runner",
+    ]);
+    expect(repeated).toContain("60 秒内已执行过重启");
   });
 
   it("keeps an explicit DATA_DIR while migrating legacy launchd labels", () => {
