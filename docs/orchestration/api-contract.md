@@ -6,7 +6,7 @@
 
 | 场景 | 协议 |
 |---|---|
-| Web、飞书和 Telegram 查询或发送消息 | HTTP JSON API |
+| Web、外部飞书/Telegram CLI 或 WebSocket 网关查询、发送消息 | HTTP JSON API |
 | Session、Run、Flow 和审批的实时更新 | SSE Event Stream |
 | Runner 连接和任务执行 | 现有 Runner Protocol |
 | Cursor、Claude Code、Codex 等 ACP Agent | ACP Adapter |
@@ -16,6 +16,11 @@
 第一阶段使用 `POST message + SSE events` 支持 Web 直接对话，不要求 WebSocket。实时通道共享同一 Event Schema，断线后使用 Event Sequence 恢复。
 
 Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegram 的身份映射获得权限，不直接接触 Runner Token。
+
+外部渠道把稳定的渠道会话标识提交到
+`POST /v1/channels/{channel}/conversations/{conversation_id}/messages`。服务端持久化
+`channel + conversation_id → Session` 绑定，然后复用同一套 Message、Run、Flow、Approval
+和 SSE 事件合同。仓库中已有的内置 Feishu/Telegram Router 路径继续作为兼容适配器运行，迁移时只替换入口，不改变 Runner 和 Agent 合同。
 
 ## 2. 资源接口
 
