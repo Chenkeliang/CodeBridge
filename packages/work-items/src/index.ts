@@ -137,6 +137,7 @@ export interface Run {
   status: RunStatus;
   agentId: string | null;
   planId: string | null;
+  workflowRevision: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -147,6 +148,40 @@ export interface CreateRunInput {
   mode: WorkItemMode;
   agentId?: string | null;
   planId?: string | null;
+  workflowRevision?: string | null;
+}
+
+export interface PersistedPlanStep {
+  id: string;
+  capabilityId: string | null;
+  risk: "read_only" | "workspace_write" | "git_write" | "production_write" | "manual";
+  dependsOn: string[];
+  guard: string | null;
+  approval: "none" | "required";
+  branches: Array<{ when: string; next: string }>;
+  purpose: string | null;
+}
+
+export interface PersistedPlan {
+  schemaVersion: 1;
+  planId: string;
+  source: "workflow" | "agent_generated";
+  workflowId: string;
+  definitionRevision: string | null;
+  sessionId: string | null;
+  runId: string | null;
+  steps: PersistedPlanStep[];
+  createdAt: string;
+}
+
+export interface SavePlanInput {
+  planId: string;
+  source: PersistedPlan["source"];
+  workflowId: string;
+  definitionRevision: string | null;
+  sessionId?: string | null;
+  runId?: string | null;
+  steps: PersistedPlanStep[];
 }
 
 type SqliteRow = Record<string, unknown>;
@@ -220,6 +255,7 @@ export class SqliteEventStore {
         status TEXT NOT NULL,
         agent_id TEXT,
         plan_id TEXT,
+        workflow_revision TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (work_item_id) REFERENCES work_items(id)
@@ -227,6 +263,18 @@ export class SqliteEventStore {
 
       CREATE INDEX IF NOT EXISTS runs_work_item_created
         ON runs (work_item_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS plans (
+        plan_id TEXT PRIMARY KEY,
+        schema_version INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        definition_revision TEXT,
+        session_id TEXT,
+        run_id TEXT UNIQUE,
+        steps TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
 
       CREATE TABLE IF NOT EXISTS idempotency_responses (
         namespace TEXT NOT NULL,
@@ -236,6 +284,11 @@ export class SqliteEventStore {
         PRIMARY KEY (namespace, idempotency_key)
       );
     `);
+    try {
+      this.database.exec("ALTER TABLE runs ADD COLUMN workflow_revision TEXT");
+    } catch {
+      // Existing databases already contain the column.
+    }
   }
 
   createWorkItem(input: CreateWorkItemInput): WorkItem {
@@ -363,10 +416,68 @@ export class SqliteEventStore {
     return row?.sequence ? Number(row.sequence) : 0;
   }
 
+  savePlan(input: SavePlanInput): PersistedPlan {
+    const plan: PersistedPlan = {
+      schemaVersion: 1,
+      planId: input.planId,
+      source: input.source,
+      workflowId: input.workflowId,
+      definitionRevision: input.definitionRevision,
+      sessionId: input.sessionId ?? null,
+      runId: input.runId ?? null,
+      steps: input.steps.map(clonePlanStep),
+      createdAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `INSERT INTO plans (
+          plan_id, schema_version, source, workflow_id, definition_revision,
+          session_id, run_id, steps, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(plan_id) DO UPDATE SET
+          source = excluded.source,
+          workflow_id = excluded.workflow_id,
+          definition_revision = excluded.definition_revision,
+          session_id = excluded.session_id,
+          run_id = excluded.run_id,
+          steps = excluded.steps`,
+      )
+      .run(
+        plan.planId,
+        plan.schemaVersion,
+        plan.source,
+        plan.workflowId,
+        plan.definitionRevision,
+        plan.sessionId,
+        plan.runId,
+        JSON.stringify(plan.steps),
+        plan.createdAt,
+      );
+    return this.getPlan(plan.planId)!;
+  }
+
+  getPlan(planId: string): PersistedPlan | undefined {
+    const row = this.database.prepare("SELECT * FROM plans WHERE plan_id = ?").get(planId);
+    return row ? toPlan(row) : undefined;
+  }
+
+  getPlanForRun(runId: string): PersistedPlan | undefined {
+    const row = this.database.prepare("SELECT * FROM plans WHERE run_id = ?").get(runId);
+    return row ? toPlan(row) : undefined;
+  }
+
   createRun(input: CreateRunInput): Run {
     const workItem = this.getWorkItem(input.workItemId);
     if (!workItem) {
       throw new Error(`WorkItem not found: ${input.workItemId}`);
+    }
+
+    const plan = input.planId ? this.getPlan(input.planId) : undefined;
+    if (input.planId && !plan) {
+      throw new Error(`Plan not found: ${input.planId}`);
+    }
+    if (plan?.runId && input.id && plan.runId !== input.id) {
+      throw new Error(`Plan ${plan.planId} is bound to another Run`);
     }
 
     const now = new Date().toISOString();
@@ -378,6 +489,8 @@ export class SqliteEventStore {
       status: "queued",
       agentId: input.agentId ?? workItem.agentId,
       planId: input.planId ?? null,
+      workflowRevision:
+        input.workflowRevision ?? plan?.definitionRevision ?? workItem.workflowRevision,
       createdAt: now,
       updatedAt: now,
     };
@@ -388,8 +501,8 @@ export class SqliteEventStore {
         .prepare(
           `INSERT INTO runs (
             id, schema_version, work_item_id, mode, status, agent_id,
-            plan_id, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            plan_id, workflow_revision, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           run.id,
@@ -399,6 +512,7 @@ export class SqliteEventStore {
           run.status,
           run.agentId,
           run.planId,
+          run.workflowRevision,
           run.createdAt,
           run.updatedAt,
         );
@@ -412,8 +526,24 @@ export class SqliteEventStore {
           mode: run.mode,
           agent_id: run.agentId,
           plan_id: run.planId,
+          workflow_revision: run.workflowRevision,
         },
       });
+      if (plan) {
+        this.appendEventInTransaction({
+          workItemId: run.workItemId,
+          runId: run.id,
+          type: "PLAN_VALIDATED",
+          actor: "system",
+          target: plan.planId,
+          payload: {
+            workflow_id: plan.workflowId,
+            definition_revision: plan.definitionRevision,
+            source: plan.source,
+            step_count: plan.steps.length,
+          },
+        });
+      }
       this.database.exec("COMMIT;");
     } catch (error) {
       this.database.exec("ROLLBACK;");
@@ -586,7 +716,34 @@ function toRun(row: SqliteRow): Run {
     status: String(row.status) as RunStatus,
     agentId: row.agent_id === null ? null : String(row.agent_id),
     planId: row.plan_id === null ? null : String(row.plan_id),
+    workflowRevision:
+      row.workflow_revision === null || row.workflow_revision === undefined
+        ? null
+        : String(row.workflow_revision),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toPlan(row: SqliteRow): PersistedPlan {
+  return {
+    schemaVersion: Number(row.schema_version) as 1,
+    planId: String(row.plan_id),
+    source: String(row.source) as PersistedPlan["source"],
+    workflowId: String(row.workflow_id),
+    definitionRevision:
+      row.definition_revision === null ? null : String(row.definition_revision),
+    sessionId: row.session_id === null ? null : String(row.session_id),
+    runId: row.run_id === null ? null : String(row.run_id),
+    steps: (JSON.parse(String(row.steps)) as PersistedPlanStep[]).map(clonePlanStep),
+    createdAt: String(row.created_at),
+  };
+}
+
+function clonePlanStep(step: PersistedPlanStep): PersistedPlanStep {
+  return {
+    ...step,
+    dependsOn: [...step.dependsOn],
+    branches: step.branches.map((branch) => ({ ...branch })),
   };
 }
