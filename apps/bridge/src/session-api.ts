@@ -4,6 +4,7 @@ import { streamSSE } from "hono/streaming";
 import type {
   AgentProfile,
   SessionCatalogStore,
+  UpdateSessionInput,
 } from "@codebridge/session-catalog";
 import type { SqliteEventStore } from "@codebridge/work-items";
 import type { RunExecutor } from "@codebridge/run-executor";
@@ -59,7 +60,9 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const profiles = currentProfiles();
     const sync = importSessions && cwd ? await syncProviderSessions(options, profiles, agentId, cwd) : undefined;
     return c.json({
-      sessions: options.catalog.listSessions(agentId).map((session) => ({
+      sessions: options.catalog.listSessions(agentId, {
+        includeArchived: c.req.query("include_archived") === "true",
+      }).map((session) => ({
         ...toApiSession(session),
         agent: profiles.get(session.agentId)?.displayName ?? session.agentId,
       })),
@@ -270,6 +273,29 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
     return c.json(toApiSession(session));
+  });
+
+  app.patch("/v1/sessions/:session_id", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    const body = await readJson(c);
+    if (!body) return c.json({ error: "invalid_session_update" }, 400);
+    const update: UpdateSessionInput = {};
+    if (Object.hasOwn(body, "title")) {
+      if (typeof body.title !== "string" || !body.title.trim()) {
+        return c.json({ error: "title must be a non-empty string" }, 400);
+      }
+      update.title = body.title.trim();
+    }
+    for (const field of ["pinned", "archived"] as const) {
+      if (!Object.hasOwn(body, field)) continue;
+      if (typeof body[field] !== "boolean") {
+        return c.json({ error: `${field} must be a boolean` }, 400);
+      }
+      update[field] = body[field];
+    }
+    if (!Object.keys(update).length) return c.json({ error: "invalid_session_update" }, 400);
+    return c.json(toApiSession(options.catalog.updateSession(session.id, update)!));
   });
 
   app.post("/v1/sessions/:session_id/messages", async (c) => {
@@ -637,6 +663,8 @@ function toApiSession(session: ReturnType<SessionCatalogStore["getSession"]>): R
     additional_directories: session.additionalDirectories,
     title: session.title,
     status: session.status,
+    pinned_at: session.pinnedAt,
+    archived_at: session.archivedAt,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
   };

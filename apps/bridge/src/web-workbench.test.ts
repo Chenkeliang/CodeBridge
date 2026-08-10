@@ -37,8 +37,8 @@ describe("web workbench", () => {
     expect(html).toContain("/v1/runs/");
     expect(html).toContain("/review");
     expect(html).toContain('id="session-fork"');
-    expect(html).toContain('id="session-close"');
-    expect(html).toContain('id="session-delete"');
+    expect(html).not.toContain('id="session-close"');
+    expect(html).not.toContain('id="session-delete"');
     expect(html).toContain('id="session-directories"');
     expect(html).toContain('id="directory-panel"');
     expect(html).toContain('id="additional-directory"');
@@ -107,7 +107,7 @@ describe("web workbench", () => {
     expect(html).toContain('id="sync-sessions"');
     expect(html).toContain("导入历史");
     expect(html).not.toContain("同步会话");
-    expect(html).toContain("const result = await api('/v1/sessions');");
+    expect(html).toContain("const result = await api('/v1/sessions' +");
     expect(html).toContain("async function syncSessions()");
     store.close();
   });
@@ -148,6 +148,23 @@ describe("web workbench", () => {
     expect(html).toMatch(/id="session-directories"[\s\S]*id="reply-workspace-chip"/);
     expect(html).toContain("$('run-inspector').hidden = true");
     expect(html).toContain("$('session-fork').hidden = !session.provider_session_id");
+    store.close();
+  });
+
+  it("keeps Session rows name-only and exposes Cursor-style metadata actions", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain('id="session-view-toggle"');
+    expect(html).toContain("state.showArchived");
+    expect(html).toContain("data-session-action");
+    expect(html).toContain("重命名");
+    expect(html).toContain("置顶");
+    expect(html).toContain("归档");
+    expect(html).toContain("删除");
+    expect(html).not.toContain("esc(session.status) + ' · '");
+    expect(html).toContain("conversation-column.empty-session");
     store.close();
   });
 
@@ -232,7 +249,7 @@ describe("web workbench", () => {
     const html = await (await app.request("/")).text();
     const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 
-    expect(script).toMatch(/session-delete[\s\S]*clearInterval\(state\.timer\); state\.eventAbort\?\.abort\(\);[\s\S]*method:'DELETE'/);
+    expect(script).toMatch(/action === 'delete'[\s\S]*clearInterval\(state\.timer\); state\.eventAbort\?\.abort\(\);[\s\S]*method:'DELETE'/);
     store.close();
   });
 

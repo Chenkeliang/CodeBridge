@@ -78,6 +78,37 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("renames, pins, and archives a Session through its metadata API", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const create = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "codex", title: "原始名称" }),
+    });
+    const session = await create.json() as { session_id: string };
+    const renamed = await app.request(`/v1/sessions/${session.session_id}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ title: "重命名后的会话", pinned: true }),
+    });
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({ title: "重命名后的会话", pinned_at: expect.any(String), archived_at: null });
+
+    const archived = await app.request(`/v1/sessions/${session.session_id}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(archived.status).toBe(200);
+    expect(await archived.json()).toMatchObject({ archived_at: expect.any(String), pinned_at: null });
+    expect((await (await app.request("/v1/sessions", { headers: { authorization: `Bearer ${TOKEN}` } })).json() as { sessions: unknown[] }).sessions).toHaveLength(0);
+    expect((await (await app.request("/v1/sessions?include_archived=true", { headers: { authorization: `Bearer ${TOKEN}` } })).json() as { sessions: unknown[] }).sessions).toHaveLength(1);
+    catalog.close();
+    workItems.close();
+  });
+
   it("reads Agent health dynamically for later Session creation", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
