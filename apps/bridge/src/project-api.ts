@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type {
   DiscoveryTask,
+  ProjectCatalogGitRepository,
   ProjectCatalogStore,
   ProjectDiscovery,
 } from "@codebridge/project-catalog";
@@ -9,6 +10,7 @@ export function createProjectCatalogApp(
   catalog: ProjectCatalogStore,
   discovery: ProjectDiscovery,
   token: string,
+  gitRepository?: ProjectCatalogGitRepository,
 ) {
   const app = new Hono();
 
@@ -24,6 +26,38 @@ export function createProjectCatalogApp(
   app.get("/v1/projects/drifts", (c) => {
     const projectId = c.req.query("project_id");
     return c.json({ drifts: catalog.listDrifts(projectId || undefined) });
+  });
+
+  app.post("/v1/projects/candidates/:candidate_id/proposals", async (c) => {
+    if (!gitRepository) return c.json({ error: { code: "catalog_git_unavailable", message: "Project catalog Git 未配置" } }, 503);
+    const body = await c.req.json().catch(() => null) as { branch?: unknown; message?: unknown } | null;
+    if (!body || typeof body.branch !== "string" || !body.branch.trim()) {
+      return c.json({ error: { code: "invalid_catalog_proposal", message: "branch 必填" } }, 400);
+    }
+    try {
+      const projects = catalog.projectsForCandidate(c.req.param("candidate_id"));
+      return c.json(gitRepository.createProposal(projects, {
+        branch: body.branch,
+        message: typeof body.message === "string" ? body.message : undefined,
+      }), 201);
+    } catch (error) {
+      const message = messageOf(error);
+      const code = message.includes("not found") ? "candidate_not_found" : "catalog_proposal_failed";
+      return c.json({ error: { code, message } }, code === "candidate_not_found" ? 404 : 409);
+    }
+  });
+
+  app.post("/v1/projects/catalog/sync", async (c) => {
+    if (!gitRepository) return c.json({ error: { code: "catalog_git_unavailable", message: "Project catalog Git 未配置" } }, 503);
+    const body = await c.req.json().catch(() => null) as { ref?: unknown } | null;
+    const ref = typeof body?.ref === "string" && body.ref.trim() ? body.ref : undefined;
+    try {
+      const revision = ref ?? gitRepository.baseRef;
+      const projects = gitRepository.readProjects(ref);
+      return c.json({ revision, projects: catalog.syncProjects(projects, revision).map(toApiProject) });
+    } catch (error) {
+      return c.json({ error: { code: "catalog_sync_failed", message: messageOf(error) } }, 409);
+    }
   });
 
   app.get("/v1/projects/candidates/:candidate_id/diff", (c) => {

@@ -89,4 +89,22 @@ describe("ACP-only backend configuration", () => {
     expect(config.telegram?.botToken).toBe("123:token");
     expect(config.telegram?.allowedChats).toEqual(["-1001"]);
   });
+
+  it("keeps Project Catalog Git integration explicit and scoped", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      orchestration: {
+        projectCatalog: {
+          repositoryPath: "/srv/codebridge-catalog",
+          baseRef: "origin/main",
+          catalogPath: "catalog/projects.yaml",
+        },
+      },
+    });
+    expect(config.orchestration?.projectCatalog).toEqual({
+      repositoryPath: "/srv/codebridge-catalog",
+      baseRef: "origin/main",
+      catalogPath: "catalog/projects.yaml",
+    });
+  });
 });

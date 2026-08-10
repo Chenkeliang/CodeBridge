@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
+import { ProjectCatalogGitRepository, ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
 import { createProjectCatalogApp } from "./project-api.js";
 
 const TOKEN = "project-api-token";
@@ -110,4 +114,52 @@ describe("project catalog API", () => {
     expect((await resolved.json()) as { drift: { status: string } }).toMatchObject({ drift: { status: "resolved" } });
     discovery.close();
   });
+
+  it("creates a Git proposal and imports only after an explicit sync", async () => {
+    const repository = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-project-api-git-"));
+    fs.mkdirSync(path.join(repository, "catalog"), { recursive: true });
+    fs.writeFileSync(path.join(repository, "catalog/projects.yaml"), "schema_version: 1\nprojects: []\n");
+    git(repository, ["init", "-b", "main"]);
+    git(repository, ["config", "user.email", "test@example.com"]);
+    git(repository, ["config", "user.name", "CodeBridge Test"]);
+    git(repository, ["add", "catalog/projects.yaml"]);
+    git(repository, ["commit", "-m", "initial catalog"]);
+    const catalog = new ProjectCatalogStore(":memory:");
+    const discovery = new ProjectDiscovery(catalog, { reader: () => ({ language: "go", evidence: [] }) });
+    const candidate = catalog.saveCandidate({
+      projectId: "service-a",
+      repositoryRemote: "gitlab/rock/service-a",
+      language: "go",
+      confidence: "high",
+      evidence: [{ kind: "test", ref: "service-a" }],
+    });
+    const app = createProjectCatalogApp(
+      catalog,
+      discovery,
+      TOKEN,
+      new ProjectCatalogGitRepository({ repositoryPath: repository, baseRef: "main" }),
+    );
+    const proposalResponse = await app.request(request(`/v1/projects/candidates/${candidate.id}/proposals`, {
+      method: "POST",
+      body: JSON.stringify({ branch: "catalog/service-a" }),
+    }));
+    expect(proposalResponse.status).toBe(201);
+    const proposal = await proposalResponse.json() as { branch: string; commit: string };
+    expect(proposal.branch).toBe("catalog/service-a");
+    expect(proposal.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(catalog.getProject("service-a")).toBeUndefined();
+
+    const syncResponse = await app.request(request("/v1/projects/catalog/sync", {
+      method: "POST",
+      body: JSON.stringify({ ref: proposal.branch }),
+    }));
+    expect(syncResponse.status).toBe(200);
+    expect(catalog.getProject("service-a")?.status).toBe("registered");
+    fs.rmSync(repository, { recursive: true, force: true });
+    discovery.close();
+  });
 });
+
+function git(repository: string, args: string[]): string {
+  return execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
+}

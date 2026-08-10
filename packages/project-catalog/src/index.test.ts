@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
 import {
   ProjectCatalogStore,
   ProjectDiscovery,
+  ProjectCatalogGitRepository,
   type DiscoveryEvidenceReader,
 } from "./index.js";
 
@@ -158,4 +160,80 @@ describe("project catalog discovery", () => {
     expect(catalog.listDiscoveryTasks()).toHaveLength(1);
     catalog.close();
   });
+
+  it("creates a reviewable catalog commit without changing the caller checkout", () => {
+    const repository = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-catalog-git-"));
+    fs.mkdirSync(path.join(repository, "catalog"), { recursive: true });
+    fs.writeFileSync(path.join(repository, "catalog/projects.yaml"), "schema_version: 1\nprojects: []\n");
+    runGit(repository, ["init", "-b", "main"]);
+    runGit(repository, ["config", "user.email", "test@example.com"]);
+    runGit(repository, ["config", "user.name", "CodeBridge Test"]);
+    runGit(repository, ["add", "catalog/projects.yaml"]);
+    runGit(repository, ["commit", "-m", "initial catalog"]);
+    const beforeBranch = runGit(repository, ["branch", "--show-current"]);
+    const catalog = new ProjectCatalogStore(":memory:");
+    const candidate = catalog.saveCandidate({
+      projectId: "equity-center",
+      repositoryRemote: "gitlab/rock/equity-center",
+      language: "go",
+      deployService: "equity-center",
+      confidence: "high",
+      evidence: [{ kind: "git_remote", ref: "origin" }],
+    });
+    const git = new ProjectCatalogGitRepository({ repositoryPath: repository, baseRef: "main" });
+    const proposal = git.createProposal(catalog.projectsForCandidate(candidate.id), {
+      branch: "catalog/project-equity-center",
+    });
+    expect(proposal.baseRef).toBe("main");
+    expect(proposal.branch).toBe("catalog/project-equity-center");
+    expect(proposal.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(runGit(repository, ["branch", "--show-current"])).toBe(beforeBranch);
+    expect(runGit(repository, ["show", `${proposal.branch}:catalog/projects.yaml`])).toContain("equity-center");
+    expect(runGit(repository, ["rev-list", "--count", `main..${proposal.branch}`])).toBe("1");
+    fs.rmSync(repository, { recursive: true, force: true });
+    catalog.close();
+  });
+
+  it("imports a reviewed catalog revision into SQLite without deleting absent records", () => {
+    const repository = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-catalog-sync-"));
+    fs.mkdirSync(path.join(repository, "catalog"), { recursive: true });
+    fs.writeFileSync(path.join(repository, "catalog/projects.yaml"), [
+      "schema_version: 1",
+      "projects:",
+      "  - project_id: service-a",
+      "    repository_remote: gitlab/rock/service-a",
+      "    language: go",
+      "    dependencies: [service-b]",
+      "  - project_id: service-b",
+      "    repository_remote: gitlab/rock/service-b",
+      "    language: python",
+      "    dependencies: []",
+      "",
+    ].join("\n"));
+    runGit(repository, ["init", "-b", "main"]);
+    runGit(repository, ["config", "user.email", "test@example.com"]);
+    runGit(repository, ["config", "user.name", "CodeBridge Test"]);
+    runGit(repository, ["add", "catalog/projects.yaml"]);
+    runGit(repository, ["commit", "-m", "reviewed catalog"]);
+    const catalog = new ProjectCatalogStore(":memory:");
+    const existing = catalog.saveCandidate({
+      projectId: "legacy",
+      language: "go",
+      confidence: "medium",
+      evidence: [{ kind: "test", ref: "legacy" }],
+    });
+    catalog.acceptCandidate(existing.id);
+    const git = new ProjectCatalogGitRepository({ repositoryPath: repository, baseRef: "main" });
+    const imported = git.readProjects("main");
+    expect(imported.map((project) => project.id)).toEqual(["service-a", "service-b"]);
+    expect(catalog.syncProjects(imported, "main").map((project) => project.id)).toEqual(["legacy", "service-a", "service-b"]);
+    expect(catalog.getProject("legacy")?.status).toBe("deprecated");
+    expect(catalog.getProject("service-a")).toMatchObject({ dependencies: ["service-b"] });
+    fs.rmSync(repository, { recursive: true, force: true });
+    catalog.close();
+  });
 });
+
+function runGit(repository: string, args: string[]): string {
+  return execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
+}

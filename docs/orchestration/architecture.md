@@ -285,6 +285,19 @@ CodeBridge Gateway + Session/Run Runtime + SQLite
 - SQLite：Session、Message、Run、TaskRecord、Approval、Event。
 - 文件/对象目录：Diff、日志快照、测试报告、上下文包。
 
+Project Catalog 的 Git 集成是可选配置：
+
+```yaml
+orchestration:
+  projectCatalog:
+    repositoryPath: /path/to/catalog-repository
+    baseRef: origin/main
+    catalogPath: catalog/projects.yaml
+```
+
+运行时只在显式提案请求时创建 feature branch/commit；不会 checkout、merge 或 push。审核后的
+revision 再显式同步到 SQLite，避免长期运行进程读取到半完成的工作区文件。
+
 Workflow 文件先经过 Schema/Plan IR，再由当前执行器运行。未来替换为 Temporal 或其他 Durable Engine 时，保持 Flow/Workflow DSL、Plan IR 和事件合同不变。
 
 ## 10. 未来边界

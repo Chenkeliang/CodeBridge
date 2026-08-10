@@ -15,7 +15,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@codebridge/work-items": "workspace:*"
+    "@codebridge/work-items": "workspace:*",
+    "yaml": "^2.6.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
