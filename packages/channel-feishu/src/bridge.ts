@@ -770,7 +770,7 @@ export class FeishuBridge {
       agentConsumed = true;
       try {
         const binding = this.orchestrator.router.getBinding(msg.chatId, topicId);
-        const events = this.sessionIngress && !msg.attachments?.length
+        const events = this.sessionIngress
           ? this.sessionIngress({
               channel: "feishu",
               conversationId: this.chatKey(msg.chatId, topicId),
@@ -778,6 +778,7 @@ export class FeishuBridge {
               agentId: binding.backendId,
               cwd: binding.cwd,
               model: binding.model,
+              attachments: msg.attachments,
               idempotencyKey: msg.messageId,
               signal: streamAbort.signal,
             })

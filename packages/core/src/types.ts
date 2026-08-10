@@ -147,6 +147,7 @@ export interface ChannelSessionMessage {
   cwd?: string;
   model?: string;
   flowId?: string;
+  attachments?: RunAttachment[];
   idempotencyKey?: string;
   signal?: AbortSignal;
 }
