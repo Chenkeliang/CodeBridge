@@ -28,6 +28,9 @@ describe("web workbench", () => {
     expect(html).not.toContain('id="work-title"');
     expect(html).not.toContain('id="cancel-new"');
     expect(html).toContain('id="reply-model"');
+    expect(html).toContain('list="model-options"');
+    expect(html).toContain('id="model-options"');
+    expect(html).not.toMatch(/<select[^>]*id="reply-model"/);
     expect(html).toContain('id="save-flow"');
     expect(html).toContain("/v1/flows/candidates");
     expect(html).toContain('id="accept-project"');
@@ -41,8 +44,9 @@ describe("web workbench", () => {
     expect(html).not.toContain('id="session-delete"');
     expect(html).toContain('id="session-directories"');
     expect(html).toContain('id="directory-panel"');
-    expect(html).toContain('id="additional-directory"');
-    expect(html).toContain('id="add-directory"');
+    expect(html).toContain('id="pick-directory"');
+    expect(html).not.toContain('id="additional-directory"');
+    expect(html).not.toContain('placeholder="输入要加入当前 Session 的目录路径"');
     expect(html).toContain("/directories");
     expect(html).toContain("additional_directories");
     expect(html).toContain('id="run-inspector"');
@@ -60,6 +64,8 @@ describe("web workbench", () => {
     expect(html).toContain('data-drift-action="resolve"');
     expect(html).toContain('id="reply-attachment-picker"');
     expect(html).toContain('id="reply-attachment-list"');
+    expect(html).toContain("clipboardData.files");
+    expect(html).toContain("dataTransfer.files");
     expect(html).toContain("data_base64");
     expect(html).toContain("mime_type");
     expect(html).not.toContain('data-view="plan"');
@@ -76,6 +82,14 @@ describe("web workbench", () => {
     expect(html).toContain("/v1/sessions");
     expect(html).toContain("events?live=true&after_sequence=");
     expect(html).not.toContain("@ 委派");
+    expect(html).toContain("/config-options");
+    expect(html).toContain('id="command-menu"');
+    expect(html).toContain("MCP 工具由 Agent 自动选择");
+    expect(html).not.toContain("WORKBENCH / 01");
+    expect(html).not.toContain("pi · idle");
+    expect(html).toContain('data-brand-icon="codebridge"');
+    expect(html).not.toContain("window.confirm(");
+    expect(html).not.toContain("window.prompt(");
     store.close();
   });
 
@@ -118,7 +132,7 @@ describe("web workbench", () => {
     const html = await (await app.request("/")).text();
 
     expect(html).toMatch(/<select[^>]*id="reply-workflow"[^>]*hidden/);
-    expect(html).toMatch(/<select[^>]*id="reply-model"[^>]*hidden/);
+    expect(html).toMatch(/<input[^>]*id="reply-model"[^>]*hidden/);
     store.close();
   });
 
@@ -128,6 +142,22 @@ describe("web workbench", () => {
     const html = await (await app.request("/")).text();
 
     expect(html).not.toContain('id="timeline-toolbar"');
+    store.close();
+  });
+
+  it("presents domain events as conversation, tools, and approvals instead of raw payloads", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain("renderUserMessage(event)");
+    expect(html).toContain("renderAgentEvent(event)");
+    expect(html).toContain("upsertToolCall(agentEvent)");
+    expect(html).toContain("renderApprovalRequest(event)");
+    expect(html).toContain("friendlyAgentError(agentEvent.message)");
+    expect(html).not.toContain("JSON.stringify(event.payload || {}, null, 2)");
+    expect(html).not.toContain("<strong>' + esc(label(event.type))");
     store.close();
   });
 
@@ -177,7 +207,8 @@ describe("web workbench", () => {
     const app = createWebWorkbenchApp({ store, token: "web-token" });
     const html = await (await app.request("/")).text();
 
-    expect(html).toContain("#work-list { flex:1 1 auto; min-height:0; align-content:start; }");
+    expect(html).toContain("#work-list { max-height:min(54dvh,560px);");
+    expect(html).not.toContain("#work-list { flex:1 1 auto;");
     store.close();
   });
 
@@ -244,6 +275,21 @@ describe("web workbench", () => {
     const html = await (await app.request("/")).text();
 
     expect(html).not.toContain('aria-label="新建 Pi Session"');
+    store.close();
+  });
+
+  it("reads current Agent health on each Workbench request", async () => {
+    const store = new SqliteEventStore(":memory:");
+    let status = "unavailable";
+    const app = createWebWorkbenchApp({
+      store,
+      token: "web-token",
+      agentProfiles: () => [{ id: "pi", name: "Pi", status }],
+    });
+
+    expect(await (await app.request("/")).text()).toContain('const agentStatuses = {"pi":"unavailable"}');
+    status = "healthy";
+    expect(await (await app.request("/")).text()).toContain('const agentStatuses = {"pi":"healthy"}');
     store.close();
   });
 

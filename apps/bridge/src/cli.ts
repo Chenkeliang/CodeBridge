@@ -263,7 +263,7 @@ program
       store: workItemStore,
       token: config.runner.token,
       agents: agentProfiles.map((agent) => agent.agentId),
-      agentProfiles: agentProfiles.map((agent) => ({
+      agentProfiles: () => registry.list().map((agent) => ({
         id: agent.agentId,
         name: agent.displayName,
         status: agent.status,

@@ -17,7 +17,7 @@ export interface WebWorkbenchOptions {
   store: SqliteEventStore;
   token: string;
   agents?: string[];
-  agentProfiles?: WebWorkbenchAgent[];
+  agentProfiles?: WebWorkbenchAgent[] | (() => WebWorkbenchAgent[]);
   workflows?: WebWorkbenchWorkflow[];
 }
 
@@ -44,12 +44,13 @@ export function createWebWorkbenchApp(options: WebWorkbenchOptions) {
 }
 
 function renderWorkbench(options: WebWorkbenchOptions): string {
-  const agents = options.agents ?? [];
-  const agentProfiles: WebWorkbenchAgent[] = options.agentProfiles ?? agents.map((id) => ({ id, name: id }));
+  const configuredProfiles = typeof options.agentProfiles === "function"
+    ? options.agentProfiles()
+    : options.agentProfiles;
+  const agents = options.agents ?? configuredProfiles?.map((agent) => agent.id) ?? [];
+  const agentProfiles: WebWorkbenchAgent[] = configuredProfiles ?? agents.map((id) => ({ id, name: id }));
   const workflows = options.workflows ?? [];
   const token = JSON.stringify(options.token).replace(/</g, "\\u003c");
-  const models = [...new Set(agentProfiles.flatMap((agent) => agent.models ?? []))];
-  const modelOptions = `<option value="">模型 · Agent 默认</option>${models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join("")}`;
   const workflowOptions = [
     `<option value="">Workflow · 自动发现</option>`,
     ...workflows.map((workflow) => `<option value="${escapeHtml(workflow.id)}">${escapeHtml(workflow.name)} · ${escapeHtml(workflow.id)}</option>`),
@@ -73,18 +74,19 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     button, input, select, textarea { font:inherit; }
     button { cursor:pointer; border:0; }
     .shell { min-height:100dvh; display:grid; grid-template-columns:300px 1fr; }
-    .sidebar { position:sticky; top:0; height:100dvh; min-height:0; overflow:hidden; border-right:1px solid var(--line); background:#f1f3ef; padding:28px 18px; display:flex; flex-direction:column; gap:24px; }
-    .brand { display:flex; align-items:center; justify-content:space-between; padding:0 8px; }
-    .brand strong { letter-spacing:.08em; font-size:12px; text-transform:uppercase; }
-    .brand span { color:var(--muted); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .sidebar { position:sticky; top:0; height:100dvh; min-height:0; overflow:hidden; border-right:1px solid var(--line); background:#f1f3ef; padding:22px 16px; display:flex; flex-direction:column; gap:12px; }
+    .brand { display:flex; align-items:center; gap:9px; padding:2px 8px 12px; }
+    .brand strong { letter-spacing:.04em; font-size:13px; }
+    .brand-icon { width:24px; height:24px; display:grid; place-items:center; color:var(--accent); }
+    .brand-icon svg { display:block; width:24px; height:24px; }
     .inbox-head { display:flex; justify-content:space-between; align-items:center; padding:0 8px; }
     .inbox-head h2 { margin:0; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
     .inbox-actions { display:flex; align-items:center; gap:6px; }
     .sync-button { background:transparent; color:var(--muted); border-radius:7px; padding:7px 8px; }
     .sync-button:hover { background:#e4e9e5; color:var(--accent); }
     .work-list { display:grid; gap:12px; overflow:auto; }
-    #work-list { flex:1 1 auto; min-height:0; align-content:start; }
-    #flow-list { flex:0 0 auto; max-height:28dvh; }
+    #work-list { max-height:min(54dvh,560px); min-height:72px; align-content:start; }
+    #flow-list { max-height:min(28dvh,280px); align-content:start; }
     .agent-group { display:grid; gap:3px; }
     .agent-group-head { display:flex; align-items:center; gap:4px; padding:3px 4px; color:var(--ink); }
     .agent-toggle { min-width:0; flex:1; display:flex; align-items:center; gap:7px; padding:7px 6px; border-radius:8px; background:transparent; color:var(--ink); text-align:left; }
@@ -94,6 +96,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .agent-icon svg { display:block; width:18px; height:18px; }
     .agent-icon-fallback { border:1px solid var(--line); border-radius:5px; font:700 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .agent-status, .agent-count { color:var(--muted); font:10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .agent-status { color:#a14835; }
     .agent-count { margin-left:auto; }
     .agent-chevron { flex:0 0 14px; color:var(--muted); transition:transform .16s ease; }
     .agent-chevron.expanded { transform:rotate(90deg); }
@@ -133,13 +136,9 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .empty { color:var(--muted); padding:18px 10px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
     .main { min-width:0; padding:38px clamp(20px,5vw,72px); }
     .workspace { max-width:1040px; margin:0 auto; display:grid; gap:24px; }
-    .workspace-top { display:flex; justify-content:space-between; gap:24px; align-items:flex-start; border-bottom:1px solid var(--line); padding-bottom:24px; }
-    .eyebrow { color:var(--accent); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform:uppercase; letter-spacing:.12em; }
-    h1 { margin:7px 0 5px; font-size:clamp(24px,3vw,38px); letter-spacing:-.035em; line-height:1.1; }
+    .workspace-top { display:flex; justify-content:space-between; gap:24px; align-items:center; border-bottom:1px solid var(--line); padding-bottom:18px; }
+    h1 { margin:0; font-size:clamp(20px,2vw,28px); letter-spacing:-.025em; line-height:1.2; }
     .subline { margin:0; color:var(--muted); max-width:60ch; }
-    .status { display:inline-flex; align-items:center; gap:7px; white-space:nowrap; color:var(--muted); font:12px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .status::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft); }
-    .status.waiting::before { background:var(--warning); box-shadow:0 0 0 4px #f5ecd9; }
     .session-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
     .session-action { border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--muted); padding:6px 9px; font-size:12px; }
     .session-action:hover { border-color:var(--accent); color:var(--accent); }
@@ -158,13 +157,22 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .directory-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 9px; border-radius:7px; background:#f5f7f5; color:var(--muted); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-all; }
     .directory-remove { flex:0 0 auto; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--muted); padding:3px 6px; font-size:11px; }
     .directory-remove:hover { border-color:#a14835; color:#a14835; }
-    .directory-add { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
+    .directory-add { display:flex; justify-content:flex-end; }
     .attachment-list { display:flex; flex-wrap:wrap; gap:5px; }
     .attachment-chip { display:inline-flex; align-items:center; max-width:100%; border-radius:7px; background:var(--accent-soft); color:var(--accent); padding:4px 7px; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .attachment-remove { margin-left:6px; padding:0; background:transparent; color:inherit; font-size:14px; line-height:1; }
+    .input-shell.drag-active { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+    .composer-popover { position:absolute; z-index:8; left:12px; bottom:74px; width:min(420px,calc(100% - 24px)); max-height:320px; overflow:auto; border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:0 24px 60px -28px rgba(22,31,28,.6); padding:7px; }
+    .popover-list { display:grid; gap:2px; }
+    .popover-item { width:100%; display:grid; grid-template-columns:minmax(0,1fr); gap:2px; padding:9px 10px; border-radius:8px; background:transparent; color:var(--ink); text-align:left; }
+    .popover-item:hover, .popover-item.active { background:#edf1ee; }
+    .popover-item strong { font-size:12px; font-weight:650; }
+    .popover-item small, .popover-note { color:var(--muted); font-size:11px; }
+    .popover-note { margin:5px 4px 1px; padding-top:7px; border-top:1px solid var(--line); }
     .grid { display:grid; grid-template-columns:minmax(0,1fr); gap:24px; align-items:start; }
     .grid.inspector-visible { grid-template-columns:minmax(0,1fr) 300px; }
     .conversation-column { display:grid; gap:18px; min-width:0; }
-    .conversation-column.empty-session { min-height:clamp(420px, calc(100dvh - 220px), 720px); align-content:center; }
+    .conversation-column.empty-session { min-height:clamp(380px, calc(100dvh - 190px), 680px); align-content:center; }
     .conversation-column.empty-session .timeline { display:none; }
     .conversation-column.empty-session #workbench-error:empty { display:none; }
     .inspector { display:grid; gap:12px; position:sticky; top:24px; }
@@ -179,13 +187,43 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .inspector-link { color:var(--accent); background:transparent; text-align:left; padding:0; font-size:12px; }
     .inspector-link:hover { text-decoration:underline; }
     .artifact-content { max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:#f5f7f5; border-radius:7px; padding:8px; color:var(--muted); font:11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .timeline { min-height:330px; border-top:1px solid var(--line); }
+    .timeline { min-height:330px; display:grid; align-content:start; gap:18px; }
     .timeline-empty { padding:42px 0; color:var(--muted); }
-    .event { display:grid; grid-template-columns:116px 1fr; gap:18px; padding:14px 0; border-bottom:1px solid var(--line); }
-    .event time { color:var(--muted); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .event-body strong { display:block; font-size:12px; letter-spacing:.04em; }
-    .event-body pre { margin:5px 0 0; white-space:pre-wrap; word-break:break-word; color:var(--muted); font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .chat-composer { background:rgba(255,255,255,.94); border:1px solid var(--line); border-radius:16px; padding:12px; box-shadow:var(--shadow); }
+    .conversation-turn { display:grid; gap:7px; min-width:0; }
+    .conversation-turn.user { justify-items:end; }
+    .turn-label { color:var(--muted); font-size:11px; }
+    .message-surface { max-width:min(78%,720px); white-space:pre-wrap; word-break:break-word; font-size:15px; line-height:1.65; }
+    .conversation-turn.user .message-surface { border-radius:15px 15px 4px 15px; background:#e8ece9; padding:10px 14px; }
+    .conversation-turn.agent .message-surface { max-width:820px; }
+    .message-meta { color:var(--muted); font-size:11px; }
+    .progress-message { max-width:820px; display:flex; gap:8px; align-items:flex-start; color:var(--muted); font-size:13px; }
+    .progress-message::before { content:""; flex:0 0 6px; width:6px; height:6px; margin-top:7px; border-radius:50%; background:var(--accent); }
+    .tool-call { border:1px solid var(--line); border-radius:10px; background:#fafbf9; overflow:hidden; }
+    .tool-call summary { list-style:none; display:flex; align-items:center; gap:8px; padding:9px 11px; cursor:pointer; }
+    .tool-call summary::-webkit-details-marker { display:none; }
+    .tool-call summary:hover { background:#f2f5f2; }
+    .tool-call strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:650; }
+    .tool-status-icon { flex:0 0 16px; width:16px; height:16px; display:grid; place-items:center; border-radius:50%; background:var(--accent-soft); color:var(--accent); font-size:10px; }
+    .tool-status-label { margin-left:auto; color:var(--muted); font-size:11px; }
+    .tool-call.failed .tool-status-icon { background:#f6e7e3; color:#a14835; }
+    .tool-detail { display:grid; gap:9px; border-top:1px solid var(--line); padding:10px 12px; }
+    .tool-detail-section { display:grid; gap:4px; }
+    .tool-detail-section span { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+    .tool-detail-section pre { max-height:240px; overflow:auto; margin:0; white-space:pre-wrap; word-break:break-word; color:var(--muted); font:11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .plan-card, .approval-request, .run-notice { max-width:820px; border:1px solid var(--line); border-radius:11px; padding:12px 14px; background:#fff; }
+    .plan-card strong, .approval-request strong, .run-notice strong { display:block; font-size:12px; }
+    .plan-list { display:grid; gap:5px; margin:9px 0 0; padding:0; list-style:none; color:var(--muted); font-size:12px; }
+    .plan-list li::before { content:"○"; margin-right:7px; }
+    .plan-list li.completed::before { content:"✓"; color:var(--accent); }
+    .plan-list li.in_progress { color:var(--ink); }
+    .approval-request { background:#fffaf0; border-color:#ead8b5; }
+    .approval-request p, .run-notice p { margin:5px 0 0; color:var(--muted); font-size:12px; }
+    .approval-actions { display:flex; gap:7px; margin-top:11px; }
+    .approval-action { border-radius:7px; padding:7px 10px; background:#ecefeb; color:var(--ink); font-size:12px; }
+    .approval-action.allow { background:var(--accent); color:#fff; }
+    .run-notice.error-notice { border-color:#eccfc7; background:#fff8f6; }
+    .run-notice.error-notice strong { color:#a14835; }
+    .chat-composer { position:relative; background:rgba(255,255,255,.94); border:1px solid var(--line); border-radius:16px; padding:12px; box-shadow:var(--shadow); }
     .form-grid { display:grid; gap:10px; }
     input, select, textarea { width:100%; border:1px solid var(--line); background:#fbfcfa; border-radius:7px; padding:9px 10px; color:var(--ink); outline:none; transition:border .2s ease, box-shadow .2s ease; }
     input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
@@ -219,7 +257,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><strong>CodeBridge</strong><span>WORKBENCH / 01</span></div>
+      <div class="brand"><span class="brand-icon" data-brand-icon="codebridge" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7.2 4.5 2.8 9v6l4.4 4.5h4.1v-3H8.5l-2.7-2.8v-3.4l2.7-2.8h2.8v-3H7.2Zm9.6 0h-4.1v3h2.8l2.7 2.8v3.4l-2.7 2.8h-2.8v3h4.1l4.4-4.5V9l-4.4-4.5Z" fill="currentColor"/><path d="M9 10.5h6v3H9z" fill="currentColor"/></svg></span><strong>CodeBridge</strong></div>
       <div class="inbox-head"><h2>Agents</h2><div class="inbox-actions"><button class="sync-button" id="session-view-toggle" title="显示已归档 Session" type="button">已归档</button><button class="sync-button" id="sync-sessions" title="从 Agent 导入已有会话" type="button">导入历史</button></div></div>
       <div class="work-list" id="work-list"><div class="empty">正在读取 Agent 会话…</div></div>
       <div class="inbox-head"><h2>Flows</h2></div>
@@ -228,26 +266,28 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     <main class="main">
       <div class="workspace">
         <header class="workspace-top">
-          <div><div class="eyebrow">CodeBridge Workbench</div><h1 id="title">选择一个 Agent 开始</h1><p class="subline" id="subtitle" hidden></p></div>
-          <div class="session-actions" id="session-actions" hidden><button class="session-action" id="session-resume" type="button">继续</button><button class="session-action" id="session-inspector-toggle" hidden type="button" aria-expanded="false">运行详情</button><details class="session-menu" id="session-menu" hidden><summary aria-label="运行操作" title="运行操作">···</summary><div class="session-menu-panel"><button class="session-menu-action" id="session-fork" hidden type="button">创建分支</button><button class="session-menu-action" id="run-again" hidden type="button">再次运行</button></div></details><span class="status" id="status" hidden>idle</span></div>
+          <div><h1 id="title">选择 Agent 新建 Session</h1><p class="subline" id="subtitle" hidden></p></div>
+          <div class="session-actions" id="session-actions" hidden><button class="session-action" id="session-resume" type="button">继续</button><button class="session-action" id="session-inspector-toggle" hidden type="button" aria-expanded="false">运行详情</button><details class="session-menu" id="session-menu" hidden><summary aria-label="运行操作" title="运行操作">···</summary><div class="session-menu-panel"><button class="session-menu-action" id="session-fork" hidden type="button">创建分支</button><button class="session-menu-action" id="run-again" hidden type="button">再次运行</button></div></details></div>
         </header>
         <div class="grid" id="session-grid">
            <section class="conversation-column" id="conversation-column">
             <section class="directory-panel" id="directory-panel" hidden>
-              <div class="directory-head"><strong>Session 目录</strong><span class="directory-note">下次运行时生效</span></div>
+              <div class="directory-head"><strong>Session 目录</strong><span class="directory-note">从下一条消息开始使用，无需重启</span></div>
               <div class="directory-list" id="directory-list"><div class="empty">当前没有附加目录。</div></div>
-              <div class="directory-add"><input id="additional-directory" aria-label="附加目录" placeholder="输入要加入当前 Session 的目录路径" autocomplete="off" /><button class="secondary" id="add-directory" type="button">添加</button></div>
+              <div class="directory-add"><button class="secondary" id="pick-directory" type="button">选择目录</button></div>
               <div class="error" id="directory-error"></div>
             </section>
-            <div class="timeline" id="timeline"><div class="timeline-empty">选择左侧 Agent 创建 Session</div></div><div class="error" id="workbench-error"></div>
+            <div class="timeline" id="timeline" aria-live="polite"><div class="timeline-empty">选择左侧 Agent 创建 Session</div></div><div class="error" id="workbench-error"></div>
             <form class="chat-composer form-grid" id="reply-form" hidden>
               <div class="composer-context">
-                <select class="context-control" id="reply-workflow" aria-label="Workflow"${workflows.length ? "" : " hidden"}>${workflowOptions}</select><button class="context-chip" id="session-directories" type="button"><span id="reply-workspace-chip">工作空间 · 自动发现</span></button><select class="context-control" id="reply-model" aria-label="模型"${models.length ? "" : " hidden"}>${modelOptions}</select>
+                <select class="context-control" id="reply-workflow" aria-label="Workflow"${workflows.length ? "" : " hidden"}>${workflowOptions}</select><button class="context-chip" id="session-directories" type="button"><span id="reply-workspace-chip">工作空间 · 自动发现</span></button><input class="context-control" id="reply-model" aria-label="模型" list="model-options" placeholder="模型 · Agent 默认" autocomplete="off" hidden /><datalist id="model-options"></datalist>
               </div>
-               <div class="input-shell">
+               <section class="composer-popover" id="command-menu" hidden aria-label="Agent 命令"><div class="popover-list" id="command-list"></div><p class="popover-note">Skill 由当前 Agent 提供；MCP 工具由 Agent 自动选择。</p></section>
+               <section class="composer-popover" id="mention-menu" hidden aria-label="添加上下文"><div class="popover-list"><button class="popover-item" data-context-action="attach" type="button"><strong>文件或图片</strong><small>选择文件，也可直接粘贴或拖入截图</small></button><button class="popover-item" data-context-action="directory" type="button"><strong>目录</strong><small>授权当前 Session 访问其他目录</small></button></div></section>
+               <div class="input-shell" id="composer-dropzone">
                  <div class="composer-tools"><button class="tool-button" id="reply-attach-button" type="button" aria-label="添加文件">＋</button></div>
                  <textarea class="message-input" id="reply" placeholder="输入任务…"></textarea>
-                 <div class="input-actions"><button class="tool-button" id="reply-mention-button" type="button" aria-label="引用上下文">@</button><button class="tool-button" id="reply-command-button" type="button" aria-label="插入命令">/</button><button class="send-button" type="submit" aria-label="发送">↑</button></div>
+                 <div class="input-actions"><button class="tool-button" id="reply-mention-button" type="button" aria-label="添加上下文">@</button><button class="tool-button" id="reply-command-button" type="button" aria-label="Agent 命令">/</button><button class="send-button" type="submit" aria-label="发送">↑</button></div>
                </div>
                <input id="reply-attachment-picker" type="file" multiple hidden />
                <div class="attachment-list" id="reply-attachment-list"></div>
@@ -278,34 +318,101 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       <footer class="dialog-actions"><button class="dialog-button" type="submit" value="cancel">取消</button><button class="dialog-button primary" id="session-action-submit" type="submit" value="confirm"></button></footer>
     </form>
   </dialog>
+  <dialog class="session-action-dialog" id="flow-review-dialog" aria-labelledby="flow-review-title">
+    <form class="session-action-form" id="flow-review-form" method="dialog">
+      <header class="session-action-dialog-head"><div><p class="dialog-eyebrow">Flow</p><h2 id="flow-review-title">审核 Flow</h2></div><button class="dialog-close" type="submit" value="cancel" aria-label="关闭">×</button></header>
+      <p class="dialog-description">发布会固定当前定义版本；拒绝会结束这个 Candidate。</p>
+      <label class="dialog-field"><span>Git revision</span><input id="flow-review-revision" autocomplete="off" placeholder="发布时必填" /></label>
+      <div class="error" id="flow-review-error"></div>
+      <footer class="dialog-actions"><button class="dialog-button" type="submit" value="cancel">取消</button><button class="dialog-button danger" id="flow-review-reject" type="button">拒绝</button><button class="dialog-button primary" id="flow-review-approve" type="button">发布</button></footer>
+    </form>
+  </dialog>
   <script>
     const TOKEN = __TOKEN__;
     const agentIcons = {${agentIconSource}};
-    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, showArchived: false, collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
+    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, attachments: [], commands: [], resourceKey: null, showArchived: false, messageNodes: new Map(), toolNodes: new Map(), planNodes: new Map(), approvalNodes: new Map(), failedRuns: new Set(), collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
       const response = await fetch(url, { ...init, headers: { authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json', ...(init.headers || {}) } });
       if (!response.ok) throw new Error((await response.text()) || ('HTTP ' + response.status));
       return response.status === 204 ? null : response.json();
     };
-    const agentModels = ${JSON.stringify({ "": models, ...Object.fromEntries(agentProfiles.map((agent) => [agent.id, agent.models ?? []])) })};
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
-    const label = (value) => ({ WORK_ITEM_CREATED:'创建', MESSAGE_RECEIVED:'消息', RUN_CREATED:'运行排队', RUN_STARTED:'运行开始', STEP_STARTED:'步骤开始', STEP_SKIPPED:'步骤跳过', AGENT_EVENT:'Agent 事件', FLOW_PROPOSED:'流程建议', FLOW_SAVED_AS_CANDIDATE:'流程已保存', STEP_SUCCEEDED:'步骤完成', RUN_SUCCEEDED:'运行成功', RUN_FAILED:'运行失败', PROJECT_CANDIDATE_FOUND:'发现资源', APPROVAL_REQUESTED:'需要确认', APPROVAL_GRANTED:'已确认', APPROVAL_REJECTED:'已拒绝', BRANCH_SELECTED:'分支选择', WORK_ITEM_COMPLETED:'工作完成' }[value] || value);
-    const modeLabel = (value) => ({ auto:'Agent 判断中', investigation:'调查', change:'修改', review:'Review', release:'发布', observe:'观察' }[value] || value || '待判断');
-    const insertToken = (id, token) => { const input = $(id); const start = input.selectionStart ?? input.value.length; const end = input.selectionEnd ?? start; input.value = input.value.slice(0, start) + token + input.value.slice(end); input.focus(); input.selectionStart = input.selectionEnd = start + token.length; };
-    function renderPendingAttachments(inputId, listId) { const files = [...($(inputId).files || [])]; $(listId).innerHTML = files.map((file) => '<span class="attachment-chip">' + esc(file.name) + ' · ' + esc(file.type || 'file') + '</span>').join(''); }
-    async function encodePendingAttachments(inputId) {
-      const files = [...($(inputId).files || [])];
-      return Promise.all(files.map((file) => new Promise((resolve, reject) => {
+    function resetConversationPresentation(emptyText) {
+      state.messageNodes.clear(); state.toolNodes.clear(); state.planNodes.clear(); state.approvalNodes.clear(); state.failedRuns.clear();
+      $('timeline').innerHTML = '<div class="timeline-empty">' + esc(emptyText) + '</div>';
+    }
+    function renderPendingAttachments() { $('reply-attachment-list').innerHTML = state.attachments.map((file, index) => '<span class="attachment-chip">' + esc(file.name) + '<button class="attachment-remove" type="button" data-attachment-index="' + index + '" aria-label="移除 ' + esc(file.name) + '">×</button></span>').join(''); }
+    function addAttachmentFiles(files) { for (const file of [...files]) { if (!state.attachments.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) state.attachments.push(file); } renderPendingAttachments(); }
+    async function encodePendingAttachments() {
+      return Promise.all(state.attachments.map((file) => new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onerror = () => reject(new Error('读取附件失败：' + file.name));
         reader.onload = () => { const dataUrl = String(reader.result || ''); resolve({ name: file.name, mime_type: file.type || 'application/octet-stream', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1) }); };
         reader.readAsDataURL(file);
       })));
     }
+    function closeComposerMenus() { $('command-menu').hidden = true; $('mention-menu').hidden = true; }
+    function renderCommandMenu(query = '') {
+      const normalized = query.toLowerCase();
+      const commands = state.commands.filter((command) => !normalized || command.name.toLowerCase().includes(normalized) || command.description.toLowerCase().includes(normalized));
+      $('command-list').innerHTML = commands.length
+        ? commands.map((command) => '<button class="popover-item" data-command="' + esc(command.name) + '" type="button"><strong>/' + esc(command.name) + '</strong><small>' + esc(command.description) + (command.input?.hint ? ' · ' + esc(command.input.hint) : '') + '</small></button>').join('')
+        : '<div class="empty">当前 Agent 尚未提供可用命令。</div>';
+      document.querySelectorAll('[data-command]').forEach((button) => button.addEventListener('click', () => insertCommand(button.dataset.command || '')));
+    }
+    function insertCommand(command) {
+      if (!command) return;
+      const input = $('reply');
+      const cursor = input.selectionStart ?? input.value.length;
+      const before = input.value.slice(0, cursor);
+      const match = before.match(/(?:^|\\s)\\/[^\\s]*$/);
+      const start = match ? cursor - match[0].trimStart().length : cursor;
+      input.value = input.value.slice(0, start) + '/' + command + ' ' + input.value.slice(cursor);
+      input.selectionStart = input.selectionEnd = start + command.length + 2;
+      closeComposerMenus();
+      input.focus();
+    }
+    function applyModels(options, selectedModel) {
+      const model = options.find((option) => option.category === 'model' || option.id === 'model');
+      const values = model?.values || [];
+      $('model-options').innerHTML = values.map((value) => '<option value="' + esc(value.value) + '" label="' + esc(value.name || value.value) + '"></option>').join('');
+      $('reply-model').hidden = values.length === 0;
+      $('reply-model').value = selectedModel || '';
+    }
+    async function loadSessionResources(session) {
+      const key = session.agent_id + ':' + (session.cwd || '');
+      if (state.resourceKey === key) { $('reply-model').value = session.model || ''; return; }
+      const [config, commands] = await Promise.all([
+        api('/v1/sessions/' + encodeURIComponent(session.session_id) + '/config-options').catch(() => ({ options: [] })),
+        api('/v1/sessions/' + encodeURIComponent(session.session_id) + '/commands').catch(() => ({ commands: [] })),
+      ]);
+      applyModels(config.options || [], session.model);
+      state.commands = commands.commands || [];
+      state.resourceKey = key;
+      renderCommandMenu();
+    }
     function applyFlows(flows) { const options = '<option value="">Workflow · 自动发现</option>' + flows.map((flow) => '<option value="' + esc(flow.flow_id) + '">' + esc(flow.name || flow.flow_id) + ' · ' + esc(flow.flow_id) + '</option>').join(''); $('reply-workflow').innerHTML = options; $('reply-workflow').hidden = flows.length === 0; }
     async function loadFlows() { try { const result = await api('/v1/flows'); const flows = result.flows || []; applyFlows(flows); $('flow-list').innerHTML = flows.length ? flows.map((flow) => '<div class="flow-row-wrap"><button class="work-row flow-row" data-flow="' + esc(flow.flow_id) + '"><strong>' + esc(flow.name || flow.flow_id) + '</strong><small>' + esc(flow.status) + ' · ' + esc(flow.kind) + '</small></button>' + (flow.status === 'candidate' ? '<button class="flow-review" data-review-flow="' + esc(flow.flow_id) + '" type="button">审核</button>' : '') + '</div>').join('') : '<div class="empty">暂无 Flow</div>'; document.querySelectorAll('.flow-row').forEach((button) => button.addEventListener('click', () => { $('reply-workflow').value = button.dataset.flow; })); document.querySelectorAll('.flow-review').forEach((button) => button.addEventListener('click', () => reviewFlow(button.dataset.reviewFlow).catch((error) => { $('reply-error').textContent = error.message; }))); } catch (error) { $('flow-list').innerHTML = '<div class="empty">无法读取 Flow：' + esc(error.message) + '</div>'; } }
-    async function reviewFlow(flowId) { const decision = window.confirm('发布这个 Workflow Candidate？\\n取消将保留 Candidate 不变。') ? 'approve' : 'reject'; const gitRevision = decision === 'approve' ? window.prompt('输入已审核的 Git revision') : null; if (decision === 'approve' && !gitRevision) return; await api('/v1/flows/' + encodeURIComponent(flowId) + '/review', { method:'POST', body: JSON.stringify({ decision, ...(gitRevision ? { git_revision: gitRevision } : {}) }) }); await loadFlows(); }
+    async function reviewFlow(flowId) {
+      const dialog = $('flow-review-dialog');
+      const revision = $('flow-review-revision');
+      $('flow-review-error').textContent = '';
+      revision.value = '';
+      dialog.showModal();
+      const result = await new Promise((resolve) => {
+        const approve = () => { if (!revision.value.trim()) { $('flow-review-error').textContent = '请输入已审核的 Git revision。'; revision.focus(); return; } cleanup(); dialog.close(); resolve({ decision:'approve', git_revision:revision.value.trim() }); };
+        const reject = () => { cleanup(); dialog.close(); resolve({ decision:'reject' }); };
+        const close = () => { cleanup(); resolve(null); };
+        const cleanup = () => { $('flow-review-approve').removeEventListener('click', approve); $('flow-review-reject').removeEventListener('click', reject); dialog.removeEventListener('close', close); };
+        $('flow-review-approve').addEventListener('click', approve);
+        $('flow-review-reject').addEventListener('click', reject);
+        dialog.addEventListener('close', close, { once:true });
+      });
+      if (!result) return;
+      await api('/v1/flows/' + encodeURIComponent(flowId) + '/review', { method:'POST', body: JSON.stringify(result) });
+      await loadFlows();
+    }
     async function syncSessions() {
       const button = $('sync-sessions');
       button.disabled = true;
@@ -341,7 +448,8 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
             const archiveLabel = session.archived_at ? '取消归档' : '归档';
             return '<div class="session-row-wrap"><button class="work-row ' + (state.selected === session.session_id ? 'active' : '') + '" data-id="' + esc(session.session_id) + '" type="button"><strong>' + esc(title) + '</strong></button><details class="session-row-menu"><summary aria-label="操作 ' + esc(title) + '" title="Session 操作">···</summary><div class="session-row-menu-panel">' + pinAction + '<button class="session-row-action" data-session-action="rename" data-session-id="' + esc(session.session_id) + '" data-session-title="' + esc(title) + '" type="button">重命名</button><button class="session-row-action" data-session-action="archive" data-session-id="' + esc(session.session_id) + '" data-session-archived="' + String(Boolean(session.archived_at)) + '" type="button">' + archiveLabel + '</button><button class="session-row-action danger" data-session-action="delete" data-session-id="' + esc(session.session_id) + '" type="button">删除</button></div></details></div>';
           }).join('');
-          const status = agentStatuses[agentId] ? '<span class="agent-status">' + esc(agentStatuses[agentId]) + '</span>' : '';
+          const statusLabel = ({ needs_setup:'需配置', unavailable:'不可用' })[agentStatuses[agentId]];
+          const status = statusLabel ? '<span class="agent-status">' + statusLabel + '</span>' : '';
           const icon = agentIcons[agentId] || '<span class="agent-icon-fallback" data-agent-icon="' + esc(agentId) + '">' + esc((agentLabels[agentId] || agentId).slice(0, 1).toUpperCase()) + '</span>';
           return '<section class="agent-group"><div class="agent-group-head"><button class="agent-toggle" data-agent-toggle="' + esc(agentId) + '" aria-expanded="' + String(!collapsed) + '" aria-controls="' + sessionsId + '" type="button"><span class="agent-chevron ' + (collapsed ? '' : 'expanded') + '">›</span><span class="agent-icon" aria-hidden="true">' + icon + '</span><strong>' + esc(agentLabels[agentId] || agentId) + '</strong>' + status + '<span class="agent-count">' + sessionsForAgent.length + '</span></button>' + newButton + '</div><div class="agent-sessions" id="' + sessionsId + '"' + (collapsed ? ' hidden' : '') + '>' + (sessionRows || '<div class="empty">还没有会话</div>') + '</div></section>';
         }).join('');
@@ -429,11 +537,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       await selectSession(session.session_id);
     }
     function resetWorkbench() {
-      state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; clearInterval(state.timer);
-      $('title').textContent = '选择一个 Agent 开始'; $('subtitle').textContent = ''; $('subtitle').hidden = true; $('session-actions').hidden = true; $('session-menu').open = false; $('session-menu').hidden = true; $('session-fork').hidden = true; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('conversation-column').classList.remove('empty-session'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('run-again').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">没有待审核的目录变化。</div>'; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('reply-attachment-picker').value = ''; renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'); $('timeline').innerHTML = '<div class="timeline-empty">选择左侧 Agent 创建 Session</div>'; $('reply-form').hidden = true; $('reply-model').value = ''; $('workbench-error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; loadSessions();
+      state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.resourceKey = null; clearInterval(state.timer);
+      $('title').textContent = '选择 Agent 新建 Session'; $('subtitle').textContent = ''; $('subtitle').hidden = true; $('session-actions').hidden = true; $('session-menu').open = false; $('session-menu').hidden = true; $('session-fork').hidden = true; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('conversation-column').classList.remove('empty-session'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('run-again').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">没有待审核的目录变化。</div>'; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; state.attachments = []; state.commands = []; $('reply-attachment-picker').value = ''; renderPendingAttachments(); closeComposerMenus(); resetConversationPresentation('选择左侧 Agent 创建 Session'); $('reply-form').hidden = true; $('reply-model').value = ''; $('reply-model').hidden = true; $('workbench-error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; loadSessions();
     }
     async function selectSession(id) {
-      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('session-menu').open = false; $('session-menu').hidden = true; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('conversation-column').classList.add('empty-session'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('session-fork').hidden = true; $('run-again').hidden = true; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('timeline').innerHTML = '<div class="timeline-empty">暂无消息</div>'; $('reply-form').hidden = false; $('session-actions').hidden = false; $('workbench-error').textContent = '';
+      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.resourceKey = null; state.attachments = []; state.commands = []; renderPendingAttachments(); closeComposerMenus(); $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('session-menu').open = false; $('session-menu').hidden = true; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('conversation-column').classList.add('empty-session'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('session-fork').hidden = true; $('run-again').hidden = true; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; resetConversationPresentation('暂无消息'); $('reply-form').hidden = false; $('session-actions').hidden = false; $('workbench-error').textContent = '';
       await refreshSession(true); void startEventStream(); loadSessions();
       void loadDrifts();
       clearInterval(state.timer); state.timer = setInterval(() => { void refreshSession(); }, 1200);
@@ -445,11 +553,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         state.session = session;
         const agent = session.agent_id || '自动选择';
         const scope = session.cwd || '';
-        $('title').textContent = session.title || 'Session'; $('subtitle').textContent = agent + ' · ' + (session.status || 'idle'); $('subtitle').hidden = false; $('status').textContent = session.status || 'idle'; $('status').className = 'status ' + (session.status === 'waiting' ? 'waiting' : '');
+        $('title').textContent = session.title || 'Session'; $('subtitle').textContent = ''; $('subtitle').hidden = true;
         $('session-resume').hidden = session.status !== 'closed';
         $('session-fork').hidden = !session.provider_session_id;
         $('session-menu').hidden = !session.provider_session_id && state.latestRunId === null;
-        $('reply-workflow').value = session.flow_id || ''; applyModels(agent); $('reply-model').value = session.model || '';
+        $('reply-workflow').value = session.flow_id || ''; await loadSessionResources(session);
          $('reply-workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
          renderDirectories(session);
          await refreshInspector();
@@ -470,17 +578,14 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         removeDirectory(button.dataset.directory || '').catch((error) => { $('directory-error').textContent = error.message; });
       }));
     }
-    async function addDirectory() {
+    async function pickDirectory() {
       if (!state.selected) return;
-      const input = $('additional-directory');
-      const directory = input.value.trim();
       $('directory-error').textContent = '';
-      if (!directory) { input.focus(); return; }
-      const button = $('add-directory');
+      const button = $('pick-directory');
       button.disabled = true;
       try {
-        await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/directories', { method:'POST', body: JSON.stringify({ path: directory }) });
-        input.value = '';
+        const result = await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/directories/pick', { method:'POST', body: '{}' });
+        if (result.cancelled) return;
         await refreshSession();
       } catch (error) { $('directory-error').textContent = error.message; }
       finally { button.disabled = false; }
@@ -532,7 +637,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       $('approval-card').hidden = approvals.length === 0;
       $('approval-list').innerHTML = approvals.length ? approvals.map((approval) => '<div class="inspector-row"><strong>' + esc(approval.capability_id) + ' · ' + esc(approval.status) + '</strong><small>' + esc(approval.environment) + ' · ' + esc(approval.target_resource) + '</small><small>' + esc(approval.input_hash) + '</small></div>').join('') : '<div class="empty">当前 Run 没有审批记录。</div>';
       const pending = [...approvals].reverse().find((approval) => approval.status === 'requested');
-      if (pending) { state.approval = { approvalId: pending.id, runId: run.run_id }; $('approve-run').hidden = false; $('reject-run').hidden = false; }
+      if (pending) { state.approval = { approvalId: pending.id, runId: run.run_id }; }
       else if (state.approval?.runId === run.run_id) { state.approval = null; $('approve-run').hidden = true; $('reject-run').hidden = true; }
       const artifacts = artifactResult.artifacts || [];
       $('artifact-card').hidden = artifacts.length === 0;
@@ -595,11 +700,148 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         }
       }
     }
+    function ensureConversationContent() {
+      const target = $('timeline');
+      target.querySelector('.timeline-empty')?.remove();
+      $('conversation-column').classList.remove('empty-session');
+      return target;
+    }
+    function appendConversation(html) {
+      const target = ensureConversationContent();
+      target.insertAdjacentHTML('beforeend', html);
+      return target.lastElementChild;
+    }
+    function renderUserMessage(event) {
+      const message = typeof event.payload?.message === 'string' ? event.payload.message : '';
+      if (!message) return false;
+      const attachmentCount = Array.isArray(event.payload?.attachment_ids) ? event.payload.attachment_ids.length : 0;
+      appendConversation('<article class="conversation-turn user" title="' + esc(new Date(event.occurred_at).toLocaleString()) + '"><div class="message-surface">' + esc(message) + '</div>' + (attachmentCount ? '<div class="message-meta">' + attachmentCount + ' 个附件</div>' : '') + '</article>');
+      return true;
+    }
+    function renderAgentText(event, agentEvent) {
+      if (!agentEvent.text) return false;
+      const phase = agentEvent.phase === 'commentary' ? 'commentary' : 'answer';
+      const key = phase + ':' + (agentEvent.messageId || event.run_id || event.sequence);
+      let node = state.messageNodes.get(key);
+      if (!node) {
+        node = appendConversation(phase === 'commentary'
+          ? '<article class="progress-message"><div class="message-surface"></div></article>'
+          : '<article class="conversation-turn agent"><div class="turn-label">Agent</div><div class="message-surface"></div></article>');
+        state.messageNodes.set(key, node);
+      }
+      node.querySelector('.message-surface').textContent += agentEvent.text;
+      return true;
+    }
+    function formatToolValue(value) {
+      if (value === undefined || value === null) return '';
+      if (typeof value === 'string') return value;
+      try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+    }
+    function setToolDetail(node, kind, labelText, value) {
+      const text = formatToolValue(value);
+      if (!text) return;
+      const detail = node.querySelector('.tool-detail');
+      let section = detail.querySelector('[data-tool-detail="' + kind + '"]');
+      if (!section) {
+        detail.insertAdjacentHTML('beforeend', '<section class="tool-detail-section" data-tool-detail="' + kind + '"><span>' + esc(labelText) + '</span><pre></pre></section>');
+        section = detail.lastElementChild;
+      }
+      section.querySelector('pre').textContent = text;
+      detail.hidden = false;
+    }
+    function toolStatusLabel(value, fallback) {
+      return ({ in_progress:'运行中', running:'运行中', completed:'完成', success:'完成', failed:'失败', error:'失败' }[value] || fallback);
+    }
+    function upsertToolCall(agentEvent) {
+      const key = agentEvent.toolCallId || agentEvent.name || ('tool-' + state.toolNodes.size);
+      let node = state.toolNodes.get(key);
+      if (!node) {
+        node = appendConversation('<details class="tool-call" data-tool-call="' + esc(key) + '"><summary><span class="tool-status-icon">…</span><strong>' + esc(agentEvent.name || '工具') + '</strong><span class="tool-status-label">运行中</span></summary><div class="tool-detail" hidden></div></details>');
+        state.toolNodes.set(key, node);
+      }
+      if (agentEvent.name) node.querySelector('strong').textContent = agentEvent.name;
+      if (agentEvent.type === 'tool_start') setToolDetail(node, 'input', '输入', agentEvent.input || agentEvent.content);
+      if (agentEvent.type === 'tool_update') setToolDetail(node, 'output', '进度', agentEvent.output || agentEvent.content);
+      if (agentEvent.type === 'tool_end') setToolDetail(node, 'output', '结果', agentEvent.output || agentEvent.content);
+      const failed = agentEvent.status === 'failed' || agentEvent.status === 'error';
+      if (agentEvent.type === 'tool_end') {
+        node.classList.toggle('failed', failed);
+        node.querySelector('.tool-status-icon').textContent = failed ? '!' : '✓';
+        node.querySelector('.tool-status-label').textContent = failed ? '失败' : toolStatusLabel(agentEvent.status, '完成');
+      } else {
+        node.querySelector('.tool-status-label').textContent = toolStatusLabel(agentEvent.status, '运行中');
+      }
+      return true;
+    }
+    function renderPlan(event, agentEvent) {
+      const entries = agentEvent.entries || agentEvent.plan?.entries;
+      if (!Array.isArray(entries) || !entries.length) return false;
+      const key = event.run_id || 'session';
+      let node = state.planNodes.get(key);
+      if (!node) {
+        node = appendConversation('<section class="plan-card"><strong>计划</strong><ul class="plan-list"></ul></section>');
+        state.planNodes.set(key, node);
+      }
+      node.querySelector('.plan-list').innerHTML = entries.map((entry) => '<li class="' + esc(entry.status || '') + '">' + esc(entry.content || '') + '</li>').join('');
+      return true;
+    }
+    function friendlyAgentError(message) {
+      const text = String(message || '').trim();
+      if (/No API key found/i.test(text)) return '未找到可用的模型凭据。请先完成当前 Agent 的登录或 API Key 配置后重试。';
+      if (/exited with code/i.test(text)) return 'Agent 运行失败。请检查当前 Agent 配置后重试。';
+      return text.split('\\n')[0] || 'Agent 运行失败。请打开运行详情查看原因。';
+    }
+    function renderRunNotice(title, message, isError = false) {
+      appendConversation('<section class="run-notice' + (isError ? ' error-notice' : '') + '"><strong>' + esc(title) + '</strong><p>' + esc(message) + '</p></section>');
+      return true;
+    }
+    function renderAgentEvent(event) {
+      const agentEvent = event.payload?.event;
+      if (!agentEvent || typeof agentEvent !== 'object') return false;
+      if (agentEvent.type === 'text_delta') return renderAgentText(event, agentEvent);
+      if (agentEvent.type === 'tool_start' || agentEvent.type === 'tool_update' || agentEvent.type === 'tool_end') return upsertToolCall(agentEvent);
+      if (agentEvent.type === 'plan' || agentEvent.type === 'plan_update') return renderPlan(event, agentEvent);
+      if (agentEvent.type === 'error') {
+        if (event.run_id) state.failedRuns.add(event.run_id);
+        return renderRunNotice('运行失败', friendlyAgentError(agentEvent.message), true);
+      }
+      if (agentEvent.type === 'permission_request') return renderRunNotice('等待权限确认', agentEvent.title || '当前操作需要你的确认。');
+      if (agentEvent.type === 'done' && agentEvent.exitCode !== 0 && event.run_id && !state.failedRuns.has(event.run_id)) {
+        state.failedRuns.add(event.run_id);
+        return renderRunNotice('运行失败', 'Agent 未能完成本次任务，请检查配置后重试。', true);
+      }
+      return false;
+    }
+    function renderApprovalRequest(event) {
+      const approvalId = event.payload?.approval_id;
+      if (!approvalId || !event.run_id) return false;
+      const resource = event.payload?.target_resource || event.target || '当前操作';
+      const environment = event.payload?.environment ? ' · ' + event.payload.environment : '';
+      const node = appendConversation('<section class="approval-request" data-approval-id="' + esc(approvalId) + '"><strong>需要确认</strong><p>Agent 请求操作 ' + esc(resource) + esc(environment) + '。授权仅用于当前步骤。</p><div class="approval-actions"><button class="approval-action" data-approval-decision="reject" type="button">拒绝</button><button class="approval-action allow" data-approval-decision="approve" type="button">允许</button></div></section>');
+      state.approvalNodes.set(approvalId, node);
+      state.approval = { approvalId, runId: event.run_id };
+      return true;
+    }
+    function renderApprovalResolution(event) {
+      const approvalId = event.payload?.approval_id;
+      const node = approvalId ? state.approvalNodes.get(approvalId) : null;
+      if (!node) return false;
+      node.querySelector('strong').textContent = event.type === 'APPROVAL_GRANTED' ? '已允许' : '已拒绝';
+      node.querySelector('.approval-actions')?.remove();
+      return true;
+    }
     function renderEvents(events) {
       const target = $('timeline');
-      if (target.querySelector('.timeline-empty')) target.innerHTML = '';
-      if (events.length) $('conversation-column').classList.remove('empty-session');
-      target.insertAdjacentHTML('beforeend', events.map((event) => '<article class="event"><time>' + esc(new Date(event.occurred_at).toLocaleTimeString()) + '</time><div class="event-body"><strong>' + esc(label(event.type)) + '</strong><pre>' + esc(JSON.stringify(event.payload || {}, null, 2)) + '</pre></div></article>').join(''));
+      for (const event of events) {
+        if (event.type === 'MESSAGE_RECEIVED') renderUserMessage(event);
+        else if (event.type === 'AGENT_EVENT') renderAgentEvent(event);
+        else if (event.type === 'APPROVAL_REQUESTED') renderApprovalRequest(event);
+        else if (event.type === 'APPROVAL_GRANTED' || event.type === 'APPROVAL_REJECTED') renderApprovalResolution(event);
+        else if (event.type === 'RUN_FAILED' && event.run_id && !state.failedRuns.has(event.run_id)) {
+          state.failedRuns.add(event.run_id);
+          renderRunNotice('运行失败', '本次任务未完成。请打开运行详情查看原因，或调整配置后重试。', true);
+        }
+      }
       const proposal = [...events].reverse().find((event) => event.type === 'FLOW_PROPOSED' && event.payload && event.payload.flow && typeof event.payload.flow === 'object' && !Array.isArray(event.payload.flow));
       if (proposal) {
         state.ephemeralFlow = { flow: proposal.payload.flow, definition_revision: typeof proposal.payload.definition_revision === 'string' ? proposal.payload.definition_revision : 'event:' + proposal.event_id };
@@ -611,9 +853,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         $('accept-project').hidden = false;
       }
       const approval = [...events].reverse().find((event) => event.type === 'APPROVAL_REQUESTED' && typeof event.payload?.approval_id === 'string' && event.run_id);
-      if (approval) { state.approval = { approvalId: approval.payload.approval_id, runId: approval.run_id }; $('approve-run').hidden = false; $('reject-run').hidden = false; }
+      if (approval) { state.approval = { approvalId: approval.payload.approval_id, runId: approval.run_id }; }
       const resolvedApproval = [...events].reverse().find((event) => event.type === 'APPROVAL_GRANTED' || event.type === 'APPROVAL_REJECTED');
       if (resolvedApproval) { state.approval = null; $('approve-run').hidden = true; $('reject-run').hidden = true; }
+      const commandUpdate = [...events].reverse().find((event) => event.type === 'AGENT_EVENT' && event.payload?.event?.type === 'available_commands_update');
+      if (commandUpdate) { state.commands = commandUpdate.payload.event.availableCommands || []; renderCommandMenu(); }
       if (events.some((event) => event.run_id)) void refreshInspector(true).catch((error) => { $('reply-error').textContent = error.message; });
       target.scrollTop = target.scrollHeight;
     }
@@ -631,6 +875,12 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       finally { button.disabled = false; }
     });
     async function resolveApproval(decision) { if (!state.approval) return; const endpoint = decision === 'approve' ? 'approve' : 'reject'; await api('/v1/runs/' + encodeURIComponent(state.approval.runId) + '/' + endpoint, { method:'POST', body: JSON.stringify({ approval_id: state.approval.approvalId }) }); state.approval = null; $('approve-run').hidden = true; $('reject-run').hidden = true; await refreshSession(); }
+    $('timeline').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-approval-decision]');
+      if (!button || !state.approval) return;
+      button.closest('.approval-actions')?.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+      resolveApproval(button.dataset.approvalDecision).catch((error) => { $('reply-error').textContent = error.message; button.closest('.approval-actions')?.querySelectorAll('button').forEach((item) => { item.disabled = false; }); });
+    });
     $('approve-run').addEventListener('click', () => resolveApproval('approve').catch((error) => { $('reply-error').textContent = error.message; }));
     $('reject-run').addEventListener('click', () => resolveApproval('reject').catch((error) => { $('reply-error').textContent = error.message; }));
     $('accept-project').addEventListener('click', async () => {
@@ -664,19 +914,26 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     });
     $('session-directories').addEventListener('click', () => {
       $('directory-panel').hidden = !$('directory-panel').hidden;
-      if (!$('directory-panel').hidden) $('additional-directory').focus();
     });
-    $('add-directory').addEventListener('click', () => addDirectory());
-    $('additional-directory').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); void addDirectory(); } });
-    function applyModels(agentId) { const models = agentModels[agentId] || []; const options = '<option value="">模型 · Agent 默认</option>' + models.map((model) => '<option value="' + esc(model) + '">' + esc(model) + '</option>').join(''); $('reply-model').innerHTML = options; $('reply-model').hidden = models.length === 0; }
+    $('pick-directory').addEventListener('click', () => pickDirectory());
     async function startRun() { if (!state.selected) return; await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/runs', { method:'POST', body: JSON.stringify({ flow_id: $('reply-workflow').value || null, model: $('reply-model').value || null, mode: 'auto' }) }); await refreshSession(); }
-    $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { const attachments = await encodePendingAttachments('reply-attachment-picker'); await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value, flow_id: $('reply-workflow').value || null, model: $('reply-model').value || null, ...(attachments.length ? { attachments } : {}) }) }); $('reply').value = ''; $('reply-attachment-picker').value = ''; renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'); await startRun(); state.eventAbort?.abort(); void startEventStream(); } catch (error) { $('reply-error').textContent = error.message; } });
+    $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { const attachments = await encodePendingAttachments(); await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value, flow_id: $('reply-workflow').value || null, model: $('reply-model').value || null, ...(attachments.length ? { attachments } : {}) }) }); $('reply').value = ''; state.attachments = []; $('reply-attachment-picker').value = ''; renderPendingAttachments(); closeComposerMenus(); await startRun(); state.eventAbort?.abort(); void startEventStream(); } catch (error) { $('reply-error').textContent = error.message; } });
     $('run-again').addEventListener('click', () => startRun().catch((error) => { $('reply-error').textContent = error.message; }));
     $('session-view-toggle').addEventListener('click', () => { state.showArchived = !state.showArchived; $('session-view-toggle').textContent = state.showArchived ? '当前' : '已归档'; $('session-view-toggle').title = state.showArchived ? '显示当前 Session' : '显示已归档 Session'; resetWorkbench(); });
     $('sync-sessions').addEventListener('click', () => syncSessions().catch((error) => { $('workbench-error').textContent = error.message; }));
-    [['reply-mention-button', 'reply', '@'], ['reply-command-button', 'reply', '/']].forEach(([button, input, token]) => $(button).addEventListener('click', () => insertToken(input, token)));
+    $('reply-command-button').addEventListener('click', () => { const open = $('command-menu').hidden; closeComposerMenus(); if (open) { renderCommandMenu(); $('command-menu').hidden = false; } });
+    $('reply-mention-button').addEventListener('click', () => { const open = $('mention-menu').hidden; closeComposerMenus(); $('mention-menu').hidden = !open; });
+    $('reply').addEventListener('input', () => { const input = $('reply'); const before = input.value.slice(0, input.selectionStart ?? input.value.length); const match = before.match(/(?:^|\\s)\\/([^\\s]*)$/); if (match) { $('mention-menu').hidden = true; renderCommandMenu(match[1] || ''); $('command-menu').hidden = false; } else $('command-menu').hidden = true; });
+    $('reply').addEventListener('keydown', (event) => { if (event.key === 'Escape') closeComposerMenus(); });
+    document.querySelectorAll('[data-context-action]').forEach((button) => button.addEventListener('click', () => { closeComposerMenus(); if (button.dataset.contextAction === 'attach') $('reply-attachment-picker').click(); else if (button.dataset.contextAction === 'directory') { $('directory-panel').hidden = false; void pickDirectory(); } }));
     $('reply-attach-button').addEventListener('click', () => $('reply-attachment-picker').click());
-    $('reply-attachment-picker').addEventListener('change', () => renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'));
+    $('reply-attachment-picker').addEventListener('change', (event) => { addAttachmentFiles(event.target.files || []); event.target.value = ''; });
+    $('reply-attachment-list').addEventListener('click', (event) => { const button = event.target.closest('[data-attachment-index]'); if (!button) return; state.attachments.splice(Number(button.dataset.attachmentIndex), 1); renderPendingAttachments(); });
+    $('reply').addEventListener('paste', (event) => { const files = event.clipboardData.files; if (!files.length) return; event.preventDefault(); addAttachmentFiles(files); });
+    $('composer-dropzone').addEventListener('dragover', (event) => { event.preventDefault(); $('composer-dropzone').classList.add('drag-active'); });
+    $('composer-dropzone').addEventListener('dragleave', () => $('composer-dropzone').classList.remove('drag-active'));
+    $('composer-dropzone').addEventListener('drop', (event) => { event.preventDefault(); $('composer-dropzone').classList.remove('drag-active'); addAttachmentFiles(event.dataTransfer.files); });
+    document.addEventListener('click', (event) => { if (!event.target.closest('.chat-composer')) closeComposerMenus(); });
     loadSessions(); loadFlows();
   </script>
 </body>
