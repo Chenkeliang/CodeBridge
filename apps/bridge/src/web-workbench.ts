@@ -218,6 +218,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
              <section class="inspector-card"><h2>Approval</h2><div class="inspector-list" id="approval-list"><div class="empty">当前 Run 没有审批记录。</div></div></section>
              <section class="inspector-card"><h2>Artifacts</h2><div class="inspector-list" id="artifact-list"><div class="empty">当前 Run 没有产物。</div></div><pre class="artifact-content" id="artifact-content" hidden></pre></section>
              <section class="inspector-card"><h2>Verification</h2><div class="inspector-list" id="verification-list"><div class="empty">当前 Run 没有验证结果。</div></div></section>
+             <section class="inspector-card"><h2>Catalog drift</h2><div class="inspector-list" id="project-drift-list"><div class="empty">没有待审核的目录变化。</div></div></section>
            </aside>
          </div>
       </div>
@@ -260,6 +261,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     async function selectSession(id) {
       state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('run-inspector').hidden = false; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('work-form').hidden = true; $('reply-form').hidden = false; $('session-actions').hidden = false; $('composer-title').textContent = 'Session';
       await refreshSession(true); void startEventStream(); loadSessions();
+      void loadDrifts();
       clearInterval(state.timer); state.timer = setInterval(() => { void refreshSession(); }, 1200);
     }
     async function refreshSession(readEvents = false) {
@@ -359,6 +361,19 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       $('artifact-content').textContent = artifact.content || '';
       $('artifact-content').hidden = false;
     }
+    async function loadDrifts() {
+      try {
+        const result = await api('/v1/projects/drifts');
+        const drifts = result.drifts || [];
+        $('project-drift-list').innerHTML = drifts.length ? drifts.map((drift) => '<div class="inspector-row"><strong>' + esc(drift.project_id) + '</strong>' + (drift.changes || []).map((change) => '<small>' + esc(change.field) + ': ' + esc(JSON.stringify(change.registered)) + ' → ' + esc(JSON.stringify(change.observed)) + '</small>').join('') + '<div class="actions"><button class="inspector-link" type="button" data-drift-action="apply" data-drift-id="' + esc(drift.id) + '">应用</button><button class="inspector-link" type="button" data-drift-action="resolve" data-drift-id="' + esc(drift.id) + '">忽略</button></div></div>').join('') : '<div class="empty">没有待审核的目录变化。</div>';
+        document.querySelectorAll('[data-drift-action]').forEach((button) => button.addEventListener('click', () => resolveDrift(button.dataset.driftId || '', button.dataset.driftAction || '').catch((error) => { $('reply-error').textContent = error.message; })));
+      } catch (error) { $('project-drift-list').innerHTML = '<div class="empty">无法读取目录变化：' + esc(error.message) + '</div>'; }
+    }
+    async function resolveDrift(driftId, action) {
+      if (!driftId || !['apply', 'resolve'].includes(action)) return;
+      await api('/v1/projects/drifts/' + encodeURIComponent(driftId) + '/' + action, { method:'POST', body: '{}' });
+      await loadDrifts();
+    }
     async function startEventStream() {
       if (!state.selected) return;
       const sessionId = state.selected;
@@ -439,8 +454,9 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       $('reply-error').textContent = '';
       try {
         await api('/v1/projects/candidates/' + encodeURIComponent(state.projectCandidateId) + '/accept', { method:'POST', body: '{}' });
-        state.projectCandidateId = null;
-        button.hidden = true;
+         state.projectCandidateId = null;
+         button.hidden = true;
+         await loadDrifts();
       } catch (error) { $('reply-error').textContent = error.message; }
       finally { button.disabled = false; }
     });
@@ -492,7 +508,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       } catch (error) { $('error').textContent = error.message; }
       finally { button.disabled = false; }
     });
-    $('new-work').addEventListener('click', () => { state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('run-inspector').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model').value = ''; $('reply-model').value = ''; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyModels(''); applyView(); loadSessions(); });
+    $('new-work').addEventListener('click', () => { state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('run-inspector').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">没有待审核的目录变化。</div>'; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model').value = ''; $('reply-model').value = ''; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyModels(''); applyView(); loadSessions(); });
     loadSessions(); loadFlows();
   </script>
 </body>

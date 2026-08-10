@@ -51,6 +51,9 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `POST` | `/v1/discovery/tasks` | 创建异步项目或目录发现任务 |
 | `GET` | `/v1/projects/candidates` | 查询待确认的项目候选 |
 | `POST` | `/v1/projects/candidates/{candidate_id}/accept` | 接受候选并登记正式项目 |
+| `GET` | `/v1/projects/drifts` | 查询已登记项目的待审核字段变化 |
+| `POST` | `/v1/projects/drifts/{drift_id}/apply` | 显式应用已审核的目录变化 |
+| `POST` | `/v1/projects/drifts/{drift_id}/resolve` | 忽略本次目录变化但保留审计记录 |
 | `POST` | `/v1/directories/authorize` | 请求 Runner 验证并授权工作目录 |
 | `POST` | `/v1/runs/{run_id}/approve` | 授予当前 Run 的单次审批令牌 |
 | `POST` | `/v1/runs/{run_id}/reject` | 拒绝审批并取消当前 Run |
