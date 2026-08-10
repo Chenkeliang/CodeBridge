@@ -205,6 +205,8 @@ export class TelegramBridge {
       hasActiveRun: () => this.orchestrator.hasActiveRun(chatId, topicId),
       activeRunElapsedMs: () =>
         this.orchestrator.activeRunElapsedMs(chatId, topicId),
+      activeRunStatus: () =>
+        this.orchestrator.activeRunStatus(chatId, topicId),
       steerActiveRun: (prompt) =>
         this.orchestrator.steerActiveForChat(chatId, topicId, prompt),
       resolvePermission: (approve) =>

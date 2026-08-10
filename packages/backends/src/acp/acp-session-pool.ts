@@ -117,6 +117,11 @@ export class AcpSessionPool {
     return this.idle.size;
   }
 
+  /** detached ACP 进程是进程组组长；用于识别其 Codex 子进程是否属于本 Runner。 */
+  ownerProcessGroupId(sessionId: string): number | undefined {
+    return this.idle.get(sessionId)?.resources.child.pid;
+  }
+
   acquire(
     sessionId: string,
     match: {

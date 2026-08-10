@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig, type AgentEvent, type RunRequest } from "@codebridge/core";
+import {
+  defaultConfig,
+  type AgentEvent,
+  type RunContext,
+  type RunRequest,
+} from "@codebridge/core";
 import { RunnerHost } from "./server.js";
 import type { PiSession } from "@codebridge/backends";
 
@@ -12,7 +17,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await new Promise((resolve) => setTimeout(resolve, 20));
   for (const dir of tmpDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 20,
+    });
   }
 });
 
@@ -200,6 +210,103 @@ describe("RunnerHost steering", () => {
 });
 
 describe("RunnerHost session lifecycle", () => {
+  it("stops an ACP run and reports a fatal error when its session lock is lost", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.backends.cursor = {
+      ...config.backends.cursor!,
+      acpCommand: "fcb-missing-acp-adapter-for-test",
+      acpArgs: [],
+    };
+    const host = new RunnerHost({ token: "token", config, dataDir });
+    const executeAcpRun = (
+      host as unknown as {
+        executeAcpRun(
+          runId: string,
+          ctx: RunContext,
+          sessionLockLost: Promise<Error>,
+        ): AsyncGenerator<AgentEvent>;
+      }
+    ).executeAcpRun.bind(host);
+    const ctx: RunContext = {
+      runId: "lock-lost",
+      cwd: dataDir,
+      prompt: "hi",
+      resumeSessionId: "session-1",
+      backendConfig: config.backends.cursor!,
+    };
+
+    const events = await collect(
+      executeAcpRun(
+        "lock-lost",
+        ctx,
+        Promise.resolve(new Error("holder exited")),
+      ),
+    );
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: expect.stringContaining("session 锁异常丢失"),
+      fatal: true,
+    });
+    expect(events.at(-1)).toEqual({ type: "done", exitCode: 1 });
+    host.shutdown();
+  });
+
+  it("refuses to resume a session already running in this Runner", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
+    const active = (host as unknown as {
+      active: Map<string, unknown>;
+    }).active;
+    active.set("existing", {
+      runId: "existing",
+      sessionId: "shared-session",
+      aborted: false,
+      cancel: () => {},
+    });
+    const run = request(dataDir);
+    run.runId = "second";
+    run.resumeSessionId = "shared-session";
+
+    const events = await collect(host.executeRun(run));
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: expect.stringContaining("正在运行"),
+      fatal: true,
+    });
+    expect(events.at(-1)).toEqual({ type: "done", exitCode: 1 });
+    host.shutdown();
+  });
+
+  it("refuses to resume a Codex session owned by desktop or TUI", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      inspectSessionOwners: async () => [37540],
+    });
+    const run = request(dataDir);
+    run.runId = "second";
+    run.sessionKey.backendId = "codex";
+    run.resumeSessionId = "shared-session";
+
+    const events = await collect(host.executeRun(run));
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: expect.stringContaining("桌面端/TUI"),
+      fatal: true,
+    });
+    expect(events.at(-1)).toEqual({ type: "done", exitCode: 1 });
+    host.shutdown();
+  });
+
   it("returns an explicit error for an unknown backend", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);

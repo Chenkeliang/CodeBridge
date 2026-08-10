@@ -25,6 +25,7 @@ import type {
   AcpPermissionPolicy,
   AppConfig,
   BackendConfigOption,
+  LocalMediaPath,
   RunContext,
   RunRequest,
 } from "@codebridge/core";
@@ -35,6 +36,8 @@ import {
   materializeAttachments,
 } from "./materialize-attachments.js";
 import { writeFcbScript } from "./fcb-script.js";
+import { inspectForeignCodexSessionOwners } from "./codex-session-ownership.js";
+import { SessionLeaseStore, type SessionLease } from "./session-lease.js";
 
 export interface RunnerHostOptions {
   token: string;
@@ -45,6 +48,10 @@ export interface RunnerHostOptions {
   piSessionFactory?: (ctx: RunContext) => Promise<PiSession>;
   /** Test/embedding hook for provider-native session fork. */
   piSessionForker?: typeof forkPiSession;
+  inspectSessionOwners?: (
+    sessionId: string,
+    allowedProcessGroups: ReadonlySet<number>,
+  ) => Promise<number[]>;
 }
 
 interface ActiveRun {
@@ -119,6 +126,10 @@ export class RunnerHost {
     postStopMaxMs?: number;
   };
   private readonly fcbBinDir: Promise<string | undefined>;
+  private readonly sessionLeases: SessionLeaseStore;
+  private readonly inspectSessionOwners: NonNullable<
+    RunnerHostOptions["inspectSessionOwners"]
+  >;
   /** 长驻 ACP 会话池：同会话消息复用适配器进程（kill switch: runnerHost.acpSessionPool） */
   private readonly sessionPool: AcpSessionPool;
   /**
@@ -150,6 +161,9 @@ export class RunnerHost {
       idleMs: rh?.acpSessionIdleMs ?? 10 * 60_000,
       maxPooled: rh?.acpSessionPoolMax ?? 4,
     });
+    this.sessionLeases = new SessionLeaseStore(this.dataDir);
+    this.inspectSessionOwners =
+      options.inspectSessionOwners ?? inspectForeignCodexSessionOwners;
     for (const [id, profile] of Object.entries(options.config.backends)) {
       this.registry.register(id, profile);
     }
@@ -445,44 +459,88 @@ export class RunnerHost {
       return;
     }
 
-    const localAttachments = await materializeAttachments(
-      this.dataDir,
-      request.runId,
-      request.attachments,
-    );
+    let sessionLease: SessionLease | null = null;
+    if (request.resumeSessionId) {
+      const sessionId = request.resumeSessionId;
+      if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+        yield {
+          type: "error",
+          message: `ACP session ${sessionId} 正在运行；请等待当前任务结束或先 /stop`,
+          fatal: true,
+        };
+        yield { type: "done", exitCode: 1 };
+        return;
+      }
+      sessionLease = await this.sessionLeases.acquire(sessionId, request.runId);
+      if (!sessionLease) {
+        yield {
+          type: "error",
+          message: `ACP session ${sessionId} 已被另一个 Runner 任务占用`,
+          fatal: true,
+        };
+        yield { type: "done", exitCode: 1 };
+        return;
+      }
+    }
 
-    const ctx: RunContext = {
-      runId: request.runId,
-      cwd: resolvedCwd.cwd,
-      prompt: request.prompt,
-      additionalDirectories: resolvedAdditional.directories,
-      attachments: localAttachments.length ? localAttachments : undefined,
-      resumeSessionId: request.resumeSessionId,
-      backendConfig: profile,
-      model: request.model,
-      effort: request.effort,
-      mode: request.mode,
-      claudePermissionMode: request.claudePermissionMode,
-      acpConfig: request.acpConfig,
-      extraEnv: await this.buildAgentEnv(request),
-    };
-
+    let localAttachments: LocalMediaPath[] = [];
     try {
+      if (backendId === "codex" && request.resumeSessionId) {
+        const ownerGroup = this.sessionPool.ownerProcessGroupId(
+          request.resumeSessionId,
+        );
+        const owners = await this.inspectSessionOwners(
+          request.resumeSessionId,
+          new Set(ownerGroup === undefined ? [] : [ownerGroup]),
+        );
+        if (owners.length > 0) {
+          yield {
+            type: "error",
+            message: `Codex session ${request.resumeSessionId} 正被桌面端/TUI 占用（PID: ${owners.join(", ")}）；请先在原客户端停止该任务`,
+            fatal: true,
+          };
+          yield { type: "done", exitCode: 1 };
+          return;
+        }
+      }
+
+      localAttachments = await materializeAttachments(
+        this.dataDir,
+        request.runId,
+        request.attachments,
+      );
+      const ctx: RunContext = {
+        runId: request.runId,
+        cwd: resolvedCwd.cwd,
+        prompt: request.prompt,
+        additionalDirectories: resolvedAdditional.directories,
+        attachments: localAttachments.length ? localAttachments : undefined,
+        resumeSessionId: request.resumeSessionId,
+        backendConfig: profile,
+        model: request.model,
+        effort: request.effort,
+        mode: request.mode,
+        claudePermissionMode: request.claudePermissionMode,
+        acpConfig: request.acpConfig,
+        extraEnv: await this.buildAgentEnv(request),
+      };
       if (profile.type === "pi-sdk") {
         yield* this.executePiRun(request.runId, ctx);
       } else {
-        yield* this.executeAcpRun(request.runId, ctx);
+        yield* this.executeAcpRun(request.runId, ctx, sessionLease?.lost);
       }
     } finally {
       if (localAttachments.length > 0) {
         await cleanupAttachments(this.dataDir, request.runId);
       }
+      await sessionLease?.release();
     }
   }
 
   private async *executeAcpRun(
     runId: string,
     ctx: RunContext,
+    sessionLockLost?: Promise<Error>,
   ): AsyncGenerator<AgentEvent> {
     const handleRef: Parameters<typeof runAcpSession>[2] = {};
     const activeRun: ActiveRun = {
@@ -498,6 +556,14 @@ export class RunnerHost {
       },
     };
     this.active.set(runId, activeRun);
+    let lockLostError: Error | undefined;
+    let runFinished = false;
+    void sessionLockLost?.then((error) => {
+      if (runFinished) return;
+      lockLostError = error;
+      activeRun.aborted = true;
+      activeRun.cancel();
+    });
 
     // prompt_feishu 权限模式：权限请求经带外队列进 SSE，等 /approve /deny 或超时拒绝
     const oobEvents: AgentEvent[] = [];
@@ -567,12 +633,21 @@ export class RunnerHost {
       };
       exitCode = 1;
     } finally {
+      runFinished = true;
       // run 结束仍挂着的权限请求：全部解除阻塞（按拒绝处理），避免 handler 悬挂
       for (const pending of [...(this.pendingPermissions.get(runId) ?? [])]) {
         pending.resolve(false);
       }
       this.pendingPermissions.delete(runId);
       this.active.delete(runId);
+      if (lockLostError) {
+        yield {
+          type: "error",
+          message: `ACP session 锁异常丢失，任务已立即停止：${lockLostError.message}`,
+          fatal: true,
+        };
+        exitCode = 1;
+      }
       yield { type: "done", exitCode };
     }
   }

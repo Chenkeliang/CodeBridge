@@ -2,6 +2,19 @@ import type { AgentEvent } from "@codebridge/core";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { mapSessionConfigOptions } from "./acp-config-options.js";
 
+function codexMessagePhase(
+  update: SessionUpdate,
+): "commentary" | "final_answer" | undefined {
+  const phase = (
+    update as SessionUpdate & {
+      _meta?: { codex?: { phase?: unknown } };
+    }
+  )._meta?.codex?.phase;
+  return phase === "commentary" || phase === "final_answer"
+    ? phase
+    : undefined;
+}
+
 function textFromContent(content: {
   type: string;
   text?: string;
@@ -17,12 +30,14 @@ export function mapSessionUpdate(update: SessionUpdate): AgentEvent[] {
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
       const text = textFromContent(update.content);
+      const phase = codexMessagePhase(update);
       return text
         ? [
             {
               type: "text_delta",
               text,
               ...(update.messageId ? { messageId: update.messageId } : {}),
+              ...(phase ? { phase } : {}),
             },
           ]
         : [];
