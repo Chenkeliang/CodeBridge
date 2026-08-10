@@ -22,6 +22,14 @@ export interface CapabilityDefinition {
   adapter: string;
   environments?: string[];
   description?: string;
+  source?: CapabilitySource;
+}
+
+export interface CapabilitySource {
+  kind: "skill" | "mcp" | "cli" | "http" | "function";
+  ref: string;
+  version?: string;
+  revision?: string;
 }
 
 export interface CapabilityRegistryOptions {
@@ -53,9 +61,21 @@ export class CapabilityRegistry {
         adapter TEXT NOT NULL,
         environments TEXT,
         description TEXT,
+        source_kind TEXT,
+        source_ref TEXT,
+        source_version TEXT,
+        source_revision TEXT,
         updated_at TEXT NOT NULL
       );
     `);
+    for (const statement of [
+      "ALTER TABLE capabilities ADD COLUMN source_kind TEXT",
+      "ALTER TABLE capabilities ADD COLUMN source_ref TEXT",
+      "ALTER TABLE capabilities ADD COLUMN source_version TEXT",
+      "ALTER TABLE capabilities ADD COLUMN source_revision TEXT",
+    ]) {
+      try { this.database.exec(statement); } catch { /* Existing databases already contain the column. */ }
+    }
     const rows = this.database.prepare("SELECT * FROM capabilities ORDER BY id ASC").all() as Record<string, unknown>[];
     for (const row of rows) this.definitions.set(String(row.id), toCapability(row));
     for (const definition of definitions) this.register(definition);
@@ -66,13 +86,18 @@ export class CapabilityRegistry {
     this.definitions.set(definition.id, {
       ...definition,
       environments: definition.environments ? [...definition.environments] : undefined,
+      source: definition.source ? { ...definition.source } : undefined,
     });
     this.database
       .prepare(
-        `INSERT INTO capabilities (id, risk, adapter, environments, description, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO capabilities (
+           id, risk, adapter, environments, description,
+           source_kind, source_ref, source_version, source_revision, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET risk = excluded.risk, adapter = excluded.adapter,
            environments = excluded.environments, description = excluded.description,
+           source_kind = excluded.source_kind, source_ref = excluded.source_ref,
+           source_version = excluded.source_version, source_revision = excluded.source_revision,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -81,6 +106,10 @@ export class CapabilityRegistry {
         definition.adapter,
         definition.environments ? JSON.stringify(definition.environments) : null,
         definition.description ?? null,
+        definition.source?.kind ?? null,
+        definition.source?.ref ?? null,
+        definition.source?.version ?? null,
+        definition.source?.revision ?? null,
         new Date().toISOString(),
       );
   }
@@ -88,7 +117,11 @@ export class CapabilityRegistry {
   get(id: string): CapabilityDefinition | undefined {
     const definition = this.definitions.get(id);
     return definition
-      ? { ...definition, environments: definition.environments ? [...definition.environments] : undefined }
+      ? {
+          ...definition,
+          environments: definition.environments ? [...definition.environments] : undefined,
+          source: definition.source ? { ...definition.source } : undefined,
+        }
       : undefined;
   }
 
@@ -96,6 +129,7 @@ export class CapabilityRegistry {
     return [...this.definitions.values()].map((definition) => ({
       ...definition,
       environments: definition.environments ? [...definition.environments] : undefined,
+      source: definition.source ? { ...definition.source } : undefined,
     }));
   }
 
@@ -105,12 +139,21 @@ export class CapabilityRegistry {
 }
 
 function toCapability(row: Record<string, unknown>): CapabilityDefinition {
+  const source = row.source_kind === null || row.source_kind === undefined
+    ? undefined
+    : {
+        kind: String(row.source_kind) as CapabilitySource["kind"],
+        ref: String(row.source_ref),
+        version: row.source_version === null || row.source_version === undefined ? undefined : String(row.source_version),
+        revision: row.source_revision === null || row.source_revision === undefined ? undefined : String(row.source_revision),
+      };
   return {
     id: String(row.id),
     risk: String(row.risk) as CapabilityRisk,
     adapter: String(row.adapter),
     environments: row.environments === null ? undefined : JSON.parse(String(row.environments)) as string[],
     description: row.description === null ? undefined : String(row.description),
+    source,
   };
 }
 

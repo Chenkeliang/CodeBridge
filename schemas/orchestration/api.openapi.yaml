@@ -908,6 +908,90 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { description: Project catalog Git is not configured }
+  /v1/mcp/servers:
+    get:
+      operationId: listMcpServers
+      summary: List configured MCP servers and persisted health
+      responses:
+        '200':
+          description: MCP server list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [servers]
+                properties:
+                  servers:
+                    type: array
+                    items: { $ref: '#/components/schemas/McpServer' }
+  /v1/mcp/candidates:
+    get:
+      operationId: listMcpCapabilityCandidates
+      summary: List discovered MCP tools awaiting capability review
+      responses:
+        '200':
+          description: MCP capability candidate list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [candidates]
+                properties:
+                  candidates:
+                    type: array
+                    items: { $ref: '#/components/schemas/McpCapabilityCandidate' }
+  /v1/mcp/servers/{server_id}/discover:
+    parameters:
+      - in: path
+        name: server_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: discoverMcpServerTools
+      summary: Probe one configured MCP server and refresh tool candidates
+      responses:
+        '200': { description: Discovery completed }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { description: MCP discovery failed }
+  /v1/mcp/candidates/{candidate_id}/approve:
+    parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: approveMcpCapabilityCandidate
+      summary: Approve one discovered tool and bind it to Capability Runtime
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                capability_id: { type: [string, 'null'] }
+                risk:
+                  type: [string, 'null']
+                  enum: [read_only, workspace_write, git_write, production_write, null]
+                environments:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200': { description: Candidate approved }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/mcp/candidates/{candidate_id}/reject:
+    parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: rejectMcpCapabilityCandidate
+      summary: Reject one discovered MCP tool candidate
+      responses:
+        '200': { description: Candidate rejected }
+        '404': { $ref: '#/components/responses/NotFound' }
   /v1/projects/catalog/sync:
     post:
       operationId: syncProjectCatalogFromGit
@@ -1296,6 +1380,47 @@ components:
           type: array
           items: { type: string }
         created_at: { type: string, format: date-time }
+    McpServer:
+      type: object
+      required: [id, transport, enabled, health, updated_at]
+      properties:
+        id: { type: string }
+        transport: { type: string, enum: [stdio, http] }
+        command: { type: [string, 'null'] }
+        args:
+          type: array
+          items: { type: string }
+        url: { type: [string, 'null'] }
+        env:
+          description: Environment variable names only; credential values are never persisted or returned.
+          type: array
+          items: { type: string }
+        revision: { type: [string, 'null'] }
+        enabled: { type: boolean }
+        health:
+          type: object
+          required: [status, checked_at, error]
+          properties:
+            status: { type: string, enum: [unknown, healthy, unavailable] }
+            checked_at: { type: [string, 'null'], format: date-time }
+            error: { type: [string, 'null'] }
+        updated_at: { type: string, format: date-time }
+    McpCapabilityCandidate:
+      type: object
+      required: [id, server_id, tool_name, input_schema, suggested_capability_id, adapter_id, risk, revision, status, observed_at]
+      properties:
+        id: { type: string }
+        server_id: { type: string }
+        tool_name: { type: string }
+        description: { type: [string, 'null'] }
+        input_schema: { type: object }
+        suggested_capability_id: { type: string }
+        adapter_id: { type: string }
+        risk: { type: string, enum: [read_only, workspace_write, git_write, production_write] }
+        revision: { type: string }
+        status: { type: string, enum: [candidate, accepted, rejected, stale] }
+        observed_at: { type: string, format: date-time }
+        reviewed_at: { type: [string, 'null'], format: date-time }
     ProjectCandidate:
       type: object
       required: [id, project_id, status, confidence, evidence, observed_at]

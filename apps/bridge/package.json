@@ -16,6 +16,7 @@
     "@codebridge/core": "workspace:*",
     "@codebridge/memory-plugin": "workspace:*",
     "@codebridge/policy": "workspace:*",
+    "@codebridge/mcp-runtime": "workspace:*",
     "@codebridge/project-catalog": "workspace:*",
     "@codebridge/flow-catalog": "workspace:*",
     "@codebridge/agent-registry": "workspace:*",

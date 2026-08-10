@@ -136,6 +136,12 @@ describe("policy and approval", () => {
       id: "metrics.query",
       risk: "read_only",
       adapter: "mcp:metrics/query",
+      source: {
+        kind: "mcp",
+        ref: "metrics/query",
+        version: "server:1",
+        revision: "sha256:abc",
+      },
     });
     first.close();
 
@@ -147,6 +153,12 @@ describe("policy and approval", () => {
     expect(reopened.get("repository.inspect")).toMatchObject({
       adapter: "skill:repository-inspection",
       environments: ["local"],
+    });
+    expect(reopened.get("metrics.query")?.source).toEqual({
+      kind: "mcp",
+      ref: "metrics/query",
+      version: "server:1",
+      revision: "sha256:abc",
     });
     reopened.close();
   });

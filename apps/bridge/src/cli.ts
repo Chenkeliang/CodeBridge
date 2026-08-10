@@ -27,12 +27,18 @@ import {
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { AgentRegistry } from "@codebridge/agent-registry";
+import {
+  McpRuntime,
+  McpServerRegistry,
+  SdkMcpClientFactory,
+} from "@codebridge/mcp-runtime";
 import { createProjectCatalogApp } from "./project-api.js";
 import { createWebWorkbenchApp } from "./web-workbench.js";
 import { createSessionApp } from "./session-api.js";
 import { createFlowApp } from "./flow-api.js";
 import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 import { createChannelSessionIngress } from "./channel-ingress.js";
+import { createMcpApp } from "./mcp-api.js";
 
 const program = new Command();
 
@@ -104,6 +110,22 @@ program
     });
     const capabilityRuntime = new CapabilityRuntime();
     const policyEngine = new PolicyEngine(capabilityRegistry);
+    const mcpRegistry = new McpServerRegistry(path.join(dataDir, "mcp.sqlite"));
+    for (const [id, definition] of Object.entries(config.orchestration?.mcpServers ?? {})) {
+      mcpRegistry.registerServer({ id, ...definition });
+    }
+    const mcpRuntime = new McpRuntime(
+      mcpRegistry,
+      new SdkMcpClientFactory(),
+      capabilityRegistry,
+      capabilityRuntime,
+    );
+    const mcpApp = createMcpApp(mcpRegistry, mcpRuntime, config.runner.token);
+    for (const server of mcpRegistry.listServers().filter((candidate) => candidate.enabled !== false)) {
+      void mcpRuntime.discover(server.id).catch((error) => {
+        console.warn(`MCP discovery failed (${server.id}):`, error instanceof Error ? error.message : String(error));
+      });
+    }
     const runnerClient = new RunnerClient({
       baseUrl: config.runner.url,
       token: config.runner.token,
@@ -281,6 +303,8 @@ program
       await bridge?.disconnect();
       await telegram?.disconnect();
       approvalService.close();
+      await mcpRuntime.close();
+      mcpRegistry.close();
       capabilityRegistry.close();
       stopAgentHealthChecks();
       registry.close();
@@ -335,6 +359,7 @@ program
         webWorkbenchApp,
         sessionCatalogApp,
         flowCatalogApp,
+        mcpApp,
       ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,

@@ -75,6 +75,10 @@ Web / Feishu / Telegram
 
 因此，CodeBridge 的现有交互并非全部依赖 ACP。ACP 只解决一类 Agent Backend 通信；Web、飞书、Telegram 使用 Channel/API 边界，Skill 和 MCP 使用 Capability 边界。
 
+MCP Runtime 使用官方 SDK 连接 stdio 或 Streamable HTTP Server。配置 Server 后会自动发现 Tool，
+但只生成 Candidate；在 `/v1/mcp/candidates/{id}/approve` Review 之前，不会赋予 Agent 或
+Workflow 执行权限。
+
 ## 4. 模块互联合同
 
 模块之间只共享以下稳定合同：

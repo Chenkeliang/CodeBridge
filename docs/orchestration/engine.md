@@ -147,11 +147,13 @@ result_ref: artifact://<id>
 `CapabilityRegistry` 只保存能力的稳定 ID、风险和适配器 ID；`CapabilityRuntime` 才负责把适配器 ID 绑定到具体调用实现。运行时提供四类显式适配器：
 
 - `SKILL.md`：递归发现标准 Skill 文档，将其作为 Agent 上下文注入，不执行 Skill 内脚本。
-- MCP：由宿主注入 MCP transport，Workflow 只引用 Capability ID，不依赖 MCP SDK。
+- MCP：`packages/mcp-runtime` 使用官方 MCP SDK 管理 stdio/Streamable HTTP 连接，Workflow 只引用 Capability ID，不依赖具体 Server 或 SDK。
 - CLI：使用无 shell 的 `spawn`，以 JSON stdin 传参，工作目录和超时由宿主控制。
 - HTTP：使用受控 URL、方法和请求头，支持超时和取消信号。
 
 未注册的 adapter 不会被隐式执行，保持现有 Agent 回退路径；这保证第三方 Skill 不会因为被扫描而自动获得副作用权限。直接适配器的返回值会写入 Run 的 `AGENT_EVENT`（`actor=adapter`），Skill 返回的 instructions 则继续交给当前 Agent。
+
+MCP Server 由 `orchestration.mcpServers` 显式配置。启动时只执行健康检查和 `tools/list`，将每个 Tool 保存为 `McpCapabilityCandidate`；它不会因此自动进入 `CapabilityRegistry`。Review 时可以修正稳定的 `capability_id`、风险和环境范围，批准后才注册 `mcp:<server>/<tool>` Adapter。Server 配置 revision 和 Tool 内容 hash 会保存到 Capability source，后续工具消失时 Candidate 进入 `stale`，已运行的审计记录仍保留原 revision。
 
 每个 Step 执行前依次检查：
 

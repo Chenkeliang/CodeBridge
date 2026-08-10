@@ -46,7 +46,7 @@ Web 工作台                         飞书 / Telegram
                           │
        Pi SDK / Cursor ACP / Claude ACP / Codex Adapter
                           │
-       Skill / MCP / CLI / HTTP / Git / 项目和外部系统
+Skill / MCP / CLI / HTTP / Git / 项目和外部系统
 ```
 
 ### 组件边界
@@ -297,6 +297,25 @@ orchestration:
 
 运行时只在显式提案请求时创建 feature branch/commit；不会 checkout、merge 或 push。审核后的
 revision 再显式同步到 SQLite，避免长期运行进程读取到半完成的工作区文件。
+
+MCP Server 同样是显式配置、自动发现、人工授权：
+
+```yaml
+orchestration:
+  mcpServers:
+    local-tools:
+      transport: stdio
+      command: npx
+      args: [local-tools-mcp]
+      env: [LOCAL_TOOLS_TOKEN]
+      revision: config:1
+    shared-tools:
+      transport: http
+      url: https://mcp.example.com/api
+```
+
+`env` 只保存需要继承的环境变量名，不保存凭据值。Server 的健康和 Tool Candidate 持久化在
+`mcp.sqlite`；批准 Candidate 才生成 Capability 定义和可执行 Adapter。自动发现不等于自动授权。
 
 Workflow 文件先经过 Schema/Plan IR，再由当前执行器运行。未来替换为 Temporal 或其他 Durable Engine 时，保持 Flow/Workflow DSL、Plan IR 和事件合同不变。
 
