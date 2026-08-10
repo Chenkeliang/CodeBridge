@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { ArtifactKind, VerificationStatus } from "@codebridge/work-items";
 
 export type CapabilityAdapterKind = "function" | "skill" | "mcp" | "cli" | "http";
 
@@ -21,6 +22,8 @@ export interface CapabilityArtifact {
   name: string;
   content: string;
   mimeType?: string;
+  kind?: ArtifactKind;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CapabilityExecutionResult {
@@ -30,6 +33,11 @@ export interface CapabilityExecutionResult {
   forwardToAgent?: boolean;
   retryable?: boolean;
   metadata?: Record<string, unknown>;
+  verification?: {
+    validator: string;
+    status: VerificationStatus;
+    summary: string;
+  };
 }
 
 export interface CapabilityAdapter {

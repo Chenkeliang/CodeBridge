@@ -196,6 +196,24 @@ export function createWorkItemApp(
     return c.json({ approvals: approvals.listForRun(run.id).map(toApiApproval) });
   });
 
+  app.get("/v1/runs/:run_id/artifacts", (c) => {
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    return c.json({ artifacts: store.listArtifacts(run.id).map((artifact) => toApiArtifact(artifact, false)) });
+  });
+
+  app.get("/v1/runs/:run_id/verifications", (c) => {
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    return c.json({ verifications: store.listVerifications(run.id).map(toApiVerification) });
+  });
+
+  app.get("/v1/artifacts/:artifact_id", (c) => {
+    const artifact = store.getArtifact(c.req.param("artifact_id"));
+    if (!artifact) return errorResponse(c, 404, "artifact_not_found", "Artifact 不存在");
+    return c.json(toApiArtifact(artifact, true));
+  });
+
   app.post("/v1/runs/:run_id/reject", async (c) => {
     if (!approvals) {
       return errorResponse(c, 503, "approval_unavailable", "审批服务未配置");
@@ -384,6 +402,41 @@ function toApiApproval(approval: ReturnType<ApprovalService["listForRun"]>[numbe
     expires_at: approval.expiresAt,
     granted_at: approval.grantedAt,
     consumed_at: approval.consumedAt,
+  };
+}
+
+function toApiArtifact(
+  artifact: ReturnType<SqliteEventStore["listArtifacts"]>[number],
+  includeContent: boolean,
+): Record<string, unknown> {
+  return {
+    id: artifact.id,
+    work_item_id: artifact.workItemId,
+    run_id: artifact.runId,
+    step_id: artifact.stepId,
+    kind: artifact.kind,
+    name: artifact.name,
+    mime_type: artifact.mimeType,
+    content: includeContent ? artifact.content : undefined,
+    content_hash: artifact.contentHash,
+    metadata: artifact.metadata,
+    created_at: artifact.createdAt,
+  };
+}
+
+function toApiVerification(
+  verification: ReturnType<SqliteEventStore["listVerifications"]>[number],
+): Record<string, unknown> {
+  return {
+    id: verification.id,
+    work_item_id: verification.workItemId,
+    run_id: verification.runId,
+    step_id: verification.stepId,
+    validator: verification.validator,
+    status: verification.status,
+    summary: verification.summary,
+    artifact_ids: verification.artifactIds,
+    created_at: verification.createdAt,
   };
 }
 

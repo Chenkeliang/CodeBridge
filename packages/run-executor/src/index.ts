@@ -394,17 +394,41 @@ export class RunExecutor {
         signal,
       },
     });
+    const artifactIds = (result.artifacts ?? []).map((artifact) => this.store.createArtifact({
+      workItemId: workItem.id,
+      runId: run.id,
+      stepId: step.id,
+      name: artifact.name,
+      content: artifact.content,
+      mimeType: artifact.mimeType,
+      kind: artifact.kind,
+      metadata: artifact.metadata,
+      actor: "adapter",
+    }).id);
+    const verification = result.verification
+      ? this.store.recordVerification({
+          workItemId: workItem.id,
+          runId: run.id,
+          stepId: step.id,
+          validator: result.verification.validator,
+          status: result.verification.status,
+          summary: result.verification.summary,
+          artifactIds,
+        })
+      : undefined;
     this.store.appendEvent({
       workItemId: workItem.id,
       runId: run.id,
       type: "AGENT_EVENT",
       actor: "adapter",
       target: step.capabilityId,
+      resultRef: artifactIds[0] ? `artifact://${artifactIds[0]}` : verification?.id ? `verification://${verification.id}` : null,
       payload: {
         adapter: definition.adapter,
         capability_id: step.capabilityId,
         output: result.output,
-        artifacts: result.artifacts,
+        artifact_ids: artifactIds,
+        verification_id: verification?.id,
         retryable: result.retryable ?? false,
       },
     });
