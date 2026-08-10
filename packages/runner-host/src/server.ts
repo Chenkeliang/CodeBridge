@@ -15,6 +15,7 @@ import {
   deletePiSession,
   forkPiSession,
   listPiConfigOptions,
+  listPiCommands,
   listPiSessions,
   runPiSession,
   type PiRunHandleRef,
@@ -24,6 +25,7 @@ import {
 } from "@codebridge/backends";
 import type {
   AgentEvent,
+  AgentAvailableCommand,
   AcpPermissionPolicy,
   AppConfig,
   BackendConfigOption,
@@ -461,6 +463,25 @@ export class RunnerHost {
       return {
         options: [],
         error: `ACP config options failed for ${backendId}: ${message}`,
+      };
+    }
+  }
+
+  async listCommands(
+    backendId: string,
+    cwd: string,
+  ): Promise<{ commands: AgentAvailableCommand[]; error?: string }> {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { commands: [], error: `Unknown backend: ${backendId}` };
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) return { commands: [], error: resolvedCwd.error };
+    if (profile.type !== "pi-sdk") return { commands: [] };
+    try {
+      return { commands: await listPiCommands(resolvedCwd.cwd) };
+    } catch (error) {
+      return {
+        commands: [],
+        error: `Pi commands failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }
@@ -926,6 +947,15 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
     const result = await host.listConfigOptions(backend, cwd);
     return c.json(result);
+  });
+
+  app.get("/commands", async (c) => {
+    const backend = c.req.query("backend");
+    const cwd = c.req.query("cwd");
+    if (!backend || !cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    return c.json(await host.listCommands(backend, cwd));
   });
 
   return app;

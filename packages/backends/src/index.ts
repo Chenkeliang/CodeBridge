@@ -52,6 +52,7 @@ export {
   forkPiSession,
   listPiSessions,
   listPiConfigOptions,
+  listPiCommands,
   mapPiEvent,
   probePiSdk,
   runPiSession,

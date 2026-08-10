@@ -299,6 +299,37 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(await options.runner.listConfigOptions(session.agentId, cwd));
   });
 
+  app.get("/v1/sessions/:session_id/commands", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    const cwd = session.cwd ?? options.defaultCwd;
+    const native = options.runner && cwd
+      ? await options.runner.listCommands(session.agentId, cwd)
+      : { commands: [] };
+    const commands = new Map(native.commands.map((command) => [command.name, command]));
+    if (session.taskRecordId) {
+      const events = options.workItems.listEvents(session.taskRecordId).reverse();
+      const update = events.find((event) => {
+        const agentEvent = event.payload.event as Record<string, unknown> | undefined;
+        return event.type === "AGENT_EVENT" && agentEvent?.type === "available_commands_update";
+      });
+      const available = (update?.payload.event as { availableCommands?: unknown } | undefined)?.availableCommands;
+      if (Array.isArray(available)) {
+        for (const value of available) {
+          if (!value || typeof value !== "object") continue;
+          const command = value as { name?: unknown; description?: unknown; input?: unknown };
+          if (typeof command.name !== "string" || typeof command.description !== "string") continue;
+          commands.set(command.name, {
+            name: command.name,
+            description: command.description,
+            ...(command.input && typeof command.input === "object" ? { input: command.input as { hint: string } } : {}),
+          });
+        }
+      }
+    }
+    return c.json({ commands: [...commands.values()], ...(native.error ? { error: native.error } : {}) });
+  });
+
   app.patch("/v1/sessions/:session_id", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);

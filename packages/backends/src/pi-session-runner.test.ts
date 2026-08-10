@@ -6,6 +6,7 @@ import { afterEach } from "vitest";
 import type { AgentEvent, RunContext } from "@codebridge/core";
 import {
   forkPiSession,
+  listPiCommands,
   mapPiEvent,
   probePiSdk,
   runPiSession,
@@ -127,6 +128,22 @@ describe("Pi event mapping", () => {
 });
 
 describe("Pi session runner", () => {
+  it("lists project Skills as Pi slash commands", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-skills-"));
+    tempDirs.push(cwd);
+    const skillDir = path.join(cwd, ".pi", "skills", "project-review");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: project-review\ndescription: Review this project\n---\n",
+    );
+
+    await expect(listPiCommands(cwd)).resolves.toContainEqual({
+      name: "skill:project-review",
+      description: "Review this project",
+    });
+  });
+
   it("forks a persisted provider session into a new project directory", async () => {
     const sourceCwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-source-"));
     const targetCwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-target-"));

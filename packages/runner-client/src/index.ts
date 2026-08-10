@@ -1,4 +1,5 @@
 import type {
+  AgentAvailableCommand,
   AgentEvent,
   BackendConfigOption,
   RunRequest,
@@ -58,6 +59,19 @@ export class RunnerClient {
     }
     return res.json() as Promise<{
       options: BackendConfigOption[];
+      error?: string;
+    }>;
+  }
+
+  async listCommands(
+    backend: string,
+    cwd: string,
+  ): Promise<{ commands: AgentAvailableCommand[]; error?: string }> {
+    const params = new URLSearchParams({ backend, cwd });
+    const res = await this.fetch(`/commands?${params}`);
+    if (!res.ok) throw new Error(`Runner error: ${res.status} ${await res.text()}`);
+    return res.json() as Promise<{
+      commands: AgentAvailableCommand[];
       error?: string;
     }>;
   }
