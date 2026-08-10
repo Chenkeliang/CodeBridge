@@ -273,6 +273,23 @@ export class ApprovalService {
     return this.get(id);
   }
 
+  revoke(id: string, rejectedBy: string): ApprovalRecord | undefined {
+    const record = this.get(id);
+    if (!record || record.status !== "requested") return record;
+    this.database.prepare("UPDATE approvals SET status = 'revoked', granted_by = ? WHERE id = ?")
+      .run(rejectedBy, id);
+    this.eventStore.appendEvent({
+      workItemId: record.workItemId,
+      runId: record.runId,
+      type: "APPROVAL_REJECTED",
+      actor: "user",
+      target: record.capabilityId,
+      inputHash: record.inputHash,
+      payload: { approval_id: id, step_id: record.stepId, rejected_by: rejectedBy },
+    });
+    return this.get(id);
+  }
+
   consume(id: string, runId: string, stepId: string, inputHash: string): boolean {
     const record = this.get(id);
     if (!record || record.status !== "granted") return false;

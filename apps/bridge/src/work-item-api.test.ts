@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
+import { ApprovalService } from "@codebridge/policy";
 import { createWorkItemApp } from "./work-item-api.js";
 
 const TOKEN = "work-item-api-token";
@@ -215,5 +216,43 @@ describe("createWorkItemApp", () => {
     const resumedText = await resumed.text();
     expect(resumedText).toContain('"type":"MESSAGE_RECEIVED"');
     expect(resumedText).not.toContain('"type":"WORK_ITEM_CREATED"');
+  });
+
+  it("rejects a pending Run approval and cancels the Run", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-approval-api-"));
+    const store = new SqliteEventStore(path.join(directory, "events.sqlite"));
+    const approvals = new ApprovalService(store, path.join(directory, "approvals.sqlite"));
+    cleanups.push(() => {
+      approvals.close();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    });
+    const item = store.createWorkItem({
+      title: "release",
+      mode: "release",
+      conversationId: "web:approval",
+      riskLevel: "production_write",
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode });
+    store.updateRunStatus(run.id, "waiting");
+    const approval = approvals.request({
+      workItemId: item.id,
+      runId: run.id,
+      stepId: "release",
+      capabilityId: "release.execute",
+      inputHash: "sha256:approval",
+      requestedBy: "system",
+    });
+    const app = createWorkItemApp(store, TOKEN, approvals);
+
+    const response = await app.request(jsonRequest(`/v1/runs/${run.id}/reject`, {
+      approval_id: approval.id,
+      rejected_by: "user",
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ approval_id: approval.id, status: "revoked" });
+    expect(store.getRun(run.id)?.status).toBe("cancelled");
+    expect(store.getWorkItem(item.id)?.status).toBe("cancelled");
   });
 });

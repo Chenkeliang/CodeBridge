@@ -49,6 +49,7 @@ export type DomainEventType =
   | "PLAN_VALIDATED"
   | "APPROVAL_REQUESTED"
   | "APPROVAL_GRANTED"
+  | "APPROVAL_REJECTED"
   | "STEP_STARTED"
   | "STEP_SUCCEEDED"
   | "STEP_SKIPPED"
@@ -190,6 +191,7 @@ type SqliteRow = Record<string, unknown>;
 const STATUS_BY_EVENT: Partial<Record<DomainEventType, WorkItemStatus>> = {
   PLAN_PROPOSED: "planned",
   APPROVAL_REQUESTED: "awaiting_approval",
+  RUN_CANCELLED: "cancelled",
   STEP_STARTED: "executing",
   VERIFICATION_COMPLETED: "verifying",
   STEP_FAILED: "failed",

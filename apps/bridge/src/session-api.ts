@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import type {
   AgentProfile,
   SessionCatalogStore,
@@ -305,6 +306,25 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     }
     const after = Number(c.req.query("after_sequence") ?? c.req.header("last-event-id") ?? "0");
     if (!Number.isInteger(after) || after < 0) return c.json({ error: "invalid_after_sequence" }, 400);
+    if (c.req.query("live") === "true") {
+      return streamSSE(c, async (stream) => {
+        let cursor = after;
+        let open = true;
+        stream.onAbort(() => { open = false; });
+        while (open) {
+          const events = options.workItems.listEvents(session.taskRecordId!, cursor);
+          for (const event of events) {
+            await stream.writeSSE({
+              id: event.eventId,
+              event: event.type,
+              data: JSON.stringify(toApiEvent(event)),
+            });
+            cursor = event.sequence;
+          }
+          if (!events.length) await stream.sleep(250);
+        }
+      });
+    }
     const stream = options.workItems
       .listEvents(session.taskRecordId, after)
       .map((event) => toSseEvent(event))
@@ -453,6 +473,36 @@ function toSseEvent(event: {
     result_ref: event.resultRef,
     payload: event.payload,
   })}\n\n`;
+}
+
+function toApiEvent(event: {
+  schemaVersion: number;
+  eventId: string;
+  sequence: number;
+  workItemId: string;
+  runId: string | null;
+  type: string;
+  occurredAt: string;
+  actor: string;
+  target: string | null;
+  inputHash: string | null;
+  resultRef: string | null;
+  payload: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    schema_version: event.schemaVersion,
+    event_id: event.eventId,
+    sequence: event.sequence,
+    work_item_id: event.workItemId,
+    run_id: event.runId,
+    type: event.type,
+    occurred_at: event.occurredAt,
+    actor: event.actor,
+    target: event.target,
+    input_hash: event.inputHash,
+    result_ref: event.resultRef,
+    payload: event.payload,
+  };
 }
 
 async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown> | null> {

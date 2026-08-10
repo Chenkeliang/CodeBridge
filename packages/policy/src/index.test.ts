@@ -60,6 +60,33 @@ describe("policy and approval", () => {
     workItems.close();
   });
 
+  it("can reject a pending approval and records the decision", () => {
+    const workItems = new SqliteEventStore(":memory:");
+    const workItem = workItems.createWorkItem({
+      title: "release",
+      mode: "release",
+      conversationId: "web:reject",
+      riskLevel: "production_write",
+    });
+    const approvals = new ApprovalService(workItems, ":memory:");
+    const requested = approvals.request({
+      workItemId: workItem.id,
+      runId: "run_reject",
+      stepId: "release",
+      capabilityId: "release.execute",
+      inputHash: "sha256:reject",
+      requestedBy: "agent",
+    });
+    expect(approvals.revoke(requested.id, "user")?.status).toBe("revoked");
+    expect(approvals.revoke(requested.id, "user")?.status).toBe("revoked");
+    expect(workItems.listEvents(workItem.id).at(-1)).toMatchObject({
+      type: "APPROVAL_REJECTED",
+      payload: { approval_id: requested.id, rejected_by: "user" },
+    });
+    approvals.close();
+    workItems.close();
+  });
+
   it("rejects a grant when the token is expired or bound to different input", () => {
     const workItems = new SqliteEventStore(":memory:");
     const workItem = workItems.createWorkItem({
