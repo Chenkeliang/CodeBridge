@@ -313,6 +313,35 @@ export class RunExecutor {
         target: event.type,
         payload: step ? { event, step_id: step.id } : { event },
       });
+      if (event.type === "plan" && event.entries.length) {
+        const flowId = `flow_ephemeral_${run.id}`;
+        const flowSteps = event.entries.map((entry, index) => ({
+          id: `step_${index + 1}`,
+          mode: "manual",
+          purpose: entry.content,
+          depends_on: index ? [`step_${index}`] : [],
+          approval: "none",
+        }));
+        this.store.appendEvent({
+          workItemId: workItem.id,
+          runId: run.id,
+          type: "FLOW_PROPOSED",
+          actor: "agent",
+          target: flowId,
+          payload: {
+            source: "agent_generated",
+            definition_revision: `agent:${hashInput(workItem.id, run.id, workItem.title)}`,
+            flow: {
+              schema_version: 1,
+              workflow_id: flowId,
+              name: "Agent proposed plan",
+              kind: "guide",
+              status: "draft",
+              steps: flowSteps,
+            },
+          },
+        });
+      }
       if (event.type === "done" && event.exitCode !== 0) {
         throw new Error(`Runner exited with code ${event.exitCode}`);
       }

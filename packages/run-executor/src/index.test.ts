@@ -277,4 +277,32 @@ describe("RunExecutor", () => {
     });
     store.close();
   });
+
+  it("turns an Agent plan event into an ephemeral Flow proposal", async () => {
+    const { store, item, run } = setup();
+    const runner = new FakeRunner([
+      {
+        type: "plan",
+        entries: [{ content: "inspect context", priority: "high", status: "pending" }],
+      },
+      { type: "done", exitCode: 0 },
+    ]);
+    const executor = new RunExecutor(store, runner, {
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "plan",
+      }),
+    });
+
+    await executor.execute(run.id);
+    expect(store.listEvents(item.id).find((event) => event.type === "FLOW_PROPOSED")).toMatchObject({
+      actor: "agent",
+      payload: {
+        source: "agent_generated",
+        flow: { kind: "guide", steps: [{ id: "step_1", mode: "manual", purpose: "inspect context" }] },
+      },
+    });
+    store.close();
+  });
 });
