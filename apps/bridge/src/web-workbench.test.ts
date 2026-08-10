@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Script } from "node:vm";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { createWebWorkbenchApp } from "./web-workbench.js";
 
@@ -81,6 +82,111 @@ describe("web workbench", () => {
     expect(html).toContain("/v1/sessions");
     expect(html).toContain("events?live=true&after_sequence=");
     expect(html).not.toContain("@ 委派");
+    store.close();
+  });
+
+  it("emits browser-parseable JavaScript", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+    const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+
+    expect(script).toBeDefined();
+    expect(() => new Script(script!)).not.toThrow();
+    store.close();
+  });
+
+  it("keeps hidden workbench regions out of the layout", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain("[hidden] { display:none !important; }");
+    store.close();
+  });
+
+  it("loads local sessions before an explicit provider sync", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain('id="sync-sessions"');
+    expect(html).toContain("const result = await api('/v1/sessions');");
+    expect(html).toContain("async function syncSessions()");
+    store.close();
+  });
+
+  it("hides context selectors that have no choices", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toMatch(/<select[^>]*id="mode"[^>]*hidden/);
+    expect(html).toMatch(/<select[^>]*id="workflow"[^>]*hidden/);
+    expect(html).toMatch(/<select[^>]*id="model"[^>]*hidden/);
+    store.close();
+  });
+
+  it("hides timeline filters until a session is selected", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain('id="timeline-toolbar" hidden');
+    store.close();
+  });
+
+  it("keeps long session history inside the sidebar", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain("#work-list { flex:1 1 auto; min-height:0; }");
+    store.close();
+  });
+
+  it("does not allow new sessions for unavailable agents", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({
+      store,
+      token: "web-token",
+      agentProfiles: [
+        { id: "codex", name: "Codex", status: "healthy" },
+        { id: "pi", name: "Pi", status: "needs_setup" },
+      ],
+    });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain('<option value="pi" disabled>Pi · needs_setup</option>');
+    store.close();
+  });
+
+  it("stops session polling before deleting a session", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+    const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
+
+    expect(script).toMatch(/session-delete[\s\S]*clearInterval\(state\.timer\); state\.eventAbort\?\.abort\(\);[\s\S]*method:'DELETE'/);
+    store.close();
+  });
+
+  it("reconnects the event stream after the first message creates a work item", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+    const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
+
+    expect(script).toMatch(/await api\('\/v1\/sessions\/' \+ encodeURIComponent\(state\.selected\) \+ '\/messages'[\s\S]*?await startRun\(\); state\.eventAbort\?\.abort\(\); void startEventStream\(\);/);
+    store.close();
+  });
+
+  it("does not request an authenticated favicon", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain('<link rel="icon" href="data:," />');
     store.close();
   });
 });
