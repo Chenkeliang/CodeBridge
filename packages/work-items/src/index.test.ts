@@ -163,6 +163,65 @@ describe("SqliteEventStore", () => {
     store.close();
   });
 
+  it("persists the validated Plan IR and pins its revision to the Run", () => {
+    const databasePath = createDatabasePath();
+    const store = new SqliteEventStore(databasePath);
+    const workItem = store.createWorkItem({
+      title: "Run a reviewed workflow",
+      mode: "change",
+      conversationId: "conv_plan",
+      workflowId: "review-change",
+      workflowRevision: "git:abc123",
+      riskLevel: "workspace_write",
+    });
+    const plan = store.savePlan({
+      planId: "plan_01JTEST",
+      source: "workflow",
+      workflowId: "review-change",
+      definitionRevision: "git:abc123",
+      sessionId: "sess_01JTEST",
+      runId: "run_01JPLAN",
+      steps: [
+        {
+          id: "inspect",
+          capabilityId: "context.inspect",
+          risk: "read_only",
+          dependsOn: [],
+          guard: null,
+          approval: "none",
+          branches: [],
+          purpose: null,
+        },
+      ],
+    });
+    const run = store.createRun({
+      id: "run_01JPLAN",
+      workItemId: workItem.id,
+      mode: workItem.mode,
+      planId: plan.planId,
+      workflowRevision: plan.definitionRevision,
+    });
+
+    expect(run.workflowRevision).toBe("git:abc123");
+    expect(store.getPlan(plan.planId)).toEqual(plan);
+    expect(store.getPlanForRun(run.id)).toEqual(plan);
+    expect(store.listEvents(workItem.id).at(-1)).toMatchObject({
+      type: "PLAN_VALIDATED",
+      runId: run.id,
+      target: plan.planId,
+      payload: {
+        workflow_id: "review-change",
+        definition_revision: "git:abc123",
+      },
+    });
+
+    store.close();
+    const reopened = new SqliteEventStore(databasePath);
+    expect(reopened.getPlan(plan.planId)).toEqual(plan);
+    expect(reopened.getRun(run.id)?.workflowRevision).toBe("git:abc123");
+    reopened.close();
+  });
+
   it("updates a Run status for executor recovery", () => {
     const store = new SqliteEventStore(":memory:");
     const workItem = store.createWorkItem({
