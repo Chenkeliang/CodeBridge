@@ -265,4 +265,42 @@ describe("createWorkItemApp", () => {
       })],
     });
   });
+
+  it("lists run evidence and keeps artifact content behind an explicit detail endpoint", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "evidence",
+      mode: "review",
+      conversationId: "web:evidence",
+      riskLevel: "read_only",
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode });
+    const artifact = store.createArtifact({
+      workItemId: item.id,
+      runId: run.id,
+      name: "diff.txt",
+      kind: "diff",
+      content: "changed",
+    });
+    store.recordVerification({
+      workItemId: item.id,
+      runId: run.id,
+      validator: "diff-check",
+      status: "passed",
+      summary: "clean",
+      artifactIds: [artifact.id],
+    });
+    const app = createWorkItemApp(store, TOKEN);
+
+    const listed = await app.request(request(`/v1/runs/${run.id}/artifacts`));
+    expect(listed.status).toBe(200);
+    const listedBody = (await listed.json()) as { artifacts: Array<Record<string, unknown>> };
+    expect(listedBody.artifacts).toMatchObject([expect.objectContaining({ id: artifact.id })]);
+    expect(listedBody.artifacts[0]).not.toHaveProperty("content");
+    const detail = await app.request(request(`/v1/artifacts/${artifact.id}`));
+    expect(await detail.json()).toMatchObject({ id: artifact.id, content: "changed" });
+    const verifications = await app.request(request(`/v1/runs/${run.id}/verifications`));
+    expect(await verifications.json()).toMatchObject({ verifications: [expect.objectContaining({ status: "passed" })] });
+    store.close();
+  });
 });

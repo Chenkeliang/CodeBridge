@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 
@@ -58,6 +58,7 @@ export type DomainEventType =
   | "STEP_SKIPPED"
   | "STEP_FAILED"
   | "BRANCH_SELECTED"
+  | "ARTIFACT_CREATED"
   | "VERIFICATION_COMPLETED"
   | "WORK_ITEM_COMPLETED";
 
@@ -189,6 +190,60 @@ export interface SavePlanInput {
   steps: PersistedPlanStep[];
 }
 
+export type ArtifactKind = "output" | "diff" | "test_report" | "log" | "image" | "other";
+
+export interface ArtifactRecord {
+  id: string;
+  workItemId: string;
+  runId: string;
+  stepId: string | null;
+  kind: ArtifactKind;
+  name: string;
+  mimeType: string;
+  content: string;
+  contentHash: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface CreateArtifactInput {
+  id?: string;
+  workItemId: string;
+  runId: string;
+  stepId?: string | null;
+  kind?: ArtifactKind;
+  name: string;
+  mimeType?: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+  actor?: DomainEventActor;
+}
+
+export type VerificationStatus = "passed" | "failed" | "skipped";
+
+export interface VerificationRecord {
+  id: string;
+  workItemId: string;
+  runId: string;
+  stepId: string | null;
+  validator: string;
+  status: VerificationStatus;
+  summary: string;
+  artifactIds: string[];
+  createdAt: string;
+}
+
+export interface RecordVerificationInput {
+  id?: string;
+  workItemId: string;
+  runId: string;
+  stepId?: string | null;
+  validator: string;
+  status: VerificationStatus;
+  summary: string;
+  artifactIds?: string[];
+}
+
 type SqliteRow = Record<string, unknown>;
 
 const STATUS_BY_EVENT: Partial<Record<DomainEventType, WorkItemStatus>> = {
@@ -289,6 +344,38 @@ export class SqliteEventStore {
         created_at TEXT NOT NULL,
         PRIMARY KEY (namespace, idempotency_key)
       );
+
+      CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        work_item_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        step_id TEXT,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        metadata TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (work_item_id) REFERENCES work_items(id),
+        FOREIGN KEY (run_id) REFERENCES runs(id)
+      );
+      CREATE INDEX IF NOT EXISTS artifacts_run_created ON artifacts (run_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS verifications (
+        id TEXT PRIMARY KEY,
+        work_item_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        step_id TEXT,
+        validator TEXT NOT NULL,
+        status TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        artifact_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (work_item_id) REFERENCES work_items(id),
+        FOREIGN KEY (run_id) REFERENCES runs(id)
+      );
+      CREATE INDEX IF NOT EXISTS verifications_run_created ON verifications (run_id, created_at);
     `);
     try {
       this.database.exec("ALTER TABLE runs ADD COLUMN workflow_revision TEXT");
@@ -611,6 +698,126 @@ export class SqliteEventStore {
     return row?.response ? JSON.parse(row.response) : undefined;
   }
 
+  createArtifact(input: CreateArtifactInput): ArtifactRecord {
+    if (!this.getWorkItem(input.workItemId)) throw new Error(`WorkItem not found: ${input.workItemId}`);
+    if (!this.getRun(input.runId)) throw new Error(`Run not found: ${input.runId}`);
+    if (input.content.length > 10_000_000) throw new Error("artifact content exceeds 10 MB");
+    const record: ArtifactRecord = {
+      id: input.id ?? createId("artifact"),
+      workItemId: input.workItemId,
+      runId: input.runId,
+      stepId: input.stepId ?? null,
+      kind: input.kind ?? "output",
+      name: input.name,
+      mimeType: input.mimeType ?? "text/plain",
+      content: input.content,
+      contentHash: `sha256:${createHash("sha256").update(input.content).digest("hex")}`,
+      metadata: { ...(input.metadata ?? {}) },
+      createdAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `INSERT INTO artifacts (
+          id, work_item_id, run_id, step_id, kind, name, mime_type, content,
+          content_hash, metadata, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.workItemId,
+        record.runId,
+        record.stepId,
+        record.kind,
+        record.name,
+        record.mimeType,
+        record.content,
+        record.contentHash,
+        JSON.stringify(record.metadata),
+        record.createdAt,
+      );
+    this.appendEvent({
+      workItemId: record.workItemId,
+      runId: record.runId,
+      type: "ARTIFACT_CREATED",
+      actor: input.actor ?? "adapter",
+      target: record.id,
+      resultRef: `artifact://${record.id}`,
+      payload: {
+        artifact_id: record.id,
+        step_id: record.stepId,
+        kind: record.kind,
+        name: record.name,
+        mime_type: record.mimeType,
+        content_hash: record.contentHash,
+      },
+    });
+    return record;
+  }
+
+  getArtifact(id: string): ArtifactRecord | undefined {
+    const row = this.database.prepare("SELECT * FROM artifacts WHERE id = ?").get(id);
+    return row ? toArtifact(row) : undefined;
+  }
+
+  listArtifacts(runId: string): ArtifactRecord[] {
+    return (this.database.prepare("SELECT * FROM artifacts WHERE run_id = ? ORDER BY created_at ASC").all(runId) as SqliteRow[]).map(toArtifact);
+  }
+
+  recordVerification(input: RecordVerificationInput): VerificationRecord {
+    if (!this.getWorkItem(input.workItemId)) throw new Error(`WorkItem not found: ${input.workItemId}`);
+    if (!this.getRun(input.runId)) throw new Error(`Run not found: ${input.runId}`);
+    const record: VerificationRecord = {
+      id: input.id ?? createId("verification"),
+      workItemId: input.workItemId,
+      runId: input.runId,
+      stepId: input.stepId ?? null,
+      validator: input.validator,
+      status: input.status,
+      summary: input.summary,
+      artifactIds: [...(input.artifactIds ?? [])],
+      createdAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `INSERT INTO verifications (
+          id, work_item_id, run_id, step_id, validator, status, summary,
+          artifact_ids, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.workItemId,
+        record.runId,
+        record.stepId,
+        record.validator,
+        record.status,
+        record.summary,
+        JSON.stringify(record.artifactIds),
+        record.createdAt,
+      );
+    this.appendEvent({
+      workItemId: record.workItemId,
+      runId: record.runId,
+      type: "VERIFICATION_COMPLETED",
+      actor: "adapter",
+      target: record.stepId ?? record.runId,
+      resultRef: record.artifactIds[0] ? `artifact://${record.artifactIds[0]}` : null,
+      payload: {
+        verification_id: record.id,
+        step_id: record.stepId,
+        validator: record.validator,
+        status: record.status,
+        summary: record.summary,
+        artifact_ids: record.artifactIds,
+      },
+    });
+    return record;
+  }
+
+  listVerifications(runId: string): VerificationRecord[] {
+    return (this.database.prepare("SELECT * FROM verifications WHERE run_id = ? ORDER BY created_at ASC").all(runId) as SqliteRow[]).map(toVerification);
+  }
+
   close(): void {
     if (this.database.isOpen) this.database.close();
   }
@@ -671,7 +878,7 @@ export class SqliteEventStore {
 
 }
 
-function createId(prefix: "wi" | "evt" | "run"): string {
+function createId(prefix: "wi" | "evt" | "run" | "artifact" | "verification"): string {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }
 
@@ -742,6 +949,36 @@ function toPlan(row: SqliteRow): PersistedPlan {
     sessionId: row.session_id === null ? null : String(row.session_id),
     runId: row.run_id === null ? null : String(row.run_id),
     steps: (JSON.parse(String(row.steps)) as PersistedPlanStep[]).map(clonePlanStep),
+    createdAt: String(row.created_at),
+  };
+}
+
+function toArtifact(row: SqliteRow): ArtifactRecord {
+  return {
+    id: String(row.id),
+    workItemId: String(row.work_item_id),
+    runId: String(row.run_id),
+    stepId: row.step_id === null ? null : String(row.step_id),
+    kind: String(row.kind) as ArtifactKind,
+    name: String(row.name),
+    mimeType: String(row.mime_type),
+    content: String(row.content),
+    contentHash: String(row.content_hash),
+    metadata: JSON.parse(String(row.metadata)) as Record<string, unknown>,
+    createdAt: String(row.created_at),
+  };
+}
+
+function toVerification(row: SqliteRow): VerificationRecord {
+  return {
+    id: String(row.id),
+    workItemId: String(row.work_item_id),
+    runId: String(row.run_id),
+    stepId: row.step_id === null ? null : String(row.step_id),
+    validator: String(row.validator),
+    status: String(row.status) as VerificationStatus,
+    summary: String(row.summary),
+    artifactIds: JSON.parse(String(row.artifact_ids)) as string[],
     createdAt: String(row.created_at),
   };
 }

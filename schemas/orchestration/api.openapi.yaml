@@ -507,6 +507,36 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/Approval'
+  /v1/runs/{run_id}/artifacts:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: listRunArtifacts
+      summary: List output artifacts produced by a Run
+      responses:
+        '200':
+          description: Artifact metadata list
+  /v1/runs/{run_id}/verifications:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: listRunVerifications
+      summary: List verification results for a Run
+      responses:
+        '200':
+          description: Verification result list
+  /v1/artifacts/{artifact_id}:
+    parameters:
+      - in: path
+        name: artifact_id
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getArtifact
+      summary: Fetch an artifact including its content
+      responses:
+        '200': { description: Artifact detail }
+        '404': { $ref: '#/components/responses/NotFound' }
   /v1/runs/{run_id}/reject:
     parameters:
       - $ref: '#/components/parameters/RunId'
@@ -1007,6 +1037,36 @@ components:
         expires_at: { type: string, format: date-time }
         granted_at: { type: [string, 'null'], format: date-time }
         consumed_at: { type: [string, 'null'], format: date-time }
+    Artifact:
+      type: object
+      required: [id, work_item_id, run_id, kind, name, mime_type, content_hash, metadata, created_at]
+      properties:
+        id: { type: string }
+        work_item_id: { type: string }
+        run_id: { type: string }
+        step_id: { type: [string, 'null'] }
+        kind: { type: string, enum: [output, diff, test_report, log, image, other] }
+        name: { type: string }
+        mime_type: { type: string }
+        content: { type: string }
+        content_hash: { type: string }
+        metadata: { type: object }
+        created_at: { type: string, format: date-time }
+    Verification:
+      type: object
+      required: [id, work_item_id, run_id, validator, status, summary, artifact_ids, created_at]
+      properties:
+        id: { type: string }
+        work_item_id: { type: string }
+        run_id: { type: string }
+        step_id: { type: [string, 'null'] }
+        validator: { type: string }
+        status: { type: string, enum: [passed, failed, skipped] }
+        summary: { type: string }
+        artifact_ids:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
     ProjectCandidate:
       type: object
       required: [id, project_id, status, confidence, evidence, observed_at]

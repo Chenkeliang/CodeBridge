@@ -248,7 +248,20 @@ describe("RunExecutor", () => {
     const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
     const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
     const runtime = new CapabilityRuntime([
-      new FunctionCapabilityAdapter("local.lookup", ({ input }) => ({ output: input.identifiers })),
+      new FunctionCapabilityAdapter("local.lookup", ({ input }) => ({
+        output: input.identifiers,
+        artifacts: [{
+          name: "lookup.json",
+          mimeType: "application/json",
+          content: JSON.stringify(input.identifiers),
+          kind: "output",
+        }],
+        verification: {
+          validator: "lookup-contract",
+          status: "passed",
+          summary: "Lookup returned structured data",
+        },
+      })),
     ]);
     const executor = new RunExecutor(store, runner, {
       policy: new PolicyEngine(registry),
@@ -267,6 +280,10 @@ describe("RunExecutor", () => {
       target: "catalog.lookup",
       payload: { adapter: "local.lookup", output: { id: "value" } },
     });
+    expect(store.listArtifacts(run.id)).toHaveLength(1);
+    expect(store.listVerifications(run.id)).toMatchObject([
+      { validator: "lookup-contract", status: "passed", artifactIds: [store.listArtifacts(run.id)[0]!.id] },
+    ]);
     registry.close();
     store.close();
   });

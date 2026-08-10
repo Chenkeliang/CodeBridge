@@ -275,4 +275,43 @@ describe("SqliteEventStore", () => {
     expect(store.sequenceForEventId(item.id, "evt_missing")).toBe(0);
     store.close();
   });
+
+  it("persists run artifacts and verification results with content hashes", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "verify",
+      mode: "review",
+      conversationId: "web:verify",
+      riskLevel: "read_only",
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode });
+    const artifact = store.createArtifact({
+      workItemId: item.id,
+      runId: run.id,
+      stepId: "tests",
+      kind: "test_report",
+      name: "result.json",
+      mimeType: "application/json",
+      content: '{"passed":true}',
+      metadata: { source: "runner" },
+    });
+    expect(store.getArtifact(artifact.id)).toEqual(artifact);
+    expect(artifact.contentHash).toMatch(/^sha256:/);
+    const verification = store.recordVerification({
+      workItemId: item.id,
+      runId: run.id,
+      stepId: "tests",
+      validator: "unit-tests",
+      status: "passed",
+      summary: "All tests passed",
+      artifactIds: [artifact.id],
+    });
+    expect(store.listArtifacts(run.id)).toHaveLength(1);
+    expect(store.listVerifications(run.id)).toEqual([verification]);
+    expect(store.listEvents(item.id).slice(-2).map((event) => event.type)).toEqual([
+      "ARTIFACT_CREATED",
+      "VERIFICATION_COMPLETED",
+    ]);
+    store.close();
+  });
 });
