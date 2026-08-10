@@ -208,14 +208,15 @@ program
           : [],
       });
     });
-    const stopAgentHealthChecks = registry.startHealthChecks(
-      agentIds.filter((agentId) => Boolean(config.backends[agentId])).map((agentId) => ({
+    const agentHealthAdapters = agentIds
+      .filter((agentId) => Boolean(config.backends[agentId]))
+      .map((agentId) => ({
         agentId,
         kind: registry.get(agentId)!.adapter,
         health: async () => (await runnerClient.health()).ok ? "healthy" as const : "unavailable" as const,
-      })),
-      60_000,
-    );
+      }));
+    await Promise.all(agentHealthAdapters.map((adapter) => registry.refresh(adapter)));
+    const stopAgentHealthChecks = registry.startHealthChecks(agentHealthAdapters, 60_000);
     const agentProfiles: AgentProfile[] = registry.list();
     const webWorkbenchApp = createWebWorkbenchApp({
       store: workItemStore,
@@ -232,7 +233,7 @@ program
     const sessionCatalogApp = createSessionApp(
       {
         catalog: sessionCatalog,
-        agents: agentProfiles,
+        agents: () => registry.list(),
         workItems: workItemStore,
         executor: runExecutor,
         runner: runnerClient,

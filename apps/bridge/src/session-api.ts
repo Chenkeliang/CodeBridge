@@ -15,7 +15,7 @@ import type { CapabilityRegistry } from "@codebridge/policy";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
-  agents: AgentProfile[];
+  agents: AgentProfile[] | (() => AgentProfile[]);
   workItems: SqliteEventStore;
   executor?: RunExecutor;
   runner?: RunnerClient;
@@ -27,7 +27,8 @@ export interface SessionApiOptions {
 
 export function createSessionApp(options: SessionApiOptions, token: string) {
   const app = new Hono();
-  const profiles = new Map(options.agents.map((agent) => [agent.agentId, agent]));
+  const currentAgents = () => typeof options.agents === "function" ? options.agents() : options.agents;
+  const currentProfiles = () => new Map(currentAgents().map((agent) => [agent.agentId, agent]));
 
   app.use("/v1/*", async (c, next) => {
     if (c.req.header("authorization") !== `Bearer ${token}`) {
@@ -36,10 +37,10 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     await next();
   });
 
-  app.get("/v1/agents", (c) => c.json({ agents: options.agents.map(toApiAgent) }));
+  app.get("/v1/agents", (c) => c.json({ agents: currentAgents().map(toApiAgent) }));
 
   app.get("/v1/agents/:agent_id", (c) => {
-    const agent = profiles.get(c.req.param("agent_id"));
+    const agent = currentProfiles().get(c.req.param("agent_id"));
     if (!agent) return c.json({ error: "agent_not_found" }, 404);
     return c.json(toApiAgent(agent));
   });
@@ -48,6 +49,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const agentId = c.req.query("agent_id");
     const importSessions = c.req.query("import") === "true";
     const cwd = c.req.query("cwd") ?? options.defaultCwd;
+    const profiles = currentProfiles();
     const sync = importSessions && cwd ? await syncProviderSessions(options, profiles, agentId, cwd) : undefined;
     return c.json({
       sessions: options.catalog.listSessions(agentId).map((session) => ({
@@ -60,7 +62,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
 
   app.post("/v1/sessions", async (c) => {
     const body = await readJson(c);
-    const agent = typeof body?.agent_id === "string" ? profiles.get(body.agent_id) : undefined;
+    const agent = typeof body?.agent_id === "string" ? currentProfiles().get(body.agent_id) : undefined;
     if (!agent) {
       return c.json({ error: "agent_id must reference a registered Agent" }, 400);
     }
