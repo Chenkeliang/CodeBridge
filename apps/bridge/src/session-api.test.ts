@@ -487,6 +487,33 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("stores Session message attachments and returns reference metadata", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    const response = await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        message: "请读取这个上下文",
+        attachments: [{ name: "context.txt", mime_type: "text/plain", data_base64: Buffer.from("hello").toString("base64") }],
+      }),
+    });
+    expect(response.status).toBe(202);
+    const body = await response.json() as { attachment_ids: string[]; task_record_id: string };
+    expect(body.attachment_ids).toHaveLength(1);
+    expect(workItems.listEvents(body.task_record_id).at(-1)?.payload).toMatchObject({ attachment_ids: body.attachment_ids });
+
+    const detail = await app.request(`/v1/attachments/${body.attachment_ids[0]}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ name: "context.txt", mime_type: "text/plain", content_hash: expect.stringMatching(/^sha256:/) });
+    catalog.close();
+    workItems.close();
+  });
+
   it("compiles the selected Workflow revision into a persisted Run Plan", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

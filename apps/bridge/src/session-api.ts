@@ -46,6 +46,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiAgent(agent));
   });
 
+  app.get("/v1/attachments/:attachment_id", (c) => {
+    const attachment = options.workItems.getMessageAttachment(c.req.param("attachment_id"));
+    if (!attachment) return c.json({ error: "attachment_not_found" }, 404);
+    return c.json(toApiAttachment(attachment));
+  });
+
   app.get("/v1/sessions", async (c) => {
     const agentId = c.req.query("agent_id");
     const importSessions = c.req.query("import") === "true";
@@ -272,6 +278,8 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!body || typeof body.message !== "string" || !body.message.trim()) {
       return c.json({ error: "message is required" }, 400);
     }
+    const attachmentInput = parseMessageAttachments(body.attachments);
+    if (!attachmentInput) return c.json({ error: "invalid_attachments" }, 400);
     const idempotencyKey = c.req.header("idempotency-key");
     if (idempotencyKey) {
       const cached = options.workItems.getIdempotencyResponse(`session:message:${session.id}`, idempotencyKey);
@@ -296,6 +304,17 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         workspaceScope: session.cwd ? [session.cwd] : [],
         riskLevel: "read_only",
       });
+    let attachments;
+    try {
+      attachments = attachmentInput.map((attachment) => options.workItems.createMessageAttachment({
+        workItemId: workItem.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        dataBase64: attachment.dataBase64,
+      }));
+    } catch (error) {
+      return c.json({ error: "invalid_attachments", detail: error instanceof Error ? error.message : String(error) }, 400);
+    }
     if (task && task.workflowId !== flowId) {
       options.workItems.updateWorkflowBinding(task.id, flowId);
     }
@@ -303,7 +322,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       workItemId: workItem.id,
       type: "MESSAGE_RECEIVED",
       actor: "user",
-      payload: { message: body.message },
+      payload: { message: body.message, attachment_ids: attachments.map((attachment) => attachment.id) },
     });
     options.catalog.updateSession(session.id, {
       taskRecordId: workItem.id,
@@ -332,6 +351,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         task_record_id: workItem.id,
         event_id: event.eventId,
         sequence: event.sequence,
+        attachment_ids: attachments.map((attachment) => attachment.id),
       };
     if (idempotencyKey) options.workItems.putIdempotencyResponse(`session:message:${session.id}`, idempotencyKey, response);
     return c.json(response, 202);
@@ -635,6 +655,20 @@ function toApiRun(run: ReturnType<SqliteEventStore["getRun"]>, sessionId: string
   };
 }
 
+function toApiAttachment(attachment: ReturnType<SqliteEventStore["getMessageAttachment"]>): Record<string, unknown> {
+  if (!attachment) throw new Error("attachment is required");
+  return {
+    schema_version: attachment.schemaVersion,
+    id: attachment.id,
+    work_item_id: attachment.workItemId,
+    name: attachment.name,
+    mime_type: attachment.mimeType,
+    byte_size: attachment.byteSize,
+    content_hash: attachment.contentHash,
+    created_at: attachment.createdAt,
+  };
+}
+
 function toSseEvent(event: {
   eventId: string;
   sequence: number;
@@ -700,6 +734,30 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<R
 
 function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function parseMessageAttachments(value: unknown): Array<{ name: string; mimeType: string; dataBase64: string }> | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 10) return null;
+  let totalBytes = 0;
+  const attachments = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const record = item as Record<string, unknown>;
+    if (typeof record.name !== "string" || !record.name.trim() || typeof record.data_base64 !== "string") return null;
+    if (record.mime_type !== undefined && typeof record.mime_type !== "string") return null;
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(record.data_base64) || record.data_base64.length % 4 === 1) return null;
+    const byteSize = Buffer.byteLength(record.data_base64, "base64");
+    if (byteSize === 0 || byteSize > 10_000_000) return null;
+    totalBytes += byteSize;
+    if (totalBytes > 25_000_000) return null;
+    attachments.push({
+      name: record.name,
+      mimeType: typeof record.mime_type === "string" && record.mime_type ? record.mime_type : "application/octet-stream",
+      dataBase64: record.data_base64,
+    });
+  }
+  return attachments;
 }
 
 function deriveTitle(message: string): string {

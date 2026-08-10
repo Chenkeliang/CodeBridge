@@ -314,4 +314,26 @@ describe("SqliteEventStore", () => {
     ]);
     store.close();
   });
+
+  it("persists message attachments as stable references", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "inspect attachment",
+      mode: "auto",
+      conversationId: "conv_attachment",
+      riskLevel: "read_only",
+    });
+    const attachment = store.createMessageAttachment({
+      workItemId: item.id,
+      name: "context.txt",
+      mimeType: "text/plain",
+      dataBase64: Buffer.from("context").toString("base64"),
+    });
+
+    expect(attachment.id).toMatch(/^attachment_/);
+    expect(attachment.contentHash).toMatch(/^sha256:/);
+    expect(store.getMessageAttachment(attachment.id)).toEqual(attachment);
+    expect(store.listMessageAttachments(item.id, [attachment.id])).toEqual([attachment]);
+    store.close();
+  });
 });

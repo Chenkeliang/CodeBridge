@@ -12,9 +12,11 @@ import { RunExecutor } from "./index.js";
 
 class FakeRunner {
   readonly prompts: string[] = [];
+  readonly requests: RunRequest[] = [];
   constructor(private readonly events: AgentEvent[], private readonly fail = false) {}
 
   async *run(request: RunRequest): AsyncGenerator<AgentEvent> {
+    this.requests.push(request);
     this.prompts.push(request.prompt);
     for (const event of this.events) yield event;
     if (this.fail) throw new Error("runner offline");
@@ -85,6 +87,39 @@ describe("RunExecutor", () => {
     await expect(executor.execute(run.id)).rejects.toThrow("runner offline");
     expect(store.getRun(run.id)?.status).toBe("failed");
     expect(store.getWorkItem(item.id)?.status).toBe("failed");
+    store.close();
+  });
+
+  it("forwards the latest message attachment references to the Runner", async () => {
+    const { store, item, run } = setup();
+    const attachment = store.createMessageAttachment({
+      workItemId: item.id,
+      name: "context.txt",
+      mimeType: "text/plain",
+      dataBase64: Buffer.from("context").toString("base64"),
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      type: "MESSAGE_RECEIVED",
+      actor: "user",
+      payload: { message: "read", attachment_ids: [attachment.id] },
+    });
+    const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const executor = new RunExecutor(store, runner, {
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "read",
+      }),
+    });
+
+    await executor.execute(run.id);
+
+    expect(runner.requests[0]?.attachments).toEqual([{
+      name: "context.txt",
+      mimeType: "text/plain",
+      dataBase64: attachment.dataBase64,
+    }]);
     store.close();
   });
 
