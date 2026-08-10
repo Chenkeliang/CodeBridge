@@ -161,6 +161,51 @@ describe("web workbench", () => {
     store.close();
   });
 
+  it("preserves an unsent model choice while the Session is polled", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain("if (state.resourceKey === key) return;");
+    expect(html).not.toContain("if (state.resourceKey === key) { $('reply-model').value = session.model || ''; return; }");
+    store.close();
+  });
+
+  it("clears an unsent draft when switching Sessions", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+    const selectSession = html.match(/async function selectSession\(id\)([\s\S]*?)await refreshSession\(true\)/)?.[1];
+
+    expect(selectSession).toContain("$('reply').value = ''");
+    store.close();
+  });
+
+  it("reloads native Agent commands when the slash menu is opened", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain("async function refreshCommands(session, query = '')");
+    expect(html).toContain("正在读取 Agent 命令…");
+    expect(html).toContain("无法读取当前 Agent 的命令。请重试。");
+    expect(html).toContain("void refreshCommands(state.session)");
+    expect(html).toContain("void refreshCommands(state.session, match[1] || '')");
+    store.close();
+  });
+
+  it("shows compact run activity without exposing hidden reasoning events", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain("renderRunActivity(event)");
+    expect(html).toContain("finishRunActivity(event)");
+    expect(html).toContain("正在处理");
+    expect(html).not.toContain("agentEvent.type === 'thought_delta'");
+    store.close();
+  });
+
   it("keeps empty Session details out of the main conversation", async () => {
     const store = new SqliteEventStore(":memory:");
     const app = createWebWorkbenchApp({ store, token: "web-token" });
