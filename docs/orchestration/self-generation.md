@@ -55,6 +55,22 @@ Run 完成并形成稳定 Plan
 `catalog/projects.yaml` 的 diff，再显式选择“应用”或“仅确认”。这使代码更新、服务迁移和
 依赖变化不会直接把后续工作带入错误映射。
 
+当配置 `orchestration.projectCatalog` 后，候选可以进入真实 Git 提案流程：
+
+```text
+Candidate
+  → POST /v1/projects/candidates/{id}/proposals
+  → 从配置的 baseRef 创建一个新 commit 和 feature branch
+  → 人工 Review
+  → POST /v1/projects/catalog/sync { ref }
+  → SQLite 更新为该 Git revision 的运行时投影
+```
+
+提案通过临时 Git index 和 plumbing 命令生成，不切换 CodeBridge 当前 checkout，也不写入
+`main`。分支名必须由调用方显式提供，已存在的分支不会被覆盖。同步时，Git Catalog 中缺失的
+既有项目只标记为 `deprecated`，不删除历史记录；因此 Git 是正式定义来源，SQLite 是可恢复的
+查询投影。
+
 ## 4. 临时 Flow 生成
 
 ```text

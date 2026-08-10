@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { parse as parseYaml } from "yaml";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import type { SqliteEventStore } from "@codebridge/work-items";
 
@@ -67,6 +69,25 @@ export interface ProjectRecord extends ProjectCandidateInput {
   id: string;
   status: ProjectStatus;
   registeredAt: string;
+}
+
+export interface ProjectCatalogGitOptions {
+  repositoryPath: string;
+  baseRef: string;
+  catalogPath?: string;
+}
+
+export interface CreateProjectCatalogProposalInput {
+  branch: string;
+  message?: string;
+}
+
+export interface ProjectCatalogProposal {
+  branch: string;
+  baseRef: string;
+  baseCommit: string;
+  commit: string;
+  path: string;
 }
 
 export interface ProjectFieldDrift {
@@ -297,6 +318,65 @@ export class ProjectCatalogStore {
     return (this.database.prepare("SELECT * FROM projects ORDER BY id ASC").all() as Record<string, unknown>[]).map(toProject);
   }
 
+  projectsForCandidate(id: string): ProjectRecord[] {
+    const candidate = this.getCandidate(id);
+    if (!candidate) throw new Error(`Project candidate not found: ${id}`);
+    const existing = this.getProject(candidate.projectId);
+    const openDrift = this.listDrifts(candidate.projectId)[0];
+    const proposed = openDrift ? applyDriftValues(candidate, openDrift.changes) : candidate;
+    const project: ProjectRecord = {
+      ...proposed,
+      id: candidate.projectId,
+      status: "registered",
+      registeredAt: existing?.registeredAt ?? new Date().toISOString(),
+    };
+    return [...this.listProjects().filter((item) => item.id !== project.id), project]
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  syncProjects(projects: ProjectRecord[], revision: string): ProjectRecord[] {
+    const ids = new Set(projects.map((project) => project.id));
+    if (ids.size !== projects.length) throw new Error("Project catalog contains duplicate project_id values");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare("UPDATE projects SET status = 'deprecated'").run();
+      for (const project of projects) {
+        const existing = this.getProject(project.id);
+        const evidence = mergeEvidence(project.evidence, [{ kind: "git_catalog", ref: revision }]);
+        this.database.prepare(
+          `INSERT INTO projects (
+            id, display_name, repository_remote, language, deploy_service,
+            log_service, apm_service, confidence, status, evidence, dependencies, registered_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'registered', ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name,
+            repository_remote = excluded.repository_remote, language = excluded.language,
+            deploy_service = excluded.deploy_service, log_service = excluded.log_service,
+            apm_service = excluded.apm_service, confidence = excluded.confidence,
+            status = 'registered', evidence = excluded.evidence,
+            dependencies = excluded.dependencies`,
+        ).run(
+          project.id,
+          project.displayName ?? null,
+          project.repositoryRemote ?? null,
+          project.language ?? null,
+          project.deployService ?? null,
+          project.logService ?? null,
+          project.apmService ?? null,
+          project.confidence,
+          JSON.stringify(evidence),
+          JSON.stringify(project.dependencies ?? []),
+          existing?.registeredAt ?? project.registeredAt,
+        );
+        this.database.prepare("UPDATE project_candidates SET status = 'accepted' WHERE project_id = ?").run(project.id);
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.listProjects();
+  }
+
   listDrifts(projectId?: string, status: ProjectDriftStatus = "open"): ProjectDrift[] {
     const rows = projectId
       ? this.database.prepare("SELECT * FROM project_drifts WHERE project_id = ? AND status = ? ORDER BY observed_at DESC").all(projectId, status)
@@ -450,6 +530,64 @@ export class ProjectCatalogStore {
 
   close(): void {
     if (this.database.isOpen) this.database.close();
+  }
+}
+
+export class ProjectCatalogGitRepository {
+  private readonly repositoryPath: string;
+  private readonly catalogPath: string;
+
+  constructor(private readonly options: ProjectCatalogGitOptions) {
+    this.repositoryPath = path.resolve(options.repositoryPath);
+    this.catalogPath = normalizeCatalogPath(options.catalogPath ?? "catalog/projects.yaml");
+    if (!options.baseRef.trim()) throw new Error("Project catalog baseRef must not be empty");
+    runGit(this.repositoryPath, ["rev-parse", "--git-dir"]);
+  }
+
+  get baseRef(): string {
+    return this.options.baseRef;
+  }
+
+  createProposal(
+    projects: ProjectRecord[],
+    input: CreateProjectCatalogProposalInput,
+  ): ProjectCatalogProposal {
+    const branch = input.branch.trim();
+    if (!branch) throw new Error("Project catalog proposal branch must not be empty");
+    runGit(this.repositoryPath, ["check-ref-format", "--branch", branch]);
+    const branchRef = `refs/heads/${branch}`;
+    if (gitRefExists(this.repositoryPath, branchRef)) {
+      throw new Error(`Project catalog proposal branch already exists: ${branch}`);
+    }
+    const baseCommit = runGit(this.repositoryPath, ["rev-parse", "--verify", `${this.options.baseRef}^{commit}`]);
+    const content = renderProjectsYaml(projects);
+    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-catalog-index-"));
+    const indexPath = path.join(temporaryDirectory, "index");
+    const environment = { GIT_INDEX_FILE: indexPath };
+    try {
+      runGit(this.repositoryPath, ["read-tree", baseCommit], { environment });
+      const blob = runGit(this.repositoryPath, ["hash-object", "-w", "--stdin"], { input: content });
+      runGit(this.repositoryPath, ["update-index", "--add", "--cacheinfo", "100644", blob, this.catalogPath], { environment });
+      const tree = runGit(this.repositoryPath, ["write-tree"], { environment });
+      const commit = runGit(this.repositoryPath, [
+        "commit-tree",
+        tree,
+        "-p",
+        baseCommit,
+        "-m",
+        input.message?.trim() || `catalog: update ${this.catalogPath}`,
+      ]);
+      runGit(this.repositoryPath, ["update-ref", branchRef, commit, "0000000000000000000000000000000000000000"]);
+      return { branch, baseRef: this.options.baseRef, baseCommit, commit, path: this.catalogPath };
+    } finally {
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+
+  readProjects(ref = this.options.baseRef): ProjectRecord[] {
+    const revision = runGit(this.repositoryPath, ["rev-parse", "--verify", `${ref}^{commit}`]);
+    const source = runGit(this.repositoryPath, ["show", `${revision}:${this.catalogPath}`], { trim: false });
+    return parseProjectsYaml(source, revision);
   }
 }
 
@@ -679,6 +817,57 @@ function renderProjectYaml(project: ProjectRecord): string {
   ].join("\n");
 }
 
+export function renderProjectsYaml(projects: ProjectRecord[]): string {
+  const lines = ["schema_version: 1", "projects:"];
+  for (const project of [...projects].sort((left, right) => left.id.localeCompare(right.id))) {
+    lines.push(
+      `  - project_id: ${yamlString(project.id)}`,
+      `    display_name: ${yamlString(project.displayName)}`,
+      `    repository_remote: ${yamlString(project.repositoryRemote)}`,
+      `    language: ${yamlString(project.language)}`,
+      `    deploy_service: ${yamlString(project.deployService)}`,
+      `    log_service: ${yamlString(project.logService)}`,
+      `    apm_service: ${yamlString(project.apmService)}`,
+      `    dependencies: [${[...(project.dependencies ?? [])].sort().map(yamlString).join(", ")}]`,
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function parseProjectsYaml(source: string, revision: string): ProjectRecord[] {
+  const parsed = parseYaml(source) as unknown;
+  if (!isRecord(parsed) || parsed.schema_version !== 1 || !Array.isArray(parsed.projects)) {
+    throw new Error("Project catalog must contain schema_version: 1 and a projects array");
+  }
+  const seen = new Set<string>();
+  return parsed.projects.map((entry, index) => {
+    if (!isRecord(entry)) throw new Error(`Project catalog entry ${index} must be an object`);
+    const id = requiredCatalogString(entry.project_id, `projects[${index}].project_id`);
+    if (seen.has(id)) throw new Error(`Project catalog contains duplicate project_id: ${id}`);
+    seen.add(id);
+    const dependencies = entry.dependencies === undefined
+      ? []
+      : Array.isArray(entry.dependencies)
+        ? entry.dependencies.map((value, dependencyIndex) => requiredCatalogString(value, `projects[${index}].dependencies[${dependencyIndex}]`))
+        : (() => { throw new Error(`projects[${index}].dependencies must be an array`); })();
+    return {
+      id,
+      projectId: id,
+      displayName: optionalCatalogString(entry.display_name, `projects[${index}].display_name`),
+      repositoryRemote: optionalCatalogString(entry.repository_remote, `projects[${index}].repository_remote`),
+      language: optionalCatalogString(entry.language, `projects[${index}].language`),
+      deployService: optionalCatalogString(entry.deploy_service, `projects[${index}].deploy_service`),
+      logService: optionalCatalogString(entry.log_service, `projects[${index}].log_service`),
+      apmService: optionalCatalogString(entry.apm_service, `projects[${index}].apm_service`),
+      dependencies,
+      confidence: "high" as const,
+      evidence: [{ kind: "git_catalog", ref: revision }],
+      status: "registered" as const,
+      registeredAt: new Date().toISOString(),
+    };
+  }).sort((left, right) => left.id.localeCompare(right.id));
+}
+
 function yamlString(value: string | null | undefined): string {
   return value ? JSON.stringify(value) : "null";
 }
@@ -693,4 +882,58 @@ function diffText(before: string, after: string): string {
     ...newLines.map((line) => `+${line}`),
     "",
   ].join("\n");
+}
+
+function normalizeCatalogPath(value: string): string {
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!normalized || path.posix.isAbsolute(normalized) || normalized.split("/").includes("..")) {
+    throw new Error("Project catalog path must be a relative path inside the repository");
+  }
+  return normalized;
+}
+
+function runGit(
+  repositoryPath: string,
+  args: string[],
+  options: { input?: string; environment?: Record<string, string>; trim?: boolean } = {},
+): string {
+  try {
+    const output = execFileSync("git", args, {
+      cwd: repositoryPath,
+      encoding: "utf8",
+      input: options.input,
+      env: { ...process.env, ...options.environment },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return options.trim === false ? output : output.trim();
+  } catch (error) {
+    const stderr = isRecord(error) && typeof error.stderr === "string" ? error.stderr.trim() : "";
+    throw new Error(`Git command failed: git ${args.join(" ")}${stderr ? `: ${stderr}` : ""}`);
+  }
+}
+
+function gitRefExists(repositoryPath: string, ref: string): boolean {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", ref], {
+      cwd: repositoryPath,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function requiredCatalogString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${field} must be a non-empty string`);
+  return value.trim();
+}
+
+function optionalCatalogString(value: unknown, field: string): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  return requiredCatalogString(value, field);
 }

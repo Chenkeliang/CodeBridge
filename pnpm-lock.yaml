@@ -193,6 +193,9 @@ importers:
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../work-items
+      yaml:
+        specifier: ^2.6.1
+        version: 2.9.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.0

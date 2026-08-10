@@ -51,6 +51,8 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `POST` | `/v1/discovery/tasks` | 创建异步项目或目录发现任务 |
 | `GET` | `/v1/projects/candidates` | 查询待确认的项目候选 |
 | `POST` | `/v1/projects/candidates/{candidate_id}/accept` | 接受候选并登记正式项目 |
+| `POST` | `/v1/projects/candidates/{candidate_id}/proposals` | 在独立 Git 分支创建 Catalog 提案，不切换当前 checkout |
+| `POST` | `/v1/projects/catalog/sync` | 将已审核的 Git revision 同步为 SQLite 查询投影 |
 | `GET` | `/v1/projects/drifts` | 查询已登记项目的待审核字段变化 |
 | `POST` | `/v1/projects/drifts/{drift_id}/apply` | 显式应用已审核的目录变化 |
 | `POST` | `/v1/projects/drifts/{drift_id}/resolve` | 忽略本次目录变化但保留审计记录 |
@@ -121,7 +123,7 @@ Run 请求中的 Flow 可以为空：
 
 ## 5. 幂等与恢复
 
-创建 Session、发送消息、创建 Run、应用 Flow 和接受项目候选都支持 `Idempotency-Key`。Key 与操作作用域一起持久化在 SQLite；重复请求返回第一次结果，不会重复创建 Run 或写入副作用事件。
+创建 Session、发送消息、创建 Run、应用 Flow 和接受项目候选都支持 `Idempotency-Key`。Key 与操作作用域一起持久化在 SQLite；重复请求返回第一次结果，不会重复创建 Run 或写入副作用事件。Git Catalog 提案使用调用方提供的唯一分支名作为冲突边界，已存在分支返回冲突，不会覆盖。
 
 事件读取同时接受 `after_sequence` 和标准 `Last-Event-ID`：
 

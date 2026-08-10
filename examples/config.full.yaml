@@ -47,6 +47,14 @@ workspaces:
   root: ~/Projects
   default: ~/Projects
 
+# 可选：把正式 Project Catalog 放在单独 Git 仓库或 CodeBridge 配置仓库中。
+# 提案只创建本地 feature branch/commit，不自动 merge 或 push。
+# orchestration:
+#   projectCatalog:
+#     repositoryPath: ~/Projects/codebridge-catalog
+#     baseRef: origin/main
+#     catalogPath: catalog/projects.yaml
+
 runnerHost:
   listen: 127.0.0.1:19789
   maxConcurrentRuns: 4

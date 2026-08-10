@@ -882,6 +882,49 @@ paths:
       responses:
         '200': { description: Catalog diff }
         '404': { $ref: '#/components/responses/NotFound' }
+  /v1/projects/candidates/{candidate_id}/proposals:
+    parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: proposeProjectCatalogGitRevision
+      summary: Create a reviewable Git branch and commit for a project catalog candidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch]
+              properties:
+                branch: { type: string, minLength: 1 }
+                message: { type: [string, 'null'] }
+      responses:
+        '201':
+          description: Git proposal created without changing the current checkout
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { description: Project catalog Git is not configured }
+  /v1/projects/catalog/sync:
+    post:
+      operationId: syncProjectCatalogFromGit
+      summary: Import an explicitly reviewed Git catalog revision into the SQLite projection
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ref: { type: [string, 'null'] }
+      responses:
+        '200':
+          description: Catalog projection synchronized
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { description: Project catalog Git is not configured }
 components:
   parameters:
     AgentId:

@@ -19,7 +19,11 @@ import {
 } from "@codebridge/policy";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
-import { ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
+import {
+  ProjectCatalogGitRepository,
+  ProjectCatalogStore,
+  ProjectDiscovery,
+} from "@codebridge/project-catalog";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { AgentRegistry } from "@codebridge/agent-registry";
@@ -192,6 +196,13 @@ program
       projectCatalog,
       projectDiscovery,
       config.runner.token,
+      config.orchestration?.projectCatalog
+        ? new ProjectCatalogGitRepository({
+            repositoryPath: config.orchestration.projectCatalog.repositoryPath,
+            baseRef: config.orchestration.projectCatalog.baseRef,
+            catalogPath: config.orchestration.projectCatalog.catalogPath,
+          })
+        : undefined,
     );
     const knownAgents = ["codex", "pi", "cursor", "claude"];
     const agentIds = [...new Set([...knownAgents, ...Object.keys(config.backends)])];

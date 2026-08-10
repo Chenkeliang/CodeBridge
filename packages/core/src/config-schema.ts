@@ -49,6 +49,16 @@ export const WorkspacesConfigSchema = z.object({
   named: z.record(z.string()).optional(),
 });
 
+export const ProjectCatalogConfigSchema = z.object({
+  repositoryPath: z.string().min(1),
+  baseRef: z.string().min(1).default("main"),
+  catalogPath: z.string().min(1).default("catalog/projects.yaml"),
+});
+
+export const OrchestrationConfigSchema = z.object({
+  projectCatalog: ProjectCatalogConfigSchema.optional(),
+});
+
 export const ConfigSchema = z.object({
   feishu: z.object({
     domain: z.string().url().default("https://open.feishu.cn"),
@@ -72,6 +82,7 @@ export const ConfigSchema = z.object({
   backends: z.record(BackendProfileSchema),
   access: AccessConfigSchema.optional(),
   workspaces: WorkspacesConfigSchema.optional(),
+  orchestration: OrchestrationConfigSchema.optional(),
   runnerHost: z
     .object({
       listen: z.string().default("127.0.0.1:19789"),
