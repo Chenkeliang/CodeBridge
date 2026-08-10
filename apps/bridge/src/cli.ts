@@ -182,7 +182,7 @@ program
     );
     const knownAgents = ["codex", "pi", "cursor", "claude"];
     const agentIds = [...new Set([...knownAgents, ...Object.keys(config.backends)])];
-    const registry = new AgentRegistry();
+    const registry = new AgentRegistry({ databasePath: path.join(dataDir, "agents.sqlite") });
     agentIds.forEach((agentId) => {
       const profile = config.backends[agentId];
       const displayNames: Record<string, string> = {
@@ -203,6 +203,14 @@ program
           : [],
       });
     });
+    const stopAgentHealthChecks = registry.startHealthChecks(
+      agentIds.filter((agentId) => Boolean(config.backends[agentId])).map((agentId) => ({
+        agentId,
+        kind: registry.get(agentId)!.adapter,
+        health: async () => (await runnerClient.health()).ok ? "healthy" as const : "unavailable" as const,
+      })),
+      60_000,
+    );
     const agentProfiles: AgentProfile[] = registry.list();
     const webWorkbenchApp = createWebWorkbenchApp({
       store: workItemStore,
@@ -240,6 +248,8 @@ program
       await bridge?.disconnect();
       await telegram?.disconnect();
       approvalService.close();
+      stopAgentHealthChecks();
+      registry.close();
       projectDiscovery.close();
       sessionCatalog.close();
       flowCatalog.close();
