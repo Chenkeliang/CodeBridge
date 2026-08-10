@@ -32,6 +32,8 @@ export interface AgentSession {
   additionalDirectories: string[];
   title: string | null;
   status: SessionStatus;
+  pinnedAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -59,7 +61,13 @@ export interface CreateSessionInput {
 
 export type UpdateSessionInput = Partial<Omit<CreateSessionInput, "id" | "agentId">> & {
   status?: SessionStatus;
+  pinned?: boolean;
+  archived?: boolean;
 };
+
+export interface ListSessionsOptions {
+  includeArchived?: boolean;
+}
 
 type SqliteRow = Record<string, unknown>;
 
@@ -86,6 +94,8 @@ export class SessionCatalogStore {
         additional_directories TEXT NOT NULL,
         title TEXT,
         status TEXT NOT NULL,
+        pinned_at TEXT,
+        archived_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -116,6 +126,16 @@ export class SessionCatalogStore {
     } catch {
       // Existing databases already contain the model override column.
     }
+    try {
+      this.database.exec("ALTER TABLE agent_sessions ADD COLUMN pinned_at TEXT");
+    } catch {
+      // Existing databases already contain the pin metadata column.
+    }
+    try {
+      this.database.exec("ALTER TABLE agent_sessions ADD COLUMN archived_at TEXT");
+    } catch {
+      // Existing databases already contain the archive metadata column.
+    }
   }
 
   createSession(input: CreateSessionInput): AgentSession {
@@ -133,6 +153,8 @@ export class SessionCatalogStore {
       additionalDirectories: [...(input.additionalDirectories ?? [])],
       title: input.title ?? null,
       status: "idle",
+      pinnedAt: null,
+      archivedAt: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -140,8 +162,8 @@ export class SessionCatalogStore {
       .prepare(
         `INSERT INTO agent_sessions (
           id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, model, folder_id, cwd,
-          additional_directories, title, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          additional_directories, title, status, pinned_at, archived_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -156,6 +178,8 @@ export class SessionCatalogStore {
         JSON.stringify(session.additionalDirectories),
         session.title,
         session.status,
+        session.pinnedAt,
+        session.archivedAt,
         session.createdAt,
         session.updatedAt,
       );
@@ -176,13 +200,15 @@ export class SessionCatalogStore {
     return row ? toSession(row) : undefined;
   }
 
-  listSessions(agentId?: string): AgentSession[] {
+  listSessions(agentId?: string, options: ListSessionsOptions = {}): AgentSession[] {
+    const archiveFilter = options.includeArchived ? "" : agentId ? " AND archived_at IS NULL" : " WHERE archived_at IS NULL";
+    const order = " ORDER BY pinned_at IS NULL ASC, pinned_at DESC, updated_at DESC";
     const rows = agentId
       ? this.database
-          .prepare("SELECT * FROM agent_sessions WHERE agent_id = ? ORDER BY updated_at DESC")
+          .prepare(`SELECT * FROM agent_sessions WHERE agent_id = ?${archiveFilter}${order}`)
           .all(agentId)
       : this.database
-          .prepare("SELECT * FROM agent_sessions ORDER BY updated_at DESC")
+          .prepare(`SELECT * FROM agent_sessions${archiveFilter}${order}`)
           .all();
     return (rows as SqliteRow[]).map(toSession);
   }
@@ -237,6 +263,13 @@ export class SessionCatalogStore {
   updateSession(id: string, input: UpdateSessionInput): AgentSession | undefined {
     const existing = this.getSession(id);
     if (!existing) return undefined;
+    const now = new Date().toISOString();
+    const archivedAt = input.archived === undefined
+      ? existing.archivedAt
+      : input.archived ? now : null;
+    const pinnedAt = input.archived
+      ? null
+      : input.pinned === undefined ? existing.pinnedAt : input.pinned ? now : null;
     const next: AgentSession = {
       ...existing,
       providerSessionId: input.providerSessionId ?? existing.providerSessionId,
@@ -248,12 +281,14 @@ export class SessionCatalogStore {
       additionalDirectories: input.additionalDirectories ?? existing.additionalDirectories,
       title: input.title ?? existing.title,
       status: input.status ?? existing.status,
-      updatedAt: new Date().toISOString(),
+      pinnedAt,
+      archivedAt,
+      updatedAt: now,
     };
     this.database
       .prepare(
         `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, flow_id = ?, model = ?, folder_id = ?, cwd = ?,
-         additional_directories = ?, title = ?, status = ?, updated_at = ? WHERE id = ?`,
+         additional_directories = ?, title = ?, status = ?, pinned_at = ?, archived_at = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.providerSessionId,
@@ -265,6 +300,8 @@ export class SessionCatalogStore {
         JSON.stringify(next.additionalDirectories),
         next.title,
         next.status,
+        next.pinnedAt,
+        next.archivedAt,
         next.updatedAt,
         id,
       );
@@ -295,6 +332,8 @@ function toSession(row: SqliteRow): AgentSession {
     additionalDirectories: JSON.parse(String(row.additional_directories)) as string[],
     title: row.title === null ? null : String(row.title),
     status: String(row.status) as SessionStatus,
+    pinnedAt: row.pinned_at === null || row.pinned_at === undefined ? null : String(row.pinned_at),
+    archivedAt: row.archived_at === null || row.archived_at === undefined ? null : String(row.archived_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
