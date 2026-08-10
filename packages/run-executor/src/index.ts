@@ -163,10 +163,61 @@ export class RunExecutor {
         .map((event) => event.target)
         .filter((target): target is string => Boolean(target)),
     );
+    const skipped = new Set(
+      this.store
+        .listEvents(workItem.id)
+        .filter((event) => event.runId === run.id && event.type === "STEP_SKIPPED")
+        .map((event) => event.target)
+        .filter((target): target is string => Boolean(target)),
+    );
     for (const step of orderSteps(plan.steps)) {
-      if (completed.has(step.id)) continue;
-      if (!step.dependsOn.every((dependency) => completed.has(dependency))) {
+      if (completed.has(step.id) || skipped.has(step.id)) continue;
+      const dependencies = dependenciesFor(step, plan.steps);
+      if (!dependencies.every((dependency) => completed.has(dependency) || skipped.has(dependency))) {
         throw new Error(`Plan dependency is not complete for step ${step.id}`);
+      }
+      if (dependencies.length && dependencies.every((dependency) => skipped.has(dependency))) {
+        this.skipStep(workItem.id, run.id, step.id, { reason: "dependency_skipped" });
+        skipped.add(step.id);
+        continue;
+      }
+      if (step.branches.length) {
+        const selected = selectBranch(step, workItem.identifiers);
+        if (!selected) throw new Error(`No branch matched for step ${step.id}`);
+        this.store.appendEvent({
+          workItemId: workItem.id,
+          runId: run.id,
+          type: "STEP_STARTED",
+          actor: "system",
+          target: step.id,
+          payload: { capability_id: null, risk: step.risk },
+        });
+        this.store.appendEvent({
+          workItemId: workItem.id,
+          runId: run.id,
+          type: "BRANCH_SELECTED",
+          actor: "system",
+          target: step.id,
+          payload: { when: selected.when, next: selected.next },
+        });
+        for (const branch of step.branches) {
+          if (branch.next === selected.next || skipped.has(branch.next)) continue;
+          this.skipStep(workItem.id, run.id, branch.next, {
+            reason: "branch_not_selected",
+            branch_step_id: step.id,
+            selected: selected.next,
+          });
+          skipped.add(branch.next);
+        }
+        this.store.appendEvent({
+          workItemId: workItem.id,
+          runId: run.id,
+          type: "STEP_SUCCEEDED",
+          actor: "system",
+          target: step.id,
+        });
+        completed.add(step.id);
+        continue;
       }
       const policyDecision = step.capabilityId && this.options.policy
         ? this.options.policy.evaluate(step.capabilityId, {
@@ -229,6 +280,22 @@ export class RunExecutor {
     return false;
   }
 
+  private skipStep(
+    workItemId: string,
+    runId: string,
+    stepId: string,
+    payload: Record<string, unknown>,
+  ): void {
+    this.store.appendEvent({
+      workItemId,
+      runId,
+      type: "STEP_SKIPPED",
+      actor: "system",
+      target: stepId,
+      payload,
+    });
+  }
+
   private async executeStep(
     workItem: WorkItem,
     run: Run,
@@ -274,10 +341,50 @@ function orderSteps(steps: PersistedPlanStep[]): PersistedPlanStep[] {
   const pending = new Map(steps.map((step) => [step.id, step]));
   const ordered: PersistedPlanStep[] = [];
   while (pending.size) {
-    const next = [...pending.values()].find((step) => step.dependsOn.every((dependency) => ordered.some((item) => item.id === dependency)));
+    const next = [...pending.values()].find((step) => dependenciesFor(step, steps).every((dependency) => ordered.some((item) => item.id === dependency)));
     if (!next) throw new Error("Plan contains an unresolved dependency");
     ordered.push(next);
     pending.delete(next.id);
   }
   return ordered;
+}
+
+function dependenciesFor(step: PersistedPlanStep, steps: PersistedPlanStep[]): string[] {
+  const branchParents = steps
+    .filter((candidate) => candidate.branches.some((branch) => branch.next === step.id))
+    .map((candidate) => candidate.id);
+  return [...new Set([...step.dependsOn, ...branchParents])];
+}
+
+function selectBranch(
+  step: PersistedPlanStep,
+  facts: Record<string, unknown>,
+): { when: string; next: string } | undefined {
+  return step.branches.find((branch) => branch.when !== "default" && branch.when !== "else" && matches(branch.when, facts))
+    ?? step.branches.find((branch) => branch.when === "default" || branch.when === "else");
+}
+
+function matches(expression: string, facts: Record<string, unknown>): boolean {
+  const comparison = expression.match(/^([A-Za-z0-9_.-]+)\s*(==|=|!=)\s*(.+)$/);
+  if (!comparison) return Boolean(valueAt(facts, expression.trim()));
+  const actual = valueAt(facts, comparison[1]!);
+  const expected = parseLiteral(comparison[3]!.trim());
+  return comparison[2] === "!=" ? actual !== expected : actual === expected;
+}
+
+function valueAt(facts: Record<string, unknown>, path: string): unknown {
+  let value: unknown = facts;
+  for (const key of path.split(".")) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    value = (value as Record<string, unknown>)[key];
+  }
+  return value;
+}
+
+function parseLiteral(value: string): unknown {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value === "null") return null;
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  return value.replace(/^(["'])(.*)\1$/, "$2");
 }
