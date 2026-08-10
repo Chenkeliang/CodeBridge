@@ -205,4 +205,76 @@ describe("RunExecutor", () => {
     capabilities.close();
     store.close();
   });
+
+  it("selects a structured branch and skips the unselected path", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "branch",
+      mode: "investigation",
+      conversationId: "web:branch",
+      identifiers: { ready: true },
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_branch",
+      source: "workflow",
+      workflowId: "branch-flow",
+      definitionRevision: "git:branch",
+      steps: [
+        {
+          id: "decision",
+          capabilityId: null,
+          risk: "read_only",
+          dependsOn: [],
+          guard: null,
+          approval: "none",
+          branches: [
+            { when: "ready == true", next: "ready-path" },
+            { when: "default", next: "fallback-path" },
+          ],
+          purpose: null,
+        },
+        {
+          id: "fallback-path",
+          capabilityId: "fallback.inspect",
+          risk: "read_only",
+          dependsOn: [],
+          guard: null,
+          approval: "none",
+          branches: [],
+          purpose: null,
+        },
+        {
+          id: "ready-path",
+          capabilityId: "ready.inspect",
+          risk: "read_only",
+          dependsOn: [],
+          guard: null,
+          approval: "none",
+          branches: [],
+          purpose: null,
+        },
+      ],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const executor = new RunExecutor(store, runner, {
+      resolveRequest: (_workItem, _run, step) => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: `step:${step?.id}`,
+      }),
+    });
+
+    expect((await executor.execute(run.id)).status).toBe("succeeded");
+    expect(runner.prompts).toEqual(["step:ready-path"]);
+    expect(store.listEvents(item.id).find((event) => event.type === "BRANCH_SELECTED")).toMatchObject({
+      target: "decision",
+      payload: { when: "ready == true", next: "ready-path" },
+    });
+    expect(store.listEvents(item.id).find((event) => event.type === "STEP_SKIPPED")).toMatchObject({
+      target: "fallback-path",
+    });
+    store.close();
+  });
 });
