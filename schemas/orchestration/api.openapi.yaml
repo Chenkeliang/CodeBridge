@@ -121,6 +121,52 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Acknowledgement'
+  /v1/channels/{channel}/conversations/{conversation_id}/messages:
+    parameters:
+      - in: path
+        name: channel
+        required: true
+        schema: { type: string }
+      - in: path
+        name: conversation_id
+        required: true
+        schema: { type: string }
+    post:
+      operationId: sendChannelMessage
+      summary: Map an external channel conversation to the shared Session, Message and Run contracts
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1 }
+                agent_id: { type: string }
+                flow_id: { type: [string, 'null'] }
+                model: { type: [string, 'null'] }
+                cwd: { type: [string, 'null'] }
+                title: { type: [string, 'null'] }
+      responses:
+        '202':
+          description: Channel message accepted and Run created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [channel, conversation_id, session_id, task_record_id, run_id, status]
+                properties:
+                  channel: { type: string }
+                  conversation_id: { type: string }
+                  session_id: { type: string }
+                  task_record_id: { type: string }
+                  run_id: { type: string }
+                  status: { type: string, enum: [queued, running, waiting, succeeded, failed, cancelled] }
+                  plan_id: { type: [string, 'null'] }
+                  workflow_revision: { type: [string, 'null'] }
   /v1/sessions/{session_id}/runs:
     parameters:
       - $ref: '#/components/parameters/SessionId'

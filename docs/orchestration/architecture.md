@@ -66,6 +66,8 @@ Web 工作台                         飞书 / Telegram
 
 CodeBridge 是物理上的单一主项目。Agent Registry、Session Catalog、Flow Catalog、Run Runtime、Policy、Skill Runtime 和 MCP Runtime 是内部模块；现有 Bridge、Runner、ACP Backend 和 Channel 继续复用，不复制第二套运行时。
 
+外部渠道使用 `channel + conversation_id` 持久化绑定到 Agent Session，再调用共享的 Message/Run API；内置 Feishu/Telegram Router 保持兼容运行，迁移可以逐个渠道进行，不要求一次性改动旧适配器。
+
 目标包边界是：
 
 ```text
