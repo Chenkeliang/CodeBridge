@@ -61,6 +61,12 @@ describe("web workbench", () => {
     expect(html).toContain("/v1/projects/drifts");
     expect(html).toContain('data-drift-action="apply"');
     expect(html).toContain('data-drift-action="resolve"');
+    expect(html).toContain('id="attachment-picker"');
+    expect(html).toContain('id="reply-attachment-picker"');
+    expect(html).toContain('id="attachment-list"');
+    expect(html).toContain('id="reply-attachment-list"');
+    expect(html).toContain("data_base64");
+    expect(html).toContain("mime_type");
     expect(html).toContain('data-view="plan"');
     expect(html).toContain('data-view="approval"');
     expect(html).toContain('data-view="evidence"');

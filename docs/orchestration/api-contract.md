@@ -99,6 +99,8 @@ GET       /v1/work-items/{id}/events
 
 主工作目录保存为 `cwd`；跨项目上下文通过 `additional_directories` 管理。新增目录必须先由 Runner 授权并保存 canonical path，移除只改变 Session 上下文；两者从下一次 Run 开始生效，不修改历史 Run。
 
+消息附件使用 `{name, mime_type, data_base64}` 输入。Bridge 将内容持久化为带 hash 的 `attachment_<id>` 引用，事件只保存 `attachment_ids`，Run Runtime 再按引用组装 Runner 已支持的 Attachment；单文件上限 10 MB，单条消息总上限 25 MB。
+
 ## 4. Flow 绑定和动态生成
 
 Run 请求中的 Flow 可以为空：

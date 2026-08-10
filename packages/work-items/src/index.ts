@@ -244,6 +244,26 @@ export interface RecordVerificationInput {
   artifactIds?: string[];
 }
 
+export interface MessageAttachmentRecord {
+  schemaVersion: 1;
+  id: string;
+  workItemId: string;
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+  byteSize: number;
+  contentHash: string;
+  createdAt: string;
+}
+
+export interface CreateMessageAttachmentInput {
+  id?: string;
+  workItemId: string;
+  name: string;
+  mimeType?: string;
+  dataBase64: string;
+}
+
 type SqliteRow = Record<string, unknown>;
 
 const STATUS_BY_EVENT: Partial<Record<DomainEventType, WorkItemStatus>> = {
@@ -324,6 +344,21 @@ export class SqliteEventStore {
 
       CREATE INDEX IF NOT EXISTS runs_work_item_created
         ON runs (work_item_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS message_attachments (
+        id TEXT PRIMARY KEY,
+        schema_version INTEGER NOT NULL,
+        work_item_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        data_base64 TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (work_item_id) REFERENCES work_items(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS message_attachments_work_item_created
+        ON message_attachments (work_item_id, created_at);
 
       CREATE TABLE IF NOT EXISTS plans (
         plan_id TEXT PRIMARY KEY,
@@ -698,6 +733,64 @@ export class SqliteEventStore {
     return row?.response ? JSON.parse(row.response) : undefined;
   }
 
+  createMessageAttachment(input: CreateMessageAttachmentInput): MessageAttachmentRecord {
+    if (!this.getWorkItem(input.workItemId)) throw new Error(`WorkItem not found: ${input.workItemId}`);
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(input.dataBase64) || input.dataBase64.length % 4 === 1) {
+      throw new Error("attachment data must be valid base64");
+    }
+    const bytes = Buffer.from(input.dataBase64, "base64");
+    if (bytes.length === 0) throw new Error("attachment data cannot be empty");
+    if (bytes.length > 10_000_000) throw new Error("attachment content exceeds 10 MB");
+    const record: MessageAttachmentRecord = {
+      schemaVersion: 1,
+      id: input.id ?? createId("attachment"),
+      workItemId: input.workItemId,
+      name: path.basename(input.name || "attachment"),
+      mimeType: input.mimeType || "application/octet-stream",
+      dataBase64: input.dataBase64,
+      byteSize: bytes.length,
+      contentHash: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      createdAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `INSERT INTO message_attachments (
+          id, schema_version, work_item_id, name, mime_type, data_base64,
+          byte_size, content_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.schemaVersion,
+        record.workItemId,
+        record.name,
+        record.mimeType,
+        record.dataBase64,
+        record.byteSize,
+        record.contentHash,
+        record.createdAt,
+      );
+    return record;
+  }
+
+  getMessageAttachment(id: string): MessageAttachmentRecord | undefined {
+    const row = this.database.prepare("SELECT * FROM message_attachments WHERE id = ?").get(id) as SqliteRow | undefined;
+    return row ? toMessageAttachment(row) : undefined;
+  }
+
+  listMessageAttachments(workItemId: string, ids?: string[]): MessageAttachmentRecord[] {
+    const rows = this.database
+      .prepare("SELECT * FROM message_attachments WHERE work_item_id = ? ORDER BY created_at ASC")
+      .all(workItemId) as SqliteRow[];
+    const attachments = rows.map(toMessageAttachment);
+    if (!ids) return attachments;
+    const byId = new Map(attachments.map((attachment) => [attachment.id, attachment]));
+    return ids.flatMap((id) => {
+      const attachment = byId.get(id);
+      return attachment ? [attachment] : [];
+    });
+  }
+
   createArtifact(input: CreateArtifactInput): ArtifactRecord {
     if (!this.getWorkItem(input.workItemId)) throw new Error(`WorkItem not found: ${input.workItemId}`);
     if (!this.getRun(input.runId)) throw new Error(`Run not found: ${input.runId}`);
@@ -878,7 +971,7 @@ export class SqliteEventStore {
 
 }
 
-function createId(prefix: "wi" | "evt" | "run" | "artifact" | "verification"): string {
+function createId(prefix: "wi" | "evt" | "run" | "artifact" | "verification" | "attachment"): string {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }
 
@@ -965,6 +1058,20 @@ function toArtifact(row: SqliteRow): ArtifactRecord {
     content: String(row.content),
     contentHash: String(row.content_hash),
     metadata: JSON.parse(String(row.metadata)) as Record<string, unknown>,
+    createdAt: String(row.created_at),
+  };
+}
+
+function toMessageAttachment(row: SqliteRow): MessageAttachmentRecord {
+  return {
+    schemaVersion: Number(row.schema_version) as 1,
+    id: String(row.id),
+    workItemId: String(row.work_item_id),
+    name: String(row.name),
+    mimeType: String(row.mime_type),
+    dataBase64: String(row.data_base64),
+    byteSize: Number(row.byte_size),
+    contentHash: String(row.content_hash),
     createdAt: String(row.created_at),
   };
 }

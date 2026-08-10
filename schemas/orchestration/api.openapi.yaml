@@ -321,6 +321,24 @@ paths:
             text/event-stream:
               schema:
                 type: string
+  /v1/attachments/{attachment_id}:
+    parameters:
+      - in: path
+        name: attachment_id
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getMessageAttachment
+      summary: Get metadata for a message attachment reference
+      responses:
+        '200':
+          description: Attachment metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageAttachment'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /v1/sessions/{session_id}/fork:
     parameters:
       - $ref: '#/components/parameters/SessionId'
@@ -991,6 +1009,27 @@ components:
         references:
           type: array
           items: { type: string }
+        attachments:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            required: [name, mime_type, data_base64]
+            properties:
+              name: { type: string, minLength: 1 }
+              mime_type: { type: string }
+              data_base64: { type: string }
+    MessageAttachment:
+      type: object
+      required: [id, work_item_id, name, mime_type, byte_size, content_hash, created_at]
+      properties:
+        id: { type: string }
+        work_item_id: { type: string }
+        name: { type: string }
+        mime_type: { type: string }
+        byte_size: { type: integer, minimum: 1 }
+        content_hash: { type: string }
+        created_at: { type: string, format: date-time }
     StartSessionRun:
       type: object
       properties:

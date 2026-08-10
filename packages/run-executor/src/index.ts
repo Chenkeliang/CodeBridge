@@ -332,6 +332,21 @@ export class RunExecutor {
   ): Promise<void> {
     const capabilityResult = await this.executeCapability(workItem, run, step, signal);
     let request = await this.options.resolveRequest(workItem, run, step ?? undefined);
+    const latestMessage = this.store
+      .listEvents(workItem.id)
+      .reverse()
+      .find((event) => event.type === "MESSAGE_RECEIVED");
+    const attachmentIds = Array.isArray(latestMessage?.payload.attachment_ids)
+      ? latestMessage.payload.attachment_ids.filter((id): id is string => typeof id === "string")
+      : [];
+    const messageAttachments = this.store.listMessageAttachments(workItem.id, attachmentIds).map((attachment) => ({
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      dataBase64: attachment.dataBase64,
+    }));
+    if (messageAttachments.length) {
+      request = { ...request, attachments: [...(request.attachments ?? []), ...messageAttachments] };
+    }
     if (capabilityResult?.forwardToAgent) {
       const instructions = capabilityResult.output && typeof capabilityResult.output === "object"
         ? (capabilityResult.output as Record<string, unknown>).instructions
