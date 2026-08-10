@@ -370,6 +370,40 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("merges native and session-advertised Agent commands", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      listCommands: async () => ({ commands: [{ name: "skill:review", description: "Review" }] }),
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/workspace" }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    const message = await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ message: "hello" }),
+    });
+    const taskId = (await message.json() as { task_record_id: string }).task_record_id;
+    workItems.appendEvent({
+      workItemId: taskId,
+      type: "AGENT_EVENT",
+      actor: "adapter",
+      payload: { event: { type: "available_commands_update", availableCommands: [{ name: "compact", description: "Compact context" }] } },
+    });
+
+    const response = await app.request(`/v1/sessions/${session.id}/commands`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(await response.json()).toEqual({
+      commands: [
+        { name: "skill:review", description: "Review" },
+        { name: "compact", description: "Compact context" },
+      ],
+    });
+    catalog.close();
+    workItems.close();
+  });
+
   it("does not mutate additional directories when authorization is unavailable", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

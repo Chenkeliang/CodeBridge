@@ -162,3 +162,21 @@ describe("RunnerClient directory authorization", () => {
     });
   });
 });
+
+describe("RunnerClient Agent commands", () => {
+  it("loads commands for the selected backend and workspace", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ commands: [{ name: "skill:review", description: "Review" }] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.listCommands("pi", "/workspace")).resolves.toEqual({
+      commands: [{ name: "skill:review", description: "Review" }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/commands?backend=pi&cwd=%2Fworkspace",
+      expect.any(Object),
+    );
+  });
+});

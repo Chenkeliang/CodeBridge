@@ -1,10 +1,17 @@
 import fs from "node:fs/promises";
 import {
   createAgentSession,
+  getAgentDir,
+  loadSkills,
   ModelRuntime,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentEvent, BackendConfigOption, RunContext } from "@codebridge/core";
+import type {
+  AgentAvailableCommand,
+  AgentEvent,
+  BackendConfigOption,
+  RunContext,
+} from "@codebridge/core";
 import type { CliSessionSummary } from "./session-discovery.js";
 
 /** The small native-session surface used by the runner and by adapter tests. */
@@ -220,6 +227,19 @@ export async function listPiConfigOptions(): Promise<BackendConfigOption[]> {
         },
       ]
     : [];
+}
+
+export async function listPiCommands(cwd: string): Promise<AgentAvailableCommand[]> {
+  const result = loadSkills({
+    cwd,
+    agentDir: getAgentDir(),
+    skillPaths: [],
+    includeDefaults: true,
+  });
+  return result.skills.map((skill) => ({
+    name: `skill:${skill.name}`,
+    description: skill.description,
+  }));
 }
 
 export async function closePiSession(
