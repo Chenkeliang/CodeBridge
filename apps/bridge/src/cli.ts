@@ -11,7 +11,12 @@ import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
 import { TelegramBridge } from "@codebridge/channel-telegram";
 import { createMemoryPlugin } from "@codebridge/memory-plugin";
 import { SqliteEventStore, type PersistedPlanStep } from "@codebridge/work-items";
-import { ApprovalService, CapabilityRegistry, PolicyEngine } from "@codebridge/policy";
+import {
+  ApprovalService,
+  CapabilityRegistry,
+  CapabilityRuntime,
+  PolicyEngine,
+} from "@codebridge/policy";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
 import { ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
@@ -92,6 +97,7 @@ program
     const capabilityRegistry = new CapabilityRegistry([], {
       databasePath: path.join(dataDir, "capabilities.sqlite"),
     });
+    const capabilityRuntime = new CapabilityRuntime();
     const policyEngine = new PolicyEngine(capabilityRegistry);
     const runnerClient = new RunnerClient({
       baseUrl: config.runner.url,
@@ -100,6 +106,7 @@ program
     const runExecutor = new RunExecutor(workItemStore, runnerClient, {
       approvals: approvalService,
       policy: policyEngine,
+      capabilities: capabilityRuntime,
       onEvent: (run, event) => {
         if (event.type !== "session") return;
         const workItem = workItemStore.getWorkItem(run.workItemId);

@@ -5,6 +5,8 @@ import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import type { SqliteEventStore } from "@codebridge/work-items";
 
+export * from "./capability-runtime.js";
+
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
   typeof import("node:sqlite");
 
@@ -114,6 +116,10 @@ function toCapability(row: Record<string, unknown>): CapabilityDefinition {
 
 export class PolicyEngine {
   constructor(private readonly registry: CapabilityRegistry) {}
+
+  getCapability(capabilityId: string): CapabilityDefinition | undefined {
+    return this.registry.get(capabilityId);
+  }
 
   evaluate(capabilityId: string, context: PolicyContext): PolicyDecision {
     const capability = this.registry.get(capabilityId);

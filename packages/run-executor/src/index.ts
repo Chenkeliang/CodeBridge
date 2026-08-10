@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
-import type { ApprovalService, PolicyEngine } from "@codebridge/policy";
+import type {
+  ApprovalService,
+  CapabilityRuntime,
+  PolicyEngine,
+  CapabilityExecutionResult,
+} from "@codebridge/policy";
 import {
   SqliteEventStore,
   type Run,
@@ -21,6 +26,7 @@ export interface RunExecutorOptions {
   onEvent?: (run: Run, event: AgentEvent) => void;
   approvals?: ApprovalService;
   policy?: PolicyEngine;
+  capabilities?: CapabilityRuntime;
 }
 
 export class RunExecutor {
@@ -302,7 +308,18 @@ export class RunExecutor {
     step: PersistedPlanStep | null,
     signal?: AbortSignal,
   ): Promise<void> {
-    const request = await this.options.resolveRequest(workItem, run, step ?? undefined);
+    const capabilityResult = await this.executeCapability(workItem, run, step, signal);
+    let request = await this.options.resolveRequest(workItem, run, step ?? undefined);
+    if (capabilityResult?.forwardToAgent) {
+      const instructions = capabilityResult.output && typeof capabilityResult.output === "object"
+        ? (capabilityResult.output as Record<string, unknown>).instructions
+        : undefined;
+      if (typeof instructions === "string" && instructions.trim()) {
+        request = { ...request, prompt: `${instructions}\n\n${request.prompt}` };
+      }
+    } else if (capabilityResult) {
+      return;
+    }
     for await (const event of this.runner.run(request, { signal })) {
       this.options.onEvent?.(run, event);
       this.store.appendEvent({
@@ -346,6 +363,47 @@ export class RunExecutor {
         throw new Error(`Runner exited with code ${event.exitCode}`);
       }
     }
+  }
+
+  private async executeCapability(
+    workItem: WorkItem,
+    run: Run,
+    step: PersistedPlanStep | null,
+    signal?: AbortSignal,
+  ): Promise<CapabilityExecutionResult | undefined> {
+    if (!step?.capabilityId || !this.options.capabilities || !this.options.policy) return undefined;
+    const definition = this.options.policy.getCapability(step.capabilityId);
+    if (!definition || !this.options.capabilities.has(definition.adapter)) return undefined;
+    const result = await this.options.capabilities.execute(definition.adapter, {
+      input: {
+        title: workItem.title,
+        identifiers: workItem.identifiers,
+        workspaceScope: workItem.workspaceScope,
+        step: { id: step.id, purpose: step.purpose },
+      },
+      context: {
+        cwd: workItem.workspaceScope[0],
+        environment: step.risk === "production_write" ? "production" : "local",
+        runId: run.id,
+        stepId: step.id,
+        signal,
+      },
+    });
+    this.store.appendEvent({
+      workItemId: workItem.id,
+      runId: run.id,
+      type: "AGENT_EVENT",
+      actor: "adapter",
+      target: step.capabilityId,
+      payload: {
+        adapter: definition.adapter,
+        capability_id: step.capabilityId,
+        output: result.output,
+        artifacts: result.artifacts,
+        retryable: result.retryable ?? false,
+      },
+    });
+    return result;
   }
 
   private hasRunEvent(workItemId: string, runId: string, type: string): boolean {
