@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
-import type { ApprovalService } from "@codebridge/policy";
+import type { ApprovalService, PolicyEngine } from "@codebridge/policy";
 import {
   SqliteEventStore,
   type Run,
@@ -20,6 +20,7 @@ export interface RunExecutorOptions {
   resolveRequest: (workItem: WorkItem, run: Run, step?: PersistedPlanStep) => RunRequest | Promise<RunRequest>;
   onEvent?: (run: Run, event: AgentEvent) => void;
   approvals?: ApprovalService;
+  policy?: PolicyEngine;
 }
 
 export class RunExecutor {
@@ -167,7 +168,22 @@ export class RunExecutor {
       if (!step.dependsOn.every((dependency) => completed.has(dependency))) {
         throw new Error(`Plan dependency is not complete for step ${step.id}`);
       }
-      if (step.approval === "required" || step.risk === "production_write") {
+      const policyDecision = step.capabilityId && this.options.policy
+        ? this.options.policy.evaluate(step.capabilityId, {
+            environment: step.risk === "production_write" ? "production" : "local",
+          })
+        : undefined;
+      if (policyDecision && !policyDecision.allowed && !policyDecision.requiresApproval) {
+        if (policyDecision.reason === "unknown_capability") {
+          throw new Error(`Unknown capability: ${step.capabilityId}`);
+        }
+        throw new Error(`Capability is not allowed in this environment: ${step.capabilityId}`);
+      }
+      if (
+        step.approval === "required" ||
+        step.risk === "production_write" ||
+        (policyDecision && !policyDecision.allowed && policyDecision.requiresApproval)
+      ) {
         const inputHash = `sha256:${hashInput(workItem.id, run.id, workItem.title, step.id)}`;
         const existing = this.options.approvals
           ?.listForRun(run.id)

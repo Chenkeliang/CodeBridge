@@ -22,6 +22,10 @@ export interface CapabilityDefinition {
   description?: string;
 }
 
+export interface CapabilityRegistryOptions {
+  databasePath?: string;
+}
+
 export interface PolicyContext {
   environment: string;
   approvalGranted?: boolean;
@@ -34,8 +38,24 @@ export type PolicyDecision =
 
 export class CapabilityRegistry {
   private readonly definitions = new Map<string, CapabilityDefinition>();
+  private readonly database: DatabaseSyncType;
 
-  constructor(definitions: CapabilityDefinition[] = []) {
+  constructor(definitions: CapabilityDefinition[] = [], options: CapabilityRegistryOptions = {}) {
+    const databasePath = options.databasePath ?? ":memory:";
+    if (databasePath !== ":memory:") fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath);
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS capabilities (
+        id TEXT PRIMARY KEY,
+        risk TEXT NOT NULL,
+        adapter TEXT NOT NULL,
+        environments TEXT,
+        description TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    const rows = this.database.prepare("SELECT * FROM capabilities ORDER BY id ASC").all() as Record<string, unknown>[];
+    for (const row of rows) this.definitions.set(String(row.id), toCapability(row));
     for (const definition of definitions) this.register(definition);
   }
 
@@ -45,6 +65,22 @@ export class CapabilityRegistry {
       ...definition,
       environments: definition.environments ? [...definition.environments] : undefined,
     });
+    this.database
+      .prepare(
+        `INSERT INTO capabilities (id, risk, adapter, environments, description, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET risk = excluded.risk, adapter = excluded.adapter,
+           environments = excluded.environments, description = excluded.description,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        definition.id,
+        definition.risk,
+        definition.adapter,
+        definition.environments ? JSON.stringify(definition.environments) : null,
+        definition.description ?? null,
+        new Date().toISOString(),
+      );
   }
 
   get(id: string): CapabilityDefinition | undefined {
@@ -60,6 +96,20 @@ export class CapabilityRegistry {
       environments: definition.environments ? [...definition.environments] : undefined,
     }));
   }
+
+  close(): void {
+    if (this.database.isOpen) this.database.close();
+  }
+}
+
+function toCapability(row: Record<string, unknown>): CapabilityDefinition {
+  return {
+    id: String(row.id),
+    risk: String(row.risk) as CapabilityRisk,
+    adapter: String(row.adapter),
+    environments: row.environments === null ? undefined : JSON.parse(String(row.environments)) as string[],
+    description: row.description === null ? undefined : String(row.description),
+  };
 }
 
 export class PolicyEngine {

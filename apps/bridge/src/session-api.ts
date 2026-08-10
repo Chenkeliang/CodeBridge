@@ -10,6 +10,7 @@ import type { RunnerClient } from "@codebridge/runner-client";
 import type { ProjectDiscovery } from "@codebridge/project-catalog";
 import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
 import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
+import type { CapabilityRegistry } from "@codebridge/policy";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
@@ -19,6 +20,7 @@ export interface SessionApiOptions {
   runner?: RunnerClient;
   discovery?: ProjectDiscovery;
   flows?: FlowCatalogStore;
+  capabilities?: CapabilityRegistry;
   defaultCwd?: string;
 }
 
@@ -206,6 +208,17 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
           return c.json({ error: "invalid_flow", issues: error.issues }, 409);
         }
         throw error;
+      }
+      if (options.capabilities) {
+        for (const step of plan.steps) {
+          if (!step.capabilityId || options.capabilities.get(step.capabilityId)) continue;
+          options.capabilities.register({
+            id: step.capabilityId,
+            risk: step.risk === "manual" ? "read_only" : step.risk,
+            adapter: "agent",
+            description: step.purpose ?? undefined,
+          });
+        }
       }
     }
     if (task.workflowId !== flowId || task.workflowRevision !== (flow?.definitionRevision ?? null)) {

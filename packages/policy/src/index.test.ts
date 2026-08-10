@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
 import {
   ApprovalService,
@@ -12,6 +15,12 @@ const writeCapability: CapabilityDefinition = {
   risk: "production_write",
   adapter: "dcp",
 };
+
+const tempDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of tempDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+});
 
 describe("policy and approval", () => {
   it("requires approval for production capabilities and consumes a grant once", () => {
@@ -74,5 +83,36 @@ describe("policy and approval", () => {
     expect(approvals.consume(requested.id, "run_1", "release", "sha256:def")).toBe(false);
     approvals.close();
     workItems.close();
+  });
+
+  it("persists unified Skill and MCP capability definitions", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-capabilities-"));
+    tempDirectories.push(directory);
+    const databasePath = path.join(directory, "capabilities.sqlite");
+    const first = new CapabilityRegistry([], { databasePath });
+    first.register({
+      id: "repository.inspect",
+      risk: "read_only",
+      adapter: "skill:repository-inspection",
+      environments: ["local"],
+      description: "Inspect repository context",
+    });
+    first.register({
+      id: "metrics.query",
+      risk: "read_only",
+      adapter: "mcp:metrics/query",
+    });
+    first.close();
+
+    const reopened = new CapabilityRegistry([], { databasePath });
+    expect(reopened.list().map((capability) => capability.id)).toEqual([
+      "metrics.query",
+      "repository.inspect",
+    ]);
+    expect(reopened.get("repository.inspect")).toMatchObject({
+      adapter: "skill:repository-inspection",
+      environments: ["local"],
+    });
+    reopened.close();
   });
 });

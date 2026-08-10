@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
 import { SqliteEventStore } from "@codebridge/work-items";
-import { ApprovalService } from "@codebridge/policy";
+import { ApprovalService, CapabilityRegistry, PolicyEngine } from "@codebridge/policy";
 import { RunExecutor } from "./index.js";
 
 class FakeRunner {
@@ -162,6 +162,47 @@ describe("RunExecutor", () => {
     expect(runner.prompts).toEqual(["step:inspect", "step:change"]);
     expect(store.listEvents(item.id).filter((event) => event.type === "STEP_STARTED").map((event) => event.target)).toEqual(["inspect", "change"]);
     expect(store.listEvents(item.id).filter((event) => event.type === "STEP_SUCCEEDED").map((event) => event.target)).toEqual(["inspect", "change"]);
+    store.close();
+  });
+
+  it("rejects a planned step that is absent from the Capability Registry", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "unknown capability",
+      mode: "investigation",
+      conversationId: "web:policy",
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_policy",
+      source: "workflow",
+      workflowId: "policy-flow",
+      definitionRevision: "git:policy",
+      steps: [{
+        id: "inspect",
+        capabilityId: "missing.inspect",
+        risk: "read_only",
+        dependsOn: [],
+        guard: null,
+        approval: "none",
+        branches: [],
+        purpose: null,
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const capabilities = new CapabilityRegistry();
+    const executor = new RunExecutor(store, new FakeRunner([{ type: "done", exitCode: 0 }]), {
+      policy: new PolicyEngine(capabilities),
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "inspect",
+      }),
+    });
+
+    await expect(executor.execute(run.id)).rejects.toThrow("Unknown capability: missing.inspect");
+    expect(store.getRun(run.id)?.status).toBe("failed");
+    capabilities.close();
     store.close();
   });
 });
