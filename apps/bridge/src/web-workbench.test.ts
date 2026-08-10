@@ -62,9 +62,9 @@ describe("web workbench", () => {
     expect(html).toContain('id="reply-attachment-list"');
     expect(html).toContain("data_base64");
     expect(html).toContain("mime_type");
-    expect(html).toContain('data-view="plan"');
-    expect(html).toContain('data-view="approval"');
-    expect(html).toContain('data-view="evidence"');
+    expect(html).not.toContain('data-view="plan"');
+    expect(html).not.toContain('data-view="approval"');
+    expect(html).not.toContain('data-view="evidence"');
     expect(html).not.toContain("模式 · 发布");
     expect(html).not.toContain("模式 · 调查");
     expect(html).not.toContain("权益");
@@ -122,12 +122,32 @@ describe("web workbench", () => {
     store.close();
   });
 
-  it("hides timeline filters until a session is selected", async () => {
+  it("keeps internal timeline filters out of the chat surface", async () => {
     const store = new SqliteEventStore(":memory:");
     const app = createWebWorkbenchApp({ store, token: "web-token" });
     const html = await (await app.request("/")).text();
 
-    expect(html).toContain('id="timeline-toolbar" hidden');
+    expect(html).not.toContain('id="timeline-toolbar"');
+    store.close();
+  });
+
+  it("keeps empty Session details out of the main conversation", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain('id="session-fork" hidden');
+    expect(html).toContain('id="approval-card" hidden');
+    expect(html).toContain('id="artifact-card" hidden');
+    expect(html).toContain('id="verification-card" hidden');
+    expect(html).toContain('id="catalog-drift-card" hidden');
+    expect(html).toContain('id="run-again" hidden');
+    expect(html).toContain('id="session-inspector-toggle" hidden');
+    expect(html).toContain('id="session-menu"');
+    expect(html).toMatch(/id="session-menu"[\s\S]*id="run-again"/);
+    expect(html).toMatch(/id="session-directories"[\s\S]*id="reply-workspace-chip"/);
+    expect(html).toContain("$('run-inspector').hidden = true");
+    expect(html).toContain("$('session-fork').hidden = !session.provider_session_id");
     store.close();
   });
 

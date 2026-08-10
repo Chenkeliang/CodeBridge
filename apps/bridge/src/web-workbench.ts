@@ -116,6 +116,14 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .session-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
     .session-action { border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--muted); padding:6px 9px; font-size:12px; }
     .session-action:hover { border-color:var(--accent); color:var(--accent); }
+    .session-menu { position:relative; }
+    .session-menu summary { list-style:none; display:grid; place-items:center; width:30px; height:30px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--muted); cursor:pointer; font-size:18px; line-height:1; }
+    .session-menu summary::-webkit-details-marker { display:none; }
+    .session-menu summary:hover, .session-menu[open] summary { border-color:var(--accent); color:var(--accent); }
+    .session-menu-panel { position:absolute; z-index:2; top:36px; right:0; width:168px; display:grid; gap:2px; padding:6px; border:1px solid var(--line); border-radius:10px; background:#fff; box-shadow:var(--shadow); }
+    .session-menu-action { width:100%; border-radius:7px; background:transparent; color:var(--ink); padding:8px 9px; text-align:left; font-size:12px; }
+    .session-menu-action:hover { background:#edf1ee; }
+    .session-menu-action.danger { color:#a14835; }
     .directory-panel { display:grid; gap:10px; border:1px solid var(--line); border-radius:12px; background:#fff; padding:14px; }
     .directory-head { display:flex; justify-content:space-between; gap:12px; align-items:center; }
     .directory-head strong { font-size:13px; }
@@ -126,7 +134,8 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .directory-add { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
     .attachment-list { display:flex; flex-wrap:wrap; gap:5px; }
     .attachment-chip { display:inline-flex; align-items:center; max-width:100%; border-radius:7px; background:var(--accent-soft); color:var(--accent); padding:4px 7px; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .grid { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:24px; align-items:start; }
+    .grid { display:grid; grid-template-columns:minmax(0,1fr); gap:24px; align-items:start; }
+    .grid.inspector-visible { grid-template-columns:minmax(0,1fr) 300px; }
     .conversation-column { display:grid; gap:18px; min-width:0; }
     .inspector { display:grid; gap:12px; position:sticky; top:24px; }
     .inspector-card { display:grid; gap:8px; border:1px solid var(--line); border-radius:12px; background:#fff; padding:13px; }
@@ -141,9 +150,6 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .inspector-link:hover { text-decoration:underline; }
     .artifact-content { max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:#f5f7f5; border-radius:7px; padding:8px; color:var(--muted); font:11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .timeline { min-height:330px; border-top:1px solid var(--line); }
-    .timeline-toolbar { display:flex; flex-wrap:wrap; gap:5px; padding:10px 0; border-bottom:1px solid var(--line); }
-    .timeline-filter { border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--muted); padding:5px 9px; font-size:12px; }
-    .timeline-filter.active, .timeline-filter:hover { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
     .timeline-empty { padding:42px 0; color:var(--muted); }
     .event { display:grid; grid-template-columns:116px 1fr; gap:18px; padding:14px 0; border-bottom:1px solid var(--line); }
     .event time { color:var(--muted); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -177,7 +183,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .meta { display:grid; gap:8px; border-top:1px solid var(--line); margin-top:18px; padding-top:16px; color:var(--muted); font-size:12px; }
     .meta div { display:flex; justify-content:space-between; gap:12px; }
     .meta code { color:var(--ink); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    @media (max-width:800px) { .shell { grid-template-columns:1fr; } .sidebar { position:static; height:auto; overflow:visible; border-right:0; border-bottom:1px solid var(--line); padding:18px; } .work-list, #flow-list { max-height:190px; } .main { padding:26px 18px 44px; } .workspace-top { flex-direction:column; } .composer-context { gap:5px; } .context-control, .context-chip { flex:1 1 auto; } .grid { grid-template-columns:1fr; } .inspector { position:static; } }
+    @media (max-width:800px) { .shell { grid-template-columns:1fr; } .sidebar { position:static; height:auto; overflow:visible; border-right:0; border-bottom:1px solid var(--line); padding:18px; } .work-list, #flow-list { max-height:190px; } .main { padding:26px 18px 44px; } .workspace-top { flex-direction:column; } .composer-context { gap:5px; } .context-control, .context-chip { flex:1 1 auto; } .grid, .grid.inspector-visible { grid-template-columns:1fr; } .inspector { position:static; } }
   </style>
 </head>
 <body>
@@ -193,9 +199,9 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       <div class="workspace">
         <header class="workspace-top">
           <div><div class="eyebrow">CodeBridge Workbench</div><h1 id="title">选择一个 Agent 开始</h1><p class="subline" id="subtitle" hidden></p></div>
-          <div class="session-actions" id="session-actions" hidden><button class="session-action" id="session-resume" type="button">继续</button><button class="session-action" id="session-fork" type="button">分支</button><button class="session-action" id="session-directories" type="button">目录</button><button class="session-action" id="session-close" type="button">关闭</button><button class="session-action" id="session-delete" type="button">删除</button><span class="status" id="status">idle</span></div>
+          <div class="session-actions" id="session-actions" hidden><button class="session-action" id="session-resume" type="button">继续</button><button class="session-action" id="session-inspector-toggle" hidden type="button" aria-expanded="false">运行详情</button><details class="session-menu" id="session-menu"><summary aria-label="Session 操作" title="Session 操作">···</summary><div class="session-menu-panel"><button class="session-menu-action" id="session-fork" hidden type="button">创建分支</button><button class="session-menu-action" id="run-again" hidden type="button">再次运行</button><button class="session-menu-action" id="session-close" type="button">关闭 Session</button><button class="session-menu-action danger" id="session-delete" type="button">删除 Session</button></div></details><span class="status" id="status" hidden>idle</span></div>
         </header>
-        <div class="grid">
+        <div class="grid" id="session-grid">
           <section class="conversation-column">
             <section class="directory-panel" id="directory-panel" hidden>
               <div class="directory-head"><strong>Session 目录</strong><span class="directory-note">下次运行时生效</span></div>
@@ -203,10 +209,10 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
               <div class="directory-add"><input id="additional-directory" aria-label="附加目录" placeholder="输入要加入当前 Session 的目录路径" autocomplete="off" /><button class="secondary" id="add-directory" type="button">添加</button></div>
               <div class="error" id="directory-error"></div>
             </section>
-            <div class="timeline-toolbar" id="timeline-toolbar" hidden><button class="timeline-filter active" data-view="all" type="button">全部</button><button class="timeline-filter" data-view="plan" type="button">计划</button><button class="timeline-filter" data-view="approval" type="button">审批</button><button class="timeline-filter" data-view="evidence" type="button">证据</button><button class="timeline-filter" data-view="diff" type="button">Diff</button><button class="timeline-filter" data-view="test" type="button">测试</button></div><div class="timeline" id="timeline"><div class="timeline-empty">选择左侧 Agent 创建 Session</div></div><div class="error" id="workbench-error"></div>
+            <div class="timeline" id="timeline"><div class="timeline-empty">选择左侧 Agent 创建 Session</div></div><div class="error" id="workbench-error"></div>
             <form class="chat-composer form-grid" id="reply-form" hidden>
               <div class="composer-context">
-                <select class="context-control" id="reply-workflow" aria-label="Workflow"${workflows.length ? "" : " hidden"}>${workflowOptions}</select><span class="context-chip" id="reply-workspace-chip">工作空间 · 自动发现</span><select class="context-control" id="reply-model" aria-label="模型"${models.length ? "" : " hidden"}>${modelOptions}</select>
+                <select class="context-control" id="reply-workflow" aria-label="Workflow"${workflows.length ? "" : " hidden"}>${workflowOptions}</select><button class="context-chip" id="session-directories" type="button"><span id="reply-workspace-chip">工作空间 · 自动发现</span></button><select class="context-control" id="reply-model" aria-label="模型"${models.length ? "" : " hidden"}>${modelOptions}</select>
               </div>
                <div class="input-shell">
                  <div class="composer-tools"><button class="tool-button" id="reply-attach-button" type="button" aria-label="添加文件">＋</button></div>
@@ -216,15 +222,15 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
                <input id="reply-attachment-picker" type="file" multiple hidden />
                <div class="attachment-list" id="reply-attachment-list"></div>
               <div class="error" id="reply-error"></div>
-              <div class="actions"><button class="secondary" id="run-again" type="button">再次运行</button><button class="secondary" id="save-flow" type="button" hidden>保存为 Workflow Candidate</button><button class="secondary" id="accept-project" type="button" hidden>确认登记发现的资源</button><button class="secondary" id="approve-run" type="button" hidden>批准本次操作</button><button class="secondary" id="reject-run" type="button" hidden>拒绝本次操作</button></div>
+              <div class="actions"><button class="secondary" id="save-flow" type="button" hidden>保存为 Workflow Candidate</button><button class="secondary" id="accept-project" type="button" hidden>确认登记发现的资源</button><button class="secondary" id="approve-run" type="button" hidden>批准本次操作</button><button class="secondary" id="reject-run" type="button" hidden>拒绝本次操作</button></div>
             </form>
            </section>
            <aside class="inspector" id="run-inspector" hidden>
              <section class="inspector-card"><h2>Run</h2><div class="inspector-value" id="run-state">等待 Session</div><div class="inspector-value" id="run-id"></div></section>
-             <section class="inspector-card"><h2>Approval</h2><div class="inspector-list" id="approval-list"><div class="empty">当前 Run 没有审批记录。</div></div></section>
-             <section class="inspector-card"><h2>Artifacts</h2><div class="inspector-list" id="artifact-list"><div class="empty">当前 Run 没有产物。</div></div><pre class="artifact-content" id="artifact-content" hidden></pre></section>
-             <section class="inspector-card"><h2>Verification</h2><div class="inspector-list" id="verification-list"><div class="empty">当前 Run 没有验证结果。</div></div></section>
-             <section class="inspector-card"><h2>Catalog drift</h2><div class="inspector-list" id="project-drift-list"><div class="empty">没有待审核的目录变化。</div></div></section>
+             <section class="inspector-card" id="approval-card" hidden><h2>Approval</h2><div class="inspector-list" id="approval-list"><div class="empty">当前 Run 没有审批记录。</div></div></section>
+             <section class="inspector-card" id="artifact-card" hidden><h2>Artifacts</h2><div class="inspector-list" id="artifact-list"><div class="empty">当前 Run 没有产物。</div></div><pre class="artifact-content" id="artifact-content" hidden></pre></section>
+             <section class="inspector-card" id="verification-card" hidden><h2>Verification</h2><div class="inspector-list" id="verification-list"><div class="empty">当前 Run 没有验证结果。</div></div></section>
+             <section class="inspector-card" id="catalog-drift-card" hidden><h2>Catalog drift</h2><div class="inspector-list" id="project-drift-list"><div class="empty">没有待审核的目录变化。</div></div></section>
            </aside>
          </div>
       </div>
@@ -233,7 +239,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   <script>
     const TOKEN = __TOKEN__;
     const agentIcons = {${agentIconSource}};
-    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, view: 'all', collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
+    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
       const response = await fetch(url, { ...init, headers: { authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json', ...(init.headers || {}) } });
@@ -313,12 +319,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       await selectSession(session.session_id);
     }
     function resetWorkbench() {
-      state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer);
-      $('title').textContent = '选择一个 Agent 开始'; $('subtitle').textContent = ''; $('subtitle').hidden = true; $('session-actions').hidden = true; $('run-inspector').hidden = true; $('timeline-toolbar').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">没有待审核的目录变化。</div>'; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('reply-attachment-picker').value = ''; renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'); $('timeline').innerHTML = '<div class="timeline-empty">选择左侧 Agent 创建 Session</div>'; $('reply-form').hidden = true; $('reply-model').value = ''; $('workbench-error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyView(); loadSessions();
+      state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; clearInterval(state.timer);
+      $('title').textContent = '选择一个 Agent 开始'; $('subtitle').textContent = ''; $('subtitle').hidden = true; $('session-actions').hidden = true; $('session-menu').open = false; $('session-fork').hidden = true; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('run-again').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">没有待审核的目录变化。</div>'; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('reply-attachment-picker').value = ''; renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'); $('timeline').innerHTML = '<div class="timeline-empty">选择左侧 Agent 创建 Session</div>'; $('reply-form').hidden = true; $('reply-model').value = ''; $('workbench-error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; loadSessions();
     }
     async function selectSession(id) {
-      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('run-inspector').hidden = false; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('timeline').innerHTML = '<div class="timeline-empty">暂无消息</div>'; $('reply-form').hidden = false; $('session-actions').hidden = false; $('workbench-error').textContent = '';
-      $('timeline-toolbar').hidden = false;
+      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('session-menu').open = false; $('session-inspector-toggle').hidden = true; $('session-inspector-toggle').setAttribute('aria-expanded', 'false'); $('run-inspector').hidden = true; $('session-grid').classList.remove('inspector-visible'); $('approval-card').hidden = true; $('artifact-card').hidden = true; $('verification-card').hidden = true; $('catalog-drift-card').hidden = true; $('session-fork').hidden = true; $('run-again').hidden = true; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('timeline').innerHTML = '<div class="timeline-empty">暂无消息</div>'; $('reply-form').hidden = false; $('session-actions').hidden = false; $('workbench-error').textContent = '';
       await refreshSession(true); void startEventStream(); loadSessions();
       void loadDrifts();
       clearInterval(state.timer); state.timer = setInterval(() => { void refreshSession(); }, 1200);
@@ -333,6 +338,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         $('title').textContent = session.title || 'Session'; $('subtitle').textContent = agent + ' · ' + (session.status || 'idle'); $('subtitle').hidden = false; $('status').textContent = session.status || 'idle'; $('status').className = 'status ' + (session.status === 'waiting' ? 'waiting' : '');
         $('session-resume').hidden = session.status !== 'closed';
         $('session-close').hidden = session.status === 'closed';
+        $('session-fork').hidden = !session.provider_session_id;
         $('reply-workflow').value = session.flow_id || ''; applyModels(agent); $('reply-model').value = session.model || '';
          $('reply-workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
          renderDirectories(session);
@@ -382,6 +388,14 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       const run = runs[runs.length - 1];
       if (!run) {
         state.latestRunId = null;
+        $('run-inspector').hidden = true;
+        $('session-grid').classList.remove('inspector-visible');
+        $('session-inspector-toggle').hidden = true;
+        $('session-inspector-toggle').setAttribute('aria-expanded', 'false');
+        $('run-again').hidden = true;
+        $('approval-card').hidden = true;
+        $('artifact-card').hidden = true;
+        $('verification-card').hidden = true;
         $('run-state').textContent = '尚未运行';
         $('run-id').textContent = '';
         $('approval-list').innerHTML = '<div class="empty">当前 Run 没有审批记录。</div>';
@@ -390,6 +404,8 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         $('artifact-content').hidden = true;
         return;
       }
+      $('session-inspector-toggle').hidden = false;
+      $('run-again').hidden = false;
       $('run-state').textContent = run.status || 'unknown';
       $('run-id').textContent = run.run_id;
       const changed = state.latestRunId !== run.run_id;
@@ -401,14 +417,17 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         api('/v1/runs/' + encodeURIComponent(run.run_id) + '/verifications'),
       ]);
       const approvals = approvalResult.approvals || [];
+      $('approval-card').hidden = approvals.length === 0;
       $('approval-list').innerHTML = approvals.length ? approvals.map((approval) => '<div class="inspector-row"><strong>' + esc(approval.capability_id) + ' · ' + esc(approval.status) + '</strong><small>' + esc(approval.environment) + ' · ' + esc(approval.target_resource) + '</small><small>' + esc(approval.input_hash) + '</small></div>').join('') : '<div class="empty">当前 Run 没有审批记录。</div>';
       const pending = [...approvals].reverse().find((approval) => approval.status === 'requested');
       if (pending) { state.approval = { approvalId: pending.id, runId: run.run_id }; $('approve-run').hidden = false; $('reject-run').hidden = false; }
       else if (state.approval?.runId === run.run_id) { state.approval = null; $('approve-run').hidden = true; $('reject-run').hidden = true; }
       const artifacts = artifactResult.artifacts || [];
+      $('artifact-card').hidden = artifacts.length === 0;
       $('artifact-list').innerHTML = artifacts.length ? artifacts.map((artifact) => '<div class="inspector-row"><button class="inspector-link" type="button" data-artifact="' + esc(artifact.id) + '">' + esc(artifact.name) + '</button><small>' + esc(artifact.kind) + ' · ' + esc(artifact.mime_type) + '</small><small>' + esc(artifact.content_hash) + '</small></div>').join('') : '<div class="empty">当前 Run 没有产物。</div>';
       document.querySelectorAll('.inspector-link[data-artifact]').forEach((button) => button.addEventListener('click', () => showArtifact(button.dataset.artifact || '').catch((error) => { $('reply-error').textContent = error.message; })));
       const verifications = verificationResult.verifications || [];
+      $('verification-card').hidden = verifications.length === 0;
       $('verification-list').innerHTML = verifications.length ? verifications.map((verification) => '<div class="inspector-row"><strong>' + esc(verification.validator) + ' · ' + esc(verification.status) + '</strong><small>' + esc(verification.summary) + '</small></div>').join('') : '<div class="empty">当前 Run 没有验证结果。</div>';
     }
     async function showArtifact(artifactId) {
@@ -421,9 +440,10 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       try {
         const result = await api('/v1/projects/drifts');
         const drifts = result.drifts || [];
+        $('catalog-drift-card').hidden = drifts.length === 0;
         $('project-drift-list').innerHTML = drifts.length ? drifts.map((drift) => '<div class="inspector-row"><strong>' + esc(drift.project_id) + '</strong>' + (drift.changes || []).map((change) => '<small>' + esc(change.field) + ': ' + esc(JSON.stringify(change.registered)) + ' → ' + esc(JSON.stringify(change.observed)) + '</small>').join('') + '<div class="actions"><button class="inspector-link" type="button" data-drift-action="apply" data-drift-id="' + esc(drift.id) + '">应用</button><button class="inspector-link" type="button" data-drift-action="resolve" data-drift-id="' + esc(drift.id) + '">忽略</button></div></div>').join('') : '<div class="empty">没有待审核的目录变化。</div>';
         document.querySelectorAll('[data-drift-action]').forEach((button) => button.addEventListener('click', () => resolveDrift(button.dataset.driftId || '', button.dataset.driftAction || '').catch((error) => { $('reply-error').textContent = error.message; })));
-      } catch (error) { $('project-drift-list').innerHTML = '<div class="empty">无法读取目录变化：' + esc(error.message) + '</div>'; }
+      } catch (error) { $('catalog-drift-card').hidden = true; $('project-drift-list').innerHTML = '<div class="empty">无法读取目录变化：' + esc(error.message) + '</div>'; }
     }
     async function resolveDrift(driftId, action) {
       if (!driftId || !['apply', 'resolve'].includes(action)) return;
@@ -463,12 +483,10 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         }
       }
     }
-    const eventView = (type) => ({ FLOW_PROPOSED:'plan', PLAN_VALIDATED:'plan', STEP_STARTED:'plan', STEP_SUCCEEDED:'plan', BRANCH_SELECTED:'plan', APPROVAL_REQUESTED:'approval', APPROVAL_GRANTED:'approval', PROJECT_CANDIDATE_FOUND:'evidence', ARTIFACT_CREATED:'evidence', DIFF_CREATED:'diff', GIT_DIFF:'diff', TEST_STARTED:'test', TEST_SUCCEEDED:'test', TEST_FAILED:'test', VERIFICATION_COMPLETED:'test' }[type] || 'all');
-    function applyView() { document.querySelectorAll('.event').forEach((event) => { event.hidden = state.view !== 'all' && event.dataset.view !== state.view; }); document.querySelectorAll('.timeline-filter').forEach((button) => button.classList.toggle('active', button.dataset.view === state.view)); }
     function renderEvents(events) {
       const target = $('timeline');
       if (target.querySelector('.timeline-empty')) target.innerHTML = '';
-      target.insertAdjacentHTML('beforeend', events.map((event) => '<article class="event" data-view="' + esc(eventView(event.type)) + '"><time>' + esc(new Date(event.occurred_at).toLocaleTimeString()) + '</time><div class="event-body"><strong>' + esc(label(event.type)) + '</strong><pre>' + esc(JSON.stringify(event.payload || {}, null, 2)) + '</pre></div></article>').join(''));
+      target.insertAdjacentHTML('beforeend', events.map((event) => '<article class="event"><time>' + esc(new Date(event.occurred_at).toLocaleTimeString()) + '</time><div class="event-body"><strong>' + esc(label(event.type)) + '</strong><pre>' + esc(JSON.stringify(event.payload || {}, null, 2)) + '</pre></div></article>').join(''));
       const proposal = [...events].reverse().find((event) => event.type === 'FLOW_PROPOSED' && event.payload && event.payload.flow && typeof event.payload.flow === 'object' && !Array.isArray(event.payload.flow));
       if (proposal) {
         state.ephemeralFlow = { flow: proposal.payload.flow, definition_revision: typeof proposal.payload.definition_revision === 'string' ? proposal.payload.definition_revision : 'event:' + proposal.event_id };
@@ -484,7 +502,6 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       const resolvedApproval = [...events].reverse().find((event) => event.type === 'APPROVAL_GRANTED' || event.type === 'APPROVAL_REJECTED');
       if (resolvedApproval) { state.approval = null; $('approve-run').hidden = true; $('reject-run').hidden = true; }
       if (events.some((event) => event.run_id)) void refreshInspector(true).catch((error) => { $('reply-error').textContent = error.message; });
-      applyView();
       target.scrollTop = target.scrollHeight;
     }
     $('save-flow').addEventListener('click', async () => {
@@ -521,6 +538,12 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       try { await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/resume', { method:'POST', body: '{}' }); await refreshSession(); loadSessions(); }
       catch (error) { $('reply-error').textContent = error.message; }
     });
+    $('session-inspector-toggle').addEventListener('click', () => {
+      const visible = $('run-inspector').hidden;
+      $('run-inspector').hidden = !visible;
+      $('session-grid').classList.toggle('inspector-visible', visible);
+      $('session-inspector-toggle').setAttribute('aria-expanded', String(visible));
+    });
     $('session-fork').addEventListener('click', async () => {
       if (!state.selected) return;
       try { const forked = await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/fork', { method:'POST', body: JSON.stringify({}) }); await selectSession(forked.session_id); }
@@ -543,7 +566,6 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     });
     $('add-directory').addEventListener('click', () => addDirectory());
     $('additional-directory').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); void addDirectory(); } });
-    document.querySelectorAll('.timeline-filter').forEach((button) => button.addEventListener('click', () => { state.view = button.dataset.view || 'all'; applyView(); }));
     function applyModels(agentId) { const models = agentModels[agentId] || []; const options = '<option value="">模型 · Agent 默认</option>' + models.map((model) => '<option value="' + esc(model) + '">' + esc(model) + '</option>').join(''); $('reply-model').innerHTML = options; $('reply-model').hidden = models.length === 0; }
     async function startRun() { if (!state.selected) return; await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/runs', { method:'POST', body: JSON.stringify({ flow_id: $('reply-workflow').value || null, model: $('reply-model').value || null, mode: 'auto' }) }); await refreshSession(); }
     $('reply-form').addEventListener('submit', async (event) => { event.preventDefault(); $('reply-error').textContent = ''; if (!state.selected || !$('reply').value.trim()) return; try { const attachments = await encodePendingAttachments('reply-attachment-picker'); await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/messages', { method:'POST', body: JSON.stringify({ message: $('reply').value, flow_id: $('reply-workflow').value || null, model: $('reply-model').value || null, ...(attachments.length ? { attachments } : {}) }) }); $('reply').value = ''; $('reply-attachment-picker').value = ''; renderPendingAttachments('reply-attachment-picker', 'reply-attachment-list'); await startRun(); state.eventAbort?.abort(); void startEventStream(); } catch (error) { $('reply-error').textContent = error.message; } });
