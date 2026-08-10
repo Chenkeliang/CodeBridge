@@ -7,6 +7,7 @@ import type { AgentEvent, RunContext } from "@codebridge/core";
 import {
   forkPiSession,
   listPiCommands,
+  listPiConfigOptions,
   mapPiEvent,
   probePiSdk,
   runPiSession,
@@ -142,6 +143,20 @@ describe("Pi session runner", () => {
       name: "skill:project-review",
       description: "Review this project",
     });
+  });
+
+  it("only exposes models from configured Pi providers", async () => {
+    const runtime = {
+      getModels: () => [
+        { provider: "configured", id: "ready", name: "Ready", api: "test" },
+        { provider: "catalog-only", id: "hidden", name: "Hidden", api: "test" },
+      ],
+      hasConfiguredAuth: (provider: string) => provider === "configured",
+    };
+
+    await expect(listPiConfigOptions(runtime as never)).resolves.toMatchObject([
+      { values: [{ value: "configured/ready", name: "Ready" }] },
+    ]);
   });
 
   it("forks a persisted provider session into a new project directory", async () => {

@@ -209,13 +209,17 @@ export async function probePiSdk(
   }
 }
 
-export async function listPiConfigOptions(): Promise<BackendConfigOption[]> {
-  const runtime = await ModelRuntime.create({ refreshOnCreate: false });
-  const values = runtime.getModels().map((model) => ({
+export async function listPiConfigOptions(
+  runtime?: Pick<ModelRuntime, "getModels" | "hasConfiguredAuth">,
+): Promise<BackendConfigOption[]> {
+  const activeRuntime = runtime ?? await ModelRuntime.create({ refreshOnCreate: false });
+  const values = activeRuntime.getModels()
+    .filter((model) => activeRuntime.hasConfiguredAuth(model.provider))
+    .map((model) => ({
     value: `${model.provider}/${model.id}`,
     name: model.name,
     description: model.api,
-  }));
+    }));
   return values.length
     ? [
         {

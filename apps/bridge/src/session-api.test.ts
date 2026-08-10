@@ -404,6 +404,27 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("keeps the command menu available when Runner command discovery fails", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      listCommands: async () => { throw new Error("Runner command endpoint unavailable"); },
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/workspace" }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+
+    const response = await app.request(`/v1/sessions/${session.id}/commands`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      commands: [],
+      error: "Runner command endpoint unavailable",
+    });
+    catalog.close();
+    workItems.close();
+  });
+
   it("does not mutate additional directories when authorization is unavailable", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

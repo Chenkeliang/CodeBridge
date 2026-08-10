@@ -303,9 +303,14 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
     const cwd = session.cwd ?? options.defaultCwd;
-    const native = options.runner && cwd
-      ? await options.runner.listCommands(session.agentId, cwd)
-      : { commands: [] };
+    let native: Awaited<ReturnType<RunnerClient["listCommands"]>> = { commands: [] };
+    if (options.runner && cwd) {
+      try {
+        native = await options.runner.listCommands(session.agentId, cwd);
+      } catch (error) {
+        native = { commands: [], error: error instanceof Error ? error.message : String(error) };
+      }
+    }
     const commands = new Map(native.commands.map((command) => [command.name, command]));
     if (session.taskRecordId) {
       const events = options.workItems.listEvents(session.taskRecordId).reverse();
