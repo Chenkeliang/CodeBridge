@@ -37,6 +37,7 @@ export interface SlashContext {
     options?: { all?: boolean; limit?: number },
   ) => Promise<CliSessionSummary[]>;
   bindSession?: (sessionId: string) => void;
+  resetSession?: () => Promise<void>;
   closeSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   deleteSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（含真实模型列表） */
@@ -112,6 +113,7 @@ export async function handleSlashCommand(
 
     case "/new":
     case "/reset":
+      await ctx.resetSession?.();
       ctx.router.clearSession(ctx.chatId, ctx.topicId);
       return {
         type: "reply",

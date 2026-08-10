@@ -88,6 +88,30 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("aborts an active Runner when a channel cancels the Run", async () => {
+    const { store, item, run } = setup();
+    const runner = {
+      async *run(_request: RunRequest, options?: { signal?: AbortSignal }): AsyncGenerator<AgentEvent> {
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        });
+      },
+    };
+    const executor = new RunExecutor(store, runner, {
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "wait",
+      }),
+    });
+    const executing = executor.execute(run.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(executor.cancelRun(run.id).status).toBe("cancelled");
+    expect((await executing).status).toBe("cancelled");
+    expect(store.listEvents(item.id).filter((event) => event.type === "RUN_CANCELLED")).toHaveLength(1);
+    store.close();
+  });
+
   it("pauses production work until a scoped approval is granted", async () => {
     const store = new SqliteEventStore(":memory:");
     const item = store.createWorkItem({

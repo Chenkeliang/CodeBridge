@@ -4,6 +4,7 @@ import {
   MentionRegistry,
   formatMentionGuidance,
   type AppConfig,
+  type ChannelSessionIngress,
 } from "@codebridge/core";
 import {
   RunOrchestrator,
@@ -63,6 +64,7 @@ export interface TelegramBridgeOptions {
   dataDir: string;
   onLog?: (message: string) => void;
   api?: TelegramTransport;
+  sessionIngress?: ChannelSessionIngress;
 }
 
 export class TelegramBridge {
@@ -75,11 +77,13 @@ export class TelegramBridge {
   private readonly activeReplies = new Set<Promise<void>>();
   private readonly mentionRegistry = new MentionRegistry();
   private offset = 0;
+  private sessionIngress?: ChannelSessionIngress;
 
   constructor(private readonly options: TelegramBridgeOptions) {
     const telegram = options.config.telegram;
     if (!telegram) throw new Error("Telegram 配置不存在");
     this.config = options.config;
+    this.sessionIngress = options.sessionIngress;
     this.api = options.api ?? new TelegramApi({ token: telegram.botToken });
     this.orchestrator = new RunOrchestrator({
       dataDir: options.dataDir,
@@ -92,6 +96,10 @@ export class TelegramBridge {
   updateConfig(config: AppConfig): void {
     this.config = config;
     this.orchestrator.updateConfig(config);
+  }
+
+  setSessionIngress(ingress: ChannelSessionIngress): void {
+    this.sessionIngress = ingress;
   }
 
   async connect(): Promise<void> {
@@ -194,6 +202,9 @@ export class TelegramBridge {
         this.orchestrator.listSessions(chatId, topicId, options),
       bindSession: (sessionId) =>
         this.orchestrator.bindSession(chatId, topicId, sessionId),
+      resetSession: async () => {
+        await this.sessionIngress?.reset?.("telegram", `${chatId}|${topicId ?? ""}`);
+      },
       closeSession: (sessionId) =>
         this.orchestrator.closeSession(chatId, topicId, sessionId),
       deleteSession: (sessionId) =>
@@ -201,7 +212,9 @@ export class TelegramBridge {
       listConfigOptions: () =>
         this.orchestrator.listConfigOptions(chatId, topicId),
       cancelActiveRun: () =>
-        this.orchestrator.cancelActiveForChat(chatId, topicId),
+        this.sessionIngress?.cancel
+          ? this.sessionIngress.cancel("telegram", `${chatId}|${topicId ?? ""}`)
+          : this.orchestrator.cancelActiveForChat(chatId, topicId),
       hasActiveRun: () => this.orchestrator.hasActiveRun(chatId, topicId),
       activeRunElapsedMs: () =>
         this.orchestrator.activeRunElapsedMs(chatId, topicId),
@@ -210,7 +223,9 @@ export class TelegramBridge {
       steerActiveRun: (prompt) =>
         this.orchestrator.steerActiveForChat(chatId, topicId, prompt),
       resolvePermission: (approve) =>
-        this.orchestrator.resolveActivePermission(chatId, topicId, approve),
+        this.sessionIngress?.resolveApproval
+          ? this.sessionIngress.resolveApproval("telegram", `${chatId}|${topicId ?? ""}`, approve)
+          : this.orchestrator.resolveActivePermission(chatId, topicId, approve),
       authorizeDirectory: (directory) =>
         this.orchestrator.authorizeDirectory(directory),
       notifyStatus: (text) => this.sendText(chatId, text, topicId),
@@ -347,11 +362,24 @@ export class TelegramBridge {
       this.orchestrator.router.getBinding(chatId, topicId).showThinking ?? true;
     const { present } = createFeishuStreamPresenter({ showThinking });
     let output = "";
-    for await (const event of this.orchestrator.runAgent(chatId, topicId, prompt)) {
+    const binding = this.orchestrator.router.getBinding(chatId, topicId);
+    const events = this.sessionIngress
+      ? this.sessionIngress({
+          channel: "telegram",
+          conversationId: `${chatId}|${topicId ?? ""}`,
+          message: prompt,
+          agentId: binding.backendId,
+          cwd: binding.cwd,
+          model: binding.model,
+        })
+      : this.orchestrator.runAgent(chatId, topicId, prompt);
+    for await (const event of events) {
       if (event.type === "permission_request") {
         await this.sendText(
           chatId,
-          `🔐 Agent 请求权限：${event.title}\n回复 /approve 允许，/deny 拒绝。`,
+          this.sessionIngress
+            ? `🔐 Agent 请求权限：${event.title}`
+            : `🔐 Agent 请求权限：${event.title}\n回复 /approve 允许，/deny 拒绝。`,
           topicId,
         );
         continue;

@@ -721,4 +721,52 @@ describe("FeishuBridge mentions", () => {
       },
     );
   });
+
+  it("uses the shared Session ingress for ordinary text messages", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-session-ingress-"));
+    const received: unknown[] = [];
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir,
+      sessionIngress: async function* (message) {
+        received.push(message);
+        yield { type: "text_delta", text: "Session reply" };
+        yield { type: "done", exitCode: 0 };
+      },
+    }) as unknown as TestableBridge;
+    let rendered = "";
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-session",
+          async append(chunk) { rendered += chunk; },
+          async setContent(full) { rendered = full; },
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: { getBinding: () => ({ showThinking: false, backendId: "pi", cwd: "/tmp/project" }) as never },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () { throw new Error("legacy runner should not be used"); },
+    };
+
+    await bridge.streamAgentReply({
+      messageId: "message-session",
+      chatId: "chat-session",
+      chatType: "p2p",
+      senderId: "user",
+      content: "hello",
+    }, "hello");
+
+    expect(received).toEqual([
+      expect.objectContaining({
+        channel: "feishu",
+        conversationId: "chat-session|",
+        message: "hello",
+        agentId: "pi",
+      }),
+    ]);
+    expect(rendered).toContain("Session reply");
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
 });
