@@ -118,6 +118,31 @@ export class RunnerClient {
     return this.sessionLifecycle("delete", backend, cwd, sessionId);
   }
 
+  async forkSession(
+    backend: string,
+    cwd: string,
+    sessionId: string,
+    targetCwd: string,
+  ): Promise<{ ok: boolean; sessionId?: string; cwd?: string; error?: string }> {
+    const res = await this.fetch(`/sessions/${encodeURIComponent(sessionId)}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ backend, cwd, targetCwd }),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      sessionId?: string;
+      cwd?: string;
+      error?: string;
+    };
+    return {
+      ok: res.ok && body.ok === true,
+      sessionId: body.sessionId,
+      cwd: body.cwd,
+      error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
+    };
+  }
+
   async cancel(runId: string): Promise<void> {
     await this.fetch(`/runs/${runId}/cancel`, { method: "POST" });
   }

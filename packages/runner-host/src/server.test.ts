@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, type AgentEvent, type RunRequest } from "@codebridge/core";
 import { RunnerHost } from "./server.js";
+import type { PiSession } from "@codebridge/backends";
 
 const tmpDirs: string[] = [];
 
@@ -259,6 +260,92 @@ describe("RunnerHost session lifecycle", () => {
       ok: false,
       error: "Runner 当前未持有该 ACP session；历史 session 请使用 /session delete",
     });
+    host.shutdown();
+  });
+});
+
+describe("RunnerHost Pi SDK backend", () => {
+  it("forks a Pi provider session into a target directory", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-fork-"));
+    const sourceCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-source-"));
+    const targetCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-target-"));
+    tmpDirs.push(dataDir, sourceCwd, targetCwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      piSessionForker: async (_cwd, _sessionId, target) => ({
+        ok: true,
+        sessionId: "pi-forked",
+        cwd: target,
+      }),
+    });
+
+    await expect(host.forkSession("pi", sourceCwd, "pi-source", targetCwd)).resolves.toMatchObject({
+      ok: true,
+      cwd: fs.realpathSync(targetCwd),
+    });
+    host.shutdown();
+  });
+
+  it("lists Pi sessions without spawning an ACP process", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-list-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-list-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const host = new RunnerHost({ token: "token", config, dataDir });
+
+    await expect(host.listSessions("pi", cwd)).resolves.toEqual({ sessions: [] });
+    host.shutdown();
+  });
+
+  it("runs a configured pi-sdk profile through the native session adapter", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const session: PiSession = {
+      sessionId: "pi-native-session",
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "native-pi" },
+        });
+        return () => {};
+      },
+      async prompt() {},
+      async steer() {},
+      async abort() {},
+      dispose() {},
+    };
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      piSessionFactory: async () => session,
+    });
+
+    const events = await collect(
+      host.executeRun({
+        runId: "pi-run",
+        sessionKey: { chatId: "chat", backendId: "pi", cwd },
+        prompt: "hello pi",
+      }),
+    );
+
+    expect(events).toContainEqual({
+      type: "session",
+      sessionId: "pi-native-session",
+    });
+    expect(events).toContainEqual({
+      type: "text_delta",
+      text: "native-pi",
+    });
+    expect(events.at(-1)).toEqual({ type: "done", exitCode: 0 });
     host.shutdown();
   });
 });

@@ -1,0 +1,40 @@
+schema_version: 1
+
+# Capability 是稳定合同，具体实现由 CodeBridge Adapter 绑定。
+capabilities:
+  - id: code.read
+    owner: codebridge
+    risk: read_only
+    adapters:
+      - kind: cli
+        ref: workspace-reader
+
+  - id: code.write.workspace
+    owner: codebridge
+    risk: workspace_write
+    adapters:
+      - kind: cli
+        ref: workspace-writer
+
+  - id: git.read
+    owner: codebridge
+    risk: read_only
+    adapters:
+      - kind: cli
+        ref: git
+
+  - id: logs.read
+    owner: observability
+    risk: read_only
+    adapters:
+      - kind: mcp
+        ref: logs
+
+  - id: apm.read
+    owner: observability
+    risk: read_only
+    adapters:
+      - kind: mcp
+        ref: apm
+
+  # 领域 Capability 由具体项目/Skill/MCP 注册，不在仓库提供业务示例。

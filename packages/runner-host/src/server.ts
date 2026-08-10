@@ -9,6 +9,15 @@ import {
   listAcpConfigOptions,
   listAcpSessions,
   runAcpSession,
+  closePiSession,
+  deletePiSession,
+  forkPiSession,
+  listPiConfigOptions,
+  listPiSessions,
+  runPiSession,
+  type PiRunHandleRef,
+  type PiSession,
+  type PiSessionLifecycleResult,
   type CliSessionSummary,
 } from "@codebridge/backends";
 import type {
@@ -32,6 +41,10 @@ export interface RunnerHostOptions {
   config: AppConfig;
   maxConcurrentRuns?: number;
   dataDir?: string;
+  /** Test/embedding hook; production uses the native Pi Node SDK factory. */
+  piSessionFactory?: (ctx: RunContext) => Promise<PiSession>;
+  /** Test/embedding hook for provider-native session fork. */
+  piSessionForker?: typeof forkPiSession;
 }
 
 interface ActiveRun {
@@ -226,16 +239,20 @@ export class RunnerHost {
     cwd = resolvedCwd.cwd;
 
     try {
-      const sessions = await listAcpSessions(backendId, profile, cwd, {
-        limit: options?.limit ?? 20,
-        all: options?.all ?? false,
-      });
+      const sessions = profile.type === "pi-sdk"
+        ? await listPiSessions(backendId, cwd, {
+            limit: options?.limit ?? 20,
+          })
+        : await listAcpSessions(backendId, profile, cwd, {
+            limit: options?.limit ?? 20,
+            all: options?.all ?? false,
+          });
       return { sessions };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
         sessions: [],
-        error: `ACP session/list failed for ${backendId}: ${message}`,
+        error: `${profile.type === "pi-sdk" ? "Pi session/list" : "ACP session/list"} failed for ${backendId}: ${message}`,
       };
     }
   }
@@ -283,6 +300,38 @@ export class RunnerHost {
     return this.manageSession("delete", backendId, cwd, sessionId);
   }
 
+  async forkSession(
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+    targetCwd: string,
+  ): Promise<PiSessionLifecycleResult> {
+    if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+      return { ok: false, error: `Session ${sessionId} 正在运行，请先停止后重试` };
+    }
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { ok: false, error: `Unknown backend: ${backendId}` };
+    const source = resolveRunCwd(cwd);
+    if ("error" in source) return { ok: false, error: source.error };
+    const target = resolveRunCwd(targetCwd);
+    if ("error" in target) return { ok: false, error: target.error };
+    if (profile.type !== "pi-sdk") {
+      return { ok: false, error: `${backendId} 未声明 Session fork 能力` };
+    }
+    try {
+      return await (this.options.piSessionForker ?? forkPiSession)(
+        source.cwd,
+        sessionId,
+        target.cwd,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        error: `Pi session/fork failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
   private async manageSession(
     action: "close" | "delete",
     backendId: string,
@@ -301,6 +350,9 @@ export class RunnerHost {
     if ("error" in resolvedCwd) return { ok: false, error: resolvedCwd.error };
     try {
       if (action === "close") {
+        if (profile.type === "pi-sdk") {
+          return closePiSession(resolvedCwd.cwd, sessionId);
+        }
         const result = await this.sessionPool.close(sessionId);
         if (result.error === "not_owned") {
           return {
@@ -316,12 +368,18 @@ export class RunnerHost {
         }
         return result;
       }
+      if (profile.type === "pi-sdk") {
+        return deletePiSession(resolvedCwd.cwd, sessionId);
+      }
       await deleteAcpSession(profile, resolvedCwd.cwd, sessionId);
       this.sessionPool.remove(sessionId);
       return { ok: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: `ACP session/${action} failed for ${backendId}: ${message}` };
+      return {
+        ok: false,
+        error: `${profile.type === "pi-sdk" ? "Pi session" : "ACP session"}/${action} failed for ${backendId}: ${message}`,
+      };
     }
   }
 
@@ -340,6 +398,9 @@ export class RunnerHost {
     }
     cwd = resolvedCwd.cwd;
     try {
+      if (profile.type === "pi-sdk") {
+        return { options: await listPiConfigOptions() };
+      }
       return { options: await listAcpConfigOptions(profile, cwd) };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -407,7 +468,11 @@ export class RunnerHost {
     };
 
     try {
-      yield* this.executeAcpRun(request.runId, ctx);
+      if (profile.type === "pi-sdk") {
+        yield* this.executePiRun(request.runId, ctx);
+      } else {
+        yield* this.executeAcpRun(request.runId, ctx);
+      }
     } finally {
       if (localAttachments.length > 0) {
         await cleanupAttachments(this.dataDir, request.runId);
@@ -507,6 +572,51 @@ export class RunnerHost {
         pending.resolve(false);
       }
       this.pendingPermissions.delete(runId);
+      this.active.delete(runId);
+      yield { type: "done", exitCode };
+    }
+  }
+
+  private async *executePiRun(
+    runId: string,
+    ctx: RunContext,
+  ): AsyncGenerator<AgentEvent> {
+    const handleRef: PiRunHandleRef = {};
+    const activeRun: ActiveRun = {
+      runId,
+      sessionId: ctx.resumeSessionId,
+      aborted: false,
+      cancel: () => {
+        void handleRef.current?.cancel();
+      },
+      steer: async (prompt: string) => {
+        const steer = handleRef.current?.steer;
+        if (!steer) throw new Error("当前 Pi Agent 尚未初始化或不支持 steering");
+        return steer(prompt);
+      },
+    };
+    this.active.set(runId, activeRun);
+    let exitCode = 0;
+    try {
+      for await (const event of runPiSession(ctx, {
+        isAborted: () => activeRun.aborted,
+        handleRef,
+        ...(this.options.piSessionFactory
+          ? { createSession: this.options.piSessionFactory }
+          : {}),
+      })) {
+        if (event.type === "session") activeRun.sessionId = event.sessionId;
+        if (event.type === "error" && event.fatal) exitCode = 1;
+        yield event;
+      }
+    } catch (err) {
+      yield {
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+        fatal: true,
+      };
+      exitCode = 1;
+    } finally {
       this.active.delete(runId);
       yield { type: "done", exitCode };
     }
@@ -656,6 +766,24 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
     const result = await host.closeSession(body.backend, body.cwd, c.req.param("id"));
     return c.json(result, result.ok ? 200 : 409);
+  });
+
+  app.post("/sessions/:id/fork", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      backend?: string;
+      cwd?: string;
+      targetCwd?: string;
+    };
+    if (!body.backend || !body.cwd || !body.targetCwd) {
+      return c.json({ error: "backend, cwd and targetCwd are required" }, 400);
+    }
+    const result = await host.forkSession(
+      body.backend,
+      body.cwd,
+      c.req.param("id"),
+      body.targetCwd,
+    );
+    return c.json(result, result.ok ? 201 : 409);
   });
 
   app.delete("/sessions/:id", async (c) => {

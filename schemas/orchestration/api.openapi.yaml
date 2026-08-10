@@ -1,0 +1,859 @@
+openapi: 3.1.0
+info:
+  title: CodeBridge Orchestration API
+  version: 1.0.0-draft
+  description: |
+    Session-first API for Agent sessions, folders, flows, runs, approvals and discovery.
+    TaskRecord/WorkItem routes remain available as an internal compatibility surface.
+  x-codebridge-status: session-first-target
+servers:
+  - url: /
+paths:
+  /v1/agents:
+    get:
+      operationId: listAgents
+      summary: List registered Agent Profiles
+      responses:
+        '200':
+          description: Agent Profiles grouped in the Web navigation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agents]
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentProfile'
+  /v1/agents/{agent_id}:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+    get:
+      operationId: getAgent
+      summary: Get an Agent Profile and dynamic capabilities
+      responses:
+        '200':
+          description: Agent Profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentProfile'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions:
+    get:
+      operationId: listSessions
+      summary: List sessions grouped by Agent Profile
+      parameters:
+        - in: query
+          name: agent_id
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+      responses:
+        '200':
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentSession'
+    post:
+      operationId: createSession
+      summary: Create a session fixed to one Agent Profile
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSession'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/sessions/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getSession
+      summary: Get a session and its current context
+      responses:
+        '200':
+          description: Session projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSession'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions/{session_id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: sendSessionMessage
+      summary: Send a message to the current Agent Session
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionMessage'
+      responses:
+        '202':
+          description: Message accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+  /v1/sessions/{session_id}/runs:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: createSessionRun
+      summary: Create a Run with an optional Flow binding
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartSessionRun'
+      responses:
+        '202':
+          description: Run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunReference'
+  /v1/sessions/{session_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - $ref: '#/components/parameters/LastEventId'
+    get:
+      operationId: streamSessionEvents
+      summary: Stream ordered Session and Run events
+      responses:
+        '200':
+          description: Ordered SSE events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/sessions/{session_id}/fork:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: forkSession
+      summary: Create a provider-supported branch Session under the same Agent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_cwd: { type: string }
+                title: { type: [string, 'null'] }
+      responses:
+        '201':
+          description: Forked Session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSession'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/flows:
+    get:
+      operationId: listFlows
+      summary: List Flow and Workflow definitions
+      responses:
+        '200':
+          description: Flow Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flows]
+                properties:
+                  flows:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Flow'
+  /v1/flows/{flow_id}:
+    parameters:
+      - $ref: '#/components/parameters/FlowId'
+    get:
+      operationId: getFlow
+      summary: Get a Flow definition and revision
+      responses:
+        '200':
+          description: Flow definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/flows/{flow_id}/review:
+    parameters:
+      - $ref: '#/components/parameters/FlowId'
+    post:
+      operationId: reviewFlow
+      summary: Approve or reject a Workflow Candidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision:
+                  type: string
+                  enum: [approve, reject]
+                git_revision:
+                  type: [string, 'null']
+                  description: Required for approval; points to the reviewed Git definition.
+      responses:
+        '200':
+          description: Updated Flow review state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/flows/{flow_id}/apply:
+    parameters:
+      - $ref: '#/components/parameters/FlowId'
+    post:
+      operationId: applyFlow
+      summary: Apply a Flow to the next Run of a Session
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id: { type: string }
+      responses:
+        '200':
+          description: Flow binding recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+  /v1/flows/candidates:
+    post:
+      operationId: saveFlowCandidate
+      summary: Save a Session-generated Flow as a Candidate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlowCandidateRequest'
+      responses:
+        '201':
+          description: Flow Candidate saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+  /v1/work-items:
+    get:
+      operationId: listWorkItems
+      summary: List WorkItems for the workbench inbox
+      responses:
+        '200':
+          description: WorkItem projections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [work_items]
+                properties:
+                  work_items:
+                    type: array
+                    items:
+                      $ref: './work-item.schema.json'
+    post:
+      operationId: createWorkItem
+      summary: Create a WorkItem
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkItem'
+      responses:
+        '201':
+          description: WorkItem created
+          content:
+            application/json:
+              schema:
+                $ref: './work-item.schema.json'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/work-items/{work_item_id}:
+    parameters:
+      - $ref: '#/components/parameters/WorkItemId'
+    get:
+      operationId: getWorkItem
+      summary: Get a WorkItem
+      responses:
+        '200':
+          description: Current WorkItem projection
+          content:
+            application/json:
+              schema:
+                $ref: './work-item.schema.json'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/work-items/{work_item_id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/WorkItemId'
+    post:
+      operationId: sendWorkItemMessage
+      summary: Send a user message or additional input
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  minLength: 1
+                actor:
+                  type: string
+                  enum: [user, channel]
+                identifiers:
+                  type: object
+      responses:
+        '202':
+          description: Message accepted; follow the event stream for progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/work-items/{work_item_id}/runs:
+    parameters:
+      - $ref: '#/components/parameters/WorkItemId'
+    post:
+      operationId: startRun
+      summary: Start a WorkItem run
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartRun'
+      responses:
+        '202':
+          description: Run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunReference'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/work-items/{work_item_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/WorkItemId'
+      - $ref: '#/components/parameters/LastEventId'
+    get:
+      operationId: streamWorkItemEvents
+      summary: Stream WorkItem events
+      responses:
+        '200':
+          description: Ordered SSE events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/runs/{run_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      operationId: approveRun
+      summary: Grant a scoped approval for the next protected step
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approval_id]
+              properties:
+                approval_id:
+                  type: string
+      responses:
+        '200':
+          description: Approval recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/discovery/tasks:
+    post:
+      operationId: createDiscoveryTask
+      summary: Start asynchronous project discovery
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace_path]
+              properties:
+                workspace_path:
+                  type: string
+                work_item_id:
+                  type: string
+      responses:
+        '202':
+          description: Discovery task accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskReference'
+  /v1/directories/authorize:
+    post:
+      operationId: authorizeDirectory
+      summary: Ask the Runner to validate and authorize a workspace directory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+      responses:
+        '200':
+          description: Canonical authorized directory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: true }
+                  path: { type: string }
+        '403':
+          description: Directory is not authorized
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: false }
+                  error: { type: string }
+  /v1/projects:
+    get:
+      operationId: listProjects
+      summary: List registered projects
+      responses:
+        '200':
+          description: Registered project list
+  /v1/projects/candidates:
+    get:
+      operationId: listCatalogCandidates
+      summary: List project candidates awaiting review
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [candidate, stale, rejected, accepted]
+      responses:
+        '200':
+          description: Candidate list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [candidates]
+                properties:
+                  candidates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProjectCandidate'
+  /v1/projects/candidates/{candidate_id}/accept:
+    parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: acceptCatalogCandidate
+      summary: Accept a project candidate and create a Git diff
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Candidate registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Acknowledgement'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  parameters:
+    AgentId:
+      in: path
+      name: agent_id
+      required: true
+      schema:
+        type: string
+    SessionId:
+      in: path
+      name: session_id
+      required: true
+      schema:
+        type: string
+    FlowId:
+      in: path
+      name: flow_id
+      required: true
+      schema:
+        type: string
+    WorkItemId:
+      in: path
+      name: work_item_id
+      required: true
+      schema:
+        type: string
+    RunId:
+      in: path
+      name: run_id
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema:
+        type: string
+    LastEventId:
+      in: header
+      name: Last-Event-ID
+      required: false
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: State or idempotency conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    AgentProfile:
+      type: object
+      required: [agent_id, display_name, adapter, status, capabilities, models, session_features]
+      properties:
+        agent_id: { type: string }
+        display_name: { type: string }
+        adapter:
+          type: string
+          enum: [sdk, acp, cli]
+        status:
+          type: string
+          enum: [healthy, unavailable, needs_setup]
+        capabilities:
+          type: array
+          items: { type: string }
+        models:
+          type: array
+          items: { type: string }
+        session_features:
+          type: array
+          items: { type: string }
+        definition_revision: { type: [string, 'null'] }
+    AgentSession:
+      type: object
+      required: [session_id, agent_id, provider_session_id, folder_id, flow_id, status]
+      properties:
+        session_id: { type: string }
+        agent_id: { type: string }
+        provider_session_id: { type: string }
+        task_record_id: { type: [string, 'null'] }
+        folder_id: { type: [string, 'null'] }
+        flow_id: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        flow_revision: { type: [string, 'null'] }
+        cwd: { type: [string, 'null'] }
+        additional_directories:
+          type: array
+          items: { type: string }
+        title: { type: [string, 'null'] }
+        status:
+          type: string
+          enum: [active, idle, closed, unavailable]
+        last_seen: { type: [string, 'null'], format: date-time }
+    CreateSession:
+      type: object
+      required: [agent_id]
+      properties:
+        agent_id: { type: string }
+        folder_id: { type: [string, 'null'] }
+        cwd: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        title: { type: [string, 'null'] }
+    SessionMessage:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, minLength: 1 }
+        flow_id: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        references:
+          type: array
+          items: { type: string }
+    StartSessionRun:
+      type: object
+      properties:
+        flow_id: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        mode:
+          type: string
+          enum: [auto]
+          default: auto
+    Flow:
+      type: object
+      required: [flow_id, kind, status, source, definition_revision, steps]
+      properties:
+        flow_id: { type: string }
+        name: { type: [string, 'null'] }
+        kind:
+          type: string
+          enum: [ephemeral, guide, runbook]
+        status:
+          type: string
+          enum: [draft, candidate, published, deprecated]
+        source:
+          type: string
+          enum: [agent_generated, user_selected, git]
+        definition_revision: { type: string }
+        review_status:
+          type: string
+          enum: [pending, approved, rejected]
+        git_revision: { type: [string, 'null'] }
+        validation_issues:
+          type: array
+          items: { type: string }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [id]
+            properties:
+              id: { type: string }
+              capability: { type: [string, 'null'] }
+              purpose: { type: [string, 'null'] }
+              depends_on:
+                type: array
+                items: { type: string }
+              branches:
+                type: array
+                items:
+                  type: object
+                  required: [when, next]
+                  properties:
+                    when: { type: string }
+                    next: { type: string }
+        session_id: { type: [string, 'null'] }
+    FlowCandidateRequest:
+      type: object
+      required: [session_id, definition_revision]
+      properties:
+        session_id: { type: string }
+        run_id: { type: [string, 'null'] }
+        definition_revision: { type: string }
+        flow:
+          type: object
+          additionalProperties: true
+    CreateWorkItem:
+      type: object
+      required: [conversation_id, message]
+      properties:
+        conversation_id:
+          type: string
+        title:
+          type: string
+          description: Optional display title; generated from the first message when omitted.
+        agent_id:
+          type: [string, 'null']
+          description: Optional Agent hint; the configured default is used when omitted.
+        mode:
+          type: string
+          enum: [auto, investigation, change, review, release, observe]
+          default: auto
+          description: Optional orchestration hint; auto lets the Agent classify the work.
+        workflow_id:
+          type: [string, 'null']
+        workspace_scope:
+          type: array
+          items:
+            type: string
+        message:
+          type: string
+        identifiers:
+          type: object
+        risk_level:
+          type: string
+          enum: [read_only, workspace_write, git_write, production_write]
+    StartRun:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [auto, investigation, change, review, release, observe]
+          default: auto
+        plan_id:
+          type: [string, 'null']
+    Acknowledgement:
+      type: object
+      required: [request_id, accepted]
+      properties:
+        request_id:
+          type: string
+        accepted:
+          type: boolean
+    RunReference:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, waiting, succeeded, failed, cancelled]
+    TaskReference:
+      type: object
+      required: [task_id, status]
+      properties:
+        task_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, waiting, succeeded, failed, cancelled]
+    ProjectCandidate:
+      type: object
+      required: [id, project_id, status, confidence, evidence, observed_at]
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        display_name:
+          type: [string, 'null']
+        repository_remote:
+          type: [string, 'null']
+        language:
+          type: [string, 'null']
+        deploy_service:
+          type: [string, 'null']
+        log_service:
+          type: [string, 'null']
+        apm_service:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [candidate, stale, rejected, accepted]
+        confidence:
+          type: string
+          enum: [low, medium, high]
+        evidence:
+          type: array
+          items:
+            type: object
+            required: [kind, ref]
+            properties:
+              kind: { type: string }
+              ref: { type: string }
+              value: { type: string }
+        observed_at:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable, request_id]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            retryable:
+              type: boolean
+            details:
+              type: object
+            request_id:
+              type: string

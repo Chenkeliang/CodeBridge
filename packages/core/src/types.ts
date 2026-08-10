@@ -182,8 +182,8 @@ export interface BackendConfigOption {
 }
 
 export interface BackendProfile {
-  type: "cursor-cli" | "claude-code" | "codex" | "generic-spawn";
-  /** ACP spawn 命令；已知 backend type 有内置默认值 */
+  type: "cursor-cli" | "claude-code" | "codex" | "generic-spawn" | "pi-sdk";
+  /** ACP spawn 命令；仅 ACP profiles 使用，pi-sdk 由 Node SDK 直接创建 */
   acpCommand?: string;
   acpArgs?: string[];
   model?: string;
