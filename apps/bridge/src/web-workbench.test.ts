@@ -35,6 +35,10 @@ describe("web workbench", () => {
     expect(html).toContain("/v1/flows/candidates");
     expect(html).toContain('id="accept-project"');
     expect(html).toContain("/v1/projects/candidates/");
+    expect(html).toContain('id="approve-run"');
+    expect(html).toContain('id="reject-run"');
+    expect(html).toContain("/v1/runs/");
+    expect(html).toContain("/review");
     expect(html).toContain('id="session-fork"');
     expect(html).toContain('id="session-close"');
     expect(html).toContain('id="session-delete"');
@@ -50,6 +54,7 @@ describe("web workbench", () => {
     expect(html).not.toContain("price-change");
     expect(html).not.toContain("自动生成");
     expect(html).toContain("/v1/sessions");
+    expect(html).toContain("events?live=true&after_sequence=");
     expect(html).not.toContain("@ 委派");
     store.close();
   });

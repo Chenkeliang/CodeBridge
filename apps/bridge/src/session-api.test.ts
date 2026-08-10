@@ -230,6 +230,45 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("keeps an opt-in Session SSE stream open for later events", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    const message = await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ message: "持续事件" }),
+    });
+    const taskId = (await message.json() as { task_record_id: string }).task_record_id;
+    const response = await app.request(`/v1/sessions/${session.id}/events?after_sequence=2&live=true`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const reader = response.body!.getReader();
+    workItems.appendEvent({
+      workItemId: taskId,
+      type: "AGENT_EVENT",
+      actor: "agent",
+      payload: { text: "later" },
+    });
+    const first = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE timeout")), 2_000)),
+    ]);
+    expect(first.done).toBe(false);
+    expect(new TextDecoder().decode(first.value)).toContain("AGENT_EVENT");
+    workItems.appendEvent({ workItemId: taskId, type: "VERIFICATION_COMPLETED", actor: "system" });
+    const second = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE timeout")), 2_000)),
+    ]);
+    expect(second.done).toBe(false);
+    expect(new TextDecoder().decode(second.value)).toContain("VERIFICATION_COMPLETED");
+    await reader.cancel();
+    catalog.close();
+    workItems.close();
+  });
+
   it("makes Session creation, messages and Runs idempotent", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

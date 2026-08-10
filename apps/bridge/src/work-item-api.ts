@@ -189,6 +189,39 @@ export function createWorkItemApp(
     return c.json({ approval_id: granted.id, status: granted.status, granted_at: granted.grantedAt });
   });
 
+  app.post("/v1/runs/:run_id/reject", async (c) => {
+    if (!approvals) {
+      return errorResponse(c, 503, "approval_unavailable", "审批服务未配置");
+    }
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    const body = await readJson(c);
+    if (!body || typeof body.approval_id !== "string") {
+      return errorResponse(c, 400, "invalid_approval", "approval_id 必填");
+    }
+    const approval = approvals.get(body.approval_id);
+    if (!approval || approval.runId !== run.id) {
+      return errorResponse(c, 404, "approval_not_found", "审批记录不存在");
+    }
+    const rejected = approvals.revoke(
+      approval.id,
+      body.rejected_by === "system" ? "system" : "user",
+    );
+    if (!rejected || rejected.status !== "revoked") {
+      return errorResponse(c, 409, "approval_not_rejectable", "审批已过期或已处理");
+    }
+    store.updateRunStatus(run.id, "cancelled");
+    store.appendEvent({
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "RUN_CANCELLED",
+      actor: "user",
+      target: run.id,
+      payload: { approval_id: rejected.id, reason: "approval_rejected" },
+    });
+    return c.json({ approval_id: rejected.id, status: rejected.status });
+  });
+
   app.get("/v1/work-items/:work_item_id/events", (c) => {
     const workItemId = c.req.param("work_item_id");
     if (!store.getWorkItem(workItemId)) {
