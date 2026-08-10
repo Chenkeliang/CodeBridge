@@ -76,13 +76,20 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .work-list { display:grid; gap:12px; overflow:auto; }
     #work-list { flex:1 1 auto; min-height:0; }
     #flow-list { flex:0 0 auto; max-height:28dvh; }
-    .agent-group { display:grid; gap:4px; }
-    .agent-group-head { display:flex; align-items:center; justify-content:space-between; padding:6px 8px; color:var(--ink); }
-    .agent-group-head strong { font-size:13px; }
+    .agent-group { display:grid; gap:3px; }
+    .agent-group-head { display:flex; align-items:center; gap:4px; padding:3px 4px; color:var(--ink); }
+    .agent-toggle { min-width:0; flex:1; display:flex; align-items:center; gap:7px; padding:7px 6px; border-radius:8px; background:transparent; color:var(--ink); text-align:left; }
+    .agent-toggle:hover { background:#e4e9e5; }
+    .agent-toggle strong { font-size:14px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .agent-status, .agent-count { color:var(--muted); font:10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .agent-count { margin-left:auto; }
+    .agent-chevron { flex:0 0 14px; color:var(--muted); transition:transform .16s ease; }
+    .agent-chevron.expanded { transform:rotate(90deg); }
     .agent-new { background:transparent; color:var(--accent); font-size:16px; padding:0 4px; }
-    .work-row { display:grid; gap:3px; text-align:left; padding:12px 10px; border-radius:8px; background:transparent; color:var(--ink); }
+    .agent-sessions { display:grid; gap:2px; margin-left:14px; padding-left:10px; border-left:1px solid var(--line); }
+    .work-row { display:grid; gap:3px; text-align:left; padding:8px 9px; border-radius:8px; background:transparent; color:var(--ink); }
     .work-row:hover, .work-row.active { background:#e4e9e5; }
-    .work-row strong { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .work-row strong { font-size:12px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .work-row small { color:var(--muted); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .empty { color:var(--muted); padding:18px 10px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
     .main { min-width:0; padding:38px clamp(20px,5vw,72px); }
@@ -242,7 +249,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   </div>
   <script>
     const TOKEN = __TOKEN__;
-    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, view: 'all' };
+    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, view: 'all', collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
       const response = await fetch(url, { ...init, headers: { authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json', ...(init.headers || {}) } });
@@ -288,15 +295,29 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         const sessions = result.sessions || [];
         const groups = sessions.reduce((map, session) => { (map[session.agent_id] ||= []).push(session); return map; }, {});
         const agentIds = [...new Set([${JSON.stringify(agentProfiles.map((agent) => agent.id))}, ...Object.keys(groups)].flat())];
-        const agentLabels = ${JSON.stringify(Object.fromEntries(agentProfiles.map((agent) => [agent.id, `${agent.name}${agent.status ? ` · ${agent.status}` : ''}`])))};
+        const agentLabels = ${JSON.stringify(Object.fromEntries(agentProfiles.map((agent) => [agent.id, agent.name])))};
         const agentStatuses = ${JSON.stringify(Object.fromEntries(agentProfiles.map((agent) => [agent.id, agent.status ?? ""]))) };
-        $('work-list').innerHTML = agentIds.map((agentId) => {
+        $('work-list').innerHTML = agentIds.map((agentId, index) => {
           const canCreate = !agentStatuses[agentId] || agentStatuses[agentId] === 'healthy';
+          const sessionsForAgent = groups[agentId] || [];
+          const collapsed = state.collapsedAgents.has(agentId);
+          const sessionsId = 'agent-sessions-' + index;
           const newButton = canCreate ? '<button class="agent-new" data-agent="' + esc(agentId) + '" aria-label="新建会话" type="button">＋</button>' : '';
-          const sessionRows = (groups[agentId] || []).map((session) => '<button class="work-row ' + (state.selected === session.session_id ? 'active' : '') + '" data-id="' + esc(session.session_id) + '" type="button"><strong>' + esc(session.title || '新会话') + '</strong><small>' + esc(session.status) + ' · ' + esc(session.cwd || '工作空间自动发现') + '</small></button>').join('');
-          return '<section class="agent-group"><div class="agent-group-head"><strong>' + esc(agentLabels[agentId] || agentId) + '</strong>' + newButton + '</div>' + (sessionRows || '<div class="empty">还没有会话</div>') + '</section>';
+          const sessionRows = sessionsForAgent.map((session) => '<button class="work-row ' + (state.selected === session.session_id ? 'active' : '') + '" data-id="' + esc(session.session_id) + '" type="button"><strong>' + esc(session.title || '新会话') + '</strong><small>' + esc(session.status) + ' · ' + esc(session.cwd || '工作空间自动发现') + '</small></button>').join('');
+          const status = agentStatuses[agentId] ? '<span class="agent-status">' + esc(agentStatuses[agentId]) + '</span>' : '';
+          return '<section class="agent-group"><div class="agent-group-head"><button class="agent-toggle" data-agent-toggle="' + esc(agentId) + '" aria-expanded="' + String(!collapsed) + '" aria-controls="' + sessionsId + '" type="button"><span class="agent-chevron ' + (collapsed ? '' : 'expanded') + '">›</span><strong>' + esc(agentLabels[agentId] || agentId) + '</strong>' + status + '<span class="agent-count">' + sessionsForAgent.length + '</span></button>' + newButton + '</div><div class="agent-sessions" id="' + sessionsId + '"' + (collapsed ? ' hidden' : '') + '>' + (sessionRows || '<div class="empty">还没有会话</div>') + '</div></section>';
         }).join('');
         document.querySelectorAll('#work-list .work-row').forEach((button) => button.addEventListener('click', () => selectSession(button.dataset.id)));
+        document.querySelectorAll('.agent-toggle').forEach((button) => button.addEventListener('click', () => {
+          const agentId = button.dataset.agentToggle;
+          if (!agentId) return;
+          const sessions = $(button.getAttribute('aria-controls'));
+          const expanded = state.collapsedAgents.has(agentId);
+          if (expanded) state.collapsedAgents.delete(agentId); else state.collapsedAgents.add(agentId);
+          button.setAttribute('aria-expanded', String(expanded));
+          if (sessions) sessions.hidden = !expanded;
+          button.querySelector('.agent-chevron')?.classList.toggle('expanded', expanded);
+        }));
         document.querySelectorAll('.agent-new').forEach((button) => button.addEventListener('click', () => { void newSession(button.dataset.agent).catch((error) => { $('error').textContent = error.message; }); }));
       } catch (error) { $('work-list').innerHTML = '<div class="empty">无法读取：' + esc(error.message) + '</div>'; }
     }

@@ -145,6 +145,33 @@ describe("web workbench", () => {
     store.close();
   });
 
+  it("renders Agent groups as collapsible parents of Session rows", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({
+      store,
+      token: "web-token",
+      agentProfiles: [{ id: "codex", name: "Codex", status: "healthy" }],
+    });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain('class="agent-toggle"');
+    expect(html).toContain('class="agent-sessions"');
+    expect(html).toContain("state.collapsedAgents");
+    expect(html).toContain("aria-expanded");
+    store.close();
+  });
+
+  it("visually distinguishes Agent headings from Session titles", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain(".agent-toggle strong { font-size:14px; font-weight:700;");
+    expect(html).toContain(".work-row strong { font-size:12px; font-weight:500;");
+    expect(html).toContain(".agent-sessions { display:grid;");
+    store.close();
+  });
+
   it("does not allow new sessions for unavailable agents", async () => {
     const store = new SqliteEventStore(":memory:");
     const app = createWebWorkbenchApp({
