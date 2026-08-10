@@ -57,6 +57,10 @@ describe("web workbench", () => {
     expect(html).toContain("/artifacts");
     expect(html).toContain("/verifications");
     expect(html).toContain("/approvals");
+    expect(html).toContain('id="project-drift-list"');
+    expect(html).toContain("/v1/projects/drifts");
+    expect(html).toContain('data-drift-action="apply"');
+    expect(html).toContain('data-drift-action="resolve"');
     expect(html).toContain('data-view="plan"');
     expect(html).toContain('data-view="approval"');
     expect(html).toContain('data-view="evidence"');
