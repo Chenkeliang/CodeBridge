@@ -152,6 +152,9 @@ export interface ApprovalRecord {
   runId: string;
   stepId: string;
   capabilityId: string;
+  sessionId: string;
+  environment: string;
+  targetResource: string;
   inputHash: string;
   status: ApprovalStatus;
   requestedBy: string;
@@ -167,6 +170,9 @@ export interface RequestApprovalInput {
   runId: string;
   stepId: string;
   capabilityId: string;
+  sessionId?: string;
+  environment?: string;
+  targetResource?: string;
   inputHash: string;
   requestedBy: string;
   ttlMs?: number;
@@ -188,6 +194,9 @@ export class ApprovalService {
         run_id TEXT NOT NULL,
         step_id TEXT NOT NULL,
         capability_id TEXT NOT NULL,
+        session_id TEXT NOT NULL DEFAULT '',
+        environment TEXT NOT NULL DEFAULT 'unknown',
+        target_resource TEXT NOT NULL DEFAULT '',
         input_hash TEXT NOT NULL,
         status TEXT NOT NULL,
         requested_by TEXT NOT NULL,
@@ -199,6 +208,13 @@ export class ApprovalService {
       );
       CREATE INDEX IF NOT EXISTS approvals_run ON approvals (run_id, status);
     `);
+    for (const statement of [
+      "ALTER TABLE approvals ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE approvals ADD COLUMN environment TEXT NOT NULL DEFAULT 'unknown'",
+      "ALTER TABLE approvals ADD COLUMN target_resource TEXT NOT NULL DEFAULT ''",
+    ]) {
+      try { this.database.exec(statement); } catch { /* Existing databases already contain the column. */ }
+    }
   }
 
   request(input: RequestApprovalInput): ApprovalRecord {
@@ -212,6 +228,9 @@ export class ApprovalService {
       runId: input.runId,
       stepId: input.stepId,
       capabilityId: input.capabilityId,
+      sessionId: input.sessionId ?? "unknown",
+      environment: input.environment ?? "unknown",
+      targetResource: input.targetResource ?? "unknown",
       inputHash: input.inputHash,
       status: "requested",
       requestedBy: input.requestedBy,
@@ -225,8 +244,9 @@ export class ApprovalService {
       .prepare(
         `INSERT INTO approvals (
           id, work_item_id, run_id, step_id, capability_id, input_hash, status,
-          requested_by, granted_by, created_at, expires_at, granted_at, consumed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          session_id, environment, target_resource, requested_by, granted_by,
+          created_at, expires_at, granted_at, consumed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -236,6 +256,9 @@ export class ApprovalService {
         record.capabilityId,
         record.inputHash,
         record.status,
+        record.sessionId,
+        record.environment,
+        record.targetResource,
         record.requestedBy,
         record.grantedBy,
         record.createdAt,
@@ -250,7 +273,14 @@ export class ApprovalService {
       actor: "system",
       target: record.capabilityId,
       inputHash: record.inputHash,
-      payload: { approval_id: record.id, step_id: record.stepId, expires_at: record.expiresAt },
+      payload: {
+        approval_id: record.id,
+        step_id: record.stepId,
+        session_id: record.sessionId,
+        environment: record.environment,
+        target_resource: record.targetResource,
+        expires_at: record.expiresAt,
+      },
     });
     return record;
   }
@@ -331,6 +361,9 @@ function toApproval(row: Record<string, unknown>): ApprovalRecord {
     runId: String(row.run_id),
     stepId: String(row.step_id),
     capabilityId: String(row.capability_id),
+    sessionId: row.session_id === null ? "unknown" : String(row.session_id),
+    environment: row.environment === null ? "unknown" : String(row.environment),
+    targetResource: row.target_resource === null ? "unknown" : String(row.target_resource),
     inputHash: String(row.input_hash),
     status: String(row.status) as ApprovalStatus,
     requestedBy: String(row.requested_by),

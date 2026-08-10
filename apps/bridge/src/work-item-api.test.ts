@@ -254,5 +254,15 @@ describe("createWorkItemApp", () => {
     expect(await response.json()).toMatchObject({ approval_id: approval.id, status: "revoked" });
     expect(store.getRun(run.id)?.status).toBe("cancelled");
     expect(store.getWorkItem(item.id)?.status).toBe("cancelled");
+
+    const listed = await app.request(request(`/v1/runs/${run.id}/approvals`, { method: "GET" }));
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({
+      approvals: [expect.objectContaining({
+        session_id: "unknown",
+        environment: "unknown",
+        target_resource: "unknown",
+      })],
+    });
   });
 });

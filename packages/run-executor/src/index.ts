@@ -49,7 +49,8 @@ export class RunExecutor {
       if (!this.options.approvals) {
         throw new Error("Approval service is required for production_write runs");
       }
-      const inputHash = `sha256:${hashInput(workItem.id, runId, workItem.title)}`;
+      const approvalScope = approvalScopeFor(workItem, runId, undefined, "production");
+      const inputHash = `sha256:${hashInput(approvalScope)}`;
       const existing = this.options.approvals
         .listForRun(runId)
         .find((approval) => approval.stepId === "run" && approval.inputHash === inputHash);
@@ -60,6 +61,7 @@ export class RunExecutor {
             runId,
             stepId: "run",
             capabilityId: "run.production",
+            ...approvalScope,
             inputHash,
             requestedBy: "system",
           });
@@ -241,7 +243,9 @@ export class RunExecutor {
         step.risk === "production_write" ||
         (policyDecision && !policyDecision.allowed && policyDecision.requiresApproval)
       ) {
-        const inputHash = `sha256:${hashInput(workItem.id, run.id, workItem.title, step.id)}`;
+        const environment = step.risk === "production_write" ? "production" : "local";
+        const approvalScope = approvalScopeFor(workItem, run.id, step, environment);
+        const inputHash = `sha256:${hashInput(approvalScope)}`;
         const existing = this.options.approvals
           ?.listForRun(run.id)
           .find((approval) => approval.stepId === step.id && approval.inputHash === inputHash);
@@ -253,6 +257,7 @@ export class RunExecutor {
               runId: run.id,
               stepId: step.id,
               capabilityId: step.capabilityId ?? `manual.${step.id}`,
+              ...approvalScope,
               inputHash,
               requestedBy: "system",
             });
@@ -347,7 +352,7 @@ export class RunExecutor {
           target: flowId,
           payload: {
             source: "agent_generated",
-            definition_revision: `agent:${hashInput(workItem.id, run.id, workItem.title)}`,
+            definition_revision: `agent:${contentHash(workItem.id, run.id, workItem.title)}`,
             flow: {
               schema_version: 1,
               workflow_id: flowId,
@@ -418,10 +423,62 @@ export class RunExecutor {
   }
 }
 
-function hashInput(workItemId: string, runId: string, title: string, stepId?: string): string {
+interface ApprovalScope {
+  sessionId: string;
+  environment: string;
+  targetResource: string;
+  input: Record<string, unknown>;
+}
+
+function approvalScopeFor(
+  workItem: WorkItem,
+  runId: string,
+  step: PersistedPlanStep | undefined,
+  environment: string,
+): ApprovalScope {
+  const sessionId = workItem.conversationId.startsWith("conv_")
+    ? `sess_${workItem.conversationId.slice("conv_".length)}`
+    : workItem.conversationId;
+  const targetResource = typeof workItem.identifiers.target_resource === "string"
+    ? workItem.identifiers.target_resource
+    : step?.capabilityId ?? workItem.workspaceScope[0] ?? "run";
+  return {
+    sessionId,
+    environment,
+    targetResource,
+    input: {
+      workItemId: workItem.id,
+      runId,
+      title: workItem.title,
+      identifiers: workItem.identifiers,
+      workspaceScope: workItem.workspaceScope,
+      step: step ? { id: step.id, capabilityId: step.capabilityId, risk: step.risk, purpose: step.purpose } : null,
+      sessionId,
+      environment,
+      targetResource,
+    },
+  };
+}
+
+function hashInput(scope: ApprovalScope): string {
   return createHash("sha256")
-    .update(`${workItemId}:${runId}:${title}:${stepId ?? "run"}`)
+    .update(stableStringify(scope.input))
     .digest("hex");
+}
+
+function contentHash(...values: string[]): string {
+  return createHash("sha256").update(values.join(":"), "utf8").digest("hex");
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function orderSteps(steps: PersistedPlanStep[]): PersistedPlanStep[] {

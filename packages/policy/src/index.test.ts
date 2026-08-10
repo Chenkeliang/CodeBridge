@@ -43,12 +43,20 @@ describe("policy and approval", () => {
       runId: "run_1",
       stepId: "release",
       capabilityId: "release.execute",
+      sessionId: "sess_1",
+      environment: "production",
+      targetResource: "service/release",
       inputHash: "sha256:abc",
       requestedBy: "agent",
       ttlMs: 60_000,
     });
     const granted = approvals.grant(requested.id, "user");
     expect(granted).toBeDefined();
+    expect(requested).toMatchObject({
+      sessionId: "sess_1",
+      environment: "production",
+      targetResource: "service/release",
+    });
     expect(approvals.consume(granted!.id, "run_1", "release", "sha256:abc")).toBe(true);
     expect(approvals.consume(granted!.id, "run_1", "release", "sha256:abc")).toBe(false);
     expect(workItems.listEvents(workItem.id).map((event) => event.type)).toEqual([
