@@ -48,6 +48,15 @@ describe("web workbench", () => {
     expect(html).toContain('id="add-directory"');
     expect(html).toContain("/directories");
     expect(html).toContain("additional_directories");
+    expect(html).toContain('id="run-inspector"');
+    expect(html).toContain('id="run-state"');
+    expect(html).toContain('id="approval-list"');
+    expect(html).toContain('id="artifact-list"');
+    expect(html).toContain('id="verification-list"');
+    expect(html).toContain('id="artifact-content"');
+    expect(html).toContain("/artifacts");
+    expect(html).toContain("/verifications");
+    expect(html).toContain("/approvals");
     expect(html).toContain('data-view="plan"');
     expect(html).toContain('data-view="approval"');
     expect(html).toContain('data-view="evidence"');

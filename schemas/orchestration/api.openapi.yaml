@@ -266,6 +266,22 @@ paths:
   /v1/sessions/{session_id}/runs:
     parameters:
       - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: listSessionRuns
+      summary: List durable Run status for a Session
+      responses:
+        '200':
+          description: Run status projection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SessionRun'
     post:
       operationId: createSessionRun
       summary: Create a Run with an optional Flow binding
@@ -1099,6 +1115,20 @@ components:
           type: [string, 'null']
         workflow_revision:
           type: [string, 'null']
+    SessionRun:
+      type: object
+      required: [run_id, session_id, work_item_id, agent_id, plan_id, workflow_revision, mode, status, created_at, updated_at]
+      properties:
+        run_id: { type: string }
+        session_id: { type: string }
+        work_item_id: { type: string }
+        agent_id: { type: [string, 'null'] }
+        plan_id: { type: [string, 'null'] }
+        workflow_revision: { type: [string, 'null'] }
+        mode: { type: string, enum: [auto, investigation, change, review, release, observe] }
+        status: { type: string, enum: [queued, running, waiting, succeeded, failed, cancelled] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     TaskReference:
       type: object
       required: [task_id, status]

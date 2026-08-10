@@ -459,6 +459,34 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("lists Runs for a Session as a stable status projection", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ message: "检查状态" }),
+    });
+    const created = await app.request(`/v1/sessions/${session.id}/runs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+    const runId = (await created.json() as { run_id: string }).run_id;
+
+    const response = await app.request(`/v1/sessions/${session.id}/runs`, { headers });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runs: [{ run_id: runId, session_id: session.id, status: "queued", agent_id: "pi" }],
+    });
+    catalog.close();
+    workItems.close();
+  });
+
   it("compiles the selected Workflow revision into a persisted Run Plan", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

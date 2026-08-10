@@ -36,6 +36,7 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `POST` | `/v1/sessions/{session_id}/directories` | 授权并添加 Session 的附加目录 |
 | `DELETE` | `/v1/sessions/{session_id}/directories` | 从 Session 移除附加目录 |
 | `POST` | `/v1/sessions/{session_id}/messages` | 向当前 Session 发送消息 |
+| `GET` | `/v1/sessions/{session_id}/runs` | 查询 Session 的 Run 状态投影 |
 | `POST` | `/v1/sessions/{session_id}/runs` | 根据当前消息和可选 Flow 创建 Run |
 | `POST` | `/v1/sessions/{session_id}/resume` | 恢复 Agent 原生 Session |
 | `POST` | `/v1/sessions/{session_id}/fork` | 按 Agent 能力创建分支 Session |
