@@ -113,6 +113,23 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .session-row-action { width:100%; border-radius:7px; background:transparent; color:var(--ink); padding:8px 9px; text-align:left; font-size:12px; }
     .session-row-action:hover { background:#edf1ee; }
     .session-row-action.danger { color:#a14835; }
+    .session-action-dialog { width:min(420px,calc(100vw - 32px)); border:0; border-radius:14px; padding:0; background:#fff; color:var(--ink); box-shadow:0 30px 90px -34px rgba(22,31,28,.72); }
+    .session-action-dialog::backdrop { background:rgba(25,32,30,.32); backdrop-filter:blur(3px); }
+    .session-action-dialog[open] { animation:dialog-in .16s ease-out; }
+    .session-action-form { display:grid; gap:20px; padding:22px; }
+    .session-action-dialog-head { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; }
+    .session-action-dialog-head h2 { margin:3px 0 0; font-size:18px; letter-spacing:-.015em; }
+    .dialog-eyebrow { margin:0; color:var(--accent); font:10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing:.12em; text-transform:uppercase; }
+    .dialog-close { width:28px; height:28px; border-radius:7px; background:transparent; color:var(--muted); font-size:20px; line-height:1; }
+    .dialog-close:hover { background:#edf1ee; color:var(--ink); }
+    .dialog-description { margin:0; color:var(--muted); font-size:13px; }
+    .dialog-field { display:grid; gap:7px; color:var(--muted); font-size:12px; }
+    .dialog-actions { display:flex; justify-content:flex-end; gap:8px; }
+    .dialog-button { border-radius:8px; padding:8px 12px; background:#edf1ee; color:var(--ink); }
+    .dialog-button.primary { background:var(--accent); color:#fff; }
+    .dialog-button.danger { background:#a14835; color:#fff; }
+    .dialog-button:hover { filter:brightness(.97); }
+    @keyframes dialog-in { from { opacity:0; transform:translateY(8px) scale(.985); } to { opacity:1; transform:none; } }
     .empty { color:var(--muted); padding:18px 10px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
     .main { min-width:0; padding:38px clamp(20px,5vw,72px); }
     .workspace { max-width:1040px; margin:0 auto; display:grid; gap:24px; }
@@ -249,6 +266,18 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       </div>
     </main>
   </div>
+  <dialog class="session-action-dialog" id="session-action-dialog" aria-labelledby="session-action-title" aria-describedby="session-action-description">
+    <form class="session-action-form" id="session-action-form" method="dialog">
+      <header class="session-action-dialog-head">
+        <div><p class="dialog-eyebrow">Session</p><h2 id="session-action-title"></h2></div>
+        <button class="dialog-close" type="submit" value="cancel" aria-label="关闭">×</button>
+      </header>
+      <p class="dialog-description" id="session-action-description"></p>
+      <label class="dialog-field" id="session-action-field"><span>名称</span><input id="session-action-input" maxlength="160" autocomplete="off" /></label>
+      <div class="error" id="session-action-error"></div>
+      <footer class="dialog-actions"><button class="dialog-button" type="submit" value="cancel">取消</button><button class="dialog-button primary" id="session-action-submit" type="submit" value="confirm"></button></footer>
+    </form>
+  </dialog>
   <script>
     const TOKEN = __TOKEN__;
     const agentIcons = {${agentIconSource}};
@@ -338,8 +367,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       const sessionId = button.dataset.sessionId;
       const action = button.dataset.sessionAction;
       if (!sessionId || !action) return;
+      button.closest('details')?.removeAttribute('open');
       if (action === 'delete') {
-        if (!window.confirm('删除这个 Session？此操作会同时删除对应 Agent 的会话历史。')) return;
+        const sessionTitle = button.closest('.session-row-wrap')?.querySelector('.work-row strong')?.textContent || '这个 Session';
+        const confirmed = await openSessionActionDialog({ type:'delete', title:'删除 Session', description:'“' + sessionTitle + '”的会话历史也会被删除，此操作无法撤销。', confirmLabel:'删除' });
+        if (!confirmed) return;
         const deletingSelected = state.selected === sessionId;
         if (deletingSelected) { clearInterval(state.timer); state.eventAbort?.abort(); }
         try {
@@ -353,9 +385,9 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       }
       let update;
       if (action === 'rename') {
-        const title = window.prompt('重命名 Session', button.dataset.sessionTitle || '');
-        if (!title?.trim()) return;
-        update = { title: title.trim() };
+        const title = await openSessionActionDialog({ type:'rename', title:'重命名 Session', description:'名称只用于识别当前会话。', value:button.dataset.sessionTitle || '', confirmLabel:'保存' });
+        if (title === null) return;
+        update = { title };
       } else if (action === 'pin') {
         update = { pinned: button.dataset.sessionPinned !== 'true' };
       } else if (action === 'archive') {
@@ -365,6 +397,31 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       if (action === 'archive' && state.selected === sessionId) resetWorkbench();
       else { if (state.selected === sessionId) await refreshSession(); await loadSessions(); }
     }
+    function openSessionActionDialog(options) {
+      const dialog = $('session-action-dialog');
+      const input = $('session-action-input');
+      const field = $('session-action-field');
+      const submit = $('session-action-submit');
+      $('session-action-title').textContent = options.title;
+      $('session-action-description').textContent = options.description;
+      $('session-action-error').textContent = '';
+      field.hidden = options.type !== 'rename';
+      input.value = options.value || '';
+      submit.textContent = options.confirmLabel;
+      submit.classList.toggle('danger', options.type === 'delete');
+      submit.classList.toggle('primary', options.type !== 'delete');
+      dialog.returnValue = 'cancel';
+      dialog.showModal();
+      if (options.type === 'rename') { input.focus(); input.select(); } else submit.focus();
+      return new Promise((resolve) => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm' ? (options.type === 'rename' ? input.value.trim() : 'confirm') : null), { once:true }));
+    }
+    $('session-action-form').addEventListener('submit', (event) => {
+      if (event.submitter?.value !== 'confirm' || $('session-action-field').hidden) return;
+      if ($('session-action-input').value.trim()) return;
+      event.preventDefault();
+      $('session-action-error').textContent = '请输入 Session 名称。';
+      $('session-action-input').focus();
+    });
     async function newSession(agentId) {
       if (!agentId) return;
       $('workbench-error').textContent = '';

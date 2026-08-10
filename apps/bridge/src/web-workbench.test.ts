@@ -165,6 +165,10 @@ describe("web workbench", () => {
     expect(html).toContain("删除");
     expect(html).not.toContain("esc(session.status) + ' · '");
     expect(html).toContain("conversation-column.empty-session");
+    expect(html).toContain('id="session-action-dialog"');
+    expect(html).toContain("openSessionActionDialog");
+    expect(html).not.toContain("window.prompt('重命名 Session'");
+    expect(html).not.toContain("window.confirm('删除这个 Session");
     store.close();
   });
 
