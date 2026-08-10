@@ -95,8 +95,20 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .directory-remove { flex:0 0 auto; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--muted); padding:3px 6px; font-size:11px; }
     .directory-remove:hover { border-color:#a14835; color:#a14835; }
     .directory-add { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
-    .grid { display:grid; grid-template-columns:minmax(0,1fr); gap:24px; align-items:start; }
+    .grid { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:24px; align-items:start; }
     .conversation-column { display:grid; gap:18px; min-width:0; }
+    .inspector { display:grid; gap:12px; position:sticky; top:24px; }
+    .inspector-card { display:grid; gap:8px; border:1px solid var(--line); border-radius:12px; background:#fff; padding:13px; }
+    .inspector-card h2 { margin:0; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+    .inspector-value { color:var(--ink); font:12px ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-word; }
+    .inspector-list { display:grid; gap:6px; }
+    .inspector-row { display:grid; gap:2px; border-top:1px solid var(--line); padding-top:7px; }
+    .inspector-row:first-child { border-top:0; padding-top:0; }
+    .inspector-row strong { font-size:12px; }
+    .inspector-row small { color:var(--muted); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-word; }
+    .inspector-link { color:var(--accent); background:transparent; text-align:left; padding:0; font-size:12px; }
+    .inspector-link:hover { text-decoration:underline; }
+    .artifact-content { max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:#f5f7f5; border-radius:7px; padding:8px; color:var(--muted); font:11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .timeline { min-height:330px; border-top:1px solid var(--line); }
     .timeline-toolbar { display:flex; flex-wrap:wrap; gap:5px; padding:10px 0; border-bottom:1px solid var(--line); }
     .timeline-filter { border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--muted); padding:5px 9px; font-size:12px; }
@@ -141,7 +153,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .meta { display:grid; gap:8px; border-top:1px solid var(--line); margin-top:18px; padding-top:16px; color:var(--muted); font-size:12px; }
     .meta div { display:flex; justify-content:space-between; gap:12px; }
     .meta code { color:var(--ink); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    @media (max-width:800px) { .shell { grid-template-columns:1fr; } .sidebar { border-right:0; border-bottom:1px solid var(--line); padding:18px; } .work-list { max-height:190px; } .main { padding:26px 18px 44px; } .workspace-top { flex-direction:column; } .composer-context { gap:5px; } .context-control, .context-chip { flex:1 1 auto; } }
+    @media (max-width:800px) { .shell { grid-template-columns:1fr; } .sidebar { border-right:0; border-bottom:1px solid var(--line); padding:18px; } .work-list { max-height:190px; } .main { padding:26px 18px 44px; } .workspace-top { flex-direction:column; } .composer-context { gap:5px; } .context-control, .context-chip { flex:1 1 auto; } .grid { grid-template-columns:1fr; } .inspector { position:static; } }
   </style>
 </head>
 <body>
@@ -200,14 +212,20 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
               <div class="error" id="reply-error"></div>
               <div class="actions"><button class="secondary" id="run-again" type="button">再次运行</button><button class="secondary" id="save-flow" type="button" hidden>保存为 Workflow Candidate</button><button class="secondary" id="accept-project" type="button" hidden>确认登记发现的资源</button><button class="secondary" id="approve-run" type="button" hidden>批准本次操作</button><button class="secondary" id="reject-run" type="button" hidden>拒绝本次操作</button></div>
             </form>
-          </section>
-        </div>
+           </section>
+           <aside class="inspector" id="run-inspector" hidden>
+             <section class="inspector-card"><h2>Run</h2><div class="inspector-value" id="run-state">等待 Session</div><div class="inspector-value" id="run-id"></div></section>
+             <section class="inspector-card"><h2>Approval</h2><div class="inspector-list" id="approval-list"><div class="empty">当前 Run 没有审批记录。</div></div></section>
+             <section class="inspector-card"><h2>Artifacts</h2><div class="inspector-list" id="artifact-list"><div class="empty">当前 Run 没有产物。</div></div><pre class="artifact-content" id="artifact-content" hidden></pre></section>
+             <section class="inspector-card"><h2>Verification</h2><div class="inspector-list" id="verification-list"><div class="empty">当前 Run 没有验证结果。</div></div></section>
+           </aside>
+         </div>
       </div>
     </main>
   </div>
   <script>
     const TOKEN = __TOKEN__;
-    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, ephemeralFlow: null, projectCandidateId: null, approval: null, view: 'all' };
+    const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, view: 'all' };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
       const response = await fetch(url, { ...init, headers: { authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json', ...(init.headers || {}) } });
@@ -240,7 +258,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       await selectSession(session.session_id);
     }
     async function selectSession(id) {
-      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('work-form').hidden = true; $('reply-form').hidden = false; $('session-actions').hidden = false; $('composer-title').textContent = 'Session';
+      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.latestRunId = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('run-inspector').hidden = false; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('work-form').hidden = true; $('reply-form').hidden = false; $('session-actions').hidden = false; $('composer-title').textContent = 'Session';
       await refreshSession(true); void startEventStream(); loadSessions();
       clearInterval(state.timer); state.timer = setInterval(() => { void refreshSession(); }, 1200);
     }
@@ -260,6 +278,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
          $('reply-mode-chip').textContent = '模式 · Agent 判断';
          $('reply-workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
          renderDirectories(session);
+         await refreshInspector();
         if (readEvents) {
           const response = await fetch('/v1/sessions/' + encodeURIComponent(state.selected) + '/events?after_sequence=' + state.sequence, { headers: { authorization: 'Bearer ' + TOKEN } });
           const text = await response.text();
@@ -297,6 +316,48 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       $('directory-error').textContent = '';
       await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/directories', { method:'DELETE', body: JSON.stringify({ path: directory }) });
       await refreshSession();
+    }
+    async function refreshInspector(force = false) {
+      if (!state.selected) return;
+      const result = await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/runs');
+      const runs = result.runs || [];
+      const run = runs[runs.length - 1];
+      if (!run) {
+        state.latestRunId = null;
+        $('run-state').textContent = '尚未运行';
+        $('run-id').textContent = '';
+        $('approval-list').innerHTML = '<div class="empty">当前 Run 没有审批记录。</div>';
+        $('artifact-list').innerHTML = '<div class="empty">当前 Run 没有产物。</div>';
+        $('verification-list').innerHTML = '<div class="empty">当前 Run 没有验证结果。</div>';
+        $('artifact-content').hidden = true;
+        return;
+      }
+      $('run-state').textContent = run.status || 'unknown';
+      $('run-id').textContent = run.run_id;
+      const changed = state.latestRunId !== run.run_id;
+      state.latestRunId = run.run_id;
+      if (!changed && !force) return;
+      const [approvalResult, artifactResult, verificationResult] = await Promise.all([
+        api('/v1/runs/' + encodeURIComponent(run.run_id) + '/approvals'),
+        api('/v1/runs/' + encodeURIComponent(run.run_id) + '/artifacts'),
+        api('/v1/runs/' + encodeURIComponent(run.run_id) + '/verifications'),
+      ]);
+      const approvals = approvalResult.approvals || [];
+      $('approval-list').innerHTML = approvals.length ? approvals.map((approval) => '<div class="inspector-row"><strong>' + esc(approval.capability_id) + ' · ' + esc(approval.status) + '</strong><small>' + esc(approval.environment) + ' · ' + esc(approval.target_resource) + '</small><small>' + esc(approval.input_hash) + '</small></div>').join('') : '<div class="empty">当前 Run 没有审批记录。</div>';
+      const pending = [...approvals].reverse().find((approval) => approval.status === 'requested');
+      if (pending) { state.approval = { approvalId: pending.id, runId: run.run_id }; $('approve-run').hidden = false; $('reject-run').hidden = false; }
+      else if (state.approval?.runId === run.run_id) { state.approval = null; $('approve-run').hidden = true; $('reject-run').hidden = true; }
+      const artifacts = artifactResult.artifacts || [];
+      $('artifact-list').innerHTML = artifacts.length ? artifacts.map((artifact) => '<div class="inspector-row"><button class="inspector-link" type="button" data-artifact="' + esc(artifact.id) + '">' + esc(artifact.name) + '</button><small>' + esc(artifact.kind) + ' · ' + esc(artifact.mime_type) + '</small><small>' + esc(artifact.content_hash) + '</small></div>').join('') : '<div class="empty">当前 Run 没有产物。</div>';
+      document.querySelectorAll('.inspector-link[data-artifact]').forEach((button) => button.addEventListener('click', () => showArtifact(button.dataset.artifact || '').catch((error) => { $('reply-error').textContent = error.message; })));
+      const verifications = verificationResult.verifications || [];
+      $('verification-list').innerHTML = verifications.length ? verifications.map((verification) => '<div class="inspector-row"><strong>' + esc(verification.validator) + ' · ' + esc(verification.status) + '</strong><small>' + esc(verification.summary) + '</small></div>').join('') : '<div class="empty">当前 Run 没有验证结果。</div>';
+    }
+    async function showArtifact(artifactId) {
+      if (!artifactId) return;
+      const artifact = await api('/v1/artifacts/' + encodeURIComponent(artifactId));
+      $('artifact-content').textContent = artifact.content || '';
+      $('artifact-content').hidden = false;
     }
     async function startEventStream() {
       if (!state.selected) return;
@@ -351,6 +412,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       if (approval) { state.approval = { approvalId: approval.payload.approval_id, runId: approval.run_id }; $('approve-run').hidden = false; $('reject-run').hidden = false; }
       const resolvedApproval = [...events].reverse().find((event) => event.type === 'APPROVAL_GRANTED' || event.type === 'APPROVAL_REJECTED');
       if (resolvedApproval) { state.approval = null; $('approve-run').hidden = true; $('reject-run').hidden = true; }
+      if (events.some((event) => event.run_id)) void refreshInspector(true).catch((error) => { $('reply-error').textContent = error.message; });
       applyView();
       target.scrollTop = target.scrollHeight;
     }
@@ -430,7 +492,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       } catch (error) { $('error').textContent = error.message; }
       finally { button.disabled = false; }
     });
-    $('new-work').addEventListener('click', () => { state.eventAbort?.abort(); state.selected = null; state.session = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model').value = ''; $('reply-model').value = ''; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyModels(''); applyView(); loadSessions(); });
+    $('new-work').addEventListener('click', () => { state.eventAbort?.abort(); state.selected = null; state.session = null; state.latestRunId = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('run-inspector').hidden = true; $('run-state').textContent = '等待 Session'; $('run-id').textContent = ''; $('artifact-content').hidden = true; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model').value = ''; $('reply-model').value = ''; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyModels(''); applyView(); loadSessions(); });
     loadSessions(); loadFlows();
   </script>
 </body>

@@ -337,6 +337,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(response, 202);
   });
 
+  app.get("/v1/sessions/:session_id/runs", (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (!session.taskRecordId) return c.json({ runs: [] });
+    return c.json({ runs: options.workItems.listRuns(session.taskRecordId).map((run) => toApiRun(run, session.id)) });
+  });
+
   app.post("/v1/sessions/:session_id/runs", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
@@ -608,6 +615,23 @@ function toApiSession(session: ReturnType<SessionCatalogStore["getSession"]>): R
     status: session.status,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
+  };
+}
+
+function toApiRun(run: ReturnType<SqliteEventStore["getRun"]>, sessionId: string): Record<string, unknown> {
+  if (!run) throw new Error("run is required");
+  return {
+    schema_version: run.schemaVersion,
+    run_id: run.id,
+    session_id: sessionId,
+    work_item_id: run.workItemId,
+    agent_id: run.agentId,
+    plan_id: run.planId,
+    workflow_revision: run.workflowRevision,
+    mode: run.mode,
+    status: run.status,
+    created_at: run.createdAt,
+    updated_at: run.updatedAt,
   };
 }
 
