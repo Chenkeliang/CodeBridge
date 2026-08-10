@@ -33,6 +33,8 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `GET` | `/v1/sessions` | 按 Agent、Folder、状态查询 Session |
 | `POST` | `/v1/sessions` | 创建一个固定绑定 Agent 的 Session |
 | `GET` | `/v1/sessions/{session_id}` | 获取 Session、目录、最近 Flow 和状态 |
+| `POST` | `/v1/sessions/{session_id}/directories` | 授权并添加 Session 的附加目录 |
+| `DELETE` | `/v1/sessions/{session_id}/directories` | 从 Session 移除附加目录 |
 | `POST` | `/v1/sessions/{session_id}/messages` | 向当前 Session 发送消息 |
 | `POST` | `/v1/sessions/{session_id}/runs` | 根据当前消息和可选 Flow 创建 Run |
 | `POST` | `/v1/sessions/{session_id}/resume` | 恢复 Agent 原生 Session |
@@ -90,6 +92,8 @@ GET       /v1/work-items/{id}/events
 ```
 
 用户首句话通过 `/messages` 发送；服务端根据消息和可选上下文创建 Run。
+
+主工作目录保存为 `cwd`；跨项目上下文通过 `additional_directories` 管理。新增目录必须先由 Runner 授权并保存 canonical path，移除只改变 Session 上下文；两者从下一次 Run 开始生效，不修改历史 Run。
 
 ## 4. Flow 绑定和动态生成
 

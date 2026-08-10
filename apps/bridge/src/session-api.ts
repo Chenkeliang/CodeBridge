@@ -229,6 +229,36 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json({ resolved: true, approval_id: record.id });
   });
 
+  app.post("/v1/sessions/:session_id/directories", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    const body = await readJson(c);
+    if (!body || typeof body.path !== "string" || !body.path.trim()) {
+      return c.json({ error: "path is required" }, 400);
+    }
+    const authorization = await options.runner.authorizeDirectory(body.path);
+    if (!authorization.ok) {
+      return c.json({ error: "workspace_not_authorized", detail: authorization.error ?? "目录无法访问" }, 403);
+    }
+    const directory = authorization.path ?? body.path;
+    const additionalDirectories = session.additionalDirectories.includes(directory)
+      ? session.additionalDirectories
+      : [...session.additionalDirectories, directory];
+    return c.json(toApiSession(options.catalog.updateSession(session.id, { additionalDirectories })!));
+  });
+
+  app.delete("/v1/sessions/:session_id/directories", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    const body = await readJson(c);
+    if (!body || typeof body.path !== "string" || !body.path.trim()) {
+      return c.json({ error: "path is required" }, 400);
+    }
+    const additionalDirectories = session.additionalDirectories.filter((directory) => directory !== body.path);
+    return c.json(toApiSession(options.catalog.updateSession(session.id, { additionalDirectories })!));
+  });
+
   app.get("/v1/sessions/:session_id", (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);

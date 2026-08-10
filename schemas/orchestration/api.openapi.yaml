@@ -100,6 +100,47 @@ paths:
                 $ref: '#/components/schemas/AgentSession'
         '404':
           $ref: '#/components/responses/NotFound'
+  /v1/sessions/{session_id}/directories:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: addSessionDirectory
+      summary: Authorize and add an additional directory to a Session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionDirectory'
+      responses:
+        '200':
+          description: Updated Session context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSession'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: removeSessionDirectory
+      summary: Remove an additional directory from a Session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionDirectory'
+      responses:
+        '200':
+          description: Updated Session context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSession'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /v1/sessions/{session_id}/messages:
     parameters:
       - $ref: '#/components/parameters/SessionId'
@@ -854,6 +895,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Directory or resource authorization failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     Conflict:
       description: State or idempotency conflict
       content:
@@ -913,6 +960,11 @@ components:
         cwd: { type: [string, 'null'] }
         model: { type: [string, 'null'] }
         title: { type: [string, 'null'] }
+    SessionDirectory:
+      type: object
+      required: [path]
+      properties:
+        path: { type: string, minLength: 1 }
     SessionMessage:
       type: object
       required: [message]
