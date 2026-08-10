@@ -248,6 +248,72 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("adds and removes authorized additional directories for a Session", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const authorized: string[] = [];
+    const runner = {
+      authorizeDirectory: async (directory: string) => {
+        authorized.push(directory);
+        return { ok: true, path: `/canonical${directory}` };
+      },
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi", cwd: "/workspace" });
+    const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+
+    const added = await app.request(`/v1/sessions/${session.id}/directories`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path: "/shared" }),
+    });
+    expect(added.status).toBe(200);
+    expect(await added.json()).toMatchObject({
+      session_id: session.id,
+      additional_directories: ["/canonical/shared"],
+    });
+    expect(authorized).toEqual(["/shared"]);
+
+    const duplicate = await app.request(`/v1/sessions/${session.id}/directories`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path: "/shared" }),
+    });
+    expect(duplicate.status).toBe(200);
+    expect((await duplicate.json() as { additional_directories: string[] }).additional_directories)
+      .toEqual(["/canonical/shared"]);
+
+    const removed = await app.request(`/v1/sessions/${session.id}/directories`, {
+      method: "DELETE",
+      headers,
+      body: JSON.stringify({ path: "/canonical/shared" }),
+    });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({
+      session_id: session.id,
+      additional_directories: [],
+    });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("does not mutate additional directories when authorization is unavailable", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    const response = await app.request(`/v1/sessions/${session.id}/directories`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ path: "/shared" }),
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "runner_unavailable" });
+    expect(catalog.getSession(session.id)?.additionalDirectories).toEqual([]);
+    catalog.close();
+    workItems.close();
+  });
+
   it("starts project discovery asynchronously on the first message in a workspace Session", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

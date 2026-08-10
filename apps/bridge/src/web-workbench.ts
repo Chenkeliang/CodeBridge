@@ -87,6 +87,14 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .session-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
     .session-action { border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--muted); padding:6px 9px; font-size:12px; }
     .session-action:hover { border-color:var(--accent); color:var(--accent); }
+    .directory-panel { display:grid; gap:10px; border:1px solid var(--line); border-radius:12px; background:#fff; padding:14px; }
+    .directory-head { display:flex; justify-content:space-between; gap:12px; align-items:center; }
+    .directory-head strong { font-size:13px; }
+    .directory-list { display:grid; gap:6px; }
+    .directory-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 9px; border-radius:7px; background:#f5f7f5; color:var(--muted); font:11px ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-all; }
+    .directory-remove { flex:0 0 auto; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--muted); padding:3px 6px; font-size:11px; }
+    .directory-remove:hover { border-color:#a14835; color:#a14835; }
+    .directory-add { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
     .grid { display:grid; grid-template-columns:minmax(0,1fr); gap:24px; align-items:start; }
     .conversation-column { display:grid; gap:18px; min-width:0; }
     .timeline { min-height:330px; border-top:1px solid var(--line); }
@@ -149,10 +157,16 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       <div class="workspace">
         <header class="workspace-top">
           <div><div class="eyebrow">Multi-project agent workspace</div><h1 id="title">把问题交给 Agent</h1><p class="subline" id="subtitle">描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。</p></div>
-          <div class="session-actions" id="session-actions" hidden><button class="session-action" id="session-resume" type="button">继续</button><button class="session-action" id="session-fork" type="button">分支</button><button class="session-action" id="session-close" type="button">关闭</button><button class="session-action" id="session-delete" type="button">删除</button><span class="status" id="status">idle</span></div>
+          <div class="session-actions" id="session-actions" hidden><button class="session-action" id="session-resume" type="button">继续</button><button class="session-action" id="session-fork" type="button">分支</button><button class="session-action" id="session-directories" type="button">目录</button><button class="session-action" id="session-close" type="button">关闭</button><button class="session-action" id="session-delete" type="button">删除</button><span class="status" id="status">idle</span></div>
         </header>
         <div class="grid">
           <section class="conversation-column">
+            <section class="directory-panel" id="directory-panel" hidden>
+              <div class="directory-head"><strong>Session context</strong><span class="context-note">附加目录会在下一次运行时生效</span></div>
+              <div class="directory-list" id="directory-list"><div class="empty">当前没有附加目录。</div></div>
+              <div class="directory-add"><input id="additional-directory" aria-label="附加目录" placeholder="输入需要授权的本机目录路径" autocomplete="off" /><button class="secondary" id="add-directory" type="button">添加目录</button></div>
+              <div class="error" id="directory-error"></div>
+            </section>
             <div class="timeline-toolbar" id="timeline-toolbar"><button class="timeline-filter active" data-view="all" type="button">全部</button><button class="timeline-filter" data-view="plan" type="button">计划</button><button class="timeline-filter" data-view="approval" type="button">审批</button><button class="timeline-filter" data-view="evidence" type="button">证据</button><button class="timeline-filter" data-view="diff" type="button">Diff</button><button class="timeline-filter" data-view="test" type="button">测试</button></div><div class="timeline" id="timeline"><div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div></div>
             <form class="chat-composer form-grid" id="work-form">
               <div class="composer-head"><strong id="composer-title">新对话</strong><span>自然语言输入</span></div>
@@ -226,7 +240,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       await selectSession(session.session_id);
     }
     async function selectSession(id) {
-      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('work-form').hidden = true; $('reply-form').hidden = false; $('session-actions').hidden = false; $('composer-title').textContent = 'Session';
+      state.eventAbort?.abort(); state.selected = id; state.sequence = 0; state.session = null; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; $('directory-panel').hidden = true; $('directory-error').textContent = ''; $('work-form').hidden = true; $('reply-form').hidden = false; $('session-actions').hidden = false; $('composer-title').textContent = 'Session';
       await refreshSession(true); void startEventStream(); loadSessions();
       clearInterval(state.timer); state.timer = setInterval(() => { void refreshSession(); }, 1200);
     }
@@ -241,10 +255,11 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
         $('session-resume').hidden = session.status !== 'closed';
         $('session-close').hidden = session.status === 'closed';
         $('mode').value = 'auto'; $('agent').value = agent; $('agent').disabled = true; $('workflow').value = session.flow_id || ''; $('reply-workflow').value = session.flow_id || ''; applyModels(agent); $('model').value = session.model || ''; $('reply-model').value = session.model || '';
-        $('workspace').value = '';
-        $('workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
-        $('reply-mode-chip').textContent = '模式 · Agent 判断';
-        $('reply-workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
+         $('workspace').value = '';
+         $('workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
+         $('reply-mode-chip').textContent = '模式 · Agent 判断';
+         $('reply-workspace-chip').textContent = scope ? '工作空间 · ' + scope : '工作空间 · Agent 自动发现';
+         renderDirectories(session);
         if (readEvents) {
           const response = await fetch('/v1/sessions/' + encodeURIComponent(state.selected) + '/events?after_sequence=' + state.sequence, { headers: { authorization: 'Bearer ' + TOKEN } });
           const text = await response.text();
@@ -252,6 +267,36 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
           if (events.length) { state.sequence = events[events.length - 1].sequence; renderEvents(events); }
         }
       } catch (error) { $('error').textContent = error.message; $('reply-error').textContent = error.message; }
+    }
+    function renderDirectories(session) {
+      const directories = session.additional_directories || [];
+      $('directory-list').innerHTML = directories.length
+        ? directories.map((directory) => '<div class="directory-row"><span>' + esc(directory) + '</span><button class="directory-remove" type="button" data-directory="' + esc(directory) + '">移除</button></div>').join('')
+        : '<div class="empty">当前没有附加目录。</div>';
+      document.querySelectorAll('.directory-remove').forEach((button) => button.addEventListener('click', () => {
+        removeDirectory(button.dataset.directory || '').catch((error) => { $('directory-error').textContent = error.message; });
+      }));
+    }
+    async function addDirectory() {
+      if (!state.selected) return;
+      const input = $('additional-directory');
+      const directory = input.value.trim();
+      $('directory-error').textContent = '';
+      if (!directory) { input.focus(); return; }
+      const button = $('add-directory');
+      button.disabled = true;
+      try {
+        await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/directories', { method:'POST', body: JSON.stringify({ path: directory }) });
+        input.value = '';
+        await refreshSession();
+      } catch (error) { $('directory-error').textContent = error.message; }
+      finally { button.disabled = false; }
+    }
+    async function removeDirectory(directory) {
+      if (!state.selected || !directory) return;
+      $('directory-error').textContent = '';
+      await api('/v1/sessions/' + encodeURIComponent(state.selected) + '/directories', { method:'DELETE', body: JSON.stringify({ path: directory }) });
+      await refreshSession();
     }
     async function startEventStream() {
       if (!state.selected) return;
@@ -357,6 +402,12 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       try { await api('/v1/sessions/' + encodeURIComponent(state.selected), { method:'DELETE' }); $('new-work').click(); }
       catch (error) { $('reply-error').textContent = error.message; }
     });
+    $('session-directories').addEventListener('click', () => {
+      $('directory-panel').hidden = !$('directory-panel').hidden;
+      if (!$('directory-panel').hidden) $('additional-directory').focus();
+    });
+    $('add-directory').addEventListener('click', () => addDirectory());
+    $('additional-directory').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); void addDirectory(); } });
     document.querySelectorAll('.timeline-filter').forEach((button) => button.addEventListener('click', () => { state.view = button.dataset.view || 'all'; applyView(); }));
     function applyModels(agentId) { const models = agentModels[agentId] || []; const options = '<option value="">模型 · Agent 默认</option>' + models.map((model) => '<option value="' + esc(model) + '">' + esc(model) + '</option>').join(''); $('model').innerHTML = options; $('reply-model').innerHTML = options; }
     $('agent').addEventListener('change', () => applyModels($('agent').value));
@@ -379,7 +430,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       } catch (error) { $('error').textContent = error.message; }
       finally { button.disabled = false; }
     });
-    $('new-work').addEventListener('click', () => { state.eventAbort?.abort(); state.selected = null; state.session = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model').value = ''; $('reply-model').value = ''; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyModels(''); applyView(); loadSessions(); });
+    $('new-work').addEventListener('click', () => { state.eventAbort?.abort(); state.selected = null; state.session = null; state.sequence = 0; state.ephemeralFlow = null; state.projectCandidateId = null; state.approval = null; state.view = 'all'; clearInterval(state.timer); $('title').textContent = '把问题交给 Agent'; $('subtitle').textContent = '描述目标即可。Agent 会先理解目标，再决定合适的上下文与下一步。'; $('status').textContent = 'idle'; $('session-actions').hidden = true; $('directory-panel').hidden = true; $('directory-list').innerHTML = '<div class="empty">当前没有附加目录。</div>'; $('directory-error').textContent = ''; $('additional-directory').value = ''; $('timeline').innerHTML = '<div class="timeline-empty">发送第一句话后，这里会显示对话进展、Agent 输出、计划和需要你确认的事项。</div>'; $('work-form').hidden = false; $('reply-form').hidden = true; $('composer-title').textContent = '新 Session'; $('agent').disabled = false; $('agent').value = ''; $('mode').value = 'auto'; $('workflow').value = ''; $('workspace').value = ''; $('model').value = ''; $('reply-model').value = ''; $('workspace-chip').textContent = '工作空间 · 自动发现'; $('error').textContent = ''; $('save-flow').hidden = true; $('accept-project').hidden = true; $('approve-run').hidden = true; $('reject-run').hidden = true; applyModels(''); applyView(); loadSessions(); });
     loadSessions(); loadFlows();
   </script>
 </body>

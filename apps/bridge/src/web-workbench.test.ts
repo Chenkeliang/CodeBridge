@@ -42,6 +42,12 @@ describe("web workbench", () => {
     expect(html).toContain('id="session-fork"');
     expect(html).toContain('id="session-close"');
     expect(html).toContain('id="session-delete"');
+    expect(html).toContain('id="session-directories"');
+    expect(html).toContain('id="directory-panel"');
+    expect(html).toContain('id="additional-directory"');
+    expect(html).toContain('id="add-directory"');
+    expect(html).toContain("/directories");
+    expect(html).toContain("additional_directories");
     expect(html).toContain('data-view="plan"');
     expect(html).toContain('data-view="approval"');
     expect(html).toContain('data-view="evidence"');
