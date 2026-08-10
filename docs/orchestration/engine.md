@@ -168,7 +168,9 @@ MCP Server 由 `orchestration.mcpServers` 显式配置。启动时只执行健�
 ## 8. 暂停、重试和恢复
 
 - 等待用户输入或审批时，Run 状态为 `waiting`，事件中标明等待原因。
-- 可重试错误由 Adapter 标注 `retryable: true`，并使用幂等键避免重复副作用。
+- Step 可以声明 `retry: { max_attempts, delay_ms }`；`max_attempts` 限制为 1–10，`delay_ms` 限制为 0–300000。
+- 只有 Adapter 抛出的 `CapabilityExecutionError(..., { retryable: true })` 才进入重试；普通错误立即失败，不能仅凭 Workflow 强行重试未知副作用。
+- 每次重试产生 `STEP_RETRYING` 事件，并复用稳定的 `run_id + step_id` 作为 Adapter 幂等范围。
 - 不可重试错误进入 `manual_review` 或 `failed`，由用户在原 Session 继续处理。
 - 进程重启时读取最后一个事件，恢复未完成 Run。
 - Agent 原生 Session 可以 resume/fork；跨 Agent 继续时使用 ContextSnapshot、Folder 和 Artifact 恢复，不假设厂商 Session 可互换。

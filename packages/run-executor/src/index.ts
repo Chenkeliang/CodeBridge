@@ -330,6 +330,39 @@ export class RunExecutor {
     step: PersistedPlanStep | null,
     signal?: AbortSignal,
   ): Promise<void> {
+    const maxAttempts = step?.retry?.maxAttempts ?? 1;
+    const delayMs = step?.retry?.delayMs ?? 0;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await this.executeStepOnce(workItem, run, step, signal);
+        return;
+      } catch (error) {
+        if (attempt >= maxAttempts || !isRetryableError(error)) throw error;
+        this.store.appendEvent({
+          workItemId: workItem.id,
+          runId: run.id,
+          type: "STEP_RETRYING",
+          actor: "system",
+          target: step?.id ?? run.id,
+          payload: {
+            attempt,
+            next_attempt: attempt + 1,
+            max_attempts: maxAttempts,
+            delay_ms: delayMs,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+        await retryDelay(delayMs, signal);
+      }
+    }
+  }
+
+  private async executeStepOnce(
+    workItem: WorkItem,
+    run: Run,
+    step: PersistedPlanStep | null,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const capabilityResult = await this.executeCapability(workItem, run, step, signal);
     let request = await this.options.resolveRequest(workItem, run, step ?? undefined);
     const latestMessage = this.store
@@ -508,7 +541,19 @@ function approvalScopeFor(
       title: workItem.title,
       identifiers: workItem.identifiers,
       workspaceScope: workItem.workspaceScope,
-      step: step ? { id: step.id, capabilityId: step.capabilityId, risk: step.risk, purpose: step.purpose } : null,
+      step: step
+        ? {
+            id: step.id,
+            capabilityId: step.capabilityId,
+            risk: step.risk,
+            purpose: step.purpose,
+            dependsOn: step.dependsOn,
+            guard: step.guard,
+            approval: step.approval,
+            branches: step.branches,
+            retry: step.retry ?? null,
+          }
+        : null,
       sessionId,
       environment,
       targetResource,
@@ -587,4 +632,24 @@ function parseLiteral(value: string): unknown {
   if (value === "null") return null;
   if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
   return value.replace(/^(["'])(.*)\1$/, "$2");
+}
+
+function isRetryableError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && (error as { retryable?: unknown }).retryable === true);
+}
+
+async function retryDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+  if (delayMs <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

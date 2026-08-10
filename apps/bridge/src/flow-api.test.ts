@@ -36,12 +36,21 @@ describe("flow API", () => {
         flow: {
           flow_id: "flow-candidate",
           name: "当前流程",
-          steps: [{ id: "inspect", capability: "context.inspect", mode: "read_only" }],
+          steps: [{
+            id: "inspect",
+            capability: "context.inspect",
+            mode: "read_only",
+            retry: { max_attempts: 3, delay_ms: 10 },
+          }],
         },
       }),
     });
     expect(response.status).toBe(201);
-    expect((await response.json() as { status: string; flow_id: string })).toMatchObject({ status: "candidate", flow_id: "flow-candidate" });
+    expect((await response.json() as { status: string; flow_id: string })).toMatchObject({
+      status: "candidate",
+      flow_id: "flow-candidate",
+      steps: [{ retry: { max_attempts: 3, delay_ms: 10 } }],
+    });
     catalog.close();
   });
 

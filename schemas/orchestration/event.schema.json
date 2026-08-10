@@ -42,6 +42,7 @@
         "STEP_STARTED",
         "STEP_SUCCEEDED",
         "STEP_SKIPPED",
+        "STEP_RETRYING",
         "STEP_FAILED",
         "BRANCH_SELECTED",
         "VERIFICATION_COMPLETED",

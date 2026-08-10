@@ -15,6 +15,11 @@ export interface WorkflowBranch {
   next: string;
 }
 
+export interface WorkflowRetryPolicy {
+  maxAttempts: number;
+  delayMs: number;
+}
+
 export interface WorkflowStep {
   id: string;
   capability?: string;
@@ -23,6 +28,7 @@ export interface WorkflowStep {
   purpose?: string;
   dependsOn: string[];
   branches: WorkflowBranch[];
+  retry?: WorkflowRetryPolicy;
 }
 
 export interface WorkflowDefinition {
@@ -45,6 +51,7 @@ export interface PlanStep {
   approval: "none" | "required";
   branches: WorkflowBranch[];
   purpose: string | null;
+  retry: WorkflowRetryPolicy | null;
 }
 
 export interface PlanIR {
@@ -101,6 +108,7 @@ export function compileWorkflow(
       approval: step.approval ?? "none",
       branches: step.branches.map((branch) => ({ ...branch })),
       purpose: step.purpose ?? null,
+      retry: step.retry ? { ...step.retry } : null,
     })),
   };
 }
@@ -239,6 +247,7 @@ function normalizeCanonicalStep(
     issues,
   );
   const branches = normalizeBranches(input.branches, prefix, issues);
+  const retry = normalizeRetry(input.retry, prefix, issues, true);
   return {
     id,
     capability,
@@ -247,6 +256,7 @@ function normalizeCanonicalStep(
     purpose,
     dependsOn,
     branches,
+    retry,
   };
 }
 
@@ -299,6 +309,7 @@ function normalizeStep(
     issues,
   );
   const branches = normalizeBranches(input.branches, prefix, issues);
+  const retry = normalizeRetry(input.retry, prefix, issues, false);
 
   return {
     id,
@@ -308,7 +319,32 @@ function normalizeStep(
     purpose,
     dependsOn,
     branches,
+    retry,
   };
+}
+
+function normalizeRetry(
+  input: unknown,
+  prefix: string,
+  issues: string[],
+  canonical: boolean,
+): WorkflowRetryPolicy | undefined {
+  if (input === undefined) return undefined;
+  if (!isRecord(input)) {
+    issues.push(`${prefix}.retry must be an object`);
+    return undefined;
+  }
+  const maxAttemptsValue = input[canonical ? "maxAttempts" : "max_attempts"];
+  if (!Number.isInteger(maxAttemptsValue) || Number(maxAttemptsValue) < 1 || Number(maxAttemptsValue) > 10) {
+    issues.push(`${prefix}.retry.${canonical ? "maxAttempts" : "max_attempts"} must be an integer between 1 and 10`);
+  }
+  const delayField = canonical ? "delayMs" : "delay_ms";
+  const delayValue = input[delayField] ?? 0;
+  if (!Number.isInteger(delayValue) || Number(delayValue) < 0 || Number(delayValue) > 300_000) {
+    issues.push(`${prefix}.retry.${delayField} must be an integer between 0 and 300000`);
+  }
+  if (!Number.isInteger(maxAttemptsValue) || !Number.isInteger(delayValue)) return undefined;
+  return { maxAttempts: Number(maxAttemptsValue), delayMs: Number(delayValue) };
 }
 
 function normalizeBranches(

@@ -124,6 +124,17 @@ Run 请求中的 Flow 可以为空：
 
 选择已有 Flow 时，服务端在 Run 创建时固定其 `definition_revision`；后续 Flow Catalog 更新不影响已经创建的 Run。
 
+Runbook Step 可以声明有界重试：
+
+```yaml
+retry:
+  max_attempts: 3
+  delay_ms: 1000
+```
+
+该策略只对 Adapter 明确标记为 `retryable` 的错误生效；每次尝试写入 `STEP_RETRYING` 事件，
+不会把未知错误或未确认副作用自动重放。
+
 `mode` 是运行提示，不是安全授权。安全权限由 Capability Policy 和 Approval 合同决定。
 
 ## 5. 幂等与恢复

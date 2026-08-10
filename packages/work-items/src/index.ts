@@ -56,6 +56,7 @@ export type DomainEventType =
   | "STEP_STARTED"
   | "STEP_SUCCEEDED"
   | "STEP_SKIPPED"
+  | "STEP_RETRYING"
   | "STEP_FAILED"
   | "BRANCH_SELECTED"
   | "ARTIFACT_CREATED"
@@ -166,6 +167,7 @@ export interface PersistedPlanStep {
   approval: "none" | "required";
   branches: Array<{ when: string; next: string }>;
   purpose: string | null;
+  retry?: { maxAttempts: number; delayMs: number } | null;
 }
 
 export interface PersistedPlan {
@@ -1095,5 +1097,6 @@ function clonePlanStep(step: PersistedPlanStep): PersistedPlanStep {
     ...step,
     dependsOn: [...step.dependsOn],
     branches: step.branches.map((branch) => ({ ...branch })),
+    retry: step.retry ? { ...step.retry } : null,
   };
 }

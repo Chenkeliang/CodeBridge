@@ -18,6 +18,7 @@ export interface FlowStep {
   mode?: string;
   approval?: "none" | "required";
   branches?: Array<{ when: string; next: string }>;
+  retry?: { maxAttempts: number; delayMs: number };
 }
 export interface FlowRecord {
   schemaVersion: 1;

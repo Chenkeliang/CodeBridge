@@ -131,4 +131,21 @@ describe("workflow-engine", () => {
       "workflow contains a dependency cycle",
     );
   });
+
+  it("compiles an explicit bounded retry policy", () => {
+    const retrying = {
+      ...workflow,
+      steps: [{
+        id: "inspect",
+        capability: "service.inspect",
+        mode: "read_only",
+        retry: { max_attempts: 3, delay_ms: 25 },
+      }],
+    };
+    expect(compileWorkflow(retrying).steps[0]?.retry).toEqual({ maxAttempts: 3, delayMs: 25 });
+    expect(() => compileWorkflow({
+      ...retrying,
+      steps: [{ ...retrying.steps[0], retry: { max_attempts: 0 } }],
+    })).toThrow("step[0].retry.max_attempts must be an integer between 1 and 10");
+  });
 });

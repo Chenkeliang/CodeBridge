@@ -40,6 +40,16 @@ export interface CapabilityExecutionResult {
   };
 }
 
+export class CapabilityExecutionError extends Error {
+  readonly retryable: boolean;
+
+  constructor(message: string, options: { retryable?: boolean } = {}) {
+    super(message);
+    this.name = "CapabilityExecutionError";
+    this.retryable = options.retryable ?? false;
+  }
+}
+
 export interface CapabilityAdapter {
   readonly id: string;
   readonly kind: CapabilityAdapterKind;
