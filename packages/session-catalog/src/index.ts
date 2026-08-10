@@ -36,6 +36,14 @@ export interface AgentSession {
   updatedAt: string;
 }
 
+export interface ChannelSessionBinding {
+  channel: string;
+  conversationId: string;
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CreateSessionInput {
   id?: string;
   agentId: string;
@@ -64,6 +72,7 @@ export class SessionCatalogStore {
     }
     this.database = new DatabaseSync(databasePath);
     this.database.exec(`
+      PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS agent_sessions (
         id TEXT PRIMARY KEY,
         schema_version INTEGER NOT NULL,
@@ -82,6 +91,15 @@ export class SessionCatalogStore {
       );
       CREATE INDEX IF NOT EXISTS agent_sessions_agent_updated
         ON agent_sessions (agent_id, updated_at DESC);
+      CREATE TABLE IF NOT EXISTS channel_session_bindings (
+        channel TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (channel, conversation_id),
+        FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+      );
     `);
     try {
       this.database.exec("ALTER TABLE agent_sessions ADD COLUMN task_record_id TEXT");
@@ -169,6 +187,46 @@ export class SessionCatalogStore {
     return (rows as SqliteRow[]).map(toSession);
   }
 
+  bindChannelConversation(
+    channel: string,
+    conversationId: string,
+    sessionId: string,
+  ): ChannelSessionBinding {
+    if (!this.getSession(sessionId)) throw new Error(`Session not found: ${sessionId}`);
+    const existing = this.database
+      .prepare("SELECT * FROM channel_session_bindings WHERE channel = ? AND conversation_id = ?")
+      .get(channel, conversationId) as SqliteRow | undefined;
+    if (existing) return toChannelBinding(existing);
+    const now = new Date().toISOString();
+    const binding: ChannelSessionBinding = {
+      channel,
+      conversationId,
+      sessionId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.database
+      .prepare(
+        `INSERT INTO channel_session_bindings (
+          channel, conversation_id, session_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(binding.channel, binding.conversationId, binding.sessionId, binding.createdAt, binding.updatedAt);
+    return binding;
+  }
+
+  getChannelBinding(channel: string, conversationId: string): ChannelSessionBinding | undefined {
+    const row = this.database
+      .prepare("SELECT * FROM channel_session_bindings WHERE channel = ? AND conversation_id = ?")
+      .get(channel, conversationId) as SqliteRow | undefined;
+    return row ? toChannelBinding(row) : undefined;
+  }
+
+  getChannelSession(channel: string, conversationId: string): AgentSession | undefined {
+    const binding = this.getChannelBinding(channel, conversationId);
+    return binding ? this.getSession(binding.sessionId) : undefined;
+  }
+
   updateSession(id: string, input: UpdateSessionInput): AgentSession | undefined {
     const existing = this.getSession(id);
     if (!existing) return undefined;
@@ -230,6 +288,16 @@ function toSession(row: SqliteRow): AgentSession {
     additionalDirectories: JSON.parse(String(row.additional_directories)) as string[],
     title: row.title === null ? null : String(row.title),
     status: String(row.status) as SessionStatus,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toChannelBinding(row: SqliteRow): ChannelSessionBinding {
+  return {
+    channel: String(row.channel),
+    conversationId: String(row.conversation_id),
+    sessionId: String(row.session_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
