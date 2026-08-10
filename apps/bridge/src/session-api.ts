@@ -564,6 +564,9 @@ function toWorkflowDefinition(flow: FlowRecord): Record<string, unknown> {
       mode: step.mode,
       approval: step.approval ?? "none",
       branches: step.branches ?? [],
+      retry: step.retry
+        ? { max_attempts: step.retry.maxAttempts, delay_ms: step.retry.delayMs }
+        : undefined,
     })),
   };
 }

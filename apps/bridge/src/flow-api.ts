@@ -109,6 +109,7 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       mode: step.risk,
       approval: step.approval,
       branches: step.branches,
+      retry: step.retry ?? undefined,
     }));
     const flow = catalog.save({
       flowId,
@@ -161,6 +162,9 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
       mode: step.mode ?? null,
       approval: step.approval ?? "none",
       branches: step.branches ?? [],
+      retry: step.retry
+        ? { max_attempts: step.retry.maxAttempts, delay_ms: step.retry.delayMs }
+        : null,
     })),
     created_at: flow.createdAt,
     updated_at: flow.updatedAt,

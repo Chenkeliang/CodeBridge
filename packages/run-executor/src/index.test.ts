@@ -5,6 +5,7 @@ import {
   ApprovalService,
   CapabilityRegistry,
   CapabilityRuntime,
+  CapabilityExecutionError,
   FunctionCapabilityAdapter,
   PolicyEngine,
 } from "@codebridge/policy";
@@ -344,6 +345,119 @@ describe("RunExecutor", () => {
       { validator: "lookup-contract", status: "passed", artifactIds: [store.listArtifacts(run.id)[0]!.id] },
     ]);
     registry.close();
+    store.close();
+  });
+
+  it("retries only explicitly retryable step failures within the Plan policy", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "retry lookup",
+      mode: "investigation",
+      conversationId: "web:retry",
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_retry",
+      source: "workflow",
+      workflowId: "retry-flow",
+      definitionRevision: "git:retry",
+      steps: [{
+        id: "lookup",
+        capabilityId: "catalog.lookup",
+        risk: "read_only",
+        dependsOn: [],
+        guard: null,
+        approval: "none",
+        branches: [],
+        purpose: null,
+        retry: { maxAttempts: 2, delayMs: 0 },
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
+    let attempts = 0;
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.lookup", () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new CapabilityExecutionError("temporary outage", { retryable: true });
+        }
+        return { output: { found: true } };
+      }),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "unused",
+      }),
+    });
+
+    expect((await executor.execute(run.id)).status).toBe("succeeded");
+    expect(attempts).toBe(2);
+    expect(store.listEvents(item.id).find((event) => event.type === "STEP_RETRYING")).toMatchObject({
+      target: "lookup",
+      payload: { attempt: 1, next_attempt: 2, max_attempts: 2, error: "temporary outage" },
+    });
+    registry.close();
+    store.close();
+  });
+
+  it("invalidates a step approval when its retry policy changes", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "release",
+      mode: "release",
+      conversationId: "web:retry-approval",
+      riskLevel: "production_write",
+    });
+    const step = {
+      id: "release",
+      capabilityId: "release.execute",
+      risk: "production_write" as const,
+      dependsOn: [],
+      guard: null,
+      approval: "required" as const,
+      branches: [],
+      purpose: "release",
+      retry: { maxAttempts: 2, delayMs: 0 },
+    };
+    const plan = store.savePlan({
+      planId: "plan_retry_approval",
+      source: "workflow",
+      workflowId: "release-flow",
+      definitionRevision: "git:one",
+      steps: [step],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const approvals = new ApprovalService(store, ":memory:");
+    const executor = new RunExecutor(store, new FakeRunner([{ type: "done", exitCode: 0 }]), {
+      approvals,
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "release",
+      }),
+    });
+    expect((await executor.execute(run.id)).status).toBe("waiting");
+    const firstApproval = approvals.listForRun(run.id)[0]!;
+    approvals.grant(firstApproval.id, "user");
+    store.savePlan({
+      planId: plan.planId,
+      source: plan.source,
+      workflowId: plan.workflowId,
+      definitionRevision: "git:two",
+      steps: [{ ...step, retry: { maxAttempts: 3, delayMs: 0 } }],
+    });
+    store.requeueRun(run.id);
+
+    expect((await executor.execute(run.id)).status).toBe("waiting");
+    const allApprovals = approvals.listForRun(run.id);
+    expect(allApprovals).toHaveLength(2);
+    expect(allApprovals[1]?.inputHash).not.toBe(firstApproval.inputHash);
+    approvals.close();
     store.close();
   });
 

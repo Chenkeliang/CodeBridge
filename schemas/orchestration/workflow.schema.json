@@ -57,6 +57,15 @@
             },
             "additionalProperties": false
           }
+        },
+        "retry": {
+          "type": "object",
+          "required": ["max_attempts"],
+          "properties": {
+            "max_attempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "delay_ms": { "type": "integer", "minimum": 0, "maximum": 300000, "default": 0 }
+          },
+          "additionalProperties": false
         }
       },
       "allOf": [
