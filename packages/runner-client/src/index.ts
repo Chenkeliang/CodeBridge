@@ -102,6 +102,27 @@ export class RunnerClient {
     }
   }
 
+  async pickDirectory(): Promise<{
+    ok: boolean;
+    path?: string;
+    cancelled?: boolean;
+    error?: string;
+  }> {
+    const res = await this.fetch("/directories/pick", { method: "POST" });
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      path?: string;
+      cancelled?: boolean;
+      error?: string;
+    };
+    return {
+      ok: res.ok && body.ok === true,
+      path: body.path,
+      cancelled: body.cancelled,
+      error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
+    };
+  }
+
   async closeSession(
     backend: string,
     cwd: string,

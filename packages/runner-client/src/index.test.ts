@@ -97,6 +97,23 @@ describe("RunnerClient session lifecycle", () => {
 });
 
 describe("RunnerClient directory authorization", () => {
+  it("picks a directory through the Runner host", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, path: "/Users/tester/Projects/app" })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.pickDirectory()).resolves.toEqual({
+      ok: true,
+      path: "/Users/tester/Projects/app",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/directories/pick",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("asks Runner to access an absolute directory", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true, path: "/Users/tester/Desktop" })),

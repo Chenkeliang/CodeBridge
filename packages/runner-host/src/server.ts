@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   AcpSessionPool,
   BackendRegistry,
@@ -52,6 +54,8 @@ export interface RunnerHostOptions {
     sessionId: string,
     allowedProcessGroups: ReadonlySet<number>,
   ) => Promise<number[]>;
+  /** Host-native directory chooser. Production uses the macOS folder panel. */
+  directoryPicker?: () => Promise<string | null>;
 }
 
 interface ActiveRun {
@@ -64,6 +68,24 @@ interface ActiveRun {
 
 /** prompt_feishu：权限请求等待用户回复的超时（到点自动拒绝）。需小于 noOutput 超时。 */
 const PERMISSION_PROMPT_TIMEOUT_MS = 8 * 60 * 1000;
+const execFileAsync = promisify(execFile);
+
+async function pickNativeDirectory(): Promise<string | null> {
+  if (process.platform !== "darwin") {
+    throw new Error("当前系统不支持原生目录选择器");
+  }
+  try {
+    const { stdout } = await execFileAsync("/usr/bin/osascript", [
+      "-e",
+      'POSIX path of (choose folder with prompt "选择要加入当前 Session 的目录")',
+    ]);
+    return stdout.trim() || null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("User canceled") || message.includes("-128")) return null;
+    throw error;
+  }
+}
 
 function resolveDoctorCwd(config: AppConfig): string {
   const home = os.homedir();
@@ -294,6 +316,24 @@ export class RunnerHost {
       return {
         ok: false,
         error: `Runner 无法访问目录 ${candidate}：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  async pickDirectory(): Promise<{
+    ok: boolean;
+    path?: string;
+    cancelled?: boolean;
+    error?: string;
+  }> {
+    try {
+      const selected = await (this.options.directoryPicker ?? pickNativeDirectory)();
+      if (!selected) return { ok: true, cancelled: true };
+      return this.authorizeDirectory(selected);
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
       };
     }
   }
@@ -829,6 +869,11 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     if (!body?.path) return c.json({ ok: false, error: "path 必填" }, 400);
     const result = await host.authorizeDirectory(body.path);
     return c.json(result, result.ok ? 200 : 403);
+  });
+
+  app.post("/directories/pick", async (c) => {
+    const result = await host.pickDirectory();
+    return c.json(result, result.ok ? 200 : 503);
   });
 
   app.post("/sessions/:id/close", async (c) => {

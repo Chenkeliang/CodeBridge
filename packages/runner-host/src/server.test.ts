@@ -41,6 +41,38 @@ function request(cwd: string): RunRequest {
 }
 
 describe("RunnerHost cwd validation", () => {
+  it("picks and authorizes a directory through an injectable host picker", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-pick-"));
+    tmpDirs.push(dataDir, target);
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      directoryPicker: async () => target,
+    });
+
+    await expect(host.pickDirectory()).resolves.toEqual({
+      ok: true,
+      path: fs.realpathSync(target),
+    });
+    host.shutdown();
+  });
+
+  it("reports an explicit cancellation from the host picker", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      directoryPicker: async () => null,
+    });
+
+    await expect(host.pickDirectory()).resolves.toEqual({ ok: true, cancelled: true });
+    host.shutdown();
+  });
+
   it("returns an explicit error for a relative cwd before spawning", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);
