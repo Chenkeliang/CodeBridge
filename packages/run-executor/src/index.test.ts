@@ -5,9 +5,11 @@ import { ApprovalService } from "@codebridge/policy";
 import { RunExecutor } from "./index.js";
 
 class FakeRunner {
+  readonly prompts: string[] = [];
   constructor(private readonly events: AgentEvent[], private readonly fail = false) {}
 
-  async *run(_request: RunRequest): AsyncGenerator<AgentEvent> {
+  async *run(request: RunRequest): AsyncGenerator<AgentEvent> {
+    this.prompts.push(request.prompt);
     for (const event of this.events) yield event;
     if (this.fail) throw new Error("runner offline");
   }
@@ -107,6 +109,59 @@ describe("RunExecutor", () => {
     expect((await executor.execute(run.id)).status).toBe("succeeded");
     expect(approvals.get(approval!.id)?.status).toBe("consumed");
     approvals.close();
+    store.close();
+  });
+
+  it("executes a persisted Plan one dependency-ordered step at a time", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "planned change",
+      mode: "change",
+      conversationId: "web:planned",
+      riskLevel: "workspace_write",
+    });
+    const plan = store.savePlan({
+      planId: "plan_ordered",
+      source: "workflow",
+      workflowId: "review-change",
+      definitionRevision: "git:abc",
+      steps: [
+        {
+          id: "change",
+          capabilityId: "workspace.change",
+          risk: "workspace_write",
+          dependsOn: ["inspect"],
+          guard: null,
+          approval: "none",
+          branches: [],
+          purpose: null,
+        },
+        {
+          id: "inspect",
+          capabilityId: "context.inspect",
+          risk: "read_only",
+          dependsOn: [],
+          guard: null,
+          approval: "none",
+          branches: [],
+          purpose: null,
+        },
+      ],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const executor = new RunExecutor(store, runner, {
+      resolveRequest: (_workItem, _run, step) => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: `step:${step?.id}`,
+      }),
+    });
+
+    expect((await executor.execute(run.id)).status).toBe("succeeded");
+    expect(runner.prompts).toEqual(["step:inspect", "step:change"]);
+    expect(store.listEvents(item.id).filter((event) => event.type === "STEP_STARTED").map((event) => event.target)).toEqual(["inspect", "change"]);
+    expect(store.listEvents(item.id).filter((event) => event.type === "STEP_SUCCEEDED").map((event) => event.target)).toEqual(["inspect", "change"]);
     store.close();
   });
 });
