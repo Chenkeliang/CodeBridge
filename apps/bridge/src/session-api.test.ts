@@ -78,6 +78,33 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("reads Agent health dynamically for later Session creation", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    let status: AgentProfile["status"] = "unavailable";
+    const app = createSessionApp({
+      catalog,
+      agents: () => [{ ...agents[1]!, status }],
+      workItems,
+    }, TOKEN);
+    const unavailable = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "pi" }),
+    });
+    expect(unavailable.status).toBe(409);
+
+    status = "healthy";
+    const healthy = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "pi" }),
+    });
+    expect(healthy.status).toBe(201);
+    catalog.close();
+    workItems.close();
+  });
+
   it("imports provider sessions into the Session Catalog on demand", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
