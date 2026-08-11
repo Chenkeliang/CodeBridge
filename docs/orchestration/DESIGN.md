@@ -164,7 +164,7 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 - 点击 Agent 切换到该 Agent 的 Session Panel。
 - 选中态同时使用边框、表面色和阴影，健康状态使用独立状态点。
 - Flow 与 Agent 平级，位于 Agent 组下方并由分割线隔开。
-- 主题和设置固定在 Rail 底部。
+- 主题固定在 Rail 底部；设置入口只在存在完整设置界面时展示，禁止保留无动作入口。
 
 ### 4.2 Session Panel
 
@@ -223,7 +223,7 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 
 - 输入自然语言是主动作。
 - 模型、权限、Workspace 和 Flow 以紧凑上下文控件出现。
-- `+` 用于选择文件或目录；`@` 用于插入运行时可用上下文；`/` 用于当前 Agent 动态返回的命令。
+- `+` 用于选择文件；`@` 用于插入当前 Session 已授权的 Workspace 上下文；`/` 用于当前 Agent 动态返回的命令。
 - 不支持的能力不显示空按钮；运行时无命令时 `/` 不展示。
 - `Enter` 发送、`Shift+Enter` 换行；IME 合成期间不得误发送。
 - 附件和目录必须使用系统选择器或浏览器授权能力，不能要求用户手写本地绝对路径。
@@ -295,4 +295,3 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 - Paper Lime 和 Carbon Vermilion 布局完全同构。
 - `1440 × 900` 无溢出，主要动作不落出视口。
 - `pnpm lint`、Web 测试和生产构建通过。
-

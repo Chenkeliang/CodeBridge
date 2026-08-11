@@ -18,7 +18,6 @@ import {
   RefreshCw,
   Search,
   Send,
-  Settings2,
   ShieldAlert,
   Sun,
   Trash2,
@@ -41,7 +40,7 @@ import type {
   SessionEvent,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { isModelOption, orderSessions, restoreSessionSelection } from "@/lib/workbench-logic";
+import { isModelOption, orderSessions, restoreSessionSelection, workspacePaths } from "@/lib/workbench-logic";
 
 type Theme = "paper" | "carbon";
 type PanelArea = "agents" | "flows";
@@ -139,6 +138,7 @@ export function Workbench() {
   const [menuView, setMenuView] = useState<MenuView>("actions");
   const [renameDraft, setRenameDraft] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const streamAbort = useRef<AbortController | null>(null);
   const selectedAgentRef = useRef<string | null>(null);
@@ -229,6 +229,7 @@ export function Workbench() {
     setMenuOpen(false);
     setMenuView("actions");
     setCommandOpen(false);
+    setContextOpen(false);
 
     void (async () => {
       try {
@@ -469,6 +470,8 @@ export function Workbench() {
               <Composer
                 attachments={attachments}
                 commands={commands}
+                contextOpen={contextOpen}
+                contextPaths={[]}
                 disabled={!selectedAgent || selectedAgent.status !== "healthy"}
                 draft={draft}
                 flowId={flowId}
@@ -480,6 +483,8 @@ export function Workbench() {
                 commandOpen={commandOpen}
                 onAddFiles={addFiles}
                 onCommandOpen={setCommandOpen}
+                onContext={() => undefined}
+                onContextOpen={setContextOpen}
                 onDraft={setDraft}
                 onFiles={() => fileInput.current?.click()}
                 onFlow={setFlowId}
@@ -513,6 +518,8 @@ export function Workbench() {
                 <Composer
                   attachments={attachments}
                   commands={commands}
+                  contextOpen={contextOpen}
+                  contextPaths={workspacePaths(selectedSession)}
                   disabled={false}
                   draft={draft}
                   flowId={flowId}
@@ -524,6 +531,8 @@ export function Workbench() {
                   commandOpen={commandOpen}
                   onAddFiles={addFiles}
                   onCommandOpen={setCommandOpen}
+                  onContext={(path) => setDraft((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}@${path} `)}
+                  onContextOpen={setContextOpen}
                   onDraft={setDraft}
                   onFiles={() => fileInput.current?.click()}
                   onFlow={setFlowId}
@@ -568,7 +577,6 @@ function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onArea, onTh
     <button aria-label="Flows" aria-pressed={area === "flows"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", t.muted, area === "flows" && cn(t.surface, t.ink, t.shadowSmall))} onClick={() => onArea("flows")} title="Flows" type="button"><Workflow className="size-3.5" /></button>
     <div className="flex-1" />
     <button aria-label="切换主题" className={cn("grid size-9 place-items-center rounded-md transition-all hover:-translate-y-px hover:opacity-80", t.muted)} onClick={onTheme} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-3.5" /></button>
-    <button aria-label="设置" className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", t.muted)} title="设置" type="button"><Settings2 className="size-3.5" /></button>
   </aside>;
 }
 
@@ -649,9 +657,11 @@ function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, 
   </header>;
 }
 
-function Composer({ attachments, commands, disabled, draft, flowId, flows, model, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onDraft, onFiles, onFlow, onPickDirectory, onRemoveAttachment, onSubmit }: {
+function Composer({ attachments, commands, contextOpen, contextPaths, disabled, draft, flowId, flows, model, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextOpen, onDraft, onFiles, onFlow, onPickDirectory, onRemoveAttachment, onSubmit }: {
   attachments: MessageAttachmentInput[];
   commands: AgentCommand[];
+  contextOpen: boolean;
+  contextPaths: string[];
   disabled: boolean;
   draft: string;
   flowId: string;
@@ -663,6 +673,8 @@ function Composer({ attachments, commands, disabled, draft, flowId, flows, model
   commandOpen: boolean;
   onAddFiles: (files: FileList | File[]) => Promise<void>;
   onCommandOpen: (open: boolean) => void;
+  onContext: (path: string) => void;
+  onContextOpen: (open: boolean) => void;
   onDraft: (value: string) => void;
   onFiles: () => void;
   onFlow: (value: string) => void;
@@ -675,7 +687,7 @@ function Composer({ attachments, commands, disabled, draft, flowId, flows, model
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5">
       <ContextChip label={model || "Agent default"} theme={theme} />
       <button className={cn("inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded border px-2 text-[10px] transition-opacity hover:opacity-80", t.surfaceSoft, t.muted, t.line)} onClick={onPickDirectory} type="button"><FolderOpen className="size-3" /><span className={cn("font-medium", t.inkSoft)}>{workspaceLabel(session)}</span></button>
-      <label className={cn("inline-flex min-h-6 shrink-0 items-center rounded border px-2 text-[10px]", t.surfaceSoft, t.muted, t.line)}><Workflow className="mr-1.5 size-3" /><select aria-label="Flow" className={cn("max-w-44 bg-transparent outline-none", t.inkSoft)} onChange={(event) => onFlow(event.target.value)} value={flowId}><option value="">Flow · Automatic</option>{flows.map((flow) => <option key={flow.flow_id} value={flow.flow_id}>{flow.name || flow.flow_id}</option>)}</select></label>
+      {flows.length > 0 && <label className={cn("inline-flex min-h-6 shrink-0 items-center rounded border px-2 text-[10px]", t.surfaceSoft, t.muted, t.line)}><Workflow className="mr-1.5 size-3" /><select aria-label="Flow" className={cn("max-w-44 bg-transparent outline-none", t.inkSoft)} onChange={(event) => onFlow(event.target.value)} value={flowId}><option value="">Flow · Automatic</option>{flows.map((flow) => <option key={flow.flow_id} value={flow.flow_id}>{flow.name || flow.flow_id}</option>)}</select></label>}
       <span className="flex-1" /><span className={cn("hidden shrink-0 text-[10px] sm:inline", t.faint)}>Enter to send</span>
     </div>
     {attachments.length > 0 && <div className="flex flex-wrap gap-1.5 px-3 pt-2">{attachments.map((attachment, index) => <span className={cn("inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[10px]", t.surfaceTint, t.inkSoft, t.line)} key={`${attachment.name}-${index}`}><Paperclip className="size-3" /><span className="max-w-40 truncate">{attachment.name}</span><button aria-label={`移除 ${attachment.name}`} onClick={() => onRemoveAttachment(index)} type="button"><X className="size-3" /></button></span>)}</div>}
@@ -683,7 +695,8 @@ function Composer({ attachments, commands, disabled, draft, flowId, flows, model
     <div className="flex items-center justify-between gap-3 px-3 pb-2.5">
       <div className="relative flex items-center gap-1">
         <Button aria-label="添加文件" className={cn("size-7 px-0", t.muted)} onClick={onFiles} size="icon" variant="ghost"><Plus className="size-3.5" /></Button>
-        {session && <Button aria-label="添加上下文" className={cn("size-7 px-0 text-xs", t.muted)} onClick={onPickDirectory} size="icon" variant="ghost"><span>@</span></Button>}
+        {session && contextPaths.length > 0 && <Button aria-label="插入上下文" className={cn("size-7 px-0 text-xs", t.muted)} onClick={() => onContextOpen(!contextOpen)} size="icon" variant="ghost"><span>@</span></Button>}
+        {contextOpen && contextPaths.length > 0 && <div className={cn("absolute bottom-9 left-8 z-30 max-h-64 w-72 overflow-y-auto rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{contextPaths.map((path) => <button className={cn("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs hover:opacity-80", t.ink)} key={path} onClick={() => { onContext(path); onContextOpen(false); }} type="button"><FolderOpen className={cn("size-3.5", t.muted)} /><span className="truncate">{path}</span></button>)}</div>}
         {commands.length > 0 && <Button aria-label="Agent commands" className={cn("size-7 px-0 text-xs", t.muted)} onClick={() => onCommandOpen(!commandOpen)} size="icon" variant="ghost"><span>/</span></Button>}
         {commandOpen && commands.length > 0 && <div className={cn("absolute bottom-9 left-0 z-30 max-h-64 w-72 overflow-y-auto rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{commands.map((command) => <button className={cn("grid w-full gap-0.5 rounded-md px-2.5 py-2 text-left hover:opacity-80", t.ink)} key={command.name} onClick={() => { onDraft(`/${command.name} `); onCommandOpen(false); }} type="button"><span className="font-mono text-xs">/{command.name}</span><span className={cn("truncate text-[10px]", t.muted)}>{command.description}</span></button>)}</div>}
       </div>
