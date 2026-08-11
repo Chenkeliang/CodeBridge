@@ -10,15 +10,20 @@ import {
   type InitializeResponse,
   type ListSessionsRequest,
   type ListSessionsResponse,
+  type SessionUpdate,
 } from "@agentclientprotocol/sdk";
 import type {
   BackendConfigOption,
   BackendProfile,
 } from "@codebridge/core";
-import type { CliSessionSummary } from "../session-discovery.js";
+import type {
+  CliSessionSummary,
+  ProviderSessionHistoryEvent,
+} from "../session-discovery.js";
 import { killProcessTree } from "./acp-kill.js";
-import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
+import { acpContinueMethod, resolveAcpSpawn } from "./acp-spawn-profiles.js";
 import { mapSessionConfigOptions } from "./acp-config-options.js";
+import { mapSessionUpdate } from "./acp-event-mapper.js";
 import { ACP_CLIENT_CAPABILITIES } from "./headless-client.js";
 import { raceWithAbort } from "./acp-race.js";
 
@@ -41,6 +46,8 @@ async function withAcpConnection<T>(
     agent: ClientConnection["agent"],
     initializeResponse: InitializeResponse,
   ) => Promise<T>,
+  onSessionUpdate?: (sessionId: string, update: SessionUpdate) => void,
+  timeoutMs = 60_000,
 ): Promise<T> {
   const spawnProfile = resolveAcpSpawn(profile);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
@@ -52,26 +59,102 @@ async function withAcpConnection<T>(
   const spawnError = new Promise<never>((_, reject) => {
     child.once("error", reject);
   });
-  const app = client({ name: "codebridge" });
+  const app = client({ name: "codebridge" }).onNotification(
+    methods.client.session.update,
+    ({ params }) => onSessionUpdate?.(params.sessionId, params.update),
+  );
   const stream = childToStream(child);
   const connection = app.connect(stream);
   try {
-    const initializeResponse = await Promise.race([
-      connection.agent.request(methods.agent.initialize, {
-        protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: ACP_CLIENT_CAPABILITIES,
-        clientInfo: { name: "codebridge", version: "0.1.0" },
-      }),
-      spawnError,
-    ]);
-    return await Promise.race([
-      op(connection.agent, initializeResponse),
-      spawnError,
-    ]);
+    const initializeResponse = await raceWithAbort(
+      Promise.race([
+        connection.agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: ACP_CLIENT_CAPABILITIES,
+          clientInfo: { name: "codebridge", version: "0.1.0" },
+        }),
+        spawnError,
+      ]),
+      () => false,
+      timeoutMs,
+      "ACP initialize timeout",
+    );
+    return await raceWithAbort(
+      Promise.race([op(connection.agent, initializeResponse), spawnError]),
+      () => false,
+      timeoutMs,
+      "ACP operation timeout",
+    );
   } finally {
     connection.close();
     if (!child.killed) killProcessTree(child, "SIGTERM");
   }
+}
+
+export function collectAcpSessionHistory(
+  updates: Array<{ sessionId: string; update: SessionUpdate }>,
+): ProviderSessionHistoryEvent[] {
+  const result: ProviderSessionHistoryEvent[] = [];
+  let previousUserMessageId: string | null | undefined;
+  for (const { update } of updates) {
+    if (update.sessionUpdate === "user_message_chunk") {
+      const text = textFromContent(update.content);
+      if (!text) continue;
+      const previous = result.at(-1);
+      if (previous?.kind === "message" && previousUserMessageId === update.messageId) previous.text += text;
+      else result.push({ kind: "message", text });
+      previousUserMessageId = update.messageId;
+      continue;
+    }
+    previousUserMessageId = undefined;
+    for (const event of mapSessionUpdate(update)) {
+      result.push({ kind: "agent_event", event });
+    }
+  }
+  return result;
+}
+
+function textFromContent(content: { type: string; text?: string }): string | undefined {
+  return content.type === "text" && typeof content.text === "string" ? content.text : undefined;
+}
+
+export async function loadAcpSessionHistory(
+  backendId: string,
+  profile: BackendProfile,
+  cwd: string,
+  sessionId: string,
+  options?: { additionalDirectories?: string[] },
+): Promise<ProviderSessionHistoryEvent[]> {
+  const updates: Array<{ sessionId: string; update: SessionUpdate }> = [];
+  await withAcpConnection(
+    profile,
+    cwd,
+    async (agent) => {
+      const params = {
+        sessionId,
+        cwd,
+        ...(options?.additionalDirectories?.length
+          ? { additionalDirectories: options.additionalDirectories }
+          : {}),
+        mcpServers: [] as [],
+      };
+      const method =
+        acpContinueMethod(profile) === "session/load"
+          ? methods.agent.session.load
+          : methods.agent.session.resume;
+      await raceWithAbort(
+        agent.request(method, params),
+        () => false,
+        60_000,
+        `ACP session history load timeout for ${backendId}`,
+      );
+    },
+    (notificationSessionId, update) => {
+      if (notificationSessionId === sessionId) updates.push({ sessionId: notificationSessionId, update });
+    },
+    15_000,
+  );
+  return collectAcpSessionHistory(updates);
 }
 
 export function hasAcpSessionCapability(

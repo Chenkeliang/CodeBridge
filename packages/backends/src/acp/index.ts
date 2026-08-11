@@ -12,6 +12,7 @@ export {
 } from "./acp-session-runner.js";
 export {
   deleteAcpSession,
+  loadAcpSessionHistory,
   listAcpConfigOptions,
   listAcpSessions,
   probeAcpInitialize,

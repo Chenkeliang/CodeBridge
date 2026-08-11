@@ -30,6 +30,49 @@ describe("RunnerClient steering", () => {
   });
 });
 
+describe("RunnerClient session history", () => {
+  it("loads provider history with the Session workspace", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ events: [{ kind: "message", text: "hello" }] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.loadSessionHistory("claude", "/workspace", "session-1")).resolves.toEqual([
+      { kind: "message", text: "hello" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/sessions/session-1/history?backend=claude&cwd=%2Fworkspace",
+      expect.any(Object),
+    );
+  });
+
+  it("aborts a provider history request at its deadline", async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        }, { once: true });
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const options = {
+      baseUrl: "http://runner",
+      token: "token",
+      sessionHistoryTimeoutMs: 5,
+    };
+    const client = new RunnerClient(options);
+
+    const outcome = await Promise.race([
+      client.loadSessionHistory("claude", "/workspace", "session-1")
+        .then(() => "resolved", (error: Error) => error.name),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still-pending"), 50)),
+    ]);
+
+    expect(outcome).toBe("AbortError");
+  });
+});
+
 describe("RunnerClient cancellation", () => {
   it("cancels the remote Runner task when an active stream is aborted", async () => {
     const controller = new AbortController();

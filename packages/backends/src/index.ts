@@ -33,6 +33,7 @@ export {
   acpContinueMethod,
   runAcpSession,
   deleteAcpSession,
+  loadAcpSessionHistory,
   listAcpConfigOptions,
   listAcpSessions,
   killProcessTree,
@@ -43,13 +44,18 @@ export {
 
 export {
   type CliSessionSummary,
+  type ProviderSessionHistoryEvent,
+  collectCodexSessionHistory,
   encodeClaudeProjectDir,
+  loadCodexSessionHistory,
+  loadClaudeSessionHistory,
 } from "./session-discovery.js";
 
 export {
   closePiSession,
   deletePiSession,
   forkPiSession,
+  loadPiSessionHistory,
   listPiSessions,
   listPiConfigOptions,
   listPiCommands,

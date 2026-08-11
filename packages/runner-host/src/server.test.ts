@@ -41,6 +41,26 @@ function request(cwd: string): RunRequest {
 }
 
 describe("RunnerHost cwd validation", () => {
+  it("exposes provider session history for imported Workbench sessions", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-history-"));
+    tmpDirs.push(dataDir, cwd);
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
+    vi.spyOn(host, "loadSessionHistory").mockResolvedValue([
+      { kind: "message", text: "历史问题" },
+    ]);
+    const app = createRunnerApp(host, "token");
+
+    const response = await app.request(
+      `/sessions/provider-1/history?backend=claude&cwd=${encodeURIComponent(cwd)}`,
+      { headers: { authorization: "Bearer token" } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ events: [{ kind: "message", text: "历史问题" }] });
+    host.shutdown();
+  });
+
   it("picks and authorizes a directory through an injectable host picker", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-pick-"));
