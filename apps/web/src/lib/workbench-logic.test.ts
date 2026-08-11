@@ -33,6 +33,25 @@ describe("workbench logic", () => {
     expect(isThoughtLevelOption({ id: "model", name: "Model", type: "select", category: "model", values: [] })).toBe(false);
   });
 
+  it("recognizes and serializes an Agent-provided speed option without checking the vendor", () => {
+    const logic = workbenchLogic as unknown as {
+      isSpeedOption?: (option: { id: string; name: string; type: string; category?: string; values: [] }) => boolean;
+      serializeConfigOverride?: (option: { type: string }, value: string) => string | boolean;
+      speedValueLabel?: (value: string, name?: string) => string;
+    };
+    expect(logic.isSpeedOption).toBeTypeOf("function");
+    expect(logic.serializeConfigOverride).toBeTypeOf("function");
+    expect(logic.speedValueLabel).toBeTypeOf("function");
+    if (!logic.isSpeedOption || !logic.serializeConfigOverride || !logic.speedValueLabel) return;
+
+    expect(logic.isSpeedOption({ id: "fast-mode", name: "Fast mode", type: "boolean", category: "model_config", values: [] })).toBe(true);
+    expect(logic.isSpeedOption({ id: "model", name: "Model", type: "select", category: "model", values: [] })).toBe(false);
+    expect(logic.serializeConfigOverride({ type: "boolean" }, "true")).toBe(true);
+    expect(logic.serializeConfigOverride({ type: "select" }, "fast")).toBe("fast");
+    expect(logic.speedValueLabel("true", "On")).toBe("Fast");
+    expect(logic.speedValueLabel("false", "Off")).toBe("Standard");
+  });
+
   it("places pinned Sessions before the most recently updated Sessions", () => {
     const session = (id: string, updatedAt: string, pinnedAt: string | null): AgentSession => ({
       session_id: id,

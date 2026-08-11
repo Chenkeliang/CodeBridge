@@ -32,11 +32,12 @@ describe("startup surfaces", () => {
     expect(resolveStartupSurfaces(config, { web: true }).web).toBe(true);
   });
 
-  it("keeps OpenCode in the configurable Agent registry and forwards Session effort", () => {
+  it("keeps OpenCode in the configurable Agent registry and forwards Session config", () => {
     const source = readFileSync(new URL("./cli.ts", import.meta.url), "utf8");
 
     expect(source).toContain('"opencode"');
     expect(source).toContain('opencode: "OpenCode"');
     expect(source).toContain("effort: linkedSession?.effort ?? undefined");
+    expect(source).toContain("acpConfig: linkedSession?.configOverrides");
   });
 });

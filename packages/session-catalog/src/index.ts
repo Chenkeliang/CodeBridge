@@ -8,6 +8,7 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
   typeof import("node:sqlite");
 
 export type SessionStatus = "active" | "idle" | "closed" | "unavailable";
+export type SessionConfigOverrides = Record<string, string | boolean>;
 
 export interface AgentProfile {
   agentId: string;
@@ -28,6 +29,7 @@ export interface AgentSession {
   flowId: string | null;
   model: string | null;
   effort: string | null;
+  configOverrides: SessionConfigOverrides;
   permissionMode: string | null;
   folderId: string | null;
   cwd: string | null;
@@ -56,6 +58,7 @@ export interface CreateSessionInput {
   flowId?: string | null;
   model?: string | null;
   effort?: string | null;
+  configOverrides?: SessionConfigOverrides;
   permissionMode?: string | null;
   folderId?: string | null;
   cwd?: string | null;
@@ -95,6 +98,7 @@ export class SessionCatalogStore {
         flow_id TEXT,
         model TEXT,
         effort TEXT,
+        config_overrides TEXT NOT NULL,
         permission_mode TEXT,
         folder_id TEXT,
         cwd TEXT,
@@ -144,6 +148,11 @@ export class SessionCatalogStore {
       // Existing databases already contain the reasoning effort override column.
     }
     try {
+      this.database.exec("ALTER TABLE agent_sessions ADD COLUMN config_overrides TEXT NOT NULL DEFAULT '{}'");
+    } catch {
+      // Existing databases already contain the Agent config override column.
+    }
+    try {
       this.database.exec("ALTER TABLE agent_sessions ADD COLUMN pinned_at TEXT");
     } catch {
       // Existing databases already contain the pin metadata column.
@@ -166,6 +175,7 @@ export class SessionCatalogStore {
       flowId: input.flowId ?? null,
       model: input.model ?? null,
       effort: input.effort ?? null,
+      configOverrides: { ...(input.configOverrides ?? {}) },
       permissionMode: input.permissionMode ?? null,
       folderId: input.folderId ?? null,
       cwd: input.cwd ?? null,
@@ -180,9 +190,9 @@ export class SessionCatalogStore {
     this.database
       .prepare(
         `INSERT INTO agent_sessions (
-          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, model, effort, permission_mode, folder_id, cwd,
+          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, model, effort, config_overrides, permission_mode, folder_id, cwd,
           additional_directories, title, status, pinned_at, archived_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -193,6 +203,7 @@ export class SessionCatalogStore {
         session.flowId,
         session.model,
         session.effort,
+        JSON.stringify(session.configOverrides),
         session.permissionMode,
         session.folderId,
         session.cwd,
@@ -298,6 +309,7 @@ export class SessionCatalogStore {
       flowId: input.flowId !== undefined ? input.flowId : existing.flowId,
       model: input.model !== undefined ? input.model : existing.model,
       effort: input.effort !== undefined ? input.effort : existing.effort,
+      configOverrides: input.configOverrides !== undefined ? { ...input.configOverrides } : existing.configOverrides,
       permissionMode: input.permissionMode !== undefined ? input.permissionMode : existing.permissionMode,
       folderId: input.folderId ?? existing.folderId,
       cwd: input.cwd ?? existing.cwd,
@@ -310,7 +322,7 @@ export class SessionCatalogStore {
     };
     this.database
       .prepare(
-        `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, flow_id = ?, model = ?, effort = ?, permission_mode = ?, folder_id = ?, cwd = ?,
+        `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, flow_id = ?, model = ?, effort = ?, config_overrides = ?, permission_mode = ?, folder_id = ?, cwd = ?,
          additional_directories = ?, title = ?, status = ?, pinned_at = ?, archived_at = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
@@ -319,6 +331,7 @@ export class SessionCatalogStore {
         next.flowId,
         next.model,
         next.effort,
+        JSON.stringify(next.configOverrides),
         next.permissionMode,
         next.folderId,
         next.cwd,
@@ -353,6 +366,7 @@ function toSession(row: SqliteRow): AgentSession {
     flowId: row.flow_id === null ? null : String(row.flow_id),
     model: row.model === null || row.model === undefined ? null : String(row.model),
     effort: row.effort === null || row.effort === undefined ? null : String(row.effort),
+    configOverrides: JSON.parse(String(row.config_overrides ?? "{}")) as SessionConfigOverrides,
     permissionMode: row.permission_mode === null || row.permission_mode === undefined ? null : String(row.permission_mode),
     folderId: row.folder_id === null ? null : String(row.folder_id),
     cwd: row.cwd === null ? null : String(row.cwd),

@@ -62,6 +62,23 @@ describe("session catalog", () => {
     store.close();
   });
 
+  it("persists arbitrary Agent config overrides for a Session", () => {
+    const store = new SessionCatalogStore(":memory:");
+    const session = store.createSession({ agentId: "codex" });
+
+    const updated = store.updateSession(session.id, {
+      configOverrides: { "fast-mode": true, output_style: "concise" },
+    });
+
+    expect(updated).toMatchObject({
+      configOverrides: { "fast-mode": true, output_style: "concise" },
+    });
+    expect(store.getSession(session.id)).toMatchObject({
+      configOverrides: { "fast-mode": true, output_style: "concise" },
+    });
+    store.close();
+  });
+
   it("persists pin and archive metadata while keeping archived sessions out of the default list", () => {
     const store = new SessionCatalogStore(":memory:");
     const first = store.createSession({ agentId: "codex", title: "普通会话" });

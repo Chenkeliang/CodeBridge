@@ -18,6 +18,7 @@ export interface AgentSession {
   flow_id: string | null;
   model: string | null;
   effort: string | null;
+  config_overrides?: Record<string, string | boolean>;
   permission_mode: string | null;
   cwd: string | null;
   additional_directories: string[];

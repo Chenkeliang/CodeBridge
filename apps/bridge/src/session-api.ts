@@ -177,6 +177,10 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       if (cached !== undefined) return c.json(cached, 201);
     }
     const sessionBody = body ?? {};
+    const configOverrides = Object.hasOwn(sessionBody, "config_overrides")
+      ? parseConfigOverrides(sessionBody.config_overrides)
+      : {};
+    if (!configOverrides) return c.json({ error: "config_overrides must contain only string or boolean values" }, 400);
     const requestedCwd = asNullableString(sessionBody.cwd) ?? options.defaultCwd ?? null;
     let cwd = requestedCwd;
     if (requestedCwd && options.runner) {
@@ -193,6 +197,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       agentId: agent.agentId,
       model: asNullableString(sessionBody.model),
       effort: asNullableString(sessionBody.effort),
+      configOverrides,
       permissionMode: asNullableString(sessionBody.permission_mode),
       folderId: asNullableString(sessionBody.folder_id),
       cwd,
@@ -484,6 +489,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       }
       update.effort = body.effort === null ? null : (body.effort as string).trim();
     }
+    if (Object.hasOwn(body, "config_overrides")) {
+      const configOverrides = parseConfigOverrides(body.config_overrides);
+      if (!configOverrides) {
+        return c.json({ error: "config_overrides must contain only string or boolean values" }, 400);
+      }
+      update.configOverrides = configOverrides;
+    }
     for (const field of ["pinned", "archived"] as const) {
       if (!Object.hasOwn(body, field)) continue;
       if (typeof body[field] !== "boolean") {
@@ -707,6 +719,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       providerSessionId: result.sessionId,
       model: asNullableString(body?.model) ?? session.model,
       effort: asNullableString(body?.effort) ?? session.effort,
+      configOverrides: session.configOverrides,
       permissionMode: asNullableString(body?.permission_mode) ?? session.permissionMode,
       folderId: session.folderId,
       cwd: result.cwd ?? targetCwd,
@@ -885,6 +898,7 @@ function toApiSession(session: ReturnType<SessionCatalogStore["getSession"]>): R
     flow_id: session.flowId,
     model: session.model,
     effort: session.effort,
+    config_overrides: session.configOverrides,
     permission_mode: session.permissionMode,
     folder_id: session.folderId,
     cwd: session.cwd,
@@ -994,6 +1008,18 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<R
 
 function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function parseConfigOverrides(value: unknown): Record<string, string | boolean> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const overrides: Record<string, string | boolean> = {};
+  for (const [key, candidate] of Object.entries(value)) {
+    if (!key.trim()) return null;
+    if (typeof candidate === "boolean") overrides[key] = candidate;
+    else if (typeof candidate === "string" && candidate.trim()) overrides[key] = candidate;
+    else return null;
+  }
+  return overrides;
 }
 
 function parseMessageAttachments(value: unknown): Array<{ name: string; mimeType: string; dataBase64: string }> | null {

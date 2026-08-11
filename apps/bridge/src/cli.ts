@@ -181,6 +181,7 @@ program
           prompt,
           model: linkedSession?.model ?? undefined,
           effort: linkedSession?.effort ?? undefined,
+          acpConfig: linkedSession?.configOverrides,
           mode: linkedSession?.permissionMode ?? undefined,
           resumeSessionId: linkedSession?.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
