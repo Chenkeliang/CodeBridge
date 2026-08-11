@@ -1,88 +1,185 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Archive,
+  Check,
   ChevronDown,
-  ChevronRight,
   Circle,
+  Code2,
+  FolderOpen,
   GitBranch,
   LoaderCircle,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   Pin,
   Plus,
   RefreshCw,
+  Search,
   Send,
+  Settings2,
+  ShieldAlert,
+  Sun,
   Trash2,
   Workflow,
   X,
 } from "lucide-react";
-import { AgentIcon } from "@/components/agent-icon";
-import { Badge } from "@/components/ui/badge";
+import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api, streamSessionEvents } from "@/lib/api";
-import { reduceConversationEvents, type ConversationProjection } from "@/lib/events";
-import type { AgentCommand, AgentProfile, AgentSession, ConfigOption, FlowRecord, SessionEvent } from "@/lib/types";
+import { reduceConversationEvents, type ApprovalProjection, type ConversationProjection } from "@/lib/events";
+import type {
+  AgentCommand,
+  AgentProfile,
+  AgentSession,
+  ApprovalRecord,
+  ConfigOption,
+  FlowRecord,
+  MessageAttachmentInput,
+  SessionEvent,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { isModelOption, orderSessions } from "@/lib/workbench-logic";
 
+type Theme = "paper" | "carbon";
+type PanelArea = "agents" | "flows";
+type MenuView = "actions" | "rename" | "delete";
+
+const themes = {
+  paper: {
+    canvas: "bg-[#F6F7F4] text-[#191C16]",
+    sidebar: "bg-[#FBFCFA]",
+    surface: "bg-white",
+    surfaceSoft: "bg-[#EEF1EB]",
+    surfaceTint: "bg-[#F2F4EF]",
+    ink: "text-[#191C16]",
+    inkSoft: "text-[#373C32]",
+    muted: "text-[#73796C]",
+    faint: "text-[#9CA296]",
+    line: "border-[#E0E4DC]",
+    lineStrong: "border-[#CDD3C8]",
+    accent: "bg-[#CCFF00]",
+    accentText: "text-[#171A11]",
+    accentSoft: "bg-[#E9F6AD]",
+    success: "text-[#3B8659]",
+    warning: "text-[#C27B18]",
+    danger: "text-[#D25D3D]",
+    dangerSoft: "bg-[#FCEBE6]",
+    healthyDot: "bg-[#3B8659]",
+    offlineDot: "bg-[#9CA296]",
+    placeholder: "placeholder:text-[#9CA296]",
+    focus: "focus:border-[#73796C] focus-visible:ring-[#CDD3C8]",
+    shadow: "shadow-[0_20px_48px_rgba(25,28,22,0.08)]",
+    shadowSmall: "shadow-[0_4px_16px_rgba(25,28,22,0.07)]",
+  },
+  carbon: {
+    canvas: "bg-[#121411] text-[#F1F2EA]",
+    sidebar: "bg-[#181A17]",
+    surface: "bg-[#1C1F1B]",
+    surfaceSoft: "bg-[#282C25]",
+    surfaceTint: "bg-[#20231E]",
+    ink: "text-[#F1F2EA]",
+    inkSoft: "text-[#D2D6C9]",
+    muted: "text-[#9DA496]",
+    faint: "text-[#6E7669]",
+    line: "border-[#30352D]",
+    lineStrong: "border-[#444B40]",
+    accent: "bg-[#FF683D]",
+    accentText: "text-[#211610]",
+    accentSoft: "bg-[#4B281F]",
+    success: "text-[#74BF8F]",
+    warning: "text-[#E7AA4E]",
+    danger: "text-[#FF8063]",
+    dangerSoft: "bg-[#41231D]",
+    healthyDot: "bg-[#74BF8F]",
+    offlineDot: "bg-[#6E7669]",
+    placeholder: "placeholder:text-[#6E7669]",
+    focus: "focus:border-[#9DA496] focus-visible:ring-[#444B40]",
+    shadow: "shadow-[0_20px_56px_rgba(0,0,0,0.28)]",
+    shadowSmall: "shadow-[0_5px_18px_rgba(0,0,0,0.22)]",
+  },
+} as const;
+
 const statusLabel: Record<string, string> = {
-  healthy: "可用",
-  unavailable: "不可用",
-  needs_setup: "未配置",
-  active: "运行中",
-  idle: "空闲",
-  closed: "已关闭",
+  healthy: "Ready",
+  unavailable: "Unavailable",
+  needs_setup: "Needs setup",
+  active: "Running",
+  idle: "Ready",
+  closed: "Closed",
 };
 
 export function Workbench() {
+  const [theme, setTheme] = useState<Theme>(() => readTheme());
+  const [area, setArea] = useState<PanelArea>("agents");
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [flows, setFlows] = useState<FlowRecord[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [collapsedAgents, setCollapsedAgents] = useState<Record<string, boolean>>({});
-  const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [modelOptions, setModelOptions] = useState<ConfigOption[]>([]);
-  const [model, setModel] = useState<string>("");
-  const [flowId, setFlowId] = useState<string>("");
+  const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
+  const [model, setModel] = useState("");
+  const [flowId, setFlowId] = useState("");
+  const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
+  const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingSession, setLoadingSession] = useState(false);
+  const [pickingDirectory, setPickingDirectory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuView, setMenuView] = useState<"actions" | "rename" | "delete">("actions");
+  const [menuView, setMenuView] = useState<MenuView>("actions");
   const [renameDraft, setRenameDraft] = useState("");
+  const [commandOpen, setCommandOpen] = useState(false);
+  const fileInput = useRef<HTMLInputElement | null>(null);
   const streamAbort = useRef<AbortController | null>(null);
+  const t = themes[theme];
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
-  const groupedSessions = useMemo(() => {
-    const grouped = new Map<string, AgentSession[]>();
-    for (const session of sessions) grouped.set(session.agent_id, [...(grouped.get(session.agent_id) ?? []), session]);
-    return grouped;
-  }, [sessions]);
+  const agentSessions = useMemo(
+    () => orderSessions(sessions.filter((session) => session.agent_id === selectedAgentId))
+      .filter((session) => (session.title || "未命名 Session").toLowerCase().includes(query.toLowerCase())),
+    [query, selectedAgentId, sessions],
+  );
   const projection = useMemo(() => reduceConversationEvents(events), [events]);
+  const modelValues = useMemo(
+    () => modelOptions.filter(isModelOption).flatMap((option) => option.values),
+    [modelOptions],
+  );
 
-  const reload = useCallback(async (selectExisting = false) => {
+  const notify = useCallback((message: string) => {
+    setNotice(message);
+    window.setTimeout(() => setNotice((current) => current === message ? "" : current), 1800);
+  }, []);
+
+  const reload = useCallback(async (importProvider = false) => {
     setLoading(true);
+    setError(null);
     try {
       const [nextAgents, nextSessions, nextFlows] = await Promise.all([
         api.agents(),
-        api.sessions(selectExisting),
+        api.sessions(importProvider),
         api.flows(),
       ]);
       setAgents(nextAgents);
       setSessions(nextSessions);
       setFlows(nextFlows.filter((flow) => flow.status !== "deprecated"));
-      setSelectedAgentId((current) => current ?? nextAgents[0]?.agent_id ?? null);
-      setSelectedSessionId((current) => current && nextSessions.some((session) => session.session_id === current) ? current : null);
+      setSelectedAgentId((current) => current && nextAgents.some((agent) => agent.agent_id === current)
+        ? current
+        : nextAgents[0]?.agent_id ?? null);
+      setSelectedSessionId((current) => current && nextSessions.some((session) => session.session_id === current)
+        ? current
+        : null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(messageOf(caught));
     } finally {
       setLoading(false);
     }
@@ -91,178 +188,553 @@ export function Workbench() {
   useEffect(() => { void reload(true); }, [reload]);
 
   useEffect(() => {
+    window.localStorage.setItem("codebridge:web-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
     if (!selectedSessionId) {
       streamAbort.current?.abort();
       setEvents([]);
       setCommands([]);
       setModelOptions([]);
+      setApprovals([]);
       setModel("");
       setFlowId("");
-      setMenuOpen(false);
-      setMenuView("actions");
+      setLoadingSession(false);
       return;
     }
+
+    const sessionId = selectedSessionId;
+    const session = sessions.find((value) => value.session_id === sessionId);
     let active = true;
     streamAbort.current?.abort();
-    setMenuOpen(false);
-    setMenuView("actions");
     const controller = new AbortController();
     streamAbort.current = controller;
+    setLoadingSession(true);
     setError(null);
+    setMenuOpen(false);
+    setMenuView("actions");
+    setCommandOpen(false);
+
     void (async () => {
       try {
-        const [history, nextCommands, options] = await Promise.all([
-          api.events(selectedSessionId),
-          api.commands(selectedSessionId),
-          api.configOptions(selectedSessionId),
+        const [history, nextCommands, options, runs] = await Promise.all([
+          api.events(sessionId),
+          api.commands(sessionId),
+          api.configOptions(sessionId),
+          api.runs(sessionId),
         ]);
         if (!active) return;
         setEvents(history);
         setCommands(nextCommands);
         setModelOptions(options);
-        const session = sessions.find((value) => value.session_id === selectedSessionId);
         setModel(session?.model ?? optionValue(options) ?? "");
         setFlowId(session?.flow_id ?? "");
-        await streamSessionEvents(selectedSessionId, history.reduce((max, event) => Math.max(max, event.sequence), 0), controller.signal, (event) => {
-          if (active) setEvents((current) => current.some((item) => item.event_id === event.event_id) ? current : [...current, event]);
+        const latestRun = runs.at(-1);
+        setApprovals(latestRun ? await api.approvals(latestRun.run_id).catch(() => []) : []);
+        setLoadingSession(false);
+        const after = history.reduce((max, event) => Math.max(max, event.sequence), 0);
+        await streamSessionEvents(sessionId, after, controller.signal, (event) => {
+          if (!active) return;
+          setEvents((current) => current.some((item) => item.event_id === event.event_id) ? current : [...current, event]);
         });
       } catch (caught) {
-        if (active && !controller.signal.aborted) setError(caught instanceof Error ? caught.message : String(caught));
+        if (active && !controller.signal.aborted) setError(messageOf(caught));
+        if (active) setLoadingSession(false);
       }
     })();
+
     return () => {
       active = false;
       controller.abort();
     };
-  }, [selectedSessionId, sessions]);
+  }, [selectedSessionId]);
 
-  async function createSession(agentId: string) {
+  function selectAgent(agentId: string) {
+    setSelectedAgentId(agentId);
+    setArea("agents");
+    setQuery("");
+    const remembered = window.localStorage.getItem(`codebridge:last-session:${agentId}`);
+    setSelectedSessionId(remembered && sessions.some((session) => session.session_id === remembered) ? remembered : null);
+  }
+
+  function selectSession(session: AgentSession) {
+    setSelectedAgentId(session.agent_id);
+    setSelectedSessionId(session.session_id);
+    window.localStorage.setItem(`codebridge:last-session:${session.agent_id}`, session.session_id);
+  }
+
+  async function createSession(agentId: string): Promise<AgentSession | undefined> {
     setError(null);
     try {
       const session = await api.createSession(agentId);
       setSessions((current) => [session, ...current]);
-      setSelectedAgentId(agentId);
-      setSelectedSessionId(session.session_id);
+      selectSession(session);
+      return session;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(messageOf(caught));
+      return undefined;
     }
   }
 
   async function submit() {
-    if (!selectedSessionId || !draft.trim() || busy) return;
     const message = draft.trim();
-    setDraft("");
-    setBusy(true);
+    if (!message || sending || !selectedAgent || selectedAgent.status !== "healthy") return;
+    setSending(true);
     setError(null);
+    let sessionId = selectedSessionId;
+    if (!sessionId) sessionId = (await createSession(selectedAgent.agent_id))?.session_id ?? null;
+    if (!sessionId) {
+      setSending(false);
+      return;
+    }
+    const pendingAttachments = attachments;
+    setDraft("");
+    setAttachments([]);
     try {
-      await api.sendMessage(selectedSessionId, message, flowId || null, model || null);
-      await api.startRun(selectedSessionId, flowId || null, model || null);
+      await api.sendMessage(sessionId, message, flowId || null, model || null, pendingAttachments);
+      await api.startRun(sessionId, flowId || null, model || null);
+      setSessions((current) => current.map((session) => session.session_id === sessionId
+        ? { ...session, status: "active", title: session.title ?? message.slice(0, 60), updated_at: new Date().toISOString() }
+        : session));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setDraft(message);
+      setAttachments(pendingAttachments);
+      setError(messageOf(caught));
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   }
 
   async function updateSession(update: Record<string, unknown>) {
     if (!selectedSessionId) return;
+    setError(null);
     try {
       const updated = await api.updateSession(selectedSessionId, update);
       setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
       setModel(updated.model ?? "");
       setMenuOpen(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(messageOf(caught));
     }
   }
 
   async function deleteSelected() {
     if (!selectedSessionId) return;
+    const deletedId = selectedSessionId;
     try {
-      await api.deleteSession(selectedSessionId);
-      setSessions((current) => current.filter((session) => session.session_id !== selectedSessionId));
+      await api.deleteSession(deletedId);
+      setSessions((current) => current.filter((session) => session.session_id !== deletedId));
       setSelectedSessionId(null);
       setMenuOpen(false);
+      notify("Session 已删除");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(messageOf(caught));
+    }
+  }
+
+  async function pickDirectory() {
+    if (!selectedSessionId || pickingDirectory) return;
+    setPickingDirectory(true);
+    setError(null);
+    try {
+      const result = await api.pickDirectory(selectedSessionId);
+      if (!("cancelled" in result)) {
+        setSessions((current) => current.map((session) => session.session_id === result.session_id ? result : session));
+        notify("Workspace 已添加");
+      }
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setPickingDirectory(false);
+    }
+  }
+
+  async function resolveApproval(item: ApprovalProjection, approve: boolean) {
+    if (!item.runId) return;
+    const approval = approvals.find((record) => record.id === item.requestId)
+      ?? approvals.find((record) => record.run_id === item.runId && record.status === "requested");
+    if (!approval) {
+      setError("审批记录尚未同步，请稍后重试");
+      return;
+    }
+    try {
+      if (approve) await api.approve(item.runId, approval.id);
+      else await api.reject(item.runId, approval.id);
+      setApprovals((current) => current.map((record) => record.id === approval.id
+        ? { ...record, status: approve ? "granted" : "revoked" }
+        : record));
+      notify(approve ? "已授权本次操作" : "已拒绝并暂停 Run");
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  async function addFiles(files: FileList | File[]) {
+    try {
+      const next = await Promise.all(Array.from(files).map(readAttachment));
+      setAttachments((current) => [...current, ...next]);
+    } catch (caught) {
+      setError(messageOf(caught));
     }
   }
 
   return (
-    <div className="flex h-screen min-w-[960px] overflow-hidden bg-zinc-950 text-zinc-100">
-      <aside className="flex w-[304px] shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-925">
-        <div className="flex h-16 items-center justify-between border-b border-zinc-800/80 px-5">
-          <div className="flex items-center gap-3">
-            <div className="grid size-8 place-items-center rounded-lg bg-zinc-100 text-zinc-950"><GitBranch className="size-4" /></div>
-            <div><p className="text-sm font-semibold tracking-tight">CodeBridge</p><p className="text-[11px] text-zinc-500">Agent Workbench</p></div>
+    <div className={cn("grid h-[100dvh] min-h-[100dvh] min-w-[1040px] grid-cols-[60px_286px_minmax(0,1fr)] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", t.canvas)}>
+      <AgentRail
+        agents={agents}
+        area={area}
+        selectedAgentId={selectedAgentId}
+        theme={theme}
+        onAgent={selectAgent}
+        onArea={setArea}
+        onTheme={() => setTheme((current) => current === "paper" ? "carbon" : "paper")}
+      />
+
+      <SessionPanel
+        agent={selectedAgent}
+        area={area}
+        flows={flows}
+        flowId={flowId}
+        loading={loading}
+        query={query}
+        sessions={agentSessions}
+        selectedSessionId={selectedSessionId}
+        theme={theme}
+        onCreate={() => selectedAgent && void createSession(selectedAgent.agent_id)}
+        onFlow={(id) => { setFlowId(id); setArea("agents"); }}
+        onQuery={setQuery}
+        onRefresh={() => void reload(true)}
+        onSession={selectSession}
+      />
+
+      <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", t.canvas)}>
+        <SessionHeader
+          agent={selectedAgent}
+          model={model}
+          modelOptions={modelValues}
+          pickingDirectory={pickingDirectory}
+          session={selectedSession}
+          theme={theme}
+          menuOpen={menuOpen}
+          menuView={menuView}
+          renameDraft={renameDraft}
+          onDelete={() => void deleteSelected()}
+          onMenu={() => { setMenuOpen((current) => !current); setMenuView("actions"); }}
+          onMenuView={setMenuView}
+          onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
+          onPickDirectory={() => void pickDirectory()}
+          onRenameDraft={setRenameDraft}
+          onUpdate={(update) => void updateSession(update)}
+        />
+
+        {error && <div className={cn("mx-8 mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", t.dangerSoft, t.danger, t.lineStrong)} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span><button aria-label="关闭错误" onClick={() => setError(null)} type="button"><X className="size-3.5" /></button></div>}
+
+        {!selectedSession ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">
+            <div className="w-full max-w-[760px]">
+              <div className="mb-7 text-center">
+                <div className={cn("mx-auto mb-4 grid size-10 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)}>{selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id} className="size-[18px]" /> : <GitBranch className="size-4" />}</div>
+                <h1 className={cn("text-2xl font-medium tracking-[-0.04em]", t.ink)}>{selectedAgent ? selectedAgent.display_name : "CodeBridge"}</h1>
+                <p className={cn("mt-2 text-xs", t.muted)}>{selectedAgent ? "创建 Session，或直接输入目标" : "选择一个可用的 Agent"}</p>
+              </div>
+              <Composer
+                attachments={attachments}
+                commands={commands}
+                disabled={!selectedAgent || selectedAgent.status !== "healthy"}
+                draft={draft}
+                flowId={flowId}
+                flows={flows}
+                model={model}
+                sending={sending}
+                session={null}
+                theme={theme}
+                commandOpen={commandOpen}
+                onAddFiles={addFiles}
+                onCommandOpen={setCommandOpen}
+                onDraft={setDraft}
+                onFiles={() => fileInput.current?.click()}
+                onFlow={setFlowId}
+                onPickDirectory={() => notify("Session 创建后可添加 Workspace")}
+                onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, valueIndex) => valueIndex !== index))}
+                onSubmit={() => void submit()}
+              />
+            </div>
           </div>
-          <Button aria-label="刷新" onClick={() => void reload(true)} size="icon" variant="ghost"><RefreshCw className={cn("size-4", loading && "animate-spin")} /></Button>
-        </div>
-        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-3 py-5">
-          <section>
-            <div className="mb-2 flex items-center justify-between px-2"><span className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">Agents</span></div>
-            <div className="space-y-1">
-              {agents.map((agent) => {
-                const agentSessions = groupedSessions.get(agent.agent_id) ?? [];
-                const orderedSessions = orderSessions(agentSessions);
-                const sessionLimit = 8;
-                const showingAllSessions = expandedSessions[agent.agent_id] ?? false;
-                const visibleSessions = showingAllSessions ? orderedSessions : orderedSessions.slice(0, sessionLimit);
-                const hiddenSessionCount = Math.max(0, orderedSessions.length - visibleSessions.length);
-                const collapsed = collapsedAgents[agent.agent_id] ?? false;
-                return <div key={agent.agent_id}>
-                  <div className={cn("group flex items-center gap-2 rounded-lg px-2 py-2", selectedAgentId === agent.agent_id && !selectedSessionId && "bg-zinc-800/70")}>
-                    <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => { setSelectedAgentId(agent.agent_id); setSelectedSessionId(null); }}>
-                      {collapsed ? <ChevronRight className="size-3.5 text-zinc-500" /> : <ChevronDown className="size-3.5 text-zinc-500" />}
-                      <span className="grid size-6 place-items-center rounded-md bg-zinc-800 text-zinc-300"><AgentIcon agentId={agent.agent_id} /></span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{agent.display_name}</span>
-                      <span className={cn("size-1.5 rounded-full", agent.status === "healthy" ? "bg-emerald-400" : "bg-zinc-600")} />
-                      <span className="text-[10px] tabular-nums text-zinc-600">{agentSessions.length}</span>
-                    </button>
-                    <button className="grid size-7 place-items-center rounded-md text-zinc-500 opacity-0 transition-opacity hover:bg-zinc-700 hover:text-zinc-200 group-hover:opacity-100 disabled:opacity-30" disabled={agent.status !== "healthy"} title="新建 Session" onClick={() => void createSession(agent.agent_id)}><Plus className="size-4" /></button>
-                    <button className="grid size-7 place-items-center rounded-md text-zinc-500 hover:bg-zinc-700" title={collapsed ? "展开" : "折叠"} onClick={() => setCollapsedAgents((current) => ({ ...current, [agent.agent_id]: !collapsed }))}>{collapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}</button>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <section aria-label="Session conversation" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7">
+              <div className="mx-auto w-full max-w-[880px] pb-7">
+                {loadingSession ? <LoadingConversation theme={theme} /> : projection.length ? (
+                  <div className="grid gap-6">
+                    {projection.map((item, index) => (
+                      <ProjectionItem
+                        approvals={approvals}
+                        item={item}
+                        key={projectionKey(item, index)}
+                        onApproval={resolveApproval}
+                        theme={theme}
+                      />
+                    ))}
                   </div>
-                  {!collapsed && <div className="ml-8 space-y-0.5 border-l border-zinc-800 pl-2">
-                    {visibleSessions.map((session) => <button key={session.session_id} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition-colors hover:bg-zinc-800/70", selectedSessionId === session.session_id && "bg-zinc-800 text-zinc-100")} onClick={() => { setSelectedAgentId(agent.agent_id); setSelectedSessionId(session.session_id); }}>
-                      {session.pinned_at ? <Pin className="size-3 shrink-0 text-amber-300" /> : <span className="size-3 shrink-0" />}
-                      <span className="min-w-0 flex-1 truncate">{session.title || "未命名 Session"}</span>
-                    </button>)}
-                    {hiddenSessionCount > 0 && <button className="flex w-full items-center justify-between rounded-md px-2 py-2 text-xs text-zinc-600 hover:bg-zinc-800/70 hover:text-zinc-300" onClick={() => setExpandedSessions((current) => ({ ...current, [agent.agent_id]: true }))}><span>显示更多</span><span className="tabular-nums">+{hiddenSessionCount}</span></button>}
-                    {showingAllSessions && orderedSessions.length > sessionLimit && <button className="flex w-full items-center rounded-md px-2 py-2 text-xs text-zinc-600 hover:bg-zinc-800/70 hover:text-zinc-300" onClick={() => setExpandedSessions((current) => ({ ...current, [agent.agent_id]: false }))}>收起历史 Session</button>}
-                    <button className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-xs text-zinc-600 hover:bg-zinc-800/70 hover:text-zinc-300" onClick={() => void createSession(agent.agent_id)}><Plus className="size-3.5" />新建 Session</button>
-                  </div>}
-                </div>;
-              })}
-            </div>
-          </section>
-          <section>
-            <div className="mb-2 flex items-center justify-between px-2"><span className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">Flows</span><Workflow className="size-3.5 text-zinc-600" /></div>
-            <div className="space-y-1">
-              {flows.map((flow) => <button key={flow.flow_id} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-zinc-400 hover:bg-zinc-800/70 hover:text-zinc-200", flowId === flow.flow_id && "bg-zinc-800 text-zinc-100")} onClick={() => setFlowId(flow.flow_id)}><span className="size-1.5 rounded-full bg-zinc-600" /><span className="min-w-0 flex-1 truncate">{flow.name || flow.flow_id}</span><span className="text-[10px] text-zinc-600">{flow.kind}</span></button>)}
-              {!flows.length && <p className="px-2 text-xs text-zinc-600">没有已发布 Flow</p>}
-            </div>
-          </section>
-        </div>
-      </aside>
-      <main className="relative flex min-w-0 flex-1 flex-col bg-zinc-950">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-800/80 px-7">
-          <div className="flex min-w-0 items-center gap-3"><span className="grid size-7 place-items-center rounded-md bg-zinc-900 text-zinc-300"><AgentIcon agentId={selectedAgent?.agent_id ?? selectedAgentId ?? "agent"} /></span><div className="min-w-0"><p className="truncate text-sm font-medium">{selectedSession?.title || (selectedAgent ? `${selectedAgent.display_name} · 新 Session` : "选择 Agent")}</p>{selectedSession && <p className="truncate text-[11px] text-zinc-500">{selectedSession.cwd || "未绑定工作目录"}</p>}</div>{selectedSession && <Badge variant={selectedSession.status === "active" ? "success" : "muted"}>{statusLabel[selectedSession.status] ?? selectedSession.status}</Badge>}</div>
-          {selectedSession && <div className="relative flex items-center gap-2"><select aria-label="模型" className="h-8 max-w-56 rounded-md border border-zinc-800 bg-zinc-900 px-2 text-xs text-zinc-300 outline-none focus:border-zinc-600" value={model} onChange={(event) => { setModel(event.target.value); void updateSession({ model: event.target.value || null }); }}><option value="">默认模型</option>{modelOptions.filter(isModelOption).flatMap((option) => option.values).map((value) => <option key={value.value} value={value.value}>{value.name || value.value}</option>)}</select><Button aria-label="Session 操作" onClick={() => { setMenuOpen((current) => !current); setMenuView("actions"); }} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button>{menuOpen && <div className="absolute right-0 top-11 z-10 w-56 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-2xl">{menuView === "rename" ? <div className="space-y-2 p-2"><label className="text-xs text-zinc-400" htmlFor="session-name">Session 名称</label><input autoFocus className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2.5 text-sm text-zinc-100 outline-none focus:border-zinc-500" id="session-name" onChange={(event) => setRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && renameDraft.trim()) void updateSession({ title: renameDraft.trim() }); if (event.key === "Escape") setMenuView("actions"); }} value={renameDraft} /><div className="flex justify-end gap-1"><Button onClick={() => setMenuView("actions")} size="sm" variant="ghost">取消</Button><Button disabled={!renameDraft.trim()} onClick={() => void updateSession({ title: renameDraft.trim() })} size="sm">保存</Button></div></div> : menuView === "delete" ? <div className="space-y-3 p-2"><p className="text-xs leading-5 text-zinc-400">删除后将无法从 CodeBridge 恢复这个 Session。</p><div className="flex justify-end gap-1"><Button onClick={() => setMenuView("actions")} size="sm" variant="ghost">取消</Button><Button onClick={() => void deleteSelected()} size="sm" variant="destructive">删除</Button></div></div> : <><Button className="w-full justify-start" onClick={() => void updateSession({ pinned: !selectedSession.pinned_at })} size="sm" variant="ghost"><Pin className="size-3.5" />{selectedSession.pinned_at ? "取消 PIN" : "PIN Session"}</Button><Button className="w-full justify-start" onClick={() => { setRenameDraft(selectedSession.title || ""); setMenuView("rename"); }} size="sm" variant="ghost"><Pencil className="size-3.5" />重命名</Button><Button className="w-full justify-start" onClick={() => void updateSession({ archived: true })} size="sm" variant="ghost"><Archive className="size-3.5" />归档</Button><Button className="w-full justify-start text-red-300 hover:text-red-200" onClick={() => setMenuView("delete")} size="sm" variant="ghost"><Trash2 className="size-3.5" />删除</Button></>}</div>}</div>}
-        </header>
-        {error && <div className="mx-7 mt-4 flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300"><X className="size-3.5" />{error}</div>}
-        {!selectedSession ? <div className="flex flex-1 items-center justify-center px-6"><div className="w-full max-w-2xl"><div className="mb-8 text-center"><p className="mb-3 text-xs uppercase tracking-[0.28em] text-zinc-600">Session-first workspace</p><h1 className="text-3xl font-medium tracking-tight text-zinc-100">从目标开始</h1><p className="mt-3 text-sm text-zinc-500">选择一个 Agent，创建 Session，然后用自然语言描述你要完成的工作。</p></div><Composer draft={draft} setDraft={setDraft} onSubmit={() => void submit()} busy={busy} flowId={flowId} setFlowId={setFlowId} flows={flows} commands={commands} disabled={!selectedAgent || selectedAgent.status !== "healthy"} /></div></div> : <div className="flex min-h-0 flex-1 flex-col"><div className="min-h-0 flex-1 overflow-y-auto px-7 py-8"><div className="mx-auto flex max-w-3xl flex-col gap-5">{projection.length ? projection.map((item, index) => <ProjectionItem key={item.kind === "tool" ? item.id : `${item.kind}-${index}`} item={item} />) : <div className="flex min-h-[45vh] items-center justify-center text-sm text-zinc-600">描述目标，Agent 会在当前 Session 中处理。</div>}{busy && <div className="flex items-center gap-2 text-xs text-zinc-500"><LoaderCircle className="size-3.5 animate-spin" />正在处理</div>}</div></div><div className="border-t border-zinc-800/80 bg-zinc-950/95 px-7 py-5"><div className="mx-auto max-w-3xl"><Composer draft={draft} setDraft={setDraft} onSubmit={() => void submit()} busy={busy} flowId={flowId} setFlowId={setFlowId} flows={flows} commands={commands} disabled={false} /></div></div></div>}
+                ) : <div className={cn("flex min-h-[42vh] items-center justify-center text-xs", t.muted)}>输入目标开始当前 Session</div>}
+              </div>
+            </section>
+            <footer className="px-8 pb-5 pt-3">
+              <div className="mx-auto w-full max-w-[880px]">
+                <Composer
+                  attachments={attachments}
+                  commands={commands}
+                  disabled={false}
+                  draft={draft}
+                  flowId={flowId}
+                  flows={flows}
+                  model={model}
+                  sending={sending}
+                  session={selectedSession}
+                  theme={theme}
+                  commandOpen={commandOpen}
+                  onAddFiles={addFiles}
+                  onCommandOpen={setCommandOpen}
+                  onDraft={setDraft}
+                  onFiles={() => fileInput.current?.click()}
+                  onFlow={setFlowId}
+                  onPickDirectory={() => void pickDirectory()}
+                  onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, valueIndex) => valueIndex !== index))}
+                  onSubmit={() => void submit()}
+                />
+              </div>
+            </footer>
+          </div>
+        )}
       </main>
+
+      <input className="hidden" multiple onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ""; }} ref={fileInput} type="file" />
+      {notice && <div className={cn("fixed bottom-6 right-6 z-50 rounded-md border px-3 py-2 text-xs", t.surface, t.ink, t.lineStrong, t.shadow)} role="status">{notice}</div>}
     </div>
   );
 }
 
-function Composer({ draft, setDraft, onSubmit, busy, flowId, setFlowId, flows, commands, disabled }: { draft: string; setDraft: (value: string) => void; onSubmit: () => void; busy: boolean; flowId: string; setFlowId: (value: string) => void; flows: FlowRecord[]; commands: AgentCommand[]; disabled: boolean }) {
-  return <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-2 shadow-2xl shadow-black/20"><Textarea aria-label="消息" className="min-h-[104px] border-0 bg-transparent px-3 py-2 shadow-none focus:border-0 focus:ring-0" disabled={disabled || busy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); onSubmit(); } }} placeholder="描述你要完成的目标…" value={draft} /><div className="flex items-center justify-between px-2 pb-1 pt-2"><div className="flex min-w-0 items-center gap-2"><select aria-label="Flow" className="h-8 max-w-52 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-400 outline-none focus:border-zinc-600" onChange={(event) => setFlowId(event.target.value)} value={flowId}><option value="">自动理解上下文</option>{flows.map((flow) => <option key={flow.flow_id} value={flow.flow_id}>{flow.name || flow.flow_id}</option>)}</select>{commands.length > 0 && <span className="truncate text-[11px] text-zinc-600">/{commands.length} 个 Agent 命令</span>}</div><Button aria-label="发送" disabled={disabled || busy || !draft.trim()} onClick={onSubmit} size="icon"><Send className="size-4" /></Button></div></div>;
+function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onArea, onTheme }: {
+  agents: AgentProfile[];
+  area: PanelArea;
+  selectedAgentId: string | null;
+  theme: Theme;
+  onAgent: (id: string) => void;
+  onArea: (area: PanelArea) => void;
+  onTheme: () => void;
+}) {
+  const t = themes[theme];
+  return <aside className={cn("flex min-h-0 flex-col items-center gap-3 border-r px-2.5 py-3", t.sidebar, t.line)}>
+    <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)} title="CodeBridge"><GitBranch className="size-4" strokeWidth={1.6} /></div>
+    <div className="grid w-full gap-2">
+      {agents.map((agent) => {
+        const selected = area === "agents" && selectedAgentId === agent.agent_id;
+        return <button aria-label={agent.display_name} aria-pressed={selected} className={cn("group relative grid size-[42px] place-items-center rounded-md border border-transparent transition-all duration-150 hover:-translate-y-px hover:opacity-80", t.muted, selected && cn(t.surface, t.ink, t.lineStrong, t.shadowSmall))} key={agent.agent_id} onClick={() => onAgent(agent.agent_id)} title={`${agent.display_name} · ${statusLabel[agent.status] ?? agent.status}`} type="button">
+          <BrandAgentIcon agentId={agent.agent_id} className="size-[18px]" />
+          <span className={cn("absolute bottom-1.5 right-1.5 size-1.5 rounded-full border-2", theme === "paper" ? "border-[#FBFCFA]" : "border-[#181A17]", agent.status === "healthy" ? t.healthyDot : t.offlineDot)} />
+        </button>;
+      })}
+    </div>
+    <div className={cn("my-2 h-px w-8 border-t", t.line)} />
+    <button aria-label="Flows" aria-pressed={area === "flows"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", t.muted, area === "flows" && cn(t.surface, t.ink, t.shadowSmall))} onClick={() => onArea("flows")} title="Flows" type="button"><Workflow className="size-3.5" /></button>
+    <div className="flex-1" />
+    <button aria-label="切换主题" className={cn("grid size-9 place-items-center rounded-md transition-all hover:-translate-y-px hover:opacity-80", t.muted)} onClick={onTheme} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-3.5" /></button>
+    <button aria-label="设置" className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", t.muted)} title="设置" type="button"><Settings2 className="size-3.5" /></button>
+  </aside>;
 }
 
-function ProjectionItem({ item }: { item: ConversationProjection }) {
-  if (item.kind === "assistant") return <article className={cn("max-w-[86%] rounded-2xl px-4 py-3 text-sm leading-7", item.phase === "commentary" ? "self-start border border-zinc-800 bg-zinc-900/50 text-zinc-400" : "self-start text-zinc-200")}><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown></article>;
-  return <details className="group rounded-xl border border-zinc-800 bg-zinc-900/55 text-sm"><summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 text-zinc-400"><Circle className={cn("size-2.5 fill-current", item.status === "completed" ? "text-emerald-400" : item.status === "failed" ? "text-red-400" : "text-amber-300")} /><span className="font-mono text-xs text-zinc-300">{item.name}</span><span className="ml-auto text-[11px] text-zinc-600">{item.status}</span><ChevronDown className="size-3.5 transition-transform group-open:rotate-180" /></summary><div className="grid gap-3 border-t border-zinc-800 px-4 py-3 text-xs"><pre className="max-h-48 overflow-auto whitespace-pre-wrap text-zinc-500">{formatValue(item.input)}</pre>{item.output !== undefined && <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-zinc-400">{formatValue(item.output)}</pre>}</div></details>;
+function SessionPanel({ agent, area, flows, flowId, loading, query, sessions, selectedSessionId, theme, onCreate, onFlow, onQuery, onRefresh, onSession }: {
+  agent: AgentProfile | null;
+  area: PanelArea;
+  flows: FlowRecord[];
+  flowId: string;
+  loading: boolean;
+  query: string;
+  sessions: AgentSession[];
+  selectedSessionId: string | null;
+  theme: Theme;
+  onCreate: () => void;
+  onFlow: (id: string) => void;
+  onQuery: (value: string) => void;
+  onRefresh: () => void;
+  onSession: (session: AgentSession) => void;
+}) {
+  const t = themes[theme];
+  return <aside className={cn("flex min-h-0 min-w-0 flex-col border-r", t.sidebar, t.line)}>
+    <header className="flex items-start justify-between gap-3 px-5 pb-4 pt-6">
+      <div className="min-w-0"><p className={cn("mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]", t.muted)}>{area === "agents" ? "Agent profile" : "Catalog"}</p><h1 className={cn("truncate text-lg font-semibold tracking-[-0.035em]", t.ink)}>{area === "agents" ? agent?.display_name ?? "Agents" : "Flows"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-[11px]", t.muted)}><Circle className={cn("size-1.5 fill-current", area === "agents" && agent?.status === "healthy" ? t.success : t.faint)} />{area === "agents" ? `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "Unavailable"} · ${sessions.length} sessions` : `${flows.length} published definitions`}</p></div>
+      <div className="flex gap-1">
+        <Button aria-label="刷新" className={cn("size-8 px-0 hover:opacity-80", t.muted)} onClick={onRefresh} size="icon" variant="ghost"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} /></Button>
+        {area === "agents" && <Button aria-label="新建 Session" className={cn("size-8 border px-0 hover:-translate-y-px hover:opacity-80", t.surface, t.ink, t.lineStrong)} disabled={!agent || agent.status !== "healthy"} onClick={onCreate} size="icon" variant="outline"><Plus className="size-4" /></Button>}
+      </div>
+    </header>
+    {area === "agents" ? <>
+      <div className="px-4 pb-3"><label className={cn("flex h-[34px] items-center gap-2 rounded-md border px-2.5", t.surface, t.line)}><Search className={cn("size-3.5", t.muted)} /><input aria-label="搜索 Session" className={cn("min-w-0 flex-1 bg-transparent text-xs outline-none", t.ink, t.placeholder)} onChange={(event) => onQuery(event.target.value)} placeholder="搜索 Session" value={query} /></label></div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4">
+        <div className={cn("px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.1em]", t.faint)}><span>Sessions</span><span className="float-right font-mono">{sessions.length}</span></div>
+        {sessions.map((session) => <button className={cn("relative grid w-full gap-1 rounded-md border border-transparent px-3 py-2.5 text-left transition-colors hover:opacity-80", t.ink, selectedSessionId === session.session_id && cn(t.surface, t.line, t.shadowSmall))} key={session.session_id} onClick={() => onSession(session)} title={session.title || "未命名 Session"} type="button"><span className="truncate pr-3 text-xs font-medium">{session.title || "未命名 Session"}</span><span className={cn("flex items-center gap-1.5 text-[10px]", t.muted)}>{session.pinned_at && <Pin className={cn("size-3", t.warning)} />}<span>{statusLabel[session.status] ?? session.status}</span><span>·</span><time className="font-mono">{relativeTime(session.updated_at)}</time></span>{selectedSessionId === session.session_id && <span className={cn("absolute right-2.5 top-3.5 size-1.5 rounded-full", t.accent)} />}</button>)}
+        {!loading && !sessions.length && <div className={cn("px-3 py-8 text-center text-xs", t.muted)}>当前 Agent 暂无 Session</div>}
+      </div>
+      <footer className={cn("flex items-center justify-between border-t px-4 py-3 text-[10px]", t.line, t.muted)}><span>已归档</span><span className="font-mono">{sessions.length} active</span></footer>
+    </> : <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4"><div className={cn("px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.1em]", t.faint)}>Published</div>{flows.map((flow) => <button className={cn("flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2.5 text-left text-xs transition-colors hover:opacity-80", t.ink, flowId === flow.flow_id && cn(t.surface, t.line))} key={flow.flow_id} onClick={() => onFlow(flow.flow_id)} type="button"><Workflow className={cn("size-3.5", t.muted)} /><span className="min-w-0 flex-1 truncate">{flow.name || flow.flow_id}</span><span className={cn("font-mono text-[10px]", t.faint)}>{flow.kind}</span></button>)}{!flows.length && <div className={cn("px-3 py-8 text-center text-xs", t.muted)}>暂无已发布 Flow</div>}</div>}
+  </aside>;
+}
+
+function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, theme, menuOpen, menuView, renameDraft, onDelete, onMenu, onMenuView, onModel, onPickDirectory, onRenameDraft, onUpdate }: {
+  agent: AgentProfile | null;
+  model: string;
+  modelOptions: Array<{ value: string; name?: string }>;
+  pickingDirectory: boolean;
+  session: AgentSession | null;
+  theme: Theme;
+  menuOpen: boolean;
+  menuView: MenuView;
+  renameDraft: string;
+  onDelete: () => void;
+  onMenu: () => void;
+  onMenuView: (view: MenuView) => void;
+  onModel: (value: string) => void;
+  onPickDirectory: () => void;
+  onRenameDraft: (value: string) => void;
+  onUpdate: (update: Record<string, unknown>) => void;
+}) {
+  const t = themes[theme];
+  return <header className={cn("flex min-h-[72px] shrink-0 items-center justify-between gap-5 border-b px-8 py-4", t.line)}>
+    <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <GitBranch className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate text-sm font-semibold tracking-[-0.02em]", t.ink)}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", t.muted)}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
+    {session && <div className="relative flex items-center gap-2">
+      {modelOptions.length > 0 && <select aria-label="模型" className={cn("h-8 max-w-52 rounded-md border px-2 text-xs outline-none", t.surface, t.inkSoft, t.line, t.focus)} onChange={(event) => onModel(event.target.value)} value={model}><option value="">默认模型</option>{modelOptions.map((value) => <option key={value.value} value={value.value}>{value.name || value.value}</option>)}</select>}
+      <Button aria-label="添加 Workspace" className={cn("h-8 border px-2.5 text-xs", t.surface, t.muted, t.line)} disabled={pickingDirectory} onClick={onPickDirectory} size="sm" variant="outline">{pickingDirectory ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderOpen className="size-3.5" />}Workspace</Button>
+      <span className={cn("hidden items-center gap-1.5 text-[11px] xl:flex", t.muted)}><span className={cn("size-1.5 rounded-full", session.status === "active" ? t.accent : t.offlineDot)} />{statusLabel[session.status] ?? session.status}</span>
+      <Button aria-label="Session 操作" className={cn("size-8 px-0", t.muted)} onClick={onMenu} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button>
+      {menuOpen && <div className={cn("absolute right-0 top-11 z-30 w-56 rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{menuView === "rename" ? <div className="space-y-2 p-2"><label className={cn("text-xs", t.muted)} htmlFor="session-name">Session 名称</label><input autoFocus className={cn("h-9 w-full rounded-md border bg-transparent px-2.5 text-sm outline-none", t.ink, t.lineStrong, t.focus)} id="session-name" onChange={(event) => onRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && renameDraft.trim()) onUpdate({ title: renameDraft.trim() }); if (event.key === "Escape") onMenuView("actions"); }} value={renameDraft} /><div className="flex justify-end gap-1"><MenuButton theme={theme} onClick={() => onMenuView("actions")}>取消</MenuButton><MenuButton disabled={!renameDraft.trim()} theme={theme} onClick={() => onUpdate({ title: renameDraft.trim() })}>保存</MenuButton></div></div> : menuView === "delete" ? <div className="space-y-3 p-2"><p className={cn("text-xs leading-5", t.muted)}>删除后无法从 CodeBridge 恢复这个 Session。</p><div className="flex justify-end gap-1"><MenuButton theme={theme} onClick={() => onMenuView("actions")}>取消</MenuButton><MenuButton danger theme={theme} onClick={onDelete}>删除</MenuButton></div></div> : <>
+        <MenuButton theme={theme} onClick={() => onUpdate({ pinned: !session.pinned_at })}><Pin className="size-3.5" />{session.pinned_at ? "取消 PIN" : "PIN Session"}</MenuButton>
+        <MenuButton theme={theme} onClick={() => { onRenameDraft(session.title || ""); onMenuView("rename"); }}><Pencil className="size-3.5" />重命名</MenuButton>
+        <MenuButton theme={theme} onClick={() => onUpdate({ archived: true })}><Archive className="size-3.5" />归档</MenuButton>
+        <MenuButton danger theme={theme} onClick={() => onMenuView("delete")}><Trash2 className="size-3.5" />删除</MenuButton>
+      </>}</div>}
+    </div>}
+  </header>;
+}
+
+function Composer({ attachments, commands, disabled, draft, flowId, flows, model, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onDraft, onFiles, onFlow, onPickDirectory, onRemoveAttachment, onSubmit }: {
+  attachments: MessageAttachmentInput[];
+  commands: AgentCommand[];
+  disabled: boolean;
+  draft: string;
+  flowId: string;
+  flows: FlowRecord[];
+  model: string;
+  sending: boolean;
+  session: AgentSession | null;
+  theme: Theme;
+  commandOpen: boolean;
+  onAddFiles: (files: FileList | File[]) => Promise<void>;
+  onCommandOpen: (open: boolean) => void;
+  onDraft: (value: string) => void;
+  onFiles: () => void;
+  onFlow: (value: string) => void;
+  onPickDirectory: () => void;
+  onRemoveAttachment: (index: number) => void;
+  onSubmit: () => void;
+}) {
+  const t = themes[theme];
+  return <div className={cn("relative rounded-xl border", t.surface, t.lineStrong, t.shadow)}>
+    <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5">
+      <ContextChip label={model || "Agent default"} theme={theme} />
+      <button className={cn("inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded border px-2 text-[10px] transition-opacity hover:opacity-80", t.surfaceSoft, t.muted, t.line)} onClick={onPickDirectory} type="button"><FolderOpen className="size-3" /><span className={cn("font-medium", t.inkSoft)}>{workspaceLabel(session)}</span></button>
+      <label className={cn("inline-flex min-h-6 shrink-0 items-center rounded border px-2 text-[10px]", t.surfaceSoft, t.muted, t.line)}><Workflow className="mr-1.5 size-3" /><select aria-label="Flow" className={cn("max-w-44 bg-transparent outline-none", t.inkSoft)} onChange={(event) => onFlow(event.target.value)} value={flowId}><option value="">Flow · Automatic</option>{flows.map((flow) => <option key={flow.flow_id} value={flow.flow_id}>{flow.name || flow.flow_id}</option>)}</select></label>
+      <span className="flex-1" /><span className={cn("hidden shrink-0 text-[10px] sm:inline", t.faint)}>Enter to send</span>
+    </div>
+    {attachments.length > 0 && <div className="flex flex-wrap gap-1.5 px-3 pt-2">{attachments.map((attachment, index) => <span className={cn("inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[10px]", t.surfaceTint, t.inkSoft, t.line)} key={`${attachment.name}-${index}`}><Paperclip className="size-3" /><span className="max-w-40 truncate">{attachment.name}</span><button aria-label={`移除 ${attachment.name}`} onClick={() => onRemoveAttachment(index)} type="button"><X className="size-3" /></button></span>)}</div>}
+    <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", t.ink, t.placeholder)} disabled={disabled || sending} onChange={(event) => onDraft(event.target.value)} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); onSubmit(); } }} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} placeholder="输入目标，或继续当前工作…" value={draft} />
+    <div className="flex items-center justify-between gap-3 px-3 pb-2.5">
+      <div className="relative flex items-center gap-1">
+        <Button aria-label="添加文件" className={cn("size-7 px-0", t.muted)} onClick={onFiles} size="icon" variant="ghost"><Plus className="size-3.5" /></Button>
+        {session && <Button aria-label="添加上下文" className={cn("size-7 px-0 text-xs", t.muted)} onClick={onPickDirectory} size="icon" variant="ghost"><span>@</span></Button>}
+        {commands.length > 0 && <Button aria-label="Agent commands" className={cn("size-7 px-0 text-xs", t.muted)} onClick={() => onCommandOpen(!commandOpen)} size="icon" variant="ghost"><span>/</span></Button>}
+        {commandOpen && commands.length > 0 && <div className={cn("absolute bottom-9 left-0 z-30 max-h-64 w-72 overflow-y-auto rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{commands.map((command) => <button className={cn("grid w-full gap-0.5 rounded-md px-2.5 py-2 text-left hover:opacity-80", t.ink)} key={command.name} onClick={() => { onDraft(`/${command.name} `); onCommandOpen(false); }} type="button"><span className="font-mono text-xs">/{command.name}</span><span className={cn("truncate text-[10px]", t.muted)}>{command.description}</span></button>)}</div>}
+      </div>
+      <Button aria-label="发送" className={cn("size-8 px-0", t.accent, t.accentText)} disabled={disabled || sending || !draft.trim()} onClick={onSubmit} size="icon">{sending ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}</Button>
+    </div>
+  </div>;
+}
+
+function ProjectionItem({ approvals, item, onApproval, theme }: { approvals: ApprovalRecord[]; item: ConversationProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void>; theme: Theme }) {
+  const t = themes[theme];
+  if (item.kind === "user") return <article className="grid justify-items-end gap-2"><span className={cn("text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>You</span><div className={cn("max-w-[72%] rounded-xl px-3.5 py-3 text-sm leading-6", t.ink, t.accentSoft)}>{item.content}</div></article>;
+  if (item.kind === "assistant") return <article className="grid max-w-[780px] gap-2"><span className={cn("text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>{item.phase === "commentary" ? "Agent · working" : "Agent"}</span><Markdown content={item.content} theme={theme} /></article>;
+  if (item.kind === "plan") return <section className={cn("max-w-[760px] rounded-lg border", t.surface, t.line, t.shadowSmall)}><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", t.line)}><span className={cn("flex items-center gap-2 text-[11px] font-semibold", t.ink)}><Check className={cn("size-3.5", t.muted)} />Plan</span><span className={cn("font-mono text-[10px]", t.muted)}>{item.entries.filter((entry) => entry.status === "completed").length} / {item.entries.length}</span></div><ol className="grid gap-2 px-3.5 py-3.5">{item.entries.map((entry, index) => <li className={cn("flex items-start gap-2 text-xs", entry.status === "completed" ? t.muted : t.inkSoft)} key={`${entry.content}-${index}`}>{entry.status === "completed" ? <Check className={cn("mt-0.5 size-3.5 shrink-0", t.success)} /> : <Circle className={cn("mt-0.5 size-3.5 shrink-0", entry.status === "in_progress" ? t.warning : t.faint)} />}<span>{entry.content}</span></li>)}</ol></section>;
+  if (item.kind === "approval") {
+    const approval = approvals.find((record) => record.id === item.requestId) ?? approvals.find((record) => record.run_id === item.runId);
+    return <ApprovalCard approval={approval} item={item} onApproval={onApproval} theme={theme} />;
+  }
+  if (item.kind === "error") return <section className={cn("flex max-w-[760px] items-start gap-2 rounded-lg border p-3.5 text-xs", t.dangerSoft, t.danger, t.lineStrong)}><X className="mt-0.5 size-3.5 shrink-0" /><div><p className="font-semibold">{item.fatal ? "Run failed" : "Agent error"}</p><p className="mt-1 leading-5">{item.content}</p></div></section>;
+  return <details className={cn("group max-w-[760px] rounded-lg border", t.surface, t.line, t.shadowSmall)}><summary className={cn("flex cursor-pointer list-none items-center gap-2.5 px-3.5 py-3 text-xs", t.muted)}><Code2 className="size-3.5" /><span className={cn("min-w-0 flex-1 truncate font-semibold", t.ink)}>{item.name}</span><span className={cn("text-[10px]", item.status === "failed" ? t.danger : item.status === "completed" ? t.success : t.warning)}>{item.status}</span><ChevronDown className="size-3.5 transition-transform group-open:rotate-180" /></summary><div className={cn("grid gap-2.5 border-t px-3.5 py-3", t.line)}>{item.input !== undefined && <pre className={cn("max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-5", t.muted)}>{formatValue(item.input)}</pre>}{item.output !== undefined && <pre className={cn("max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-5", t.inkSoft)}>{formatValue(item.output)}</pre>}</div></details>;
+}
+
+function ApprovalCard({ approval, item, onApproval, theme }: { approval: ApprovalRecord | undefined; item: ApprovalProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void>; theme: Theme }) {
+  const t = themes[theme];
+  if (approval && approval.status !== "requested") return <section className={cn("max-w-[760px] rounded-lg border p-3.5", t.surface, t.line, t.shadowSmall)}><div className={cn("flex items-center gap-2 text-xs font-semibold", approval.status === "granted" ? t.success : t.danger)}>{approval.status === "granted" ? <Check className="size-3.5" /> : <X className="size-3.5" />}{approval.status === "granted" ? "Approved" : "Run paused"}<span className={cn("ml-auto font-mono text-[10px] font-normal", t.muted)}>{approval.status}</span></div></section>;
+  return <section className={cn("max-w-[760px] rounded-lg border", t.surface, t.lineStrong, t.shadowSmall)}><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", t.line)}><span className={cn("flex items-center gap-2 text-[11px] font-semibold", t.ink)}><ShieldAlert className={cn("size-3.5", t.warning)} />Needs approval</span><span className={cn("font-mono text-[10px]", t.muted)}>scoped to this Run</span></div><div className={cn("px-3.5 pb-1 pt-3 text-xs leading-5", t.inkSoft)}>{item.title}</div><div className="flex gap-2 px-3.5 pb-3.5 pt-2"><Button className={cn("h-8 text-xs", t.accent, t.accentText)} disabled={!approval} onClick={() => void onApproval(item, true)} size="sm">Allow once</Button><Button className={cn("h-8 border text-xs", t.surface, t.ink, t.lineStrong)} disabled={!approval} onClick={() => void onApproval(item, false)} size="sm" variant="outline">Deny</Button></div></section>;
+}
+
+function Markdown({ content, theme }: { content: string; theme: Theme }) {
+  const t = themes[theme];
+  return <div className={cn("max-w-[780px] text-sm font-normal leading-7", t.inkSoft)}><ReactMarkdown components={{
+    a: ({ children, href }) => <a className={cn("underline underline-offset-4", t.ink)} href={href} rel="noreferrer" target="_blank">{children}</a>,
+    blockquote: ({ children }) => <blockquote className={cn("my-3 border-l-2 pl-3", t.lineStrong, t.muted)}>{children}</blockquote>,
+    code: ({ children }) => <code className={cn("rounded px-1 py-0.5 font-mono text-[0.9em]", t.surfaceSoft, t.ink)}>{children}</code>,
+    h1: ({ children }) => <h1 className={cn("mb-3 mt-5 text-lg font-medium", t.ink)}>{children}</h1>,
+    h2: ({ children }) => <h2 className={cn("mb-2 mt-5 text-base font-medium", t.ink)}>{children}</h2>,
+    h3: ({ children }) => <h3 className={cn("mb-2 mt-4 text-sm font-medium", t.ink)}>{children}</h3>,
+    ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-5">{children}</ol>,
+    p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+    pre: ({ children }) => <pre className={cn("my-3 max-w-full overflow-auto rounded-lg border p-3 font-mono text-xs leading-6", t.surfaceTint, t.line)}>{children}</pre>,
+    table: ({ children }) => <div className="my-3 overflow-auto"><table className={cn("w-full border-collapse text-left text-xs [&_td]:border-b [&_td]:p-2 [&_th]:border-b [&_th]:p-2", t.line)}>{children}</table></div>,
+    ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>,
+  }} remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown></div>;
+}
+
+function LoadingConversation({ theme }: { theme: Theme }) {
+  const t = themes[theme];
+  return <div className="grid gap-5" aria-label="正在加载 Session"><div className={cn("h-3 w-24 animate-pulse rounded", t.surfaceSoft)} /><div className={cn("h-16 w-2/3 animate-pulse rounded-lg", t.surfaceSoft)} /><div className={cn("ml-auto h-12 w-1/2 animate-pulse rounded-lg", t.surfaceSoft)} /></div>;
+}
+
+function ContextChip({ label, theme }: { label: string; theme: Theme }) {
+  const t = themes[theme];
+  return <span className={cn("inline-flex min-h-6 max-w-44 shrink-0 items-center rounded border px-2 text-[10px]", t.surfaceSoft, t.line)}><span className={cn("truncate font-medium", t.inkSoft)}>{label}</span></span>;
+}
+
+function MenuButton({ children, danger = false, disabled = false, onClick, theme }: { children: ReactNode; danger?: boolean; disabled?: boolean; onClick: () => void; theme: Theme }) {
+  const t = themes[theme];
+  return <Button className={cn("w-full justify-start text-xs", danger ? t.danger : t.inkSoft)} disabled={disabled} onClick={onClick} size="sm" variant="ghost">{children}</Button>;
+}
+
+function optionValue(options: ConfigOption[]): string | undefined {
+  return options.find(isModelOption)?.currentValue;
+}
+
+function projectionKey(item: ConversationProjection, index: number): string {
+  if (item.kind === "tool") return item.id;
+  if (item.kind === "user") return item.eventId;
+  if (item.kind === "approval") return item.requestId;
+  return `${item.kind}-${item.runId ?? "session"}-${index}`;
+}
+
+function workspaceLabel(session: AgentSession | null): string {
+  if (!session) return "Workspace";
+  const path = session.additional_directories.at(-1) ?? session.cwd;
+  if (!path) return "Add workspace";
+  return path.split("/").filter(Boolean).at(-1) ?? path;
+}
+
+function relativeTime(value: string): string {
+  const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
+  if (elapsed < 60_000) return "now";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h`;
+  return `${Math.floor(elapsed / 86_400_000)}d`;
 }
 
 function formatValue(value: unknown): string {
@@ -271,6 +743,25 @@ function formatValue(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-function optionValue(options: ConfigOption[]): string | undefined {
-  return options.find(isModelOption)?.currentValue;
+function readTheme(): Theme {
+  const stored = window.localStorage.getItem("codebridge:web-theme");
+  if (stored === "paper" || stored === "carbon") return stored;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "carbon" : "paper";
+}
+
+function messageOf(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
+
+function readAttachment(file: File): Promise<MessageAttachmentInput> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error(`无法读取 ${file.name}`));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const dataBase64 = result.includes(",") ? result.slice(result.indexOf(",") + 1) : result;
+      resolve({ name: file.name, mimeType: file.type || "application/octet-stream", dataBase64 });
+    };
+    reader.readAsDataURL(file);
+  });
 }

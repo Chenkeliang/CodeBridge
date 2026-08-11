@@ -8,5 +8,8 @@ const paths: Record<string, string> = {
 
 /** Monochrome official brand geometry sourced from Simple Icons. */
 export function BrandAgentIcon({ agentId, className = "size-4" }: { agentId: string; className?: string }) {
-  return <svg aria-hidden="true" className={className} fill="currentColor" viewBox="0 0 24 24"><path d={paths[agentId] ?? paths.opencode} /></svg>;
+  const path = paths[agentId];
+  if (!path) return <Bot aria-hidden="true" className={className} strokeWidth={1.5} />;
+  return <svg aria-hidden="true" className={className} fill="currentColor" viewBox="0 0 24 24"><path d={path} /></svg>;
 }
+import { Bot } from "lucide-react";
