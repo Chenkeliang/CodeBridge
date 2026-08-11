@@ -80,7 +80,8 @@ packages/project-catalog
 packages/policy
 packages/skill-runtime
 packages/mcp-runtime
-apps/bridge (Web、Discovery、API 装配)
+apps/bridge (Core API、Discovery、API 装配)
+apps/web (React、Vite、TypeScript、Tailwind、shadcn)
 ```
 
 现有 `packages/work-items`、`workflow-engine`、`run-executor` 继续作为内部实现包；对外合同使用 Session、Flow、Run 和 TaskRecord，存储迁移通过兼容适配完成。

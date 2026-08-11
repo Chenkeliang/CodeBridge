@@ -118,7 +118,7 @@ NODE
 }
 
 ensure_built() {
-  if [[ ! -f "$ROOT/apps/bridge/dist/cli.js" ]] || [[ ! -f "$ROOT/packages/runner-host/dist/cli.js" ]]; then
+  if [[ ! -f "$ROOT/apps/bridge/dist/cli.js" ]] || [[ ! -f "$ROOT/packages/runner-host/dist/cli.js" ]] || [[ ! -f "$ROOT/apps/web/dist/index.html" ]]; then
     info "正在构建…"
     (cd "$ROOT" && pnpm build)
   fi

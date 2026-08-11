@@ -6,7 +6,7 @@
 ./scripts/start.sh setup
 ```
 
-交互式流程：检查 node/pnpm → 构建 → 生成配置 → 可选填写飞书凭据 → 检查 Cursor/Claude/Codex CLI → 可选后台启动。
+交互式流程：检查 node/pnpm → 构建 → 生成配置 → 可选配置入口 → 检查 Agent → 可选后台启动。
 
 ## 2. 一键启动
 
@@ -18,6 +18,21 @@
 ./scripts/start.sh stop     # 停止
 ./scripts/start.sh doctor   # 诊断
 ```
+
+Web 是独立的可选入口，不要求配置飞书或 Telegram。默认不启动：
+
+```bash
+node apps/bridge/dist/cli.js start --web  # 本次启动 Web，不写入配置
+```
+
+也可以在 `config.yaml` 中持久启用：
+
+```yaml
+web:
+  enabled: true
+```
+
+启动后打开 `http://127.0.0.1:19790/workbench/`。Web 使用 `apps/web` 的 React/Vite 构建产物；Bridge 只负责 API、SSE 和静态文件托管。
 
 ## 手动启动
 

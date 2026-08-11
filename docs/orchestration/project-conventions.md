@@ -39,7 +39,18 @@ production_write 配置、发布、回滚、第三方回写
 
 风险级别由能力定义决定，不能仅由用户选择的 Workflow 决定。高风险动作必须经过预览、审批、幂等检查和结果验证。
 
-## 5. 变更规则
+## 5. Web 技术与样式规则
+
+- Web 代码只位于 CodeBridge 的 `apps/web`，使用 React + Vite + TypeScript。
+- 组件基础使用 shadcn/ui 约定；通用类名合并使用 `cn`，不在页面层重复实现组件变体。
+- 样式只允许 Tailwind Utility Class、shadcn 组件源码和 `@import "tailwindcss"` 框架入口。
+- 禁止新增自定义 CSS Selector、CSS Module、styled-components、Emotion 和 `style={}`。
+- 禁止通过内联颜色、间距、圆角或阴影绕过 Design Token；需要新增视觉规则时先更新组件或 Token 规范。
+- 禁止在 Bridge TypeScript 中拼接 HTML/CSS/JS 页面；Hono 只托管构建产物和 API。
+
+该规则中的“禁止自定义 CSS”不禁止 Tailwind/shadcn 生成或要求的框架入口；它禁止业务开发者另写页面级 CSS 体系。
+
+## 6. 变更规则
 
 每个 Workflow/Catalog 变更必须包含：
 
@@ -51,7 +62,7 @@ production_write 配置、发布、回滚、第三方回写
 
 运行时发现项目新信息时，先写入 Candidate Store，并生成面向 CodeBridge Catalog 的 Git diff；正式注册需要 Review。不要因为一次 Agent 查询就直接覆盖正式配置。
 
-## 6. Git 分支和提交规则
+## 7. Git 分支和提交规则
 
 每个小功能、修复或规范变更都必须拥有独立的特性分支。分支从生产基线创建：优先使用 `main`，没有 `main` 时使用 `master`；不能从 `develop`、`release` 或其他集成分支派生。
 
@@ -74,7 +85,7 @@ feat/<small-feature>
 main
 ```
 
-## 7. 失败和恢复
+## 8. 失败和恢复
 
 - 每个 Step 需要唯一 `idempotency_key`。
 - 工具调用必须产生事件，不以聊天文本作为状态事实。

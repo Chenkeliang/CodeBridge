@@ -109,6 +109,28 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("persists a selected model on the Session", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const create = await app.request("/v1/sessions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "codex" }),
+    });
+    const session = await create.json() as { session_id: string };
+    const updated = await app.request(`/v1/sessions/${session.session_id}`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-5-codex" }),
+    });
+
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toMatchObject({ model: "openai/gpt-5-codex" });
+    catalog.close();
+    workItems.close();
+  });
+
   it("reads Agent health dynamically for later Session creation", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

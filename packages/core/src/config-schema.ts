@@ -99,6 +99,14 @@ export const ConfigSchema = z.object({
     url: z.string().url().default("http://127.0.0.1:19789"),
     token: z.string().min(8),
   }),
+  web: z
+    .object({
+      /** The Web surface is opt-in; channels and Core API remain independent. */
+      enabled: z.boolean().default(false),
+      /** Optional absolute path to the built React application. */
+      staticDirectory: z.string().min(1).optional(),
+    })
+    .default({ enabled: false }),
   defaultBackend: z.enum(["cursor", "claude", "codex", "pi"]).default("cursor"),
   backends: z.record(BackendProfileSchema),
   access: AccessConfigSchema.optional(),
@@ -181,6 +189,9 @@ export function defaultConfig(): AppConfig {
     runner: {
       url: "http://127.0.0.1:19789",
       token: "change-me-runner-token",
+    },
+    web: {
+      enabled: false,
     },
     defaultBackend: "cursor",
     backends: {
