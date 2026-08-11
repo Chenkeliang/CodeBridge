@@ -187,7 +187,13 @@ export function collectCodexSessionHistory(entries: unknown[]): ProviderSessionH
       continue;
     }
     if (value.type === "event_msg" && payload.type === "agent_message" && typeof payload.message === "string") {
-      result.push({ kind: "agent_event", event: { type: "text_delta", text: payload.message } });
+      const phase = payload.phase === "commentary" || payload.phase === "final_answer"
+        ? payload.phase
+        : undefined;
+      result.push({
+        kind: "agent_event",
+        event: { type: "text_delta", text: payload.message, ...(phase ? { phase } : {}) },
+      });
       continue;
     }
     if (value.type !== "response_item") continue;
@@ -265,7 +271,10 @@ export function collectCodexSessionHistory(entries: unknown[]): ProviderSessionH
       }
       continue;
     }
-    if (payload.type !== "message" || payload.role !== "assistant" || !Array.isArray(payload.content)) continue;
+    if (payload.type !== "message" || payload.role !== "assistant" || !Array.isArray(payload.content) || hasEventAgentMessages) continue;
+    const phase = payload.phase === "commentary" || payload.phase === "final_answer"
+      ? payload.phase
+      : undefined;
     for (const item of payload.content) {
       if (!item || typeof item !== "object") continue;
       const block = item as { type?: unknown; text?: unknown };
@@ -276,6 +285,7 @@ export function collectCodexSessionHistory(entries: unknown[]): ProviderSessionH
           type: "text_delta",
           text: block.text,
           ...(typeof payload.id === "string" ? { messageId: payload.id } : {}),
+          ...(phase ? { phase } : {}),
         },
       });
     }

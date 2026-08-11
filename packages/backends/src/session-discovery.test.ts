@@ -164,4 +164,34 @@ describe("collectCodexSessionHistory", () => {
       { kind: "agent_event", event: { type: "text_delta", text: "正在检查" } },
     ]);
   });
+
+  it("preserves Codex message phases and removes duplicated response items", () => {
+    expect(collectCodexSessionHistory([
+      { type: "event_msg", payload: { type: "agent_message", message: "正在检查", phase: "commentary" } },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          id: "commentary-1",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "正在检查" }],
+        },
+      },
+      { type: "event_msg", payload: { type: "agent_message", message: "检查完成", phase: "final_answer" } },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          id: "answer-1",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: "检查完成" }],
+        },
+      },
+    ])).toEqual([
+      { kind: "agent_event", event: { type: "text_delta", text: "正在检查", phase: "commentary" } },
+      { kind: "agent_event", event: { type: "text_delta", text: "检查完成", phase: "final_answer" } },
+    ]);
+  });
 });
