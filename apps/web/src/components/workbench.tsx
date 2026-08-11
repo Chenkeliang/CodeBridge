@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 import {
   Archive,
   Check,
@@ -28,6 +31,7 @@ import {
   X,
 } from "lucide-react";
 import { BrandAgentIcon } from "@/components/brand-agent-icon";
+import { MermaidDiagram } from "@/components/mermaid-diagram";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -844,19 +848,23 @@ function ApprovalCard({ approval, item, onApproval, theme }: { approval: Approva
 
 function Markdown({ content, theme }: { content: string; theme: Theme }) {
   const t = themes[theme];
-  return <div className={cn("max-w-[780px] text-sm font-normal leading-7", t.inkSoft)}><ReactMarkdown components={{
+  return <div className={cn("max-w-[780px] text-sm font-normal leading-7 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-2", t.inkSoft)}><ReactMarkdown components={{
     a: ({ children, href }) => <a className={cn("underline underline-offset-4", t.ink)} href={href} rel="noreferrer" target="_blank">{children}</a>,
     blockquote: ({ children }) => <blockquote className={cn("my-3 border-l-2 pl-3", t.lineStrong, t.muted)}>{children}</blockquote>,
-    code: ({ children }) => <code className={cn("rounded px-1 py-0.5 font-mono text-[0.9em]", t.surfaceSoft, t.ink)}>{children}</code>,
+    code: ({ children, className }) => className?.includes("language-mermaid")
+      ? <MermaidDiagram source={String(children).trimEnd()} theme={theme} />
+      : <code className={cn("rounded px-1 py-0.5 font-mono text-[0.9em]", t.surfaceSoft, t.ink)}>{children}</code>,
     h1: ({ children }) => <h1 className={cn("mb-3 mt-5 text-lg font-medium", t.ink)}>{children}</h1>,
     h2: ({ children }) => <h2 className={cn("mb-2 mt-5 text-base font-medium", t.ink)}>{children}</h2>,
     h3: ({ children }) => <h3 className={cn("mb-2 mt-4 text-sm font-medium", t.ink)}>{children}</h3>,
     ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-5">{children}</ol>,
     p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
-    pre: ({ children }) => <pre className={cn("my-3 max-w-full overflow-auto rounded-lg border p-3 font-mono text-xs leading-6", t.surfaceTint, t.line)}>{children}</pre>,
+    pre: ({ children }) => isValidElement(children) && children.type === MermaidDiagram
+      ? children
+      : <pre className={cn("my-3 max-w-full overflow-auto rounded-lg border p-3 font-mono text-xs leading-6", t.surfaceTint, t.line)}>{children}</pre>,
     table: ({ children }) => <div className="my-3 overflow-auto"><table className={cn("w-full border-collapse text-left text-xs [&_td]:border-b [&_td]:p-2 [&_th]:border-b [&_th]:p-2", t.line)}>{children}</table></div>,
     ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>,
-  }} remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown></div>;
+  }} rehypePlugins={[rehypeKatex]} remarkPlugins={[remarkGfm, remarkMath]}>{content}</ReactMarkdown></div>;
 }
 
 function LoadingConversation({ theme }: { theme: Theme }) {
