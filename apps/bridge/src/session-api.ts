@@ -188,7 +188,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       if (cached !== undefined) return c.json(cached, 201);
     }
     const sessionBody = body ?? {};
-    const requestedCwd = asNullableString(sessionBody.cwd);
+    const requestedCwd = asNullableString(sessionBody.cwd) ?? options.defaultCwd ?? null;
     let cwd = requestedCwd;
     if (requestedCwd && options.runner) {
       const authorization = await options.runner.authorizeDirectory(requestedCwd);
@@ -491,11 +491,14 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   });
 
   app.post("/v1/sessions/:session_id/messages", async (c) => {
-    const session = options.catalog.getSession(c.req.param("session_id"));
+    let session = options.catalog.getSession(c.req.param("session_id"));
     const body = await readJson(c);
     if (!session) return c.json({ error: "session_not_found" }, 404);
     if (!body || typeof body.message !== "string" || !body.message.trim()) {
       return c.json({ error: "message is required" }, 400);
+    }
+    if (!session.cwd && options.defaultCwd) {
+      session = options.catalog.updateSession(session.id, { cwd: options.defaultCwd })!;
     }
     const attachmentInput = parseMessageAttachments(body.attachments);
     if (!attachmentInput) return c.json({ error: "invalid_attachments" }, 400);

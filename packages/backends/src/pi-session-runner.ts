@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import {
   createAgentSession,
+  DefaultResourceLoader,
   getAgentDir,
-  loadSkills,
   ModelRuntime,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type {
   AgentAvailableCommand,
@@ -140,7 +141,6 @@ export async function* runPiSession(
   if (handleRef) handleRef.current = handle;
 
   try {
-    yield { type: "session", sessionId: session.sessionId };
     const prompt = await buildPrompt(ctx);
     const promptPromise = session
       .prompt(prompt.text, prompt.options)
@@ -169,6 +169,8 @@ export async function* runPiSession(
         message: promptError instanceof Error ? promptError.message : String(promptError),
         fatal: true,
       };
+    } else if (!options.isAborted()) {
+      yield { type: "session", sessionId: session.sessionId };
     }
   } finally {
     unsubscribe();
@@ -292,7 +294,7 @@ export async function probePiSdk(
 export async function listPiConfigOptions(
   runtime?: Pick<ModelRuntime, "getModels" | "hasConfiguredAuth">,
 ): Promise<BackendConfigOption[]> {
-  const activeRuntime = runtime ?? await ModelRuntime.create({ refreshOnCreate: false });
+  const activeRuntime = runtime ?? await createPiModelRuntime();
   const values = activeRuntime.getModels()
     .filter((model) => activeRuntime.hasConfiguredAuth(model.provider))
     .map((model) => ({
@@ -314,12 +316,14 @@ export async function listPiConfigOptions(
 }
 
 export async function listPiCommands(cwd: string): Promise<AgentAvailableCommand[]> {
-  const result = loadSkills({
+  const agentDir = getAgentDir();
+  const loader = new DefaultResourceLoader({
     cwd,
-    agentDir: getAgentDir(),
-    skillPaths: [],
-    includeDefaults: true,
+    agentDir,
+    settingsManager: SettingsManager.create(cwd, agentDir),
   });
+  await loader.reload();
+  const result = loader.getSkills();
   return result.skills.map((skill) => ({
     name: `skill:${skill.name}`,
     description: skill.description,
@@ -361,8 +365,8 @@ export async function deletePiSession(
 }
 
 async function createNativePiSession(ctx: RunContext): Promise<PiSession> {
-  const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false });
-  const sessionManager = await resolveSessionManager(ctx);
+  const modelRuntime = await createPiModelRuntime();
+  const sessionManager = await resolvePiSessionManager(ctx);
   const model = resolveModel(modelRuntime, ctx.backendConfig.model ?? ctx.model);
   const { session } = await createAgentSession({
     cwd: ctx.cwd,
@@ -374,14 +378,19 @@ async function createNativePiSession(ctx: RunContext): Promise<PiSession> {
   return session;
 }
 
-async function resolveSessionManager(ctx: RunContext): Promise<SessionManager> {
+export async function resolvePiSessionManager(ctx: RunContext): Promise<SessionManager> {
   if (!ctx.resumeSessionId) return SessionManager.create(ctx.cwd);
   const sessions = await SessionManager.list(ctx.cwd);
   const match = sessions.find((session) => session.id === ctx.resumeSessionId);
-  if (!match) {
-    throw new Error(`Pi session not found in ${ctx.cwd}: ${ctx.resumeSessionId}`);
-  }
+  if (!match) return SessionManager.create(ctx.cwd);
   return SessionManager.open(match.path, undefined, ctx.cwd);
+}
+
+export function createPiModelRuntime(options: {
+  authPath?: string;
+  modelsPath?: string | null;
+} = {}): Promise<ModelRuntime> {
+  return ModelRuntime.create({ ...options, allowModelNetwork: false });
 }
 
 function resolveModel(runtime: ModelRuntime, raw: string | undefined) {

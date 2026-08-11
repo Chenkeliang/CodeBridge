@@ -6,11 +6,13 @@ import { afterEach } from "vitest";
 import type { AgentEvent, RunContext } from "@codebridge/core";
 import {
   collectPiSessionHistory,
+  createPiModelRuntime,
   forkPiSession,
   listPiCommands,
   listPiConfigOptions,
   mapPiEvent,
   probePiSdk,
+  resolvePiSessionManager,
   runPiSession,
   type PiRunHandleRef,
   type PiSession,
@@ -155,6 +157,35 @@ describe("Pi event mapping", () => {
 });
 
 describe("Pi session runner", () => {
+  it("loads literal provider credentials from Pi models.json", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-runtime-"));
+    tempDirs.push(cwd);
+    const modelsPath = path.join(cwd, "models.json");
+    const authPath = path.join(cwd, "auth.json");
+    await fs.writeFile(modelsPath, JSON.stringify({
+      providers: {
+        dedao: {
+          baseUrl: "https://llm.example.test",
+          api: "openai-responses",
+          apiKey: "test-key",
+          models: [{
+            id: "gpt-test",
+            name: "GPT Test",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 128000,
+            maxTokens: 16000,
+          }],
+        },
+      },
+    }));
+
+    const runtime = await createPiModelRuntime({ modelsPath, authPath });
+
+    expect(runtime.getModel("dedao", "gpt-test")).toBeDefined();
+    expect(runtime.hasConfiguredAuth("dedao")).toBe(true);
+  });
+
   it("lists project Skills as Pi slash commands", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-skills-"));
     tempDirs.push(cwd);
@@ -168,6 +199,22 @@ describe("Pi session runner", () => {
     await expect(listPiCommands(cwd)).resolves.toContainEqual({
       name: "skill:project-review",
       description: "Review this project",
+    });
+  });
+
+  it("lists shared .agents Skills through Pi resource discovery", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-agents-skills-"));
+    tempDirs.push(cwd);
+    const skillDir = path.join(cwd, ".agents", "skills", "shared-review");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: shared-review\ndescription: Review from shared skills\n---\n",
+    );
+
+    await expect(listPiCommands(cwd)).resolves.toContainEqual({
+      name: "skill:shared-review",
+      description: "Review from shared skills",
     });
   });
 
@@ -231,12 +278,35 @@ describe("Pi session runner", () => {
     );
 
     expect(events).toEqual([
-      { type: "session", sessionId: "pi-session-1" },
       { type: "text_delta", text: "ready" },
+      { type: "session", sessionId: "pi-session-1" },
     ]);
     expect(session.prompts).toEqual(["inspect the project"]);
     expect(session.disposed).toBe(true);
     expect(handle.current).toBeUndefined();
+  });
+
+  it("does not bind a provider Session when the first prompt fails", async () => {
+    const session = new FakePiSession();
+    session.prompt = async () => {
+      throw new Error("provider unavailable");
+    };
+
+    const events = await collect(runPiSession(context(), {
+      createSession: async () => session,
+      isAborted: () => false,
+    }));
+
+    expect(events).toEqual([{ type: "error", message: "provider unavailable", fatal: true }]);
+  });
+
+  it("starts a fresh native Session when a stored Pi Session no longer exists", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-stale-session-"));
+    tempDirs.push(cwd);
+
+    const manager = await resolvePiSessionManager(context({ cwd, resumeSessionId: "missing-session" }));
+
+    expect(manager.getSessionId()).not.toBe("missing-session");
   });
 
   it("forwards cancellation to the native session", async () => {

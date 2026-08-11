@@ -150,6 +150,29 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 
 间距使用 `4px` 基础网格。常用间距为 `4 / 8 / 12 / 16 / 20 / 24 / 32`，禁止为单个页面引入没有语义的近似值。
 
+### 3.5 字体与文字层级
+
+字体策略参考 [Pi](https://pi.dev/) 对“内容字体”和“机器信息字体”的角色区分，但不复制其字体文件。Pi 官网使用 Plantin 系列承载编辑性正文、Departure Mono / Commit Mono 承载导航和技术标签；AGNET 是高密度开发工作台，核心界面继续使用系统无衬线字体，命令、路径和代码使用等宽字体。未经明确授权，不将第三方商业字体打包进产品。
+
+| Role | Typography | Tailwind baseline | Use |
+| --- | --- | --- | --- |
+| Page title | `16px / 24px`, `600`, `-0.01em` | `text-base font-semibold tracking-tight` | 当前 Agent、主要页面标题 |
+| Section title | `13px / 20px`, `600` | `text-[13px] font-semibold` | Plan、Approval、设置分组 |
+| Session title | `12px / 18px`, `500` | `text-xs font-medium` | Session 列表与对话标题 |
+| Conversation | `14px / 28px`, `400` | `text-sm font-normal leading-7` | 用户消息与 Agent 最终回答 |
+| UI body | `13px / 20px`, `400` | `text-[13px] font-normal leading-5` | 菜单描述、普通界面文本 |
+| Metadata | `10–11px / 16px`, `500` | `text-[10px] font-medium` | 状态、时间、数量；英文状态可使用 `tracking-[0.08em] uppercase` |
+| Machine label | `11–12px / 18px`, `400` mono | `font-mono text-[11px]` | `/command`、工具名、模型 ID |
+| Path and code | `12px / 20px`, `400` mono | `font-mono text-xs leading-5` | 文件路径、命令、代码和 Diff |
+
+约束：
+
+- 中文正文、标题和 Session 名称使用系统无衬线字体栈，不使用全大写或人为增加字间距。
+- 对话正文默认正常字重；粗体只来自 Markdown 语义，不将整段 Agent 输出加粗。
+- 等宽字体只用于机器生成或需要字符对齐的信息，不能用于长篇自然语言正文。
+- 同一信息层级在 Paper Lime 与 Carbon Vermilion 中保持完全一致的字号、行高和字重。
+- 字体层级必须通过基础组件落地，页面层不得临时引入新的字号或字体族。
+
 ## 4. 信息架构
 
 桌面端采用三列结构：
