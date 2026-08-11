@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isModelOption, orderSessions } from "./workbench-logic";
+import * as workbenchLogic from "./workbench-logic";
 import type { AgentSession } from "./types";
+
+const { isModelOption, orderSessions } = workbenchLogic;
 
 describe("workbench logic", () => {
   it("keeps non-model Agent configuration out of the model selector", () => {
@@ -34,5 +36,40 @@ describe("workbench logic", () => {
     ]);
 
     expect(ordered.map((value) => value.session_id)).toEqual(["pinned", "recent", "older"]);
+  });
+
+  it("restores only the remembered Session that belongs to the selected Agent", () => {
+    const restoreSession = (workbenchLogic as unknown as {
+      restoreSessionSelection?: (
+        sessions: AgentSession[],
+        currentSessionId: string | null,
+        agentId: string,
+        rememberedSessionId: string | null,
+      ) => string | null;
+    }).restoreSessionSelection;
+    expect(restoreSession).toBeTypeOf("function");
+    if (!restoreSession) return;
+
+    const session = (id: string, agentId: string): AgentSession => ({
+      session_id: id,
+      agent_id: agentId,
+      provider_session_id: null,
+      task_record_id: null,
+      flow_id: null,
+      model: null,
+      cwd: null,
+      additional_directories: [],
+      title: id,
+      status: "idle",
+      pinned_at: null,
+      archived_at: null,
+      created_at: "2026-08-11T00:00:00.000Z",
+      updated_at: "2026-08-11T00:00:00.000Z",
+    });
+    const sessions = [session("codex-session", "codex"), session("pi-session", "pi")];
+
+    expect(restoreSession(sessions, null, "codex", "codex-session")).toBe("codex-session");
+    expect(restoreSession(sessions, null, "codex", "pi-session")).toBeNull();
+    expect(restoreSession(sessions, "codex-session", "codex", "pi-session")).toBe("codex-session");
   });
 });

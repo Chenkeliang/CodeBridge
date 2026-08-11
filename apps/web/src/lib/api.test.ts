@@ -6,6 +6,15 @@ afterEach(() => {
 });
 
 describe("workbench API client", () => {
+  it("can request archived Sessions for the archive view", async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({ sessions: [] }));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.sessions(false, true);
+
+    expect(fetch).toHaveBeenCalledWith("/v1/sessions?include_archived=true", expect.any(Object));
+  });
+
   it("hydrates a Session before loading its conversation resources", async () => {
     let resolveSession!: (response: Response) => void;
     const sessionResponse = new Promise<Response>((resolve) => { resolveSession = resolve; });
