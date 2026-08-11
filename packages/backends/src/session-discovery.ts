@@ -31,8 +31,31 @@ export function collectClaudeSessionHistory(entries: unknown[]): ProviderSession
       isMeta?: unknown;
       isSidechain?: unknown;
       message?: { role?: unknown; content?: unknown };
+      attachment?: { type?: unknown; names?: unknown; content?: unknown };
     };
     if (value.isMeta === true || value.isSidechain === true) continue;
+    if (value.type === "attachment" && value.attachment?.type === "skill_listing") {
+      const names = Array.isArray(value.attachment.names)
+        ? value.attachment.names.filter((name): name is string => typeof name === "string" && Boolean(name))
+        : [];
+      const lines = typeof value.attachment.content === "string"
+        ? value.attachment.content.split("\n")
+        : [];
+      if (names.length) {
+        result.push({
+          kind: "agent_event",
+          event: {
+            type: "available_commands_update",
+            availableCommands: names.map((name) => {
+              const prefix = `- ${name}: `;
+              const description = lines.find((line) => line.startsWith(prefix))?.slice(prefix.length).trim();
+              return { name, description: description || "Agent Skill" };
+            }),
+          },
+        });
+      }
+      continue;
+    }
     if (value.type !== "user" && value.type !== "assistant") continue;
     const role = value.message?.role;
     const content = value.message?.content;
@@ -72,7 +95,7 @@ export function collectClaudeSessionHistory(entries: unknown[]): ProviderSession
     }
     if (role !== "user") continue;
     if (typeof content === "string") {
-      if (content) result.push({ kind: "message", text: content });
+      if (content && !isClaudeInternalUserMessage(content)) result.push({ kind: "message", text: content });
       continue;
     }
     if (!Array.isArray(content)) continue;
@@ -86,7 +109,9 @@ export function collectClaudeSessionHistory(entries: unknown[]): ProviderSession
         content?: unknown;
         is_error?: unknown;
       };
-      if (item.type === "text" && typeof item.text === "string") userText.push(item.text);
+      if (item.type === "text" && typeof item.text === "string" && !isClaudeInternalUserMessage(item.text)) {
+        userText.push(item.text);
+      }
       else if (item.type === "tool_result" && typeof item.tool_use_id === "string") {
         result.push({
           kind: "agent_event",
@@ -102,6 +127,13 @@ export function collectClaudeSessionHistory(entries: unknown[]): ProviderSession
     if (userText.length) result.push({ kind: "message", text: userText.join("") });
   }
   return result;
+}
+
+function isClaudeInternalUserMessage(text: string): boolean {
+  const normalized = text.trimStart();
+  return normalized.startsWith("<command-name>")
+    || normalized.startsWith("<local-command-stdout>")
+    || normalized.startsWith("<local-command-stderr>");
 }
 
 export async function loadClaudeSessionHistory(
