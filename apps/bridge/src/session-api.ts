@@ -35,6 +35,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   const historyHydrations = new Map<string, Promise<void>>();
   const historyHydrated = new Set<string>();
   const historyRetryAfter = new Map<string, number>();
+  const configOptionRequests = new Map<string, Promise<Awaited<ReturnType<RunnerClient["listConfigOptions"]>>>>();
 
   async function hydrateProviderHistory(session: AgentSession): Promise<AgentSession> {
     if (!options.runner || !session.providerSessionId || historyHydrated.has(session.id)) return session;
@@ -399,7 +400,16 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
     const cwd = session.cwd ?? options.defaultCwd;
     if (!cwd) return c.json({ options: [], error: "workspace_required" });
-    return c.json(await options.runner.listConfigOptions(session.agentId, cwd));
+    const cacheKey = `${session.agentId}\0${cwd}`;
+    let request = configOptionRequests.get(cacheKey);
+    if (!request) {
+      request = options.runner.listConfigOptions(session.agentId, cwd);
+      configOptionRequests.set(cacheKey, request);
+      request.catch(() => {
+        if (configOptionRequests.get(cacheKey) === request) configOptionRequests.delete(cacheKey);
+      });
+    }
+    return c.json(await request);
   });
 
   app.get("/v1/sessions/:session_id/commands", async (c) => {
