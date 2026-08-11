@@ -22,6 +22,17 @@ describe("workbench logic", () => {
     expect(isPermissionOption({ id: "model", name: "Model", type: "select", category: "model", values: [] })).toBe(false);
   });
 
+  it("recognizes Agent reasoning configuration without checking the vendor", () => {
+    const isThoughtLevelOption = (workbenchLogic as unknown as {
+      isThoughtLevelOption?: (option: { id: string; name: string; type: string; category?: string; values: [] }) => boolean;
+    }).isThoughtLevelOption;
+    expect(isThoughtLevelOption).toBeTypeOf("function");
+    if (!isThoughtLevelOption) return;
+
+    expect(isThoughtLevelOption({ id: "reasoning_effort", name: "Reasoning", type: "select", category: "thought_level", values: [] })).toBe(true);
+    expect(isThoughtLevelOption({ id: "model", name: "Model", type: "select", category: "model", values: [] })).toBe(false);
+  });
+
   it("places pinned Sessions before the most recently updated Sessions", () => {
     const session = (id: string, updatedAt: string, pinnedAt: string | null): AgentSession => ({
       session_id: id,
@@ -30,6 +41,7 @@ describe("workbench logic", () => {
       task_record_id: null,
       flow_id: null,
       model: null,
+      effort: null,
       permission_mode: null,
       cwd: null,
       additional_directories: [],
@@ -69,6 +81,7 @@ describe("workbench logic", () => {
       task_record_id: null,
       flow_id: null,
       model: null,
+      effort: null,
       permission_mode: null,
       cwd: null,
       additional_directories: [],
@@ -100,6 +113,7 @@ describe("workbench logic", () => {
       task_record_id: null,
       flow_id: null,
       model: null,
+      effort: null,
       permission_mode: null,
       cwd: "/workspace/app",
       additional_directories: ["/workspace/shared", "/workspace/app"],

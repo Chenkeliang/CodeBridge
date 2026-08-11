@@ -27,6 +27,7 @@ export interface AgentSession {
   taskRecordId: string | null;
   flowId: string | null;
   model: string | null;
+  effort: string | null;
   permissionMode: string | null;
   folderId: string | null;
   cwd: string | null;
@@ -54,6 +55,7 @@ export interface CreateSessionInput {
   taskRecordId?: string | null;
   flowId?: string | null;
   model?: string | null;
+  effort?: string | null;
   permissionMode?: string | null;
   folderId?: string | null;
   cwd?: string | null;
@@ -92,6 +94,7 @@ export class SessionCatalogStore {
         task_record_id TEXT,
         flow_id TEXT,
         model TEXT,
+        effort TEXT,
         permission_mode TEXT,
         folder_id TEXT,
         cwd TEXT,
@@ -136,6 +139,11 @@ export class SessionCatalogStore {
       // Existing databases already contain the Agent permission override column.
     }
     try {
+      this.database.exec("ALTER TABLE agent_sessions ADD COLUMN effort TEXT");
+    } catch {
+      // Existing databases already contain the reasoning effort override column.
+    }
+    try {
       this.database.exec("ALTER TABLE agent_sessions ADD COLUMN pinned_at TEXT");
     } catch {
       // Existing databases already contain the pin metadata column.
@@ -157,6 +165,7 @@ export class SessionCatalogStore {
       taskRecordId: input.taskRecordId ?? null,
       flowId: input.flowId ?? null,
       model: input.model ?? null,
+      effort: input.effort ?? null,
       permissionMode: input.permissionMode ?? null,
       folderId: input.folderId ?? null,
       cwd: input.cwd ?? null,
@@ -171,9 +180,9 @@ export class SessionCatalogStore {
     this.database
       .prepare(
         `INSERT INTO agent_sessions (
-          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, model, permission_mode, folder_id, cwd,
+          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, model, effort, permission_mode, folder_id, cwd,
           additional_directories, title, status, pinned_at, archived_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -183,6 +192,7 @@ export class SessionCatalogStore {
         session.taskRecordId,
         session.flowId,
         session.model,
+        session.effort,
         session.permissionMode,
         session.folderId,
         session.cwd,
@@ -287,6 +297,7 @@ export class SessionCatalogStore {
       taskRecordId: input.taskRecordId ?? existing.taskRecordId,
       flowId: input.flowId !== undefined ? input.flowId : existing.flowId,
       model: input.model !== undefined ? input.model : existing.model,
+      effort: input.effort !== undefined ? input.effort : existing.effort,
       permissionMode: input.permissionMode !== undefined ? input.permissionMode : existing.permissionMode,
       folderId: input.folderId ?? existing.folderId,
       cwd: input.cwd ?? existing.cwd,
@@ -299,7 +310,7 @@ export class SessionCatalogStore {
     };
     this.database
       .prepare(
-        `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, flow_id = ?, model = ?, permission_mode = ?, folder_id = ?, cwd = ?,
+        `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, flow_id = ?, model = ?, effort = ?, permission_mode = ?, folder_id = ?, cwd = ?,
          additional_directories = ?, title = ?, status = ?, pinned_at = ?, archived_at = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
@@ -307,6 +318,7 @@ export class SessionCatalogStore {
         next.taskRecordId,
         next.flowId,
         next.model,
+        next.effort,
         next.permissionMode,
         next.folderId,
         next.cwd,
@@ -340,6 +352,7 @@ function toSession(row: SqliteRow): AgentSession {
     taskRecordId: row.task_record_id === null ? null : String(row.task_record_id),
     flowId: row.flow_id === null ? null : String(row.flow_id),
     model: row.model === null || row.model === undefined ? null : String(row.model),
+    effort: row.effort === null || row.effort === undefined ? null : String(row.effort),
     permissionMode: row.permission_mode === null || row.permission_mode === undefined ? null : String(row.permission_mode),
     folderId: row.folder_id === null ? null : String(row.folder_id),
     cwd: row.cwd === null ? null : String(row.cwd),

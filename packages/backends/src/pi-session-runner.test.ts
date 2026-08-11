@@ -227,9 +227,20 @@ describe("Pi session runner", () => {
       hasConfiguredAuth: (provider: string) => provider === "configured",
     };
 
-    await expect(listPiConfigOptions(runtime as never)).resolves.toMatchObject([
-      { values: [{ value: "configured/ready", name: "Ready" }] },
-    ]);
+    const options = await listPiConfigOptions(runtime as never);
+
+    expect(options).toContainEqual(expect.objectContaining({
+      category: "model",
+      values: [{ value: "configured/ready", name: "Ready", description: "test" }],
+    }));
+    expect(options).toContainEqual(expect.objectContaining({
+      category: "thought_level",
+      values: expect.arrayContaining([
+        expect.objectContaining({ value: "off" }),
+        expect.objectContaining({ value: "xhigh" }),
+        expect.objectContaining({ value: "max" }),
+      ]),
+    }));
   });
 
   it("forks a persisted provider session into a new project directory", async () => {

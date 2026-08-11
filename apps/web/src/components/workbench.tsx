@@ -29,11 +29,14 @@ import {
   Wrench,
   Workflow,
   X,
+  Zap,
 } from "lucide-react";
 import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { api, streamSessionEvents } from "@/lib/api";
 import { describeTool, reduceConversationEvents, type ApprovalProjection, type ConversationProjection, type ToolProjection, type WorkProjection } from "@/lib/events";
@@ -49,7 +52,7 @@ import type {
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, isModelOption, isPermissionOption, orderSessions, restoreSessionSelection, workspacePaths } from "@/lib/workbench-logic";
+import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, isModelOption, isPermissionOption, isThoughtLevelOption, orderSessions, restoreSessionSelection, workspacePaths } from "@/lib/workbench-logic";
 
 type Theme = "paper" | "carbon";
 type PanelArea = "agents" | "flows";
@@ -77,6 +80,8 @@ const themes = {
     dangerSoft: "bg-[#FCEBE6]",
     healthyDot: "bg-[#3B8659]",
     offlineDot: "bg-[#9CA296]",
+    controlAccent: "text-[#3B8659]",
+    controlHover: "hover:bg-[#E0E4DC]",
     placeholder: "placeholder:text-[#9CA296]",
     focus: "focus:border-[#73796C] focus-visible:ring-[#CDD3C8]",
     shadow: "shadow-[0_20px_48px_rgba(25,28,22,0.08)]",
@@ -104,6 +109,8 @@ const themes = {
     dangerSoft: "bg-[#41231D]",
     healthyDot: "bg-[#74BF8F]",
     offlineDot: "bg-[#6E7669]",
+    controlAccent: "text-[#FF683D]",
+    controlHover: "hover:bg-[#30352D]",
     placeholder: "placeholder:text-[#6E7669]",
     focus: "focus:border-[#9DA496] focus-visible:ring-[#444B40]",
     shadow: "shadow-[0_20px_56px_rgba(0,0,0,0.28)]",
@@ -137,6 +144,7 @@ export function Workbench() {
   const [configOptions, setConfigOptions] = useState<ConfigOption[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
   const [permissionMode, setPermissionMode] = useState("");
   const [flowId, setFlowId] = useState("");
   const [query, setQuery] = useState("");
@@ -156,6 +164,7 @@ export function Workbench() {
   const [workspaceListing, setWorkspaceListing] = useState<WorkspaceListing | null>(null);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const conversationViewport = useRef<HTMLElement | null>(null);
   const streamAbort = useRef<AbortController | null>(null);
   const selectedAgentRef = useRef<string | null>(null);
   const selectedSessionRef = useRef<string | null>(null);
@@ -173,6 +182,7 @@ export function Workbench() {
   const archivedSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && session.archived_at).length;
   const projection = useMemo(() => reduceConversationEvents(events), [events]);
   const modelOption = useMemo(() => configOptions.find(isModelOption), [configOptions]);
+  const thoughtLevelOption = useMemo(() => configOptions.find(isThoughtLevelOption), [configOptions]);
   const permissionOption = useMemo(() => configOptions.find(isPermissionOption), [configOptions]);
 
   const notify = useCallback((message: string) => {
@@ -228,6 +238,7 @@ export function Workbench() {
       setConfigOptions([]);
       setApprovals([]);
       setModel("");
+      setEffort("");
       setPermissionMode("");
       setFlowId("");
       setLoadingSession(false);
@@ -257,6 +268,7 @@ export function Workbench() {
         setCommands(nextCommands);
         setConfigOptions(options);
         setModel(session.model ?? "");
+        setEffort(session.effort ?? "");
         setPermissionMode(session.permission_mode ?? "");
         setFlowId(session.flow_id ?? "");
         const latestRun = runs.at(-1);
@@ -278,6 +290,14 @@ export function Workbench() {
       controller.abort();
     };
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (loadingSession || !selectedSessionId || !conversationViewport.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (conversationViewport.current) conversationViewport.current.scrollTop = conversationViewport.current.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedSessionId, loadingSession]);
 
   function selectAgent(agentId: string) {
     selectedAgentRef.current = agentId;
@@ -327,8 +347,8 @@ export function Workbench() {
     setDraft("");
     setAttachments([]);
     try {
-      await api.sendMessage(sessionId, message, flowId || null, model || null, pendingAttachments, permissionMode || null);
-      await api.startRun(sessionId, flowId || null, model || null, permissionMode || null);
+      await api.sendMessage(sessionId, message, flowId || null, model || null, pendingAttachments, permissionMode || null, effort || null);
+      await api.startRun(sessionId, flowId || null, model || null, permissionMode || null, effort || null);
       setSessions((current) => current.map((session) => session.session_id === sessionId
         ? { ...session, status: "active", title: session.title ?? message.slice(0, 60), updated_at: new Date().toISOString() }
         : session));
@@ -348,6 +368,7 @@ export function Workbench() {
       const updated = await api.updateSession(selectedSessionId, update);
       setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
       setModel(updated.model ?? "");
+      setEffort(updated.effort ?? "");
       setPermissionMode(updated.permission_mode ?? "");
       if (updated.archived_at) {
         window.localStorage.removeItem(`codebridge:last-session:${updated.agent_id}`);
@@ -364,6 +385,11 @@ export function Workbench() {
   function setSessionPermissionMode(value: string) {
     setPermissionMode(value);
     void updateSession({ permission_mode: value || null });
+  }
+
+  function setSessionEffort(value: string) {
+    setEffort(value);
+    void updateSession({ effort: value || null });
   }
 
   async function deleteSelected() {
@@ -516,6 +542,8 @@ export function Workbench() {
                 flows={flows}
                 model={model}
                 modelOption={modelOption}
+                effort={effort}
+                thoughtLevelOption={thoughtLevelOption}
                 permissionMode={permissionMode}
                 permissionOption={permissionOption}
                 sending={sending}
@@ -531,6 +559,7 @@ export function Workbench() {
                 onFiles={() => fileInput.current?.click()}
                 onFlow={setFlowId}
                 onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
+                onEffort={setSessionEffort}
                 onPermissionMode={setSessionPermissionMode}
                 onPickDirectory={() => notify("Session 创建后可添加 Workspace")}
                 onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, valueIndex) => valueIndex !== index))}
@@ -540,7 +569,7 @@ export function Workbench() {
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            <section aria-label="Session conversation" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7">
+            <section aria-label="Session conversation" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7" ref={conversationViewport}>
               <div className="mx-auto w-full max-w-[880px] pb-7">
                 {loadingSession ? <LoadingConversation theme={theme} /> : projection.length ? (
                   <div className="grid gap-6">
@@ -572,6 +601,8 @@ export function Workbench() {
                   flows={flows}
                   model={model}
                   modelOption={modelOption}
+                  effort={effort}
+                  thoughtLevelOption={thoughtLevelOption}
                   permissionMode={permissionMode}
                   permissionOption={permissionOption}
                   sending={sending}
@@ -587,6 +618,7 @@ export function Workbench() {
                   onFiles={() => fileInput.current?.click()}
                   onFlow={setFlowId}
                   onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
+                  onEffort={setSessionEffort}
                   onPermissionMode={setSessionPermissionMode}
                   onPickDirectory={() => void pickDirectory()}
                   onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, valueIndex) => valueIndex !== index))}
@@ -702,7 +734,7 @@ function SessionHeader({ agent, session, theme, menuOpen, menuView, renameDraft,
   </header>;
 }
 
-function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, modelOption, permissionMode, permissionOption, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onModel, onPermissionMode, onPickDirectory, onRemoveAttachment, onSubmit }: {
+function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, modelOption, effort, thoughtLevelOption, permissionMode, permissionOption, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onModel, onEffort, onPermissionMode, onPickDirectory, onRemoveAttachment, onSubmit }: {
   attachments: MessageAttachmentInput[];
   commands: AgentCommand[];
   contextOpen: boolean;
@@ -714,6 +746,8 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   flows: FlowRecord[];
   model: string;
   modelOption?: ConfigOption;
+  effort: string;
+  thoughtLevelOption?: ConfigOption;
   permissionMode: string;
   permissionOption?: ConfigOption;
   sending: boolean;
@@ -729,6 +763,7 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   onFiles: () => void;
   onFlow: (value: string) => void;
   onModel: (value: string) => void;
+  onEffort: (value: string) => void;
   onPermissionMode: (value: string) => void;
   onPickDirectory: () => void;
   onRemoveAttachment: (index: number) => void;
@@ -743,6 +778,7 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   return <div className={cn("relative rounded-xl border", t.surface, t.lineStrong, t.shadow)}>
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5">
       {modelOption ? <SessionConfigSelect label={defaultModelLabel(modelOption)} onValue={onModel} option={modelOption} theme={theme} value={model} /> : <ContextChip label="Agent default" theme={theme} />}
+      {thoughtLevelOption && <ReasoningLevelControl onValue={onEffort} option={thoughtLevelOption} theme={theme} value={effort} />}
       {permissionOption && <SessionConfigSelect label="Agent default" onValue={onPermissionMode} option={permissionOption} theme={theme} value={permissionMode} />}
       <button className={cn("inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded border px-2 text-[10px] transition-opacity hover:opacity-80", t.surfaceSoft, t.muted, t.line)} onClick={onPickDirectory} type="button"><FolderOpen className="size-3" /><span className={cn("font-medium", t.inkSoft)}>{workspaceLabel(session)}</span></button>
       {flows.length > 0 && <div className={cn("inline-flex min-h-6 shrink-0 items-center rounded border pl-2 text-[10px]", t.surfaceSoft, t.muted, t.line)}><Workflow className="mr-1 size-3" /><Select onValueChange={(value) => onFlow(value === DEFAULT_SELECT_VALUE ? "" : value)} value={flowId || DEFAULT_SELECT_VALUE}>
@@ -880,6 +916,31 @@ function LoadingConversation({ theme }: { theme: Theme }) {
 function ContextChip({ label, theme }: { label: string; theme: Theme }) {
   const t = themes[theme];
   return <span className={cn("inline-flex min-h-6 max-w-44 shrink-0 items-center rounded border px-2 text-[10px]", t.surfaceSoft, t.line)}><span className={cn("truncate font-medium", t.inkSoft)}>{label}</span></span>;
+}
+
+function ReasoningLevelControl({ onValue, option, theme, value }: { onValue: (value: string) => void; option: ConfigOption; theme: Theme; value: string }) {
+  const t = themes[theme];
+  const selectableLevels = option.values.filter((candidate) => candidate.value.toLowerCase() !== "default");
+  const levels = selectableLevels.length ? selectableLevels : option.values;
+  const effectiveValue = value || option.currentValue || levels[0]?.value || "";
+  const committedIndex = Math.max(0, levels.findIndex((candidate) => candidate.value === effectiveValue));
+  const [previewIndex, setPreviewIndex] = useState(committedIndex);
+  useEffect(() => setPreviewIndex(committedIndex), [committedIndex]);
+  const active = levels[previewIndex] ?? levels[0]!;
+  const activeLabel = `${active.name || active.value}${value ? "" : " · Default"}`;
+  return <Popover>
+    <PopoverTrigger asChild>
+      <Button aria-label={option.name} className={cn("h-6 max-w-44 shrink-0 gap-1 border px-2 py-0 text-[10px] shadow-none", t.surfaceSoft, t.inkSoft, t.line, t.controlHover)} title={activeLabel} type="button" variant="outline"><Zap className="size-3" /><span className="truncate">{activeLabel}</span><ChevronDown className="size-3 opacity-60" /></Button>
+    </PopoverTrigger>
+    <PopoverContent align="start" className={cn("w-64", t.surface, t.inkSoft, t.lineStrong, t.shadow)} side="top">
+      <div className="mb-4 flex items-center justify-between gap-3"><span className={cn("text-xs font-medium", t.ink)}>Reasoning</span><span className="flex min-w-0 items-center gap-2">{value && <span className={cn("text-[10px] underline underline-offset-2", t.muted)}><button onClick={() => onValue("")}>Use default</button></span>}<span className={cn("truncate text-[10px]", t.muted)}>{activeLabel}</span></span></div>
+      <div className="relative py-1">
+        <div className={cn("pointer-events-none absolute inset-x-1 top-1/2 flex -translate-y-1/2 justify-between", t.faint)}>{levels.map((level, index) => <span className="size-1 rounded-full bg-current" key={`${level.value}-${index}`} />)}</div>
+        <Slider aria-label="Reasoning level" className={t.controlAccent} max={levels.length - 1} min={0} onValueChange={([index]) => setPreviewIndex(index ?? 0)} onValueCommit={([index]) => onValue(levels[index ?? 0]?.value ?? "")} step={1} value={[previewIndex]} />
+      </div>
+      <div className={cn("mt-3 flex justify-between text-[9px]", t.faint)}><span>{levels[0]?.name}</span><span>{levels.at(-1)?.name}</span></div>
+    </PopoverContent>
+  </Popover>;
 }
 
 function SessionConfigSelect({ label, onValue, option, theme, value }: { label: string; onValue: (value: string) => void; option: ConfigOption; theme: Theme; value: string }) {

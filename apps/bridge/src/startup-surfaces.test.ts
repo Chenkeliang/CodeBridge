@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "@codebridge/core";
 import { resolveStartupSurfaces } from "./startup-surfaces.js";
@@ -29,5 +30,13 @@ describe("startup surfaces", () => {
     const config = defaultConfig();
 
     expect(resolveStartupSurfaces(config, { web: true }).web).toBe(true);
+  });
+
+  it("keeps OpenCode in the configurable Agent registry and forwards Session effort", () => {
+    const source = readFileSync(new URL("./cli.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('"opencode"');
+    expect(source).toContain('opencode: "OpenCode"');
+    expect(source).toContain("effort: linkedSession?.effort ?? undefined");
   });
 });

@@ -87,11 +87,20 @@ describe("workbench API client", () => {
     }));
     vi.stubGlobal("fetch", fetch);
 
-    await api.sendMessage("session-1", "review this", null, null, [{
+    const sendMessage = api.sendMessage as unknown as (
+      id: string,
+      message: string,
+      flowId: string | null,
+      model: string | null,
+      attachments: Array<{ name: string; mimeType: string; dataBase64: string }>,
+      permissionMode: string | null,
+      effort: string | null,
+    ) => Promise<unknown>;
+    await sendMessage("session-1", "review this", null, null, [{
       name: "screen.png",
       mimeType: "image/png",
       dataBase64: "aW1hZ2U=",
-    }], "read-only");
+    }], "read-only", "xhigh");
 
     expect(fetch).toHaveBeenCalledWith("/v1/sessions/session-1/messages", expect.objectContaining({
       body: JSON.stringify({
@@ -99,6 +108,7 @@ describe("workbench API client", () => {
         flow_id: null,
         model: null,
         permission_mode: "read-only",
+        effort: "xhigh",
         attachments: [{ name: "screen.png", mimeType: "image/png", dataBase64: "aW1hZ2U=" }],
       }),
     }));

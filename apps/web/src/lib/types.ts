@@ -17,6 +17,7 @@ export interface AgentSession {
   task_record_id: string | null;
   flow_id: string | null;
   model: string | null;
+  effort: string | null;
   permission_mode: string | null;
   cwd: string | null;
   additional_directories: string[];

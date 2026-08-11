@@ -180,6 +180,7 @@ program
           },
           prompt,
           model: linkedSession?.model ?? undefined,
+          effort: linkedSession?.effort ?? undefined,
           mode: linkedSession?.permissionMode ?? undefined,
           resumeSessionId: linkedSession?.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
@@ -212,7 +213,7 @@ program
           })
         : undefined,
     );
-    const knownAgents = ["codex", "pi", "cursor", "claude"];
+    const knownAgents = ["codex", "pi", "cursor", "claude", "opencode"];
     const agentIds = [...new Set([...knownAgents, ...Object.keys(config.backends)])];
     const registry = new AgentRegistry({ databasePath: path.join(dataDir, "agents.sqlite") });
     agentIds.forEach((agentId) => {
@@ -222,6 +223,7 @@ program
         pi: "Pi",
         cursor: "Cursor",
         claude: "Claude Code",
+        opencode: "OpenCode",
       };
       registry.register({
         agentId,

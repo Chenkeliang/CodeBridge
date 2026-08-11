@@ -51,6 +51,17 @@ describe("session catalog", () => {
     store.close();
   });
 
+  it("persists a Session reasoning effort override", () => {
+    const store = new SessionCatalogStore(":memory:");
+    const session = store.createSession({ agentId: "codex" });
+
+    const updated = store.updateSession(session.id, { effort: "xhigh" } as never);
+
+    expect(updated).toMatchObject({ effort: "xhigh" });
+    expect(store.getSession(session.id)).toMatchObject({ effort: "xhigh" });
+    store.close();
+  });
+
   it("persists pin and archive metadata while keeping archived sessions out of the default list", () => {
     const store = new SessionCatalogStore(":memory:");
     const first = store.createSession({ agentId: "codex", title: "普通会话" });
