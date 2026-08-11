@@ -45,3 +45,20 @@ export {
   type CliSessionSummary,
   encodeClaudeProjectDir,
 } from "./session-discovery.js";
+
+export {
+  closePiSession,
+  deletePiSession,
+  forkPiSession,
+  listPiSessions,
+  listPiConfigOptions,
+  listPiCommands,
+  mapPiEvent,
+  probePiSdk,
+  runPiSession,
+  type PiRunHandle,
+  type PiRunHandleRef,
+  type PiSession,
+  type PiSessionLifecycleResult,
+  type PiSessionRunnerOptions,
+} from "./pi-session-runner.js";

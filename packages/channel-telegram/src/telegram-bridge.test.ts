@@ -290,4 +290,44 @@ describe("TelegramBridge inbound commands", () => {
       ],
     );
   });
+
+  it("uses the shared Session ingress for ordinary messages", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const editMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const received: unknown[] = [];
+    const bridge = new TelegramBridge({
+      config,
+      dataDir,
+      api: { sendMessage, editMessage } as never,
+      sessionIngress: async function* (message) {
+        received.push(message);
+        yield { type: "text_delta", text: "Session reply" };
+        yield { type: "done", exitCode: 0 };
+      },
+    });
+
+    await bridge.handleUpdate({
+      update_id: 2,
+      message: {
+        message_id: 9,
+        chat: { id: 42, type: "private" },
+        from: { id: 99 },
+        text: "hello",
+      },
+    });
+    await bridge.disconnect();
+
+    expect(received).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        conversationId: "telegram:42|",
+        message: expect.stringContaining("hello"),
+      }),
+    ]);
+    expect(editMessage).toHaveBeenCalledWith("telegram:42", 8, "Session reply");
+  });
 });

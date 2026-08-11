@@ -31,6 +31,29 @@ describe("RunnerClient steering", () => {
 });
 
 describe("RunnerClient session lifecycle", () => {
+  it("forks a provider session into a target directory", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, sessionId: "pi-fork", cwd: "/target" }), {
+        status: 201,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.forkSession("pi", "/source", "s1", "/target")).resolves.toEqual({
+      ok: true,
+      sessionId: "pi-fork",
+      cwd: "/target",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/sessions/s1/fork",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ backend: "pi", cwd: "/source", targetCwd: "/target" }),
+      }),
+    );
+  });
+
   it("posts close for an explicit session id", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
@@ -74,6 +97,23 @@ describe("RunnerClient session lifecycle", () => {
 });
 
 describe("RunnerClient directory authorization", () => {
+  it("picks a directory through the Runner host", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, path: "/Users/tester/Projects/app" })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.pickDirectory()).resolves.toEqual({
+      ok: true,
+      path: "/Users/tester/Projects/app",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/directories/pick",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("asks Runner to access an absolute directory", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true, path: "/Users/tester/Desktop" })),
@@ -120,5 +160,23 @@ describe("RunnerClient directory authorization", () => {
       path: "/Users/tester/Desktop",
       error: expect.stringContaining("超时"),
     });
+  });
+});
+
+describe("RunnerClient Agent commands", () => {
+  it("loads commands for the selected backend and workspace", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ commands: [{ name: "skill:review", description: "Review" }] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.listCommands("pi", "/workspace")).resolves.toEqual({
+      commands: [{ name: "skill:review", description: "Review" }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/commands?backend=pi&cwd=%2Fworkspace",
+      expect.any(Object),
+    );
   });
 });

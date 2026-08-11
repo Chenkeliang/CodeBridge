@@ -1,6 +1,13 @@
 import path from "node:path";
 import { appendJsonl } from "@codebridge/core";
-import type { AgentEvent, AppConfig, BackendConfigOption, RunAttachment, RunRequest } from "@codebridge/core";
+import type {
+  ActiveRunStatus,
+  AgentEvent,
+  AppConfig,
+  BackendConfigOption,
+  RunAttachment,
+  RunRequest,
+} from "@codebridge/core";
 import {
   RunnerClient,
   type CliSessionSummary,
@@ -22,6 +29,11 @@ export class RunOrchestrator {
       runId: string;
       controller: AbortController;
       startedAt: number;
+      lastActivityAt: number;
+      currentPhase: string;
+      lastCheckpoint?: string;
+      checkpointText?: string;
+      checkpointMessageId?: string;
       finished?: Promise<void>;
     }
   >();
@@ -52,6 +64,23 @@ export class RunOrchestrator {
   activeRunElapsedMs(chatId: string, topicId?: string): number | undefined {
     const active = this.activeChatRuns.get(this.chatRunKey(chatId, topicId));
     return active ? Date.now() - active.startedAt : undefined;
+  }
+
+  activeRunStatus(
+    chatId: string,
+    topicId?: string,
+  ): ActiveRunStatus | undefined {
+    const active = this.activeChatRuns.get(this.chatRunKey(chatId, topicId));
+    if (!active) return undefined;
+    return {
+      runId: active.runId,
+      startedAt: active.startedAt,
+      lastActivityAt: active.lastActivityAt,
+      currentPhase: active.currentPhase,
+      ...(active.lastCheckpoint
+        ? { lastCheckpoint: active.lastCheckpoint }
+        : {}),
+    };
   }
 
   async cancelActiveForChat(
@@ -100,10 +129,13 @@ export class RunOrchestrator {
     const finished = new Promise<void>((resolve) => {
       resolveFinished = resolve;
     });
+    const startedAt = Date.now();
     this.activeChatRuns.set(chatKey, {
       runId,
       controller,
-      startedAt: Date.now(),
+      startedAt,
+      lastActivityAt: startedAt,
+      currentPhase: "任务启动",
       finished,
     });
 
@@ -183,6 +215,62 @@ export class RunOrchestrator {
             break;
           }
           this.options.onEvent?.(runId, event);
+          const active = this.activeChatRuns.get(chatKey);
+          if (active?.runId === runId) {
+            let phase: string | undefined;
+            switch (event.type) {
+              case "text_delta":
+                phase =
+                  event.phase === "commentary" ? "任务检查点" : "生成回复";
+                if (event.phase === "commentary") {
+                  const sameMessage =
+                    Boolean(event.messageId) &&
+                    active.checkpointMessageId === event.messageId;
+                  active.checkpointText = sameMessage
+                    ? `${active.checkpointText ?? ""}${event.text}`
+                    : event.text;
+                  active.checkpointMessageId = event.messageId;
+                  const checkpoint = active.checkpointText
+                    .replace(/\s+/g, " ")
+                    .trim();
+                  if (checkpoint) {
+                    active.lastCheckpoint =
+                      checkpoint.length > 240
+                        ? `${checkpoint.slice(0, 239)}…`
+                        : checkpoint;
+                  }
+                }
+                break;
+              case "thought_delta":
+                phase = "分析任务";
+                break;
+              case "tool_start":
+                phase = `工具执行：${event.name}`;
+                break;
+              case "tool_update":
+                phase = event.name
+                  ? `工具执行：${event.name}`
+                  : active.currentPhase;
+                break;
+              case "tool_end":
+                phase = event.name ? `工具完成：${event.name}` : "工具完成";
+                break;
+              case "plan":
+              case "plan_update":
+              case "plan_removed":
+                phase = "更新计划";
+                break;
+              case "permission_request":
+                phase = "等待权限确认";
+                break;
+              default:
+                break;
+            }
+            if (phase) {
+              active.lastActivityAt = Date.now();
+              active.currentPhase = phase;
+            }
+          }
           if (event.type === "session") {
             persistSession(event.sessionId);
           }

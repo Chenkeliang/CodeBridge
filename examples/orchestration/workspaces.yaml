@@ -1,0 +1,4 @@
+schema_version: 1
+
+# 项目路径使用主机绑定或环境变量，不能把某台机器的绝对路径写入 Workflow。
+workspaces: []

@@ -18,6 +18,24 @@ describe("mapSessionUpdate", () => {
     expect(events).toEqual([{ type: "text_delta", text: "hello" }]);
   });
 
+  it("preserves the Codex message phase on agent text", () => {
+    const events = mapSessionUpdate({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "m1",
+      content: { type: "text", text: "P3 正在接入板块下钻" },
+      _meta: { codex: { phase: "commentary" } },
+    });
+
+    expect(events).toEqual([
+      {
+        type: "text_delta",
+        text: "P3 正在接入板块下钻",
+        messageId: "m1",
+        phase: "commentary",
+      },
+    ]);
+  });
+
   it("maps tool_call to tool_start", () => {
     const events = mapSessionUpdate({
       sessionUpdate: "tool_call",

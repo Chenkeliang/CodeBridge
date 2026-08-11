@@ -39,10 +39,31 @@ backends:
     type: codex
     acpCommand: npx
     acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.9"]
+  # 可选；Pi 通过 Node SDK 在 Runner 内执行，不启动 pi --mode rpc
+  # pi:
+  #   type: pi-sdk
 
 workspaces:
   root: ~/Projects
   default: ~/Projects
+
+# 可选：把正式 Project Catalog 放在单独 Git 仓库或 CodeBridge 配置仓库中。
+# 提案只创建本地 feature branch/commit，不自动 merge 或 push。
+# orchestration:
+#   projectCatalog:
+#     repositoryPath: ~/Projects/codebridge-catalog
+#     baseRef: origin/main
+#     catalogPath: catalog/projects.yaml
+#   mcpServers:
+#     local-tools:
+#       transport: stdio
+#       command: npx
+#       args: [local-tools-mcp]
+#       env: [LOCAL_TOOLS_TOKEN] # 只声明变量名，不在配置中写 token
+#       revision: config:1
+#     shared-tools:
+#       transport: http
+#       url: https://mcp.example.com/api
 
 runnerHost:
   listen: 127.0.0.1:19789

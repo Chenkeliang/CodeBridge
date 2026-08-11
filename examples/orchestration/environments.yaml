@@ -1,0 +1,16 @@
+schema_version: 1
+
+environments:
+  - id: local
+    kind: workstation
+    host_binding: local-workspace
+    write_policy: workspace_only
+
+  - id: test
+    kind: shared_test
+    write_policy: explicit_confirmation
+
+  - id: production
+    kind: production
+    write_policy: approval_token_required
+    credentials_ref: external-secret-store

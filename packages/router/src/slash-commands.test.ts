@@ -659,11 +659,11 @@ describe("/thinking", () => {
     expect(ctx.router.getBinding(ctx.chatId).showThinking ?? true).toBe(true);
 
     const off = await handleSlashCommand({ ...ctx, text: "/thinking off" });
-    expect((off as { text: string }).text).toContain("只显示最终答案");
+    expect((off as { text: string }).text).toContain("保留进度检查点和最终答案");
     expect(ctx.router.getBinding(ctx.chatId).showThinking).toBe(false);
 
     const status1 = await handleSlashCommand({ ...ctx, text: "/thinking" });
-    expect((status1 as { text: string }).text).toContain("卡片只显示最终答案");
+    expect((status1 as { text: string }).text).toContain("保留进度与最终答案");
 
     const on = await handleSlashCommand({ ...ctx, text: "/thinking on" });
     expect((on as { text: string }).text).toContain("显示思考");
@@ -694,6 +694,26 @@ describe("/thinking", () => {
     const ctx = baseCtx();
     await handleSlashCommand({ ...ctx, text: "/thinking off" });
     const status = await handleSlashCommand({ ...ctx, text: "/status" });
-    expect((status as { text: string }).text).toContain("只显示最终答案");
+    expect((status as { text: string }).text).toContain("保留进度与最终答案");
+  });
+
+  it("/status reports the latest real activity and checkpoint", async () => {
+    const ctx = baseCtx();
+    const now = Date.now();
+    ctx.activeRunStatus = () => ({
+      runId: "r1",
+      startedAt: now - 20 * 60_000,
+      lastActivityAt: now - 2 * 60_000,
+      currentPhase: "任务检查点",
+      lastCheckpoint: "P3 正在接入板块成分股 Web 下钻",
+    });
+
+    const status = await handleSlashCommand({ ...ctx, text: "/status" });
+    const text = (status as { text: string }).text;
+    expect(text).toContain("**currentPhase**: 任务检查点");
+    expect(text).toContain("**lastRealActivity**: 2 分 0 秒之前");
+    expect(text).toContain(
+      "**lastCheckpoint**: P3 正在接入板块成分股 Web 下钻",
+    );
   });
 });

@@ -1,0 +1,488 @@
+import { randomUUID } from "node:crypto";
+import { Hono } from "hono";
+import {
+  SqliteEventStore,
+  type DomainEvent,
+  type RiskLevel,
+  type WorkItem,
+  type WorkItemMode,
+} from "@codebridge/work-items";
+import type { ApprovalService } from "@codebridge/policy";
+import type { RunExecutor } from "@codebridge/run-executor";
+
+const WORK_ITEM_MODES: readonly WorkItemMode[] = [
+  "auto",
+  "investigation",
+  "change",
+  "review",
+  "release",
+  "observe",
+];
+
+type ErrorStatus = 400 | 401 | 404 | 409 | 503;
+
+export function createWorkItemApp(
+  store: SqliteEventStore,
+  token: string,
+  approvals?: ApprovalService,
+  executor?: RunExecutor,
+) {
+  const app = new Hono();
+
+  app.use("/v1/*", async (c, next) => {
+    if (c.req.header("authorization") !== `Bearer ${token}`) {
+      return errorResponse(c, 401, "unauthorized", "未授权");
+    }
+    await next();
+  });
+
+  app.post("/v1/work-items", async (c) => {
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = store.getIdempotencyResponse("create-work-item", idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 201);
+    }
+    const body = await readJson(c);
+    const input = parseCreateInput(body);
+    if (!input) {
+      return errorResponse(
+        c,
+        400,
+        "invalid_work_item",
+        "conversation_id 和 message 必填；title、agent_id、mode 可由 Agent 自动判断",
+      );
+    }
+
+    try {
+      const workItem = store.createWorkItem(input);
+      store.appendEvent({
+        workItemId: workItem.id,
+        type: "MESSAGE_RECEIVED",
+        actor: "user",
+        payload: { message: input.message },
+      });
+      const response = toApiWorkItem(workItem);
+      if (idempotencyKey) store.putIdempotencyResponse("create-work-item", idempotencyKey, response);
+      return c.json(response, 201);
+    } catch (error) {
+      return errorResponse(c, 400, "work_item_create_failed", messageOf(error));
+    }
+  });
+
+  app.get("/v1/work-items", (c) => {
+    return c.json({ work_items: store.listWorkItems().map(toApiWorkItem) });
+  });
+
+  app.get("/v1/work-items/:work_item_id", (c) => {
+    const workItem = store.getWorkItem(c.req.param("work_item_id"));
+    if (!workItem) {
+      return errorResponse(c, 404, "work_item_not_found", "WorkItem 不存在");
+    }
+    return c.json(toApiWorkItem(workItem));
+  });
+
+  app.post("/v1/work-items/:work_item_id/messages", async (c) => {
+    const workItemId = c.req.param("work_item_id");
+    if (!store.getWorkItem(workItemId)) {
+      return errorResponse(c, 404, "work_item_not_found", "WorkItem 不存在");
+    }
+    const body = await readJson(c);
+    if (
+      !body ||
+      typeof body.message !== "string" ||
+      body.message.trim() === ""
+    ) {
+      return errorResponse(c, 400, "invalid_message", "message 必填");
+    }
+
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = store.getIdempotencyResponse(`message:${workItemId}`, idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 202);
+    }
+
+    const event = store.appendEvent({
+      workItemId,
+      type: "MESSAGE_RECEIVED",
+      actor: body.actor === "channel" ? "channel" : "user",
+      payload: { message: body.message },
+    });
+    const response = {
+      request_id: `req_${randomUUID().replaceAll("-", "")}`,
+      accepted: true,
+      event_id: event.eventId,
+      sequence: event.sequence,
+    };
+    if (idempotencyKey) store.putIdempotencyResponse(`message:${workItemId}`, idempotencyKey, response);
+    return c.json(response, 202);
+  });
+
+  app.post("/v1/work-items/:work_item_id/runs", async (c) => {
+    const workItemId = c.req.param("work_item_id");
+    const workItem = store.getWorkItem(workItemId);
+    if (!workItem) {
+      return errorResponse(c, 404, "work_item_not_found", "WorkItem 不存在");
+    }
+
+    const body = await readJson(c);
+    if (
+      !body ||
+      typeof body.mode !== "string" ||
+      !WORK_ITEM_MODES.includes(body.mode as WorkItemMode)
+    ) {
+      return errorResponse(c, 400, "invalid_run", "mode 必须是有效的 Run 模式");
+    }
+    if (
+      body.plan_id !== undefined &&
+      body.plan_id !== null &&
+      typeof body.plan_id !== "string"
+    ) {
+      return errorResponse(c, 400, "invalid_run", "plan_id 无效");
+    }
+
+    const idempotencyKey = c.req.header("idempotency-key");
+    if (idempotencyKey) {
+      const cached = store.getIdempotencyResponse(`run:${workItemId}`, idempotencyKey);
+      if (cached !== undefined) return c.json(cached, 202);
+    }
+
+    try {
+      const run = store.createRun({
+        workItemId,
+        mode: body.mode as WorkItemMode,
+        planId: (body.plan_id as string | null | undefined) ?? null,
+      });
+      if (executor) {
+        void executor.execute(run.id).catch(() => {
+          // RunExecutor persists the failure event and status. The event stream
+          // is the durable error channel for clients that created the Run.
+        });
+      }
+      const response = { run_id: run.id, status: run.status };
+      if (idempotencyKey) store.putIdempotencyResponse(`run:${workItemId}`, idempotencyKey, response);
+      return c.json(response, 202);
+    } catch (error) {
+      return errorResponse(c, 400, "run_create_failed", messageOf(error));
+    }
+  });
+
+  app.post("/v1/runs/:run_id/approve", async (c) => {
+    if (!approvals) {
+      return errorResponse(c, 503, "approval_unavailable", "审批服务未配置");
+    }
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    const body = await readJson(c);
+    if (!body || typeof body.approval_id !== "string") {
+      return errorResponse(c, 400, "invalid_approval", "approval_id 必填");
+    }
+    const approval = approvals.get(body.approval_id);
+    if (!approval || approval.runId !== run.id) {
+      return errorResponse(c, 404, "approval_not_found", "审批记录不存在");
+    }
+    const granted = approvals.grant(approval.id, body.granted_by === "system" ? "system" : "user");
+    if (!granted || granted.status !== "granted") {
+      return errorResponse(c, 409, "approval_not_grantable", "审批已过期或已处理");
+    }
+    store.requeueRun(run.id);
+    if (executor) void executor.execute(run.id).catch(() => {});
+    return c.json({ approval_id: granted.id, status: granted.status, granted_at: granted.grantedAt });
+  });
+
+  app.get("/v1/runs/:run_id/approvals", (c) => {
+    if (!approvals) return errorResponse(c, 503, "approval_unavailable", "审批服务未配置");
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    return c.json({ approvals: approvals.listForRun(run.id).map(toApiApproval) });
+  });
+
+  app.get("/v1/runs/:run_id/artifacts", (c) => {
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    return c.json({ artifacts: store.listArtifacts(run.id).map((artifact) => toApiArtifact(artifact, false)) });
+  });
+
+  app.get("/v1/runs/:run_id/verifications", (c) => {
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    return c.json({ verifications: store.listVerifications(run.id).map(toApiVerification) });
+  });
+
+  app.get("/v1/artifacts/:artifact_id", (c) => {
+    const artifact = store.getArtifact(c.req.param("artifact_id"));
+    if (!artifact) return errorResponse(c, 404, "artifact_not_found", "Artifact 不存在");
+    return c.json(toApiArtifact(artifact, true));
+  });
+
+  app.post("/v1/runs/:run_id/reject", async (c) => {
+    if (!approvals) {
+      return errorResponse(c, 503, "approval_unavailable", "审批服务未配置");
+    }
+    const run = store.getRun(c.req.param("run_id"));
+    if (!run) return errorResponse(c, 404, "run_not_found", "Run 不存在");
+    const body = await readJson(c);
+    if (!body || typeof body.approval_id !== "string") {
+      return errorResponse(c, 400, "invalid_approval", "approval_id 必填");
+    }
+    const approval = approvals.get(body.approval_id);
+    if (!approval || approval.runId !== run.id) {
+      return errorResponse(c, 404, "approval_not_found", "审批记录不存在");
+    }
+    const rejected = approvals.revoke(
+      approval.id,
+      body.rejected_by === "system" ? "system" : "user",
+    );
+    if (!rejected || rejected.status !== "revoked") {
+      return errorResponse(c, 409, "approval_not_rejectable", "审批已过期或已处理");
+    }
+    store.updateRunStatus(run.id, "cancelled");
+    store.appendEvent({
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "RUN_CANCELLED",
+      actor: "user",
+      target: run.id,
+      payload: { approval_id: rejected.id, reason: "approval_rejected" },
+    });
+    return c.json({ approval_id: rejected.id, status: rejected.status });
+  });
+
+  app.get("/v1/work-items/:work_item_id/events", (c) => {
+    const workItemId = c.req.param("work_item_id");
+    if (!store.getWorkItem(workItemId)) {
+      return errorResponse(c, 404, "work_item_not_found", "WorkItem 不存在");
+    }
+    const lastEventId = c.req.header("last-event-id");
+    const afterSequenceValue =
+      c.req.query("after_sequence") ??
+      (lastEventId ? String(store.sequenceForEventId(workItemId, lastEventId)) : "0");
+    const afterSequence = Number(afterSequenceValue);
+    if (!Number.isInteger(afterSequence) || afterSequence < 0) {
+      return errorResponse(c, 400, "invalid_after_sequence", "after_sequence 无效");
+    }
+
+    const stream = store
+      .listEvents(workItemId, afterSequence)
+      .map(toSseEvent)
+      .join("");
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+        "content-type": "text/event-stream; charset=utf-8",
+      },
+    });
+  });
+
+  return app;
+}
+
+function parseCreateInput(
+  body: Record<string, unknown> | null,
+):
+  | (Parameters<SqliteEventStore["createWorkItem"]>[0] & {
+      message: string;
+    })
+  | null {
+  if (!body) return null;
+  const requiredStrings = ["conversation_id", "message"];
+  if (requiredStrings.some((key) => !isNonEmptyString(body[key]))) {
+    return null;
+  }
+  if (body.title !== undefined && body.title !== null && !isNonEmptyString(body.title)) {
+    return null;
+  }
+  if (body.agent_id !== undefined && body.agent_id !== null && !isNonEmptyString(body.agent_id)) {
+    return null;
+  }
+  if (body.mode !== undefined && body.mode !== null && (
+    typeof body.mode !== "string" ||
+    !WORK_ITEM_MODES.includes(body.mode as WorkItemMode)
+  )) {
+    return null;
+  }
+  if (
+    body.workflow_id !== undefined &&
+    body.workflow_id !== null &&
+    typeof body.workflow_id !== "string"
+  ) {
+    return null;
+  }
+  if (body.workspace_scope !== undefined && !isStringArray(body.workspace_scope)) {
+    return null;
+  }
+  if (body.identifiers !== undefined && !isRecord(body.identifiers)) {
+    return null;
+  }
+  if (
+    body.risk_level !== undefined &&
+    !["read_only", "workspace_write", "git_write", "production_write"].includes(
+      String(body.risk_level),
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    title: isNonEmptyString(body.title)
+      ? body.title
+      : deriveTitle(body.message as string),
+    mode: (body.mode as WorkItemMode | undefined) ?? "auto",
+    conversationId: body.conversation_id as string,
+    agentId: (body.agent_id as string | null | undefined) ?? null,
+    workflowId: (body.workflow_id as string | null | undefined) ?? null,
+    workflowRevision: null,
+    workspaceScope: (body.workspace_scope as string[] | undefined) ?? [],
+    identifiers: (body.identifiers as Record<string, unknown> | undefined) ?? {},
+    riskLevel: (body.risk_level as RiskLevel | undefined) ?? "read_only",
+    message: body.message as string,
+  };
+}
+
+function deriveTitle(message: string): string {
+  const compact = message.replace(/\s+/g, " ").trim();
+  return compact.length > 48 ? `${compact.slice(0, 47)}…` : compact;
+}
+
+async function readJson(
+  c: { req: { json: () => Promise<unknown> } },
+): Promise<Record<string, unknown> | null> {
+  const body = await c.req.json().catch(() => null);
+  return isRecord(body) ? body : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function toApiWorkItem(workItem: WorkItem): Record<string, unknown> {
+  return {
+    schema_version: workItem.schemaVersion,
+    id: workItem.id,
+    title: workItem.title,
+    status: workItem.status,
+    mode: workItem.mode,
+    conversation_id: workItem.conversationId,
+    agent_id: workItem.agentId,
+    workflow_id: workItem.workflowId,
+    workflow_revision: workItem.workflowRevision,
+    workspace_scope: workItem.workspaceScope,
+    identifiers: workItem.identifiers,
+    context_revision: workItem.contextRevision,
+    risk_level: workItem.riskLevel,
+    created_at: workItem.createdAt,
+    updated_at: workItem.updatedAt,
+  };
+}
+
+function toApiApproval(approval: ReturnType<ApprovalService["listForRun"]>[number]): Record<string, unknown> {
+  return {
+    id: approval.id,
+    work_item_id: approval.workItemId,
+    run_id: approval.runId,
+    step_id: approval.stepId,
+    capability_id: approval.capabilityId,
+    session_id: approval.sessionId,
+    environment: approval.environment,
+    target_resource: approval.targetResource,
+    input_hash: approval.inputHash,
+    status: approval.status,
+    requested_by: approval.requestedBy,
+    granted_by: approval.grantedBy,
+    created_at: approval.createdAt,
+    expires_at: approval.expiresAt,
+    granted_at: approval.grantedAt,
+    consumed_at: approval.consumedAt,
+  };
+}
+
+function toApiArtifact(
+  artifact: ReturnType<SqliteEventStore["listArtifacts"]>[number],
+  includeContent: boolean,
+): Record<string, unknown> {
+  return {
+    id: artifact.id,
+    work_item_id: artifact.workItemId,
+    run_id: artifact.runId,
+    step_id: artifact.stepId,
+    kind: artifact.kind,
+    name: artifact.name,
+    mime_type: artifact.mimeType,
+    content: includeContent ? artifact.content : undefined,
+    content_hash: artifact.contentHash,
+    metadata: artifact.metadata,
+    created_at: artifact.createdAt,
+  };
+}
+
+function toApiVerification(
+  verification: ReturnType<SqliteEventStore["listVerifications"]>[number],
+): Record<string, unknown> {
+  return {
+    id: verification.id,
+    work_item_id: verification.workItemId,
+    run_id: verification.runId,
+    step_id: verification.stepId,
+    validator: verification.validator,
+    status: verification.status,
+    summary: verification.summary,
+    artifact_ids: verification.artifactIds,
+    created_at: verification.createdAt,
+  };
+}
+
+function toSseEvent(event: DomainEvent): string {
+  return [
+    `id: ${event.eventId}`,
+    `event: ${event.type}`,
+    `data: ${JSON.stringify({
+      schema_version: event.schemaVersion,
+      event_id: event.eventId,
+      sequence: event.sequence,
+      work_item_id: event.workItemId,
+      run_id: event.runId,
+      type: event.type,
+      occurred_at: event.occurredAt,
+      actor: event.actor,
+      target: event.target,
+      input_hash: event.inputHash,
+      result_ref: event.resultRef,
+      payload: event.payload,
+    })}`,
+    "",
+    "",
+  ].join("\n");
+}
+
+function errorResponse(
+  c: { json: (value: unknown, status: ErrorStatus) => Response },
+  status: ErrorStatus,
+  code: string,
+  message: string,
+  retryable = false,
+) {
+  return c.json(
+    {
+      error: {
+        code,
+        message,
+        retryable,
+        request_id: `req_${randomUUID().replaceAll("-", "")}`,
+      },
+    },
+    status,
+  );
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

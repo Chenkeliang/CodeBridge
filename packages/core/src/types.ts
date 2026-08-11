@@ -41,6 +41,16 @@ export interface RunRequest {
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
 
+export type AgentMessagePhase = "commentary" | "final_answer";
+
+export interface ActiveRunStatus {
+  runId: string;
+  startedAt: number;
+  lastActivityAt: number;
+  currentPhase: string;
+  lastCheckpoint?: string;
+}
+
 export interface RunState {
   runId: string;
   status: RunStatus;
@@ -68,7 +78,12 @@ export interface AgentAvailableCommand {
 }
 
 export type AgentEvent =
-  | { type: "text_delta"; text: string; messageId?: string }
+  | {
+      type: "text_delta";
+      text: string;
+      messageId?: string;
+      phase?: AgentMessagePhase;
+    }
   | { type: "thought_delta"; text: string; messageId?: string }
   | {
       type: "tool_start";
@@ -123,6 +138,26 @@ export type AgentEvent =
   /** prompt_feishu 权限模式：agent 请求权限，等待用户 /approve 或 /deny */
   | { type: "permission_request"; requestId: string; title: string }
   | { type: "done"; exitCode: number };
+
+export interface ChannelSessionMessage {
+  channel: string;
+  conversationId: string;
+  message: string;
+  agentId?: string;
+  cwd?: string;
+  model?: string;
+  flowId?: string;
+  attachments?: RunAttachment[];
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}
+
+export interface ChannelSessionIngress {
+  (message: ChannelSessionMessage): AsyncGenerator<AgentEvent>;
+  cancel?(channel: string, conversationId: string): Promise<boolean>;
+  resolveApproval?(channel: string, conversationId: string, approve: boolean): Promise<boolean>;
+  reset?(channel: string, conversationId: string): Promise<boolean>;
+}
 
 export interface DoctorResult {
   ok: boolean;
@@ -182,8 +217,8 @@ export interface BackendConfigOption {
 }
 
 export interface BackendProfile {
-  type: "cursor-cli" | "claude-code" | "codex" | "generic-spawn";
-  /** ACP spawn 命令；已知 backend type 有内置默认值 */
+  type: "cursor-cli" | "claude-code" | "codex" | "generic-spawn" | "pi-sdk";
+  /** ACP spawn 命令；仅 ACP profiles 使用，pi-sdk 由 Node SDK 直接创建 */
   acpCommand?: string;
   acpArgs?: string[];
   model?: string;

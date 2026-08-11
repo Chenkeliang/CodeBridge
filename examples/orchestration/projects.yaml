@@ -1,0 +1,4 @@
+schema_version: 1
+
+# 正式项目清单由 Discovery Task 生成候选，经确认后写入。
+projects: []

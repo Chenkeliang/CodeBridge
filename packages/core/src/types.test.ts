@@ -27,6 +27,17 @@ describe("CodeBridge defaults", () => {
   it("uses the renamed data directory", () => {
     expect(DEFAULT_DATA_DIR).toMatch(/\.codebridge$/);
   });
+
+  it("allows six-hour tasks while keeping no-output and stall watchdogs short", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      runnerHost: {},
+    });
+
+    expect(config.runnerHost?.acpPromptTimeoutMs).toBe(6 * 60 * 60_000);
+    expect(config.runnerHost?.acpNoOutputTimeoutMs).toBe(10 * 60_000);
+    expect(config.runnerHost?.acpStallTimeoutMs).toBe(30 * 60_000);
+  });
 });
 
 describe("resolveRequireMention", () => {
@@ -77,5 +88,49 @@ describe("ACP-only backend configuration", () => {
     });
     expect(config.telegram?.botToken).toBe("123:token");
     expect(config.telegram?.allowedChats).toEqual(["-1001"]);
+  });
+
+  it("keeps Project Catalog Git integration explicit and scoped", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      orchestration: {
+        projectCatalog: {
+          repositoryPath: "/srv/codebridge-catalog",
+          baseRef: "origin/main",
+          catalogPath: "catalog/projects.yaml",
+        },
+      },
+    });
+    expect(config.orchestration?.projectCatalog).toEqual({
+      repositoryPath: "/srv/codebridge-catalog",
+      baseRef: "origin/main",
+      catalogPath: "catalog/projects.yaml",
+    });
+  });
+
+  it("accepts MCP server configuration without storing credential values", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      orchestration: {
+        mcpServers: {
+          logs: {
+            transport: "stdio",
+            command: "npx",
+            args: ["logs-mcp"],
+            env: ["LOGS_MCP_TOKEN"],
+            revision: "config:1",
+          },
+          catalog: {
+            transport: "http",
+            url: "https://mcp.example.test/api",
+          },
+        },
+      },
+    });
+    expect(config.orchestration?.mcpServers?.logs).toMatchObject({
+      command: "npx",
+      env: ["LOGS_MCP_TOKEN"],
+    });
+    expect(config.orchestration?.mcpServers?.catalog.transport).toBe("http");
   });
 });

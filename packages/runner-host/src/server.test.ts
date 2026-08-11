@@ -2,8 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig, type AgentEvent, type RunRequest } from "@codebridge/core";
+import {
+  defaultConfig,
+  type AgentEvent,
+  type RunContext,
+  type RunRequest,
+} from "@codebridge/core";
 import { RunnerHost } from "./server.js";
+import type { PiSession } from "@codebridge/backends";
 
 const tmpDirs: string[] = [];
 
@@ -11,7 +17,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await new Promise((resolve) => setTimeout(resolve, 20));
   for (const dir of tmpDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 20,
+    });
   }
 });
 
@@ -30,6 +41,38 @@ function request(cwd: string): RunRequest {
 }
 
 describe("RunnerHost cwd validation", () => {
+  it("picks and authorizes a directory through an injectable host picker", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-pick-"));
+    tmpDirs.push(dataDir, target);
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      directoryPicker: async () => target,
+    });
+
+    await expect(host.pickDirectory()).resolves.toEqual({
+      ok: true,
+      path: fs.realpathSync(target),
+    });
+    host.shutdown();
+  });
+
+  it("reports an explicit cancellation from the host picker", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      directoryPicker: async () => null,
+    });
+
+    await expect(host.pickDirectory()).resolves.toEqual({ ok: true, cancelled: true });
+    host.shutdown();
+  });
+
   it("returns an explicit error for a relative cwd before spawning", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);
@@ -199,6 +242,103 @@ describe("RunnerHost steering", () => {
 });
 
 describe("RunnerHost session lifecycle", () => {
+  it("stops an ACP run and reports a fatal error when its session lock is lost", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.backends.cursor = {
+      ...config.backends.cursor!,
+      acpCommand: "fcb-missing-acp-adapter-for-test",
+      acpArgs: [],
+    };
+    const host = new RunnerHost({ token: "token", config, dataDir });
+    const executeAcpRun = (
+      host as unknown as {
+        executeAcpRun(
+          runId: string,
+          ctx: RunContext,
+          sessionLockLost: Promise<Error>,
+        ): AsyncGenerator<AgentEvent>;
+      }
+    ).executeAcpRun.bind(host);
+    const ctx: RunContext = {
+      runId: "lock-lost",
+      cwd: dataDir,
+      prompt: "hi",
+      resumeSessionId: "session-1",
+      backendConfig: config.backends.cursor!,
+    };
+
+    const events = await collect(
+      executeAcpRun(
+        "lock-lost",
+        ctx,
+        Promise.resolve(new Error("holder exited")),
+      ),
+    );
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: expect.stringContaining("session 锁异常丢失"),
+      fatal: true,
+    });
+    expect(events.at(-1)).toEqual({ type: "done", exitCode: 1 });
+    host.shutdown();
+  });
+
+  it("refuses to resume a session already running in this Runner", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
+    const active = (host as unknown as {
+      active: Map<string, unknown>;
+    }).active;
+    active.set("existing", {
+      runId: "existing",
+      sessionId: "shared-session",
+      aborted: false,
+      cancel: () => {},
+    });
+    const run = request(dataDir);
+    run.runId = "second";
+    run.resumeSessionId = "shared-session";
+
+    const events = await collect(host.executeRun(run));
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: expect.stringContaining("正在运行"),
+      fatal: true,
+    });
+    expect(events.at(-1)).toEqual({ type: "done", exitCode: 1 });
+    host.shutdown();
+  });
+
+  it("refuses to resume a Codex session owned by desktop or TUI", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      inspectSessionOwners: async () => [37540],
+    });
+    const run = request(dataDir);
+    run.runId = "second";
+    run.sessionKey.backendId = "codex";
+    run.resumeSessionId = "shared-session";
+
+    const events = await collect(host.executeRun(run));
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: expect.stringContaining("桌面端/TUI"),
+      fatal: true,
+    });
+    expect(events.at(-1)).toEqual({ type: "done", exitCode: 1 });
+    host.shutdown();
+  });
+
   it("returns an explicit error for an unknown backend", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);
@@ -259,6 +399,92 @@ describe("RunnerHost session lifecycle", () => {
       ok: false,
       error: "Runner 当前未持有该 ACP session；历史 session 请使用 /session delete",
     });
+    host.shutdown();
+  });
+});
+
+describe("RunnerHost Pi SDK backend", () => {
+  it("forks a Pi provider session into a target directory", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-fork-"));
+    const sourceCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-source-"));
+    const targetCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-target-"));
+    tmpDirs.push(dataDir, sourceCwd, targetCwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      piSessionForker: async (_cwd, _sessionId, target) => ({
+        ok: true,
+        sessionId: "pi-forked",
+        cwd: target,
+      }),
+    });
+
+    await expect(host.forkSession("pi", sourceCwd, "pi-source", targetCwd)).resolves.toMatchObject({
+      ok: true,
+      cwd: fs.realpathSync(targetCwd),
+    });
+    host.shutdown();
+  });
+
+  it("lists Pi sessions without spawning an ACP process", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-list-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-list-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const host = new RunnerHost({ token: "token", config, dataDir });
+
+    await expect(host.listSessions("pi", cwd)).resolves.toEqual({ sessions: [] });
+    host.shutdown();
+  });
+
+  it("runs a configured pi-sdk profile through the native session adapter", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const session: PiSession = {
+      sessionId: "pi-native-session",
+      subscribe(listener) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "native-pi" },
+        });
+        return () => {};
+      },
+      async prompt() {},
+      async steer() {},
+      async abort() {},
+      dispose() {},
+    };
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      piSessionFactory: async () => session,
+    });
+
+    const events = await collect(
+      host.executeRun({
+        runId: "pi-run",
+        sessionKey: { chatId: "chat", backendId: "pi", cwd },
+        prompt: "hello pi",
+      }),
+    );
+
+    expect(events).toContainEqual({
+      type: "session",
+      sessionId: "pi-native-session",
+    });
+    expect(events).toContainEqual({
+      type: "text_delta",
+      text: "native-pi",
+    });
+    expect(events.at(-1)).toEqual({ type: "done", exitCode: 0 });
     host.shutdown();
   });
 });
