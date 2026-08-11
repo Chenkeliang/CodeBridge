@@ -1,4 +1,4 @@
-import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -12,6 +12,7 @@ import {
   Circle,
   FileText,
   FolderOpen,
+  Gauge,
   GitBranch,
   LoaderCircle,
   MoreHorizontal,
@@ -52,7 +53,7 @@ import type {
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, isModelOption, isPermissionOption, isThoughtLevelOption, orderSessions, restoreSessionSelection, workspacePaths } from "@/lib/workbench-logic";
+import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, orderSessions, restoreSessionSelection, serializeConfigOverride, speedValueLabel, workspacePaths } from "@/lib/workbench-logic";
 
 type Theme = "paper" | "carbon";
 type PanelArea = "agents" | "flows";
@@ -145,6 +146,7 @@ export function Workbench() {
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
+  const [configOverrides, setConfigOverrides] = useState<Record<string, string | boolean>>({});
   const [permissionMode, setPermissionMode] = useState("");
   const [flowId, setFlowId] = useState("");
   const [query, setQuery] = useState("");
@@ -183,6 +185,7 @@ export function Workbench() {
   const projection = useMemo(() => reduceConversationEvents(events), [events]);
   const modelOption = useMemo(() => configOptions.find(isModelOption), [configOptions]);
   const thoughtLevelOption = useMemo(() => configOptions.find(isThoughtLevelOption), [configOptions]);
+  const speedOption = useMemo(() => configOptions.find(isSpeedOption), [configOptions]);
   const permissionOption = useMemo(() => configOptions.find(isPermissionOption), [configOptions]);
 
   const notify = useCallback((message: string) => {
@@ -239,6 +242,7 @@ export function Workbench() {
       setApprovals([]);
       setModel("");
       setEffort("");
+      setConfigOverrides({});
       setPermissionMode("");
       setFlowId("");
       setLoadingSession(false);
@@ -269,6 +273,7 @@ export function Workbench() {
         setConfigOptions(options);
         setModel(session.model ?? "");
         setEffort(session.effort ?? "");
+        setConfigOverrides(session.config_overrides ?? {});
         setPermissionMode(session.permission_mode ?? "");
         setFlowId(session.flow_id ?? "");
         const latestRun = runs.at(-1);
@@ -369,6 +374,7 @@ export function Workbench() {
       setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
       setModel(updated.model ?? "");
       setEffort(updated.effort ?? "");
+      setConfigOverrides(updated.config_overrides ?? {});
       setPermissionMode(updated.permission_mode ?? "");
       if (updated.archived_at) {
         window.localStorage.removeItem(`codebridge:last-session:${updated.agent_id}`);
@@ -390,6 +396,14 @@ export function Workbench() {
   function setSessionEffort(value: string) {
     setEffort(value);
     void updateSession({ effort: value || null });
+  }
+
+  function setSessionConfigOverride(option: ConfigOption, value: string) {
+    const next = { ...configOverrides };
+    if (value) next[option.id] = serializeConfigOverride(option, value);
+    else delete next[option.id];
+    setConfigOverrides(next);
+    void updateSession({ config_overrides: next });
   }
 
   async function deleteSelected() {
@@ -544,6 +558,8 @@ export function Workbench() {
                 modelOption={modelOption}
                 effort={effort}
                 thoughtLevelOption={thoughtLevelOption}
+                configOverrides={configOverrides}
+                speedOption={speedOption}
                 permissionMode={permissionMode}
                 permissionOption={permissionOption}
                 sending={sending}
@@ -560,6 +576,7 @@ export function Workbench() {
                 onFlow={setFlowId}
                 onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
                 onEffort={setSessionEffort}
+                onConfigOverride={setSessionConfigOverride}
                 onPermissionMode={setSessionPermissionMode}
                 onPickDirectory={() => notify("Session 创建后可添加 Workspace")}
                 onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, valueIndex) => valueIndex !== index))}
@@ -603,6 +620,8 @@ export function Workbench() {
                   modelOption={modelOption}
                   effort={effort}
                   thoughtLevelOption={thoughtLevelOption}
+                  configOverrides={configOverrides}
+                  speedOption={speedOption}
                   permissionMode={permissionMode}
                   permissionOption={permissionOption}
                   sending={sending}
@@ -619,6 +638,7 @@ export function Workbench() {
                   onFlow={setFlowId}
                   onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
                   onEffort={setSessionEffort}
+                  onConfigOverride={setSessionConfigOverride}
                   onPermissionMode={setSessionPermissionMode}
                   onPickDirectory={() => void pickDirectory()}
                   onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, valueIndex) => valueIndex !== index))}
@@ -734,7 +754,7 @@ function SessionHeader({ agent, session, theme, menuOpen, menuView, renameDraft,
   </header>;
 }
 
-function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, modelOption, effort, thoughtLevelOption, permissionMode, permissionOption, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onModel, onEffort, onPermissionMode, onPickDirectory, onRemoveAttachment, onSubmit }: {
+function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, modelOption, effort, thoughtLevelOption, configOverrides, speedOption, permissionMode, permissionOption, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onModel, onEffort, onConfigOverride, onPermissionMode, onPickDirectory, onRemoveAttachment, onSubmit }: {
   attachments: MessageAttachmentInput[];
   commands: AgentCommand[];
   contextOpen: boolean;
@@ -748,6 +768,8 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   modelOption?: ConfigOption;
   effort: string;
   thoughtLevelOption?: ConfigOption;
+  configOverrides: Record<string, string | boolean>;
+  speedOption?: ConfigOption;
   permissionMode: string;
   permissionOption?: ConfigOption;
   sending: boolean;
@@ -764,6 +786,7 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   onFlow: (value: string) => void;
   onModel: (value: string) => void;
   onEffort: (value: string) => void;
+  onConfigOverride: (option: ConfigOption, value: string) => void;
   onPermissionMode: (value: string) => void;
   onPickDirectory: () => void;
   onRemoveAttachment: (index: number) => void;
@@ -779,6 +802,7 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5">
       {modelOption ? <SessionConfigSelect label={defaultModelLabel(modelOption)} onValue={onModel} option={modelOption} theme={theme} value={model} /> : <ContextChip label="Agent default" theme={theme} />}
       {thoughtLevelOption && <ReasoningLevelControl onValue={onEffort} option={thoughtLevelOption} theme={theme} value={effort} />}
+      {speedOption && <SpeedControl onValue={(value) => onConfigOverride(speedOption, value)} option={speedOption} overridden={Object.hasOwn(configOverrides, speedOption.id)} theme={theme} value={String(configOverrides[speedOption.id] ?? speedOption.currentValue ?? "false")} />}
       {permissionOption && <SessionConfigSelect label="Agent default" onValue={onPermissionMode} option={permissionOption} theme={theme} value={permissionMode} />}
       <button className={cn("inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded border px-2 text-[10px] transition-opacity hover:opacity-80", t.surfaceSoft, t.muted, t.line)} onClick={onPickDirectory} type="button"><FolderOpen className="size-3" /><span className={cn("font-medium", t.inkSoft)}>{workspaceLabel(session)}</span></button>
       {flows.length > 0 && <div className={cn("inline-flex min-h-6 shrink-0 items-center rounded border pl-2 text-[10px]", t.surfaceSoft, t.muted, t.line)}><Workflow className="mr-1 size-3" /><Select onValueChange={(value) => onFlow(value === DEFAULT_SELECT_VALUE ? "" : value)} value={flowId || DEFAULT_SELECT_VALUE}>
@@ -887,7 +911,7 @@ function ApprovalCard({ approval, item, onApproval, theme }: { approval: Approva
   return <section className={cn("max-w-[760px] rounded-lg border", t.surface, t.lineStrong, t.shadowSmall)}><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", t.line)}><span className={cn("flex items-center gap-2 text-[11px] font-semibold", t.ink)}><ShieldAlert className={cn("size-3.5", t.warning)} />Needs approval</span><span className={cn("font-mono text-[10px]", t.muted)}>scoped to this Run</span></div><div className={cn("px-3.5 pb-1 pt-3 text-xs leading-5", t.inkSoft)}>{item.title}</div><div className="flex gap-2 px-3.5 pb-3.5 pt-2"><Button className={cn("h-8 text-xs", t.accent, t.accentText)} disabled={!approval} onClick={() => void onApproval(item, true)} size="sm">Allow once</Button><Button className={cn("h-8 border text-xs", t.surface, t.ink, t.lineStrong)} disabled={!approval} onClick={() => void onApproval(item, false)} size="sm" variant="outline">Deny</Button></div></section>;
 }
 
-function Markdown({ content, theme }: { content: string; theme: Theme }) {
+const Markdown = memo(function Markdown({ content, theme }: { content: string; theme: Theme }) {
   const t = themes[theme];
   return <div className={cn("max-w-[780px] text-sm font-normal leading-7 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-2", t.inkSoft)}><ReactMarkdown components={{
     a: ({ children, href }) => <a className={cn("underline underline-offset-4", t.ink)} href={href} rel="noreferrer" target="_blank">{children}</a>,
@@ -906,7 +930,7 @@ function Markdown({ content, theme }: { content: string; theme: Theme }) {
     table: ({ children }) => <div className="my-3 overflow-auto"><table className={cn("w-full border-collapse text-left text-xs [&_td]:border-b [&_td]:p-2 [&_th]:border-b [&_th]:p-2", t.line)}>{children}</table></div>,
     ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>,
   }} rehypePlugins={[rehypeKatex]} remarkPlugins={[remarkGfm, remarkMath]}>{content}</ReactMarkdown></div>;
-}
+});
 
 function LoadingConversation({ theme }: { theme: Theme }) {
   const t = themes[theme];
@@ -932,15 +956,29 @@ function ReasoningLevelControl({ onValue, option, theme, value }: { onValue: (va
     <PopoverTrigger asChild>
       <Button aria-label={option.name} className={cn("h-6 max-w-44 shrink-0 gap-1 border px-2 py-0 text-[10px] shadow-none", t.surfaceSoft, t.inkSoft, t.line, t.controlHover)} title={activeLabel} type="button" variant="outline"><Zap className="size-3" /><span className="truncate">{activeLabel}</span><ChevronDown className="size-3 opacity-60" /></Button>
     </PopoverTrigger>
-    <PopoverContent align="start" className={cn("w-64", t.surface, t.inkSoft, t.lineStrong, t.shadow)} side="top">
-      <div className="mb-4 flex items-center justify-between gap-3"><span className={cn("text-xs font-medium", t.ink)}>Reasoning</span><span className="flex min-w-0 items-center gap-2">{value && <span className={cn("text-[10px] underline underline-offset-2", t.muted)}><button onClick={() => onValue("")}>Use default</button></span>}<span className={cn("truncate text-[10px]", t.muted)}>{activeLabel}</span></span></div>
+    <PopoverContent align="start" className={cn("w-72", t.surface, t.inkSoft, t.lineStrong, t.shadow)} side="top">
+      <div className="mb-5 flex items-center justify-between gap-3"><span className={cn("text-xs font-medium", t.ink)}>Reasoning</span><span className="flex min-w-0 items-center gap-2">{value && <span className={cn("text-[10px] underline underline-offset-2", t.muted)}><button onClick={() => onValue("")}>Use default</button></span>}<span className={cn("truncate text-[10px]", t.muted)}>{activeLabel}</span></span></div>
       <div className="relative py-1">
-        <div className={cn("pointer-events-none absolute inset-x-1 top-1/2 flex -translate-y-1/2 justify-between", t.faint)}>{levels.map((level, index) => <span className="size-1 rounded-full bg-current" key={`${level.value}-${index}`} />)}</div>
+        <div className="pointer-events-none absolute inset-x-1 top-1/2 flex -translate-y-1/2 justify-between">{levels.map((level, index) => <span className={cn("size-1 rounded-full bg-current motion-safe:transition-[color,transform] motion-safe:duration-150", previewIndex >= index ? t.controlAccent : t.faint, previewIndex === index && "scale-150")} key={`${level.value}-${index}`} />)}</div>
         <Slider aria-label="Reasoning level" className={t.controlAccent} max={levels.length - 1} min={0} onValueChange={([index]) => setPreviewIndex(index ?? 0)} onValueCommit={([index]) => onValue(levels[index ?? 0]?.value ?? "")} step={1} value={[previewIndex]} />
       </div>
       <div className={cn("mt-3 flex justify-between text-[9px]", t.faint)}><span>{levels[0]?.name}</span><span>{levels.at(-1)?.name}</span></div>
+      <p className={cn("mt-3 min-h-4 text-[10px] leading-4", t.muted)}>{active.description ?? "Agent-provided reasoning level"}</p>
     </PopoverContent>
   </Popover>;
+}
+
+function SpeedControl({ onValue, option, overridden, theme, value }: { onValue: (value: string) => void; option: ConfigOption; overridden: boolean; theme: Theme; value: string }) {
+  const t = themes[theme];
+  const selected = option.values.find((candidate) => candidate.value === value);
+  const label = `${speedValueLabel(selected?.value ?? value, selected?.name)}${overridden ? "" : " · Default"}`;
+  return <Select onValueChange={(next) => onValue(next === DEFAULT_SELECT_VALUE ? "" : next)} value={overridden ? value : DEFAULT_SELECT_VALUE}>
+    <SelectTrigger aria-label="Speed" className={cn("h-6 max-w-44 shrink-0 gap-1 border px-2 py-0 text-[10px] shadow-none focus-visible:ring-1", t.surfaceSoft, t.inkSoft, t.line, t.focus)} title={selected?.description}><Gauge className="size-3" /><SelectValue>{label}</SelectValue></SelectTrigger>
+    <SelectContent className={cn("max-w-80", t.surface, t.inkSoft, t.lineStrong, t.shadow)}>
+      <SelectItem className={t.menuItemFocus} value={DEFAULT_SELECT_VALUE}>{speedValueLabel(option.currentValue ?? "false")} · Default</SelectItem>
+      {option.values.map((candidate) => <SelectItem className={t.menuItemFocus} key={candidate.value} textValue={speedValueLabel(candidate.value, candidate.name)} value={candidate.value}><span className="grid gap-0.5 py-0.5"><span>{speedValueLabel(candidate.value, candidate.name)}</span><span className={cn("max-w-72 text-[10px] font-normal leading-4", t.muted)}>{candidate.description ?? (speedValueLabel(candidate.value, candidate.name) === "Fast" ? "Faster responses with higher quota usage" : "Standard response speed")}</span></span></SelectItem>)}
+    </SelectContent>
+  </Select>;
 }
 
 function SessionConfigSelect({ label, onValue, option, theme, value }: { label: string; onValue: (value: string) => void; option: ConfigOption; theme: Theme; value: string }) {

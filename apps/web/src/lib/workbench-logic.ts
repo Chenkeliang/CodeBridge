@@ -12,6 +12,20 @@ export function isThoughtLevelOption(option: ConfigOption): boolean {
   return option.category?.toLowerCase() === "thought_level" || option.id.toLowerCase().includes("reasoning");
 }
 
+export function isSpeedOption(option: ConfigOption): boolean {
+  const identity = `${option.id} ${option.name}`.toLowerCase();
+  return option.category?.toLowerCase() === "model_config" && /\b(fast|speed)\b/.test(identity);
+}
+
+export function serializeConfigOverride(option: Pick<ConfigOption, "type">, value: string): string | boolean {
+  return option.type === "boolean" ? value === "true" : value;
+}
+
+export function speedValueLabel(value: string, name?: string): string {
+  const identity = `${value} ${name ?? ""}`.toLowerCase();
+  return value.toLowerCase() === "true" || /\b(fast|quick)\b/.test(identity) ? "Fast" : "Standard";
+}
+
 export function orderSessions(sessions: AgentSession[]): AgentSession[] {
   return [...sessions].sort((left, right) => {
     if (Boolean(left.pinned_at) !== Boolean(right.pinned_at)) return left.pinned_at ? -1 : 1;

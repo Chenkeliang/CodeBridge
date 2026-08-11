@@ -47,6 +47,12 @@ describe("Workbench component policy", () => {
     expect(mermaid).toContain('aria-label="Mermaid diagram"');
   });
 
+  it("keeps rendered Markdown mounted while unrelated Session controls change", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("const Markdown = memo(function Markdown");
+  });
+
   it("keeps Agent-native model, reasoning, and permission controls in the Composer", () => {
     const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
     const sliderUrl = new URL("./ui/slider.tsx", import.meta.url);
@@ -56,12 +62,24 @@ describe("Workbench component policy", () => {
     expect(source).toContain("onPermissionMode={setSessionPermissionMode}");
     expect(source).toContain("onEffort={setSessionEffort}");
     expect(source).toContain("<ReasoningLevelControl");
+    expect(source).toContain("speedOption={speedOption}");
+    expect(source).toContain("<SpeedControl");
     expect(existsSync(sliderUrl)).toBe(true);
     expect(source).toContain('const effectiveValue = value || option.currentValue || levels[0]?.value || ""');
     expect(source).toContain('onClick={() => onValue("")}>Use default</button>');
     expect(source).toContain('label="Agent default"');
     expect(source).toContain("<SelectValue>{triggerLabel}</SelectValue>");
     expect(source).toContain('session.status === "active" || session.status === "idle" ? t.healthyDot : t.offlineDot');
+  });
+
+  it("uses reduced-motion-safe feedback for the discrete reasoning slider", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const slider = readFileSync(new URL("./ui/slider.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("previewIndex >= index");
+    expect(source).toContain("active.description");
+    expect(slider).toContain("motion-safe:transition-[left,transform,box-shadow]");
+    expect(slider).toContain("motion-safe:transition-[width]");
   });
 
   it("positions a loaded Session at the newest conversation item", () => {
