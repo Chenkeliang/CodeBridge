@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, streamSessionEvents } from "@/lib/api";
 import { reduceConversationEvents, type ApprovalProjection, type ConversationProjection } from "@/lib/events";
@@ -72,6 +73,7 @@ const themes = {
     focus: "focus:border-[#73796C] focus-visible:ring-[#CDD3C8]",
     shadow: "shadow-[0_20px_48px_rgba(25,28,22,0.08)]",
     shadowSmall: "shadow-[0_4px_16px_rgba(25,28,22,0.07)]",
+    menuItemFocus: "data-[highlighted]:bg-[#EEF1EB]",
   },
   carbon: {
     canvas: "bg-[#121411] text-[#F1F2EA]",
@@ -98,8 +100,11 @@ const themes = {
     focus: "focus:border-[#9DA496] focus-visible:ring-[#444B40]",
     shadow: "shadow-[0_20px_56px_rgba(0,0,0,0.28)]",
     shadowSmall: "shadow-[0_5px_18px_rgba(0,0,0,0.22)]",
+    menuItemFocus: "data-[highlighted]:bg-[#282C25]",
   },
 } as const;
+
+const DEFAULT_SELECT_VALUE = "__default__";
 
 const statusLabel: Record<string, string> = {
   healthy: "Ready",
@@ -643,7 +648,13 @@ function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, 
   return <header className={cn("flex min-h-[72px] shrink-0 items-center justify-between gap-5 border-b px-8 py-4", t.line)}>
     <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <GitBranch className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate text-sm font-semibold tracking-[-0.02em]", t.ink)}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", t.muted)}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
     {session && <div className="relative flex items-center gap-2">
-      {modelOptions.length > 0 && <select aria-label="模型" className={cn("h-8 max-w-52 rounded-md border px-2 text-xs outline-none", t.surface, t.inkSoft, t.line, t.focus)} onChange={(event) => onModel(event.target.value)} value={model}><option value="">默认模型</option>{modelOptions.map((value) => <option key={value.value} value={value.value}>{value.name || value.value}</option>)}</select>}
+      {modelOptions.length > 0 && <Select onValueChange={(value) => onModel(value === DEFAULT_SELECT_VALUE ? "" : value)} value={model || DEFAULT_SELECT_VALUE}>
+        <SelectTrigger aria-label="模型" className={cn("h-8 max-w-52 px-2.5 text-xs", t.surface, t.inkSoft, t.line, t.focus)}><SelectValue /></SelectTrigger>
+        <SelectContent className={cn(t.surface, t.inkSoft, t.lineStrong, t.shadow)}>
+          <SelectItem className={t.menuItemFocus} value={DEFAULT_SELECT_VALUE}>默认模型</SelectItem>
+          {modelOptions.map((value) => <SelectItem className={t.menuItemFocus} key={value.value} value={value.value}>{value.name || value.value}</SelectItem>)}
+        </SelectContent>
+      </Select>}
       <Button aria-label="添加 Workspace" className={cn("h-8 border px-2.5 text-xs", t.surface, t.muted, t.line)} disabled={pickingDirectory} onClick={onPickDirectory} size="sm" variant="outline">{pickingDirectory ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderOpen className="size-3.5" />}Workspace</Button>
       <span className={cn("hidden items-center gap-1.5 text-[11px] xl:flex", t.muted)}><span className={cn("size-1.5 rounded-full", session.status === "active" ? t.accent : t.offlineDot)} />{statusLabel[session.status] ?? session.status}</span>
       <Button aria-label="Session 操作" className={cn("size-8 px-0", t.muted)} onClick={onMenu} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button>
@@ -687,7 +698,13 @@ function Composer({ attachments, commands, contextOpen, contextPaths, disabled, 
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5">
       <ContextChip label={model || "Agent default"} theme={theme} />
       <button className={cn("inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded border px-2 text-[10px] transition-opacity hover:opacity-80", t.surfaceSoft, t.muted, t.line)} onClick={onPickDirectory} type="button"><FolderOpen className="size-3" /><span className={cn("font-medium", t.inkSoft)}>{workspaceLabel(session)}</span></button>
-      {flows.length > 0 && <label className={cn("inline-flex min-h-6 shrink-0 items-center rounded border px-2 text-[10px]", t.surfaceSoft, t.muted, t.line)}><Workflow className="mr-1.5 size-3" /><select aria-label="Flow" className={cn("max-w-44 bg-transparent outline-none", t.inkSoft)} onChange={(event) => onFlow(event.target.value)} value={flowId}><option value="">Flow · Automatic</option>{flows.map((flow) => <option key={flow.flow_id} value={flow.flow_id}>{flow.name || flow.flow_id}</option>)}</select></label>}
+      {flows.length > 0 && <div className={cn("inline-flex min-h-6 shrink-0 items-center rounded border pl-2 text-[10px]", t.surfaceSoft, t.muted, t.line)}><Workflow className="mr-1 size-3" /><Select onValueChange={(value) => onFlow(value === DEFAULT_SELECT_VALUE ? "" : value)} value={flowId || DEFAULT_SELECT_VALUE}>
+        <SelectTrigger aria-label="Flow" className={cn("h-6 max-w-44 gap-1 border-0 bg-transparent px-1.5 py-0 text-[10px] shadow-none focus-visible:ring-0", t.inkSoft)}><SelectValue /></SelectTrigger>
+        <SelectContent className={cn(t.surface, t.inkSoft, t.lineStrong, t.shadow)}>
+          <SelectItem className={t.menuItemFocus} value={DEFAULT_SELECT_VALUE}>Flow · Automatic</SelectItem>
+          {flows.map((flow) => <SelectItem className={t.menuItemFocus} key={flow.flow_id} value={flow.flow_id}>{flow.name || flow.flow_id}</SelectItem>)}
+        </SelectContent>
+      </Select></div>}
       <span className="flex-1" /><span className={cn("hidden shrink-0 text-[10px] sm:inline", t.faint)}>Enter to send</span>
     </div>
     {attachments.length > 0 && <div className="flex flex-wrap gap-1.5 px-3 pt-2">{attachments.map((attachment, index) => <span className={cn("inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[10px]", t.surfaceTint, t.inkSoft, t.line)} key={`${attachment.name}-${index}`}><Paperclip className="size-3" /><span className="max-w-40 truncate">{attachment.name}</span><button aria-label={`移除 ${attachment.name}`} onClick={() => onRemoveAttachment(index)} type="button"><X className="size-3" /></button></span>)}</div>}
