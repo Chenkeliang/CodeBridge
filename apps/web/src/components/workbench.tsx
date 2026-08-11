@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
-  Code2,
   FileText,
   FolderOpen,
   GitBranch,
@@ -22,7 +21,9 @@ import {
   Send,
   ShieldAlert,
   Sun,
+  Terminal,
   Trash2,
+  Wrench,
   Workflow,
   X,
 } from "lucide-react";
@@ -31,7 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, streamSessionEvents } from "@/lib/api";
-import { reduceConversationEvents, type ApprovalProjection, type ConversationProjection } from "@/lib/events";
+import { describeTool, reduceConversationEvents, type ApprovalProjection, type ConversationProjection, type ToolProjection, type WorkProjection } from "@/lib/events";
 import type {
   AgentCommand,
   AgentProfile,
@@ -535,6 +536,7 @@ export function Workbench() {
                     {projection.map((item, index) => (
                       <ProjectionItem
                         approvals={approvals}
+                        cwd={selectedSession.cwd}
                         item={item}
                         key={projectionKey(item, index)}
                         onApproval={resolveApproval}
@@ -766,17 +768,56 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   </div>;
 }
 
-function ProjectionItem({ approvals, item, onApproval, theme }: { approvals: ApprovalRecord[]; item: ConversationProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void>; theme: Theme }) {
+function ProjectionItem({ approvals, cwd, item, onApproval, theme }: { approvals: ApprovalRecord[]; cwd: string | null; item: ConversationProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void>; theme: Theme }) {
   const t = themes[theme];
   if (item.kind === "user") return <article className="grid justify-items-end gap-2"><span className={cn("text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>You</span><div className={cn("max-w-[72%] rounded-xl px-3.5 py-3 text-sm leading-6", t.ink, t.accentSoft)}>{item.content}</div></article>;
-  if (item.kind === "assistant") return <article className="grid max-w-[780px] gap-2"><span className={cn("text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>{item.phase === "commentary" ? "Agent · working" : "Agent"}</span><Markdown content={item.content} theme={theme} /></article>;
+  if (item.kind === "assistant") return <article className="grid max-w-[780px] gap-2"><span className={cn("text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>Agent</span><Markdown content={item.content} theme={theme} /></article>;
+  if (item.kind === "work") return <WorkActivity cwd={cwd} item={item} theme={theme} />;
   if (item.kind === "plan") return <section className={cn("max-w-[760px] rounded-lg border", t.surface, t.line, t.shadowSmall)}><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", t.line)}><span className={cn("flex items-center gap-2 text-[11px] font-semibold", t.ink)}><Check className={cn("size-3.5", t.muted)} />Plan</span><span className={cn("font-mono text-[10px]", t.muted)}>{item.entries.filter((entry) => entry.status === "completed").length} / {item.entries.length}</span></div><ol className="grid gap-2 px-3.5 py-3.5">{item.entries.map((entry, index) => <li className={cn("flex items-start gap-2 text-xs", entry.status === "completed" ? t.muted : t.inkSoft)} key={`${entry.content}-${index}`}>{entry.status === "completed" ? <Check className={cn("mt-0.5 size-3.5 shrink-0", t.success)} /> : <Circle className={cn("mt-0.5 size-3.5 shrink-0", entry.status === "in_progress" ? t.warning : t.faint)} />}<span>{entry.content}</span></li>)}</ol></section>;
   if (item.kind === "approval") {
     const approval = approvals.find((record) => record.id === item.requestId) ?? approvals.find((record) => record.run_id === item.runId);
     return <ApprovalCard approval={approval} item={item} onApproval={onApproval} theme={theme} />;
   }
   if (item.kind === "error") return <section className={cn("flex max-w-[760px] items-start gap-2 rounded-lg border p-3.5 text-xs", t.dangerSoft, t.danger, t.lineStrong)}><X className="mt-0.5 size-3.5 shrink-0" /><div><p className="font-semibold">{item.fatal ? "Run failed" : "Agent error"}</p><p className="mt-1 leading-5">{item.content}</p></div></section>;
-  return <details className={cn("group max-w-[760px] rounded-lg border", t.surface, t.line, t.shadowSmall)}><summary className={cn("flex cursor-pointer list-none items-center gap-2.5 px-3.5 py-3 text-xs", t.muted)}><Code2 className="size-3.5" /><span className={cn("min-w-0 flex-1 truncate font-semibold", t.ink)}>{item.name}</span><span className={cn("text-[10px]", item.status === "failed" ? t.danger : item.status === "completed" ? t.success : t.warning)}>{item.status}</span><ChevronDown className="size-3.5 transition-transform group-open:rotate-180" /></summary><div className={cn("grid gap-2.5 border-t px-3.5 py-3", t.line)}>{item.input !== undefined && <pre className={cn("max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-5", t.muted)}>{formatValue(item.input)}</pre>}{item.output !== undefined && <pre className={cn("max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-5", t.inkSoft)}>{formatValue(item.output)}</pre>}</div></details>;
+}
+
+function WorkActivity({ cwd, item, theme }: { cwd: string | null; item: WorkProjection; theme: Theme }) {
+  const t = themes[theme];
+  const tools = item.entries.filter((entry): entry is ToolProjection => entry.kind === "tool");
+  const running = tools.some((tool) => tool.status !== "completed" && tool.status !== "failed");
+  return <details className={cn("group max-w-[780px] border-t", t.line)}>
+    <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]", t.muted)}>
+      <span className={cn("font-medium", t.inkSoft)}>{running ? "Working" : `Worked for ${formatElapsed(item.startedAt, item.endedAt)}`}</span>
+      {tools.length > 0 && <span>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</span>}
+      <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
+    </summary>
+    <div className="grid gap-2 pb-4">
+      {item.entries.map((entry, index) => entry.kind === "tool"
+        ? <ToolActivity cwd={cwd} key={entry.id} theme={theme} tool={entry} />
+        : <div className="grid grid-cols-[18px_minmax(0,1fr)] gap-2 px-1 py-1" key={`${entry.kind}-${index}`}><span className={cn("mt-1 size-1.5 rounded-full", entry.kind === "thought" ? t.warning : t.faint)} /><div><p className={cn("mb-1 text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>{entry.kind === "thought" ? "Reasoning summary" : "Progress"}</p><div className={cn("text-xs font-normal leading-5", t.inkSoft)}>{entry.content}</div></div></div>)}
+    </div>
+  </details>;
+}
+
+function ToolActivity({ cwd, theme, tool }: { cwd: string | null; theme: Theme; tool: ToolProjection }) {
+  const t = themes[theme];
+  const presentation = describeTool(tool, cwd);
+  const ToolIcon = presentation.category === "command" ? Terminal : presentation.category === "file" ? FileText : Wrench;
+  const status = tool.status === "failed" ? "Failed" : tool.status === "completed" ? "Completed" : "Running";
+  return <details className={cn("group/tool rounded-md border", t.surfaceTint, t.line)}>
+    <summary className={cn("flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-xs", t.muted)}>
+      <ToolIcon className="size-3.5 shrink-0" />
+      <span className={cn("shrink-0 font-medium", t.inkSoft)}>{presentation.label}</span>
+      {presentation.target && <span className={cn("min-w-0 flex-1 truncate font-mono text-[10px]", t.muted)} title={presentation.target}>{presentation.target}</span>}
+      <span className={cn("text-[10px]", tool.status === "failed" ? t.danger : tool.status === "completed" ? t.success : t.warning)}>{status}</span>
+      <ChevronDown className="size-3.5 shrink-0 transition-transform group-open/tool:rotate-180" />
+    </summary>
+    <div className={cn("grid gap-3 border-t px-3 py-3", t.line)}>
+      {presentation.target && presentation.category === "file" && <div className={cn("flex items-start gap-2 font-mono text-[10px] leading-5", t.inkSoft)}><FileText className="mt-0.5 size-3.5 shrink-0" /><span className="break-all">{presentation.target}</span></div>}
+      {tool.input !== undefined && <div><p className={cn("mb-1.5 text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>Input</p><pre className={cn("max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-5", t.inkSoft)}>{formatValue(tool.input)}</pre></div>}
+      {tool.output !== undefined && <div><p className={cn("mb-1.5 text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>Output</p><pre className={cn("max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-5", t.inkSoft)}>{formatValue(tool.output)}</pre></div>}
+    </div>
+  </details>;
 }
 
 function ApprovalCard({ approval, item, onApproval, theme }: { approval: ApprovalRecord | undefined; item: ApprovalProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void>; theme: Theme }) {
@@ -822,10 +863,16 @@ function optionValue(options: ConfigOption[]): string | undefined {
 }
 
 function projectionKey(item: ConversationProjection, index: number): string {
-  if (item.kind === "tool") return item.id;
+  if (item.kind === "work") return item.id;
   if (item.kind === "user") return item.eventId;
   if (item.kind === "approval") return item.requestId;
   return `${item.kind}-${item.runId ?? "session"}-${index}`;
+}
+
+function formatElapsed(startedAt: string, endedAt: string): string {
+  const seconds = Math.max(1, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
 }
 
 function workspaceLabel(session: AgentSession | null): string {
