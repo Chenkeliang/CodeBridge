@@ -347,6 +347,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       }
       update.title = body.title.trim();
     }
+    if (Object.hasOwn(body, "model")) {
+      if (body.model !== null && (typeof body.model !== "string" || !body.model.trim())) {
+        return c.json({ error: "model must be a non-empty string or null" }, 400);
+      }
+      update.model = body.model === null ? null : (body.model as string).trim();
+    }
     for (const field of ["pinned", "archived"] as const) {
       if (!Object.hasOwn(body, field)) continue;
       if (typeof body[field] !== "boolean") {

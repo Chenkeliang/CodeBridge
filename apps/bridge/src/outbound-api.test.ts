@@ -8,7 +8,7 @@ import {
   createOutboundApp,
   type OutboundBridge,
 } from "./outbound-api.js";
-import { createWebWorkbenchApp } from "./web-workbench.js";
+import { createWebFrontendApp } from "./web-frontend.js";
 
 const TOKEN = "test-token-12345";
 
@@ -145,7 +145,9 @@ describe("createOutboundApp", () => {
 
   it("serves the Workbench shell without a bearer token", async () => {
     const store = new SqliteEventStore(":memory:");
-    const webWorkbenchApp = createWebWorkbenchApp({ store, token: TOKEN });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-web-mount-"));
+    fs.writeFileSync(path.join(directory, "index.html"), "<title>CodeBridge Workbench</title>");
+    const webFrontendApp = createWebFrontendApp({ staticDirectory: directory, token: TOKEN });
     const { bridge } = makeApp();
     const app = createBridgeApp(
       bridge,
@@ -154,7 +156,7 @@ describe("createOutboundApp", () => {
       undefined,
       undefined,
       undefined,
-      webWorkbenchApp,
+      webFrontendApp,
     );
 
     const response = await app.request("/workbench/");
@@ -163,11 +165,14 @@ describe("createOutboundApp", () => {
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(await response.text()).toContain("CodeBridge Workbench");
     store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   });
 
   it("keeps API and outbound routes protected when the Workbench is public", async () => {
     const store = new SqliteEventStore(":memory:");
-    const webWorkbenchApp = createWebWorkbenchApp({ store, token: TOKEN });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-web-auth-"));
+    fs.writeFileSync(path.join(directory, "index.html"), "<title>CodeBridge Workbench</title>");
+    const webFrontendApp = createWebFrontendApp({ staticDirectory: directory, token: TOKEN });
     const { bridge } = makeApp();
     const app = createBridgeApp(
       bridge,
@@ -176,7 +181,7 @@ describe("createOutboundApp", () => {
       undefined,
       undefined,
       undefined,
-      webWorkbenchApp,
+      webFrontendApp,
     );
 
     const workItemsResponse = await app.request("/v1/work-items");
@@ -187,5 +192,6 @@ describe("createOutboundApp", () => {
     );
     expect(outboundResponse.status).toBe(401);
     store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   });
 });

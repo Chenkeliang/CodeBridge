@@ -20,7 +20,7 @@ CodeBridge
     ├── Project Catalog / Discovery
     ├── Policy / Approval
     ├── Skill / MCP Capability Runtime
-    └── Web Workbench
+    └── Web Workbench（apps/web）
 ```
 
 模块位于同一个仓库和版本周期内，通过领域对象、应用服务和事件互联；不建立模块之间任意直连的网状调用。
@@ -32,6 +32,9 @@ CodeBridge
 - Pi Node SDK Adapter 已在 `packages/backends` 和 `packages/runner-host` 落地；配置 `backends.pi.type: pi-sdk` 后才进入可执行状态，未配置时 Registry 保持 `needs_setup`。
 - 用户可以直接创建 Session；Agent、项目范围和 Flow 都由运行时或用户输入动态确定，页面和示例配置保持通用形状。
 - Web 采用聊天优先入口：模式、模型和工作空间是输入框周边的可选上下文，省略时由 Agent/Discovery 判断，不要求用户手工填写项目范围。
+- Web 是可选入口，不依赖飞书或 Telegram 凭据；Core API、Web、Feishu 和 Telegram 具备独立启停能力，共享同一套 Session/Run/Event 合同。
+- Web 技术栈固定为 React + Vite + TypeScript + Tailwind CSS + shadcn/ui；Hono 只负责 API、SSE 和可选静态资源托管。
+- Web 禁止业务自定义 CSS：不新增 CSS Selector、CSS Module、styled-components 或 `style` 属性；只允许 Tailwind Utility、shadcn 组件源码和 Tailwind 框架入口。
 - 页面导航严格采用 `Agent → Session`：Agent Profile 是分组，Session 是分组下的具体会话；二者不在同一级展示。
 - `Flows` 与 `Agents` 平级。Flow 可在右侧主面板附加到当前 Session 的下一次 Run，不成为 Agent 或 Session 的子节点。
 - Codex、Pi、Cursor、Claude Code 和其他 ACP/SDK/CLI Agent 都是一等 Agent Profile；适配器类型由 Registry 动态声明。

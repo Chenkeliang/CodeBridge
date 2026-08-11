@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import {
   ConfigStore,
@@ -9,7 +10,6 @@ import {
 } from "@codebridge/core";
 import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
 import { TelegramBridge } from "@codebridge/channel-telegram";
-import { createMemoryPlugin } from "@codebridge/memory-plugin";
 import { SqliteEventStore, type PersistedPlanStep } from "@codebridge/work-items";
 import {
   ApprovalService,
@@ -24,7 +24,7 @@ import {
   ProjectCatalogStore,
   ProjectDiscovery,
 } from "@codebridge/project-catalog";
-import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
+import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { AgentRegistry } from "@codebridge/agent-registry";
 import {
@@ -33,12 +33,12 @@ import {
   SdkMcpClientFactory,
 } from "@codebridge/mcp-runtime";
 import { createProjectCatalogApp } from "./project-api.js";
-import { createWebWorkbenchApp } from "./web-workbench.js";
+import { createWebFrontendApp } from "./web-frontend.js";
 import { createSessionApp } from "./session-api.js";
 import { createFlowApp } from "./flow-api.js";
-import { hasFeishuCredentials, hasTelegramCredentials } from "./channel-config.js";
 import { createChannelSessionIngress } from "./channel-ingress.js";
 import { createMcpApp } from "./mcp-api.js";
+import { resolveStartupSurfaces } from "./startup-surfaces.js";
 
 const program = new Command();
 
@@ -52,7 +52,8 @@ program
   .description("启动飞书桥接服务")
   .option("-c, --config <path>", "配置文件路径")
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
-  .action(async (opts: { config?: string; dataDir: string }) => {
+  .option("--web", "本次启动启用 Web，不修改配置文件")
+  .action(async (opts: { config?: string; dataDir: string; web?: boolean }) => {
     const dataDir = opts.dataDir;
     if (opts.config) {
       process.env.DATA_DIR = path.dirname(path.resolve(opts.config));
@@ -62,32 +63,16 @@ program
 
     const store = new ConfigStore({ dataDir });
     const config = store.get();
+    const surfaces = resolveStartupSurfaces(config, { web: opts.web });
 
-    if (!hasFeishuCredentials(config) && !hasTelegramCredentials(config)) {
-      console.error(
-        "请至少配置一个通道：飞书 App 凭据或 TELEGRAM_BOT_TOKEN（配置文件：",
-        store.path,
-        ")",
-      );
-      process.exit(1);
-    }
-
-    const memory = createMemoryPlugin({
-      enabled: config.plugins?.memory?.enabled ?? false,
-      workspaceDir: config.workspaces?.default ?? process.cwd(),
-    });
-    if (memory.isEnabled()) {
-      console.log("memory-plugin: enabled");
-    }
-
-    const bridge = hasFeishuCredentials(config)
+    const bridge = surfaces.feishu
       ? new FeishuBridge({
           config,
           dataDir,
           onLog: (m) => console.log(m),
         })
       : undefined;
-    const telegram = config.telegram
+    const telegram = surfaces.telegram && config.telegram
       ? new TelegramBridge({
           config,
           dataDir,
@@ -258,19 +243,14 @@ program
       }));
     await Promise.all(agentHealthAdapters.map((adapter) => registry.refresh(adapter)));
     const stopAgentHealthChecks = registry.startHealthChecks(agentHealthAdapters, 60_000);
-    const agentProfiles: AgentProfile[] = registry.list();
-    const webWorkbenchApp = createWebWorkbenchApp({
-      store: workItemStore,
-      token: config.runner.token,
-      agents: agentProfiles.map((agent) => agent.agentId),
-      agentProfiles: () => registry.list().map((agent) => ({
-        id: agent.agentId,
-        name: agent.displayName,
-        status: agent.status,
-        models: agent.models,
-      })),
-      workflows: [],
-    });
+    const webFrontendApp = surfaces.web
+      ? createWebFrontendApp({
+          staticDirectory:
+            config.web.staticDirectory ??
+            path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist"),
+          token: config.runner.token,
+        })
+      : undefined;
     const sessionCatalogApp = createSessionApp(
       {
         catalog: sessionCatalog,
@@ -356,7 +336,7 @@ program
         approvalService,
         runExecutor,
         projectCatalogApp,
-        webWorkbenchApp,
+        webFrontendApp,
         sessionCatalogApp,
         flowCatalogApp,
         mcpApp,
@@ -364,8 +344,10 @@ program
       hostname: "127.0.0.1",
       port: apiPort,
     });
-    console.log(`出站 API（fcb）监听 http://127.0.0.1:${apiPort}`);
-    console.log("CodeBridge 已启动，等待消息…");
+    console.log(`Core API 监听 http://127.0.0.1:${apiPort}`);
+    console.log(`Web: ${surfaces.web ? `enabled at http://127.0.0.1:${apiPort}/workbench/` : "disabled"}`);
+    console.log(`Feishu: ${surfaces.feishu ? "enabled" : "disabled"}`);
+    console.log(`Telegram: ${surfaces.telegram ? "enabled" : "disabled"}`);
   });
 
 program
