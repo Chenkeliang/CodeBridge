@@ -40,4 +40,41 @@ describe("channel session ingress", () => {
       { type: "done", exitCode: 0 },
     ]);
   });
+
+  it("does not repeat a fatal Agent error as a generic step failure", async () => {
+    const app = new Hono();
+    app.post("/v1/channels/:channel/conversations/:conversation/messages", (c) =>
+      c.json({ session_id: "sess_1", run_id: "run_1", event_sequence: 3 }, 202),
+    );
+    app.get("/v1/sessions/:session/events", () =>
+      new Response([
+        "event: AGENT_EVENT",
+        'data: {"type":"AGENT_EVENT","run_id":"run_1","payload":{"event":{"type":"error","message":"ACP session is occupied","fatal":true}}}',
+        "",
+        "event: AGENT_EVENT",
+        'data: {"type":"AGENT_EVENT","run_id":"run_1","payload":{"event":{"type":"done","exitCode":1}}}',
+        "",
+        "event: STEP_FAILED",
+        'data: {"type":"STEP_FAILED","run_id":"run_1","payload":{"error":"Runner exited with code 1"}}',
+        "",
+        "event: RUN_FAILED",
+        'data: {"type":"RUN_FAILED","run_id":"run_1","payload":{}}',
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } }),
+    );
+    const ingress = createChannelSessionIngress(app, "token");
+    const events = [];
+
+    for await (const event of ingress({
+      channel: "feishu",
+      conversationId: "chat|topic",
+      message: "continue",
+    })) events.push(event);
+
+    expect(events).toEqual([
+      { type: "error", message: "ACP session is occupied", fatal: true },
+      { type: "done", exitCode: 1 },
+    ]);
+  });
 });

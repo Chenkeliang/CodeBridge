@@ -8,7 +8,7 @@ import {
   type RunContext,
   type RunRequest,
 } from "@codebridge/core";
-import { RunnerHost } from "./server.js";
+import { createRunnerApp, RunnerHost } from "./server.js";
 import type { PiSession } from "@codebridge/backends";
 
 const tmpDirs: string[] = [];
@@ -242,6 +242,132 @@ describe("RunnerHost steering", () => {
 });
 
 describe("RunnerHost session lifecycle", () => {
+  it("acknowledges cancellation only after the active run releases its session", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-cancel-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-cancel-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    let releaseAbort!: () => void;
+    const abortReleased = new Promise<void>((resolve) => {
+      releaseAbort = resolve;
+    });
+    let markPromptStarted!: () => void;
+    const promptStarted = new Promise<void>((resolve) => {
+      markPromptStarted = resolve;
+    });
+    let finishPrompt!: () => void;
+    const promptFinished = new Promise<void>((resolve) => {
+      finishPrompt = resolve;
+    });
+    let sessionCount = 0;
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      piSessionFactory: async () => {
+        sessionCount += 1;
+        if (sessionCount > 1) {
+          return {
+            sessionId: "pi-second",
+            subscribe: () => () => {},
+            async prompt() {},
+            async steer() {},
+            async abort() {},
+            dispose() {},
+          };
+        }
+        return {
+          sessionId: "pi-first",
+          subscribe: () => () => {},
+          async prompt() {
+            markPromptStarted();
+            await promptFinished;
+          },
+          async steer() {},
+          async abort() {
+            await abortReleased;
+            finishPrompt();
+          },
+          dispose() {},
+        };
+      },
+    });
+    const first = collect(host.executeRun({
+      runId: "r1",
+      sessionKey: { chatId: "chat", backendId: "pi", cwd },
+      resumeSessionId: "shared-session",
+      prompt: "wait",
+    }));
+    await promptStarted;
+
+    let cancellationSettled = false;
+    const cancellation = (async () => {
+      const response = await createRunnerApp(host, "token").request("/runs/r1/cancel", {
+        method: "POST",
+        headers: { authorization: "Bearer token" },
+      });
+      cancellationSettled = true;
+      return response;
+    })();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cancellationSettled).toBe(false);
+
+    releaseAbort();
+    const response = await cancellation;
+    expect(await response.json()).toEqual({ ok: true });
+    await first;
+
+    const second = await collect(host.executeRun({
+      runId: "r2",
+      sessionKey: { chatId: "chat", backendId: "pi", cwd },
+      resumeSessionId: "shared-session",
+      prompt: "continue",
+    }));
+    expect(second).not.toContainEqual(expect.objectContaining({
+      type: "error",
+      message: expect.stringContaining("已被另一个 Runner 任务占用"),
+    }));
+    expect(second.at(-1)).toEqual({ type: "done", exitCode: 0 });
+    host.shutdown();
+  });
+
+  it("does not start a run whose cancellation arrived first", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-early-cancel-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-early-cancel-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const prompt = vi.fn(async () => {});
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      piSessionFactory: async () => ({
+        sessionId: "pi-early",
+        subscribe: () => () => {},
+        prompt,
+        async steer() {},
+        async abort() {},
+        dispose() {},
+      }),
+    });
+    const app = createRunnerApp(host, "token");
+
+    const response = await app.request("/runs/early/cancel", {
+      method: "POST",
+      headers: { authorization: "Bearer token" },
+    });
+    expect(await response.json()).toEqual({ ok: true });
+    expect(await collect(host.executeRun({
+      runId: "early",
+      sessionKey: { chatId: "chat", backendId: "pi", cwd },
+      prompt: "must not run",
+    }))).toEqual([]);
+    expect(prompt).not.toHaveBeenCalled();
+    host.shutdown();
+  });
+
   it("stops an ACP run and reports a fatal error when its session lock is lost", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);

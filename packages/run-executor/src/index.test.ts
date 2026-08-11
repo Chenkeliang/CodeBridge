@@ -128,8 +128,8 @@ describe("RunExecutor", () => {
     const { store, item, run } = setup();
     const runner = {
       async *run(_request: RunRequest, options?: { signal?: AbortSignal }): AsyncGenerator<AgentEvent> {
-        await new Promise<void>((_resolve, reject) => {
-          options?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        await new Promise<void>((resolve) => {
+          options?.signal?.addEventListener("abort", () => resolve(), { once: true });
         });
       },
     };
@@ -145,6 +145,83 @@ describe("RunExecutor", () => {
     expect(executor.cancelRun(run.id).status).toBe("cancelled");
     expect((await executing).status).toBe("cancelled");
     expect(store.listEvents(item.id).filter((event) => event.type === "RUN_CANCELLED")).toHaveLength(1);
+    expect(store.listEvents(item.id).filter((event) => event.type === "STEP_SUCCEEDED")).toHaveLength(0);
+    store.close();
+  });
+
+  it("waits for Runner cleanup before acknowledging channel cancellation", async () => {
+    const { store, item, run } = setup();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupReleased = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const runner = {
+      async *run(_request: RunRequest, options?: { signal?: AbortSignal }): AsyncGenerator<AgentEvent> {
+        markStarted();
+        await new Promise<void>((resolve) => {
+          options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        await cleanupReleased;
+      },
+    };
+    const executor = new RunExecutor(store, runner, {
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "wait",
+      }),
+    });
+    const executing = executor.execute(run.id);
+    await started;
+
+    let cancellationSettled = false;
+    const cancellation = executor.cancelRunAndWait(run.id).then((result) => {
+      cancellationSettled = true;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cancellationSettled).toBe(false);
+
+    releaseCleanup();
+    expect((await cancellation).status).toBe("cancelled");
+    expect((await executing).status).toBe("cancelled");
+    store.close();
+  });
+
+  it("does not report cancellation when Runner rejects the cancel request", async () => {
+    const { store, item, run } = setup();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const runner = {
+      async *run(_request: RunRequest, options?: { signal?: AbortSignal }): AsyncGenerator<AgentEvent> {
+        markStarted();
+        await new Promise<void>((resolve) => {
+          options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        const error = new Error("Runner cancellation failed: 409");
+        error.name = "RunnerCancellationError";
+        throw error;
+      },
+    };
+    const executor = new RunExecutor(store, runner, {
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "wait",
+      }),
+    });
+    const executing = executor.execute(run.id).catch((error: unknown) => error);
+    await started;
+
+    await expect(executor.cancelRunAndWait(run.id)).rejects.toThrow("Runner cancellation failed");
+    expect(await executing).toBeInstanceOf(Error);
+    expect(store.getRun(run.id)?.status).toBe("failed");
     store.close();
   });
 
@@ -530,6 +607,59 @@ describe("RunExecutor", () => {
     expect(store.listEvents(item.id).find((event) => event.type === "STEP_SKIPPED")).toMatchObject({
       target: "fallback-path",
     });
+    store.close();
+  });
+
+  it("does not mark a branch step successful after the run is cancelled", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "cancelled branch",
+      mode: "investigation",
+      conversationId: "web:cancelled-branch",
+      identifiers: { ready: true },
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_cancelled_branch",
+      source: "workflow",
+      workflowId: "cancelled-branch-flow",
+      definitionRevision: "git:cancelled-branch",
+      steps: [
+        {
+          id: "decision",
+          capabilityId: null,
+          risk: "read_only",
+          dependsOn: [],
+          guard: null,
+          approval: "none",
+          branches: [{ when: "ready == true", next: "ready-path" }],
+          purpose: null,
+        },
+        {
+          id: "ready-path",
+          capabilityId: "ready.inspect",
+          risk: "read_only",
+          dependsOn: [],
+          guard: null,
+          approval: "none",
+          branches: [],
+          purpose: null,
+        },
+      ],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "must not run",
+      }),
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    expect((await executor.execute(run.id, controller.signal)).status).toBe("cancelled");
+    expect(store.listEvents(item.id).filter((event) => event.type === "STEP_SUCCEEDED")).toHaveLength(0);
     store.close();
   });
 

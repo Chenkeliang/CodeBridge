@@ -30,6 +30,122 @@ describe("RunnerClient steering", () => {
   });
 });
 
+describe("RunnerClient cancellation", () => {
+  it("cancels the remote Runner task when an active stream is aborted", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "http://runner/runs") {
+        return Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start(stream) {
+                stream.enqueue(new TextEncoder().encode(": keepalive\n\n"));
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        );
+      }
+      if (url === "http://runner/runs/r1/cancel") {
+        return Promise.resolve(new Response(JSON.stringify({ ok: true })));
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+    const consuming = (async () => {
+      for await (const _event of client.run(
+        {
+          runId: "r1",
+          sessionKey: { chatId: "chat", backendId: "codex", cwd: "/workspace" },
+          prompt: "wait",
+        },
+        { signal: controller.signal },
+      )) {
+        // The stream only contains keepalives.
+      }
+    })();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    await consuming;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/runs/r1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("cancels the remote task when aborted before the run response arrives", async () => {
+    const controller = new AbortController();
+    let markRunStarted!: () => void;
+    const runStarted = new Promise<void>((resolve) => {
+      markRunStarted = resolve;
+    });
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "http://runner/runs") {
+        markRunStarted();
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+      }
+      if (url === "http://runner/runs/r1/cancel") {
+        return Promise.resolve(new Response(JSON.stringify({ ok: true })));
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+    const consuming = (async () => {
+      for await (const _event of client.run(
+        {
+          runId: "r1",
+          sessionKey: { chatId: "chat", backendId: "codex", cwd: "/workspace" },
+          prompt: "wait",
+        },
+        { signal: controller.signal },
+      )) {
+        // The run response never arrives before cancellation.
+      }
+    })();
+
+    await runStarted;
+    controller.abort();
+    await consuming;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/runs/r1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("rejects when Runner does not acknowledge cancellation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ok: false }), { status: 409 }),
+      ),
+    );
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.cancel("r1")).rejects.toThrow("Runner cancellation failed");
+  });
+
+  it("classifies a cancellation network failure as a cancellation error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("socket closed")));
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.cancel("r1")).rejects.toMatchObject({
+      name: "RunnerCancellationError",
+      message: expect.stringContaining("socket closed"),
+    });
+  });
+});
+
 describe("RunnerClient session lifecycle", () => {
   it("forks a provider session into a target directory", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

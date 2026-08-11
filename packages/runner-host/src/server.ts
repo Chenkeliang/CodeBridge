@@ -68,6 +68,14 @@ interface ActiveRun {
   steer?: (prompt: string) => Promise<unknown>;
 }
 
+interface RunLifecycle {
+  started: boolean;
+  cancelRequested: boolean;
+  finished: Promise<void>;
+  finish: () => void;
+  expiry?: ReturnType<typeof setTimeout>;
+}
+
 /** prompt_feishu：权限请求等待用户回复的超时（到点自动拒绝）。需小于 noOutput 超时。 */
 const PERMISSION_PROMPT_TIMEOUT_MS = 8 * 60 * 1000;
 const execFileAsync = promisify(execFile);
@@ -137,6 +145,7 @@ function resolveAdditionalDirectories(
 export class RunnerHost {
   private readonly registry = new BackendRegistry();
   private readonly active = new Map<string, ActiveRun>();
+  private readonly runLifecycles = new Map<string, RunLifecycle>();
   private readonly maxConcurrent: number;
   private readonly dataDir: string;
   private readonly acpPermissionPolicy: AcpPermissionPolicy;
@@ -230,9 +239,43 @@ export class RunnerHost {
   cancel(runId: string): boolean {
     const run = this.active.get(runId);
     if (!run) return false;
+    const lifecycle = this.runLifecycles.get(runId);
+    if (lifecycle) lifecycle.cancelRequested = true;
     run.aborted = true;
     run.cancel();
     return true;
+  }
+
+  async cancelAndWait(runId: string): Promise<boolean> {
+    const lifecycle = this.runLifecycles.get(runId) ?? this.createRunLifecycle(runId);
+    lifecycle.cancelRequested = true;
+    this.cancel(runId);
+    if (!lifecycle.started) {
+      lifecycle.expiry = setTimeout(() => {
+        if (this.runLifecycles.get(runId) === lifecycle && !lifecycle.started) {
+          this.runLifecycles.delete(runId);
+        }
+      }, 60_000);
+      lifecycle.expiry.unref();
+      return true;
+    }
+    await lifecycle.finished;
+    return true;
+  }
+
+  private createRunLifecycle(runId: string): RunLifecycle {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const lifecycle: RunLifecycle = {
+      started: false,
+      cancelRequested: false,
+      finished,
+      finish,
+    };
+    this.runLifecycles.set(runId, lifecycle);
+    return lifecycle;
   }
 
   async steer(
@@ -487,9 +530,30 @@ export class RunnerHost {
   }
 
   async *executeRun(request: RunRequest): AsyncGenerator<AgentEvent> {
+    const lifecycle =
+      this.runLifecycles.get(request.runId) ?? this.createRunLifecycle(request.runId);
+    lifecycle.started = true;
+    if (lifecycle.expiry) clearTimeout(lifecycle.expiry);
+    try {
+      if (lifecycle.cancelRequested) return;
+      yield* this.executeRunInner(request, lifecycle);
+    } finally {
+      lifecycle.finish();
+      if (this.runLifecycles.get(request.runId) === lifecycle) {
+        this.runLifecycles.delete(request.runId);
+      }
+    }
+  }
+
+  private async *executeRunInner(
+    request: RunRequest,
+    lifecycle: RunLifecycle,
+  ): AsyncGenerator<AgentEvent> {
     while (this.active.size >= this.maxConcurrent) {
+      if (lifecycle.cancelRequested) return;
       await new Promise((r) => setTimeout(r, 100));
     }
+    if (lifecycle.cancelRequested) return;
 
     const backendId = request.sessionKey.backendId;
     const profile = this.options.config.backends[backendId];
@@ -546,6 +610,7 @@ export class RunnerHost {
 
     let localAttachments: LocalMediaPath[] = [];
     try {
+      if (lifecycle.cancelRequested) return;
       if (backendId === "codex" && request.resumeSessionId) {
         const ownerGroup = this.sessionPool.ownerProcessGroupId(
           request.resumeSessionId,
@@ -564,12 +629,14 @@ export class RunnerHost {
           return;
         }
       }
+      if (lifecycle.cancelRequested) return;
 
       localAttachments = await materializeAttachments(
         this.dataDir,
         request.runId,
         request.attachments,
       );
+      if (lifecycle.cancelRequested) return;
       const ctx: RunContext = {
         runId: request.runId,
         cwd: resolvedCwd.cwd,
@@ -585,6 +652,7 @@ export class RunnerHost {
         acpConfig: request.acpConfig,
         extraEnv: await this.buildAgentEnv(request),
       };
+      if (lifecycle.cancelRequested) return;
       if (profile.type === "pi-sdk") {
         yield* this.executePiRun(request.runId, ctx);
       } else {
@@ -770,6 +838,10 @@ export class RunnerHost {
       }
     }
     this.active.clear();
+    for (const lifecycle of this.runLifecycles.values()) {
+      if (lifecycle.expiry) clearTimeout(lifecycle.expiry);
+    }
+    this.runLifecycles.clear();
   }
 
   /** /approve /deny：回应当前 run 最早挂起的权限请求（FIFO） */
@@ -810,8 +882,8 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     return c.json({ resolved });
   });
 
-  app.post("/runs/:id/cancel", (c) => {
-    const ok = host.cancel(c.req.param("id"));
+  app.post("/runs/:id/cancel", async (c) => {
+    const ok = await host.cancelAndWait(c.req.param("id"));
     return c.json({ ok });
   });
 
