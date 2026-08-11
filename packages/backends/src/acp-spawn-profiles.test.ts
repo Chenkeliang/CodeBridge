@@ -18,7 +18,7 @@ describe("acp-spawn-profiles", () => {
     ]);
     expect(resolveAcpSpawn({ type: "codex" }).args).toEqual([
       "-y",
-      "@agentclientprotocol/codex-acp@1.1.9",
+      "@agentclientprotocol/codex-acp@1.1.14",
     ]);
   });
 

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codebridge:orchestration:event:v1",
+  "title": "CodeBridge Domain Event",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "sequence",
+    "work_item_id",
+    "type",
+    "occurred_at",
+    "actor"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": { "type": "string", "pattern": "^evt_[A-Za-z0-9]+$" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "work_item_id": { "type": "string", "pattern": "^wi_[A-Za-z0-9]+$" },
+    "run_id": { "type": ["string", "null"] },
+    "type": {
+      "type": "string",
+      "enum": [
+        "WORK_ITEM_CREATED",
+        "MESSAGE_RECEIVED",
+        "RUN_CREATED",
+        "AGENT_EVENT",
+        "RUN_STARTED",
+        "RUN_SUCCEEDED",
+        "RUN_FAILED",
+        "RUN_CANCELLED",
+        "DISCOVERY_STARTED",
+        "PROJECT_CANDIDATE_FOUND",
+        "FLOW_PROPOSED",
+        "FLOW_SELECTED",
+        "FLOW_SAVED_AS_CANDIDATE",
+        "PLAN_PROPOSED",
+        "PLAN_VALIDATED",
+        "APPROVAL_REQUESTED",
+        "APPROVAL_GRANTED",
+        "APPROVAL_REJECTED",
+        "STEP_STARTED",
+        "STEP_SUCCEEDED",
+        "STEP_SKIPPED",
+        "STEP_RETRYING",
+        "STEP_FAILED",
+        "BRANCH_SELECTED",
+        "VERIFICATION_COMPLETED",
+        "WORK_ITEM_COMPLETED"
+      ]
+    },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "actor": { "type": "string", "enum": ["user", "agent", "system", "adapter", "channel"] },
+    "target": { "type": ["string", "null"] },
+    "input_hash": { "type": ["string", "null"] },
+    "result_ref": { "type": ["string", "null"] },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}

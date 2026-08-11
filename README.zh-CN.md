@@ -41,7 +41,7 @@ Bridge 与 Runner 分开设计：Bridge 可以放在 Docker 或远程机器，Ru
 ### 环境要求
 
 - macOS 或 Linux
-- Node.js ≥ 20、pnpm、curl
+- Node.js ≥ 22.5、pnpm、curl。WorkItem Event Store 使用 Node 内置的 `node:sqlite`。
 - 本机至少安装一个 CLI：`cursor-agent`、`claude` 或 `codex`
 - 一个已开启机器人的飞书企业自建应用，或一个 Telegram Bot token
 
@@ -100,6 +100,10 @@ telegram:
 ```
 
 完整配置见 [examples/config.full.yaml](examples/config.full.yaml)。
+
+### Web Workbench
+
+Bridge 启动后可在本机打开 `http://127.0.0.1:19790/workbench/`。它和飞书、Telegram 共用 WorkItem、Run 和事件流：像普通 Agent 工作台一样直接输入目标，输入框周边的 Agent、模式、Workflow 和工作空间只是可选上下文；没有已发现的定义时交给 Agent 自动判断。页面只绑定本地 Bridge，不把代码或凭据上传到云端。
 
 ## 手机优先的命令
 
@@ -183,6 +187,7 @@ RUNNER_TOKEN=... node scripts/test-acp-live.mjs --backend cursor
 | 手动 / Docker 快速开始 | [docs/zh-CN/quickstart.md](docs/zh-CN/quickstart.md) |
 | Model、Effort、Permission | [docs/zh-CN/model-effort.md](docs/zh-CN/model-effort.md) |
 | Docker Bridge + 宿主机 Runner | [docs/zh-CN/deploy/docker-host-runner.md](docs/zh-CN/deploy/docker-host-runner.md) |
+| 多项目 Agent 工作台设计基线 | [docs/orchestration/README.md](docs/orchestration/README.md) |
 | 完整配置 | [examples/config.full.yaml](examples/config.full.yaml) |
 | 安全策略 | [SECURITY.md](SECURITY.md) |
 
@@ -195,7 +200,7 @@ pnpm run build
 pnpm test
 ```
 
-这是一个 pnpm monorepo，包含 `core`、`backends`、`runner-host`、`runner-client`、`router`、`channel-feishu`、`channel-telegram` 和 `apps/bridge`。
+这是一个 pnpm monorepo，包含 `core`、`backends`、`work-items`、`workflow-engine`、`policy`、`run-executor`、`project-catalog`、`runner-host`、`runner-client`、`router`、`channel-feishu`、`channel-telegram` 和 `apps/bridge`。
 
 ## License
 

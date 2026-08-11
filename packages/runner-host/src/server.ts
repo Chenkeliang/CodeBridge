@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   AcpSessionPool,
   BackendRegistry,
@@ -9,13 +11,25 @@ import {
   listAcpConfigOptions,
   listAcpSessions,
   runAcpSession,
+  closePiSession,
+  deletePiSession,
+  forkPiSession,
+  listPiConfigOptions,
+  listPiCommands,
+  listPiSessions,
+  runPiSession,
+  type PiRunHandleRef,
+  type PiSession,
+  type PiSessionLifecycleResult,
   type CliSessionSummary,
 } from "@codebridge/backends";
 import type {
   AgentEvent,
+  AgentAvailableCommand,
   AcpPermissionPolicy,
   AppConfig,
   BackendConfigOption,
+  LocalMediaPath,
   RunContext,
   RunRequest,
 } from "@codebridge/core";
@@ -26,12 +40,24 @@ import {
   materializeAttachments,
 } from "./materialize-attachments.js";
 import { writeFcbScript } from "./fcb-script.js";
+import { inspectForeignCodexSessionOwners } from "./codex-session-ownership.js";
+import { SessionLeaseStore, type SessionLease } from "./session-lease.js";
 
 export interface RunnerHostOptions {
   token: string;
   config: AppConfig;
   maxConcurrentRuns?: number;
   dataDir?: string;
+  /** Test/embedding hook; production uses the native Pi Node SDK factory. */
+  piSessionFactory?: (ctx: RunContext) => Promise<PiSession>;
+  /** Test/embedding hook for provider-native session fork. */
+  piSessionForker?: typeof forkPiSession;
+  inspectSessionOwners?: (
+    sessionId: string,
+    allowedProcessGroups: ReadonlySet<number>,
+  ) => Promise<number[]>;
+  /** Host-native directory chooser. Production uses the macOS folder panel. */
+  directoryPicker?: () => Promise<string | null>;
 }
 
 interface ActiveRun {
@@ -44,6 +70,24 @@ interface ActiveRun {
 
 /** prompt_feishu：权限请求等待用户回复的超时（到点自动拒绝）。需小于 noOutput 超时。 */
 const PERMISSION_PROMPT_TIMEOUT_MS = 8 * 60 * 1000;
+const execFileAsync = promisify(execFile);
+
+async function pickNativeDirectory(): Promise<string | null> {
+  if (process.platform !== "darwin") {
+    throw new Error("当前系统不支持原生目录选择器");
+  }
+  try {
+    const { stdout } = await execFileAsync("/usr/bin/osascript", [
+      "-e",
+      'POSIX path of (choose folder with prompt "选择要加入当前 Session 的目录")',
+    ]);
+    return stdout.trim() || null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("User canceled") || message.includes("-128")) return null;
+    throw error;
+  }
+}
 
 function resolveDoctorCwd(config: AppConfig): string {
   const home = os.homedir();
@@ -106,6 +150,10 @@ export class RunnerHost {
     postStopMaxMs?: number;
   };
   private readonly fcbBinDir: Promise<string | undefined>;
+  private readonly sessionLeases: SessionLeaseStore;
+  private readonly inspectSessionOwners: NonNullable<
+    RunnerHostOptions["inspectSessionOwners"]
+  >;
   /** 长驻 ACP 会话池：同会话消息复用适配器进程（kill switch: runnerHost.acpSessionPool） */
   private readonly sessionPool: AcpSessionPool;
   /**
@@ -137,6 +185,9 @@ export class RunnerHost {
       idleMs: rh?.acpSessionIdleMs ?? 10 * 60_000,
       maxPooled: rh?.acpSessionPoolMax ?? 4,
     });
+    this.sessionLeases = new SessionLeaseStore(this.dataDir);
+    this.inspectSessionOwners =
+      options.inspectSessionOwners ?? inspectForeignCodexSessionOwners;
     for (const [id, profile] of Object.entries(options.config.backends)) {
       this.registry.register(id, profile);
     }
@@ -226,16 +277,20 @@ export class RunnerHost {
     cwd = resolvedCwd.cwd;
 
     try {
-      const sessions = await listAcpSessions(backendId, profile, cwd, {
-        limit: options?.limit ?? 20,
-        all: options?.all ?? false,
-      });
+      const sessions = profile.type === "pi-sdk"
+        ? await listPiSessions(backendId, cwd, {
+            limit: options?.limit ?? 20,
+          })
+        : await listAcpSessions(backendId, profile, cwd, {
+            limit: options?.limit ?? 20,
+            all: options?.all ?? false,
+          });
       return { sessions };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
         sessions: [],
-        error: `ACP session/list failed for ${backendId}: ${message}`,
+        error: `${profile.type === "pi-sdk" ? "Pi session/list" : "ACP session/list"} failed for ${backendId}: ${message}`,
       };
     }
   }
@@ -267,6 +322,24 @@ export class RunnerHost {
     }
   }
 
+  async pickDirectory(): Promise<{
+    ok: boolean;
+    path?: string;
+    cancelled?: boolean;
+    error?: string;
+  }> {
+    try {
+      const selected = await (this.options.directoryPicker ?? pickNativeDirectory)();
+      if (!selected) return { ok: true, cancelled: true };
+      return this.authorizeDirectory(selected);
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   async closeSession(
     backendId: string,
     cwd: string,
@@ -281,6 +354,38 @@ export class RunnerHost {
     sessionId: string,
   ): Promise<{ ok: boolean; error?: string }> {
     return this.manageSession("delete", backendId, cwd, sessionId);
+  }
+
+  async forkSession(
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+    targetCwd: string,
+  ): Promise<PiSessionLifecycleResult> {
+    if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+      return { ok: false, error: `Session ${sessionId} 正在运行，请先停止后重试` };
+    }
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { ok: false, error: `Unknown backend: ${backendId}` };
+    const source = resolveRunCwd(cwd);
+    if ("error" in source) return { ok: false, error: source.error };
+    const target = resolveRunCwd(targetCwd);
+    if ("error" in target) return { ok: false, error: target.error };
+    if (profile.type !== "pi-sdk") {
+      return { ok: false, error: `${backendId} 未声明 Session fork 能力` };
+    }
+    try {
+      return await (this.options.piSessionForker ?? forkPiSession)(
+        source.cwd,
+        sessionId,
+        target.cwd,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        error: `Pi session/fork failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   private async manageSession(
@@ -301,6 +406,9 @@ export class RunnerHost {
     if ("error" in resolvedCwd) return { ok: false, error: resolvedCwd.error };
     try {
       if (action === "close") {
+        if (profile.type === "pi-sdk") {
+          return closePiSession(resolvedCwd.cwd, sessionId);
+        }
         const result = await this.sessionPool.close(sessionId);
         if (result.error === "not_owned") {
           return {
@@ -316,12 +424,18 @@ export class RunnerHost {
         }
         return result;
       }
+      if (profile.type === "pi-sdk") {
+        return deletePiSession(resolvedCwd.cwd, sessionId);
+      }
       await deleteAcpSession(profile, resolvedCwd.cwd, sessionId);
       this.sessionPool.remove(sessionId);
       return { ok: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: `ACP session/${action} failed for ${backendId}: ${message}` };
+      return {
+        ok: false,
+        error: `${profile.type === "pi-sdk" ? "Pi session" : "ACP session"}/${action} failed for ${backendId}: ${message}`,
+      };
     }
   }
 
@@ -340,12 +454,34 @@ export class RunnerHost {
     }
     cwd = resolvedCwd.cwd;
     try {
+      if (profile.type === "pi-sdk") {
+        return { options: await listPiConfigOptions() };
+      }
       return { options: await listAcpConfigOptions(profile, cwd) };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
         options: [],
         error: `ACP config options failed for ${backendId}: ${message}`,
+      };
+    }
+  }
+
+  async listCommands(
+    backendId: string,
+    cwd: string,
+  ): Promise<{ commands: AgentAvailableCommand[]; error?: string }> {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { commands: [], error: `Unknown backend: ${backendId}` };
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) return { commands: [], error: resolvedCwd.error };
+    if (profile.type !== "pi-sdk") return { commands: [] };
+    try {
+      return { commands: await listPiCommands(resolvedCwd.cwd) };
+    } catch (error) {
+      return {
+        commands: [],
+        error: `Pi commands failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }
@@ -384,40 +520,88 @@ export class RunnerHost {
       return;
     }
 
-    const localAttachments = await materializeAttachments(
-      this.dataDir,
-      request.runId,
-      request.attachments,
-    );
+    let sessionLease: SessionLease | null = null;
+    if (request.resumeSessionId) {
+      const sessionId = request.resumeSessionId;
+      if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+        yield {
+          type: "error",
+          message: `ACP session ${sessionId} 正在运行；请等待当前任务结束或先 /stop`,
+          fatal: true,
+        };
+        yield { type: "done", exitCode: 1 };
+        return;
+      }
+      sessionLease = await this.sessionLeases.acquire(sessionId, request.runId);
+      if (!sessionLease) {
+        yield {
+          type: "error",
+          message: `ACP session ${sessionId} 已被另一个 Runner 任务占用`,
+          fatal: true,
+        };
+        yield { type: "done", exitCode: 1 };
+        return;
+      }
+    }
 
-    const ctx: RunContext = {
-      runId: request.runId,
-      cwd: resolvedCwd.cwd,
-      prompt: request.prompt,
-      additionalDirectories: resolvedAdditional.directories,
-      attachments: localAttachments.length ? localAttachments : undefined,
-      resumeSessionId: request.resumeSessionId,
-      backendConfig: profile,
-      model: request.model,
-      effort: request.effort,
-      mode: request.mode,
-      claudePermissionMode: request.claudePermissionMode,
-      acpConfig: request.acpConfig,
-      extraEnv: await this.buildAgentEnv(request),
-    };
-
+    let localAttachments: LocalMediaPath[] = [];
     try {
-      yield* this.executeAcpRun(request.runId, ctx);
+      if (backendId === "codex" && request.resumeSessionId) {
+        const ownerGroup = this.sessionPool.ownerProcessGroupId(
+          request.resumeSessionId,
+        );
+        const owners = await this.inspectSessionOwners(
+          request.resumeSessionId,
+          new Set(ownerGroup === undefined ? [] : [ownerGroup]),
+        );
+        if (owners.length > 0) {
+          yield {
+            type: "error",
+            message: `Codex session ${request.resumeSessionId} 正被桌面端/TUI 占用（PID: ${owners.join(", ")}）；请先在原客户端停止该任务`,
+            fatal: true,
+          };
+          yield { type: "done", exitCode: 1 };
+          return;
+        }
+      }
+
+      localAttachments = await materializeAttachments(
+        this.dataDir,
+        request.runId,
+        request.attachments,
+      );
+      const ctx: RunContext = {
+        runId: request.runId,
+        cwd: resolvedCwd.cwd,
+        prompt: request.prompt,
+        additionalDirectories: resolvedAdditional.directories,
+        attachments: localAttachments.length ? localAttachments : undefined,
+        resumeSessionId: request.resumeSessionId,
+        backendConfig: profile,
+        model: request.model,
+        effort: request.effort,
+        mode: request.mode,
+        claudePermissionMode: request.claudePermissionMode,
+        acpConfig: request.acpConfig,
+        extraEnv: await this.buildAgentEnv(request),
+      };
+      if (profile.type === "pi-sdk") {
+        yield* this.executePiRun(request.runId, ctx);
+      } else {
+        yield* this.executeAcpRun(request.runId, ctx, sessionLease?.lost);
+      }
     } finally {
       if (localAttachments.length > 0) {
         await cleanupAttachments(this.dataDir, request.runId);
       }
+      await sessionLease?.release();
     }
   }
 
   private async *executeAcpRun(
     runId: string,
     ctx: RunContext,
+    sessionLockLost?: Promise<Error>,
   ): AsyncGenerator<AgentEvent> {
     const handleRef: Parameters<typeof runAcpSession>[2] = {};
     const activeRun: ActiveRun = {
@@ -433,6 +617,14 @@ export class RunnerHost {
       },
     };
     this.active.set(runId, activeRun);
+    let lockLostError: Error | undefined;
+    let runFinished = false;
+    void sessionLockLost?.then((error) => {
+      if (runFinished) return;
+      lockLostError = error;
+      activeRun.aborted = true;
+      activeRun.cancel();
+    });
 
     // prompt_feishu 权限模式：权限请求经带外队列进 SSE，等 /approve /deny 或超时拒绝
     const oobEvents: AgentEvent[] = [];
@@ -502,11 +694,65 @@ export class RunnerHost {
       };
       exitCode = 1;
     } finally {
+      runFinished = true;
       // run 结束仍挂着的权限请求：全部解除阻塞（按拒绝处理），避免 handler 悬挂
       for (const pending of [...(this.pendingPermissions.get(runId) ?? [])]) {
         pending.resolve(false);
       }
       this.pendingPermissions.delete(runId);
+      this.active.delete(runId);
+      if (lockLostError) {
+        yield {
+          type: "error",
+          message: `ACP session 锁异常丢失，任务已立即停止：${lockLostError.message}`,
+          fatal: true,
+        };
+        exitCode = 1;
+      }
+      yield { type: "done", exitCode };
+    }
+  }
+
+  private async *executePiRun(
+    runId: string,
+    ctx: RunContext,
+  ): AsyncGenerator<AgentEvent> {
+    const handleRef: PiRunHandleRef = {};
+    const activeRun: ActiveRun = {
+      runId,
+      sessionId: ctx.resumeSessionId,
+      aborted: false,
+      cancel: () => {
+        void handleRef.current?.cancel();
+      },
+      steer: async (prompt: string) => {
+        const steer = handleRef.current?.steer;
+        if (!steer) throw new Error("当前 Pi Agent 尚未初始化或不支持 steering");
+        return steer(prompt);
+      },
+    };
+    this.active.set(runId, activeRun);
+    let exitCode = 0;
+    try {
+      for await (const event of runPiSession(ctx, {
+        isAborted: () => activeRun.aborted,
+        handleRef,
+        ...(this.options.piSessionFactory
+          ? { createSession: this.options.piSessionFactory }
+          : {}),
+      })) {
+        if (event.type === "session") activeRun.sessionId = event.sessionId;
+        if (event.type === "error" && event.fatal) exitCode = 1;
+        yield event;
+      }
+    } catch (err) {
+      yield {
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+        fatal: true,
+      };
+      exitCode = 1;
+    } finally {
       this.active.delete(runId);
       yield { type: "done", exitCode };
     }
@@ -646,6 +892,11 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     return c.json(result, result.ok ? 200 : 403);
   });
 
+  app.post("/directories/pick", async (c) => {
+    const result = await host.pickDirectory();
+    return c.json(result, result.ok ? 200 : 503);
+  });
+
   app.post("/sessions/:id/close", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       backend?: string;
@@ -656,6 +907,24 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
     const result = await host.closeSession(body.backend, body.cwd, c.req.param("id"));
     return c.json(result, result.ok ? 200 : 409);
+  });
+
+  app.post("/sessions/:id/fork", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      backend?: string;
+      cwd?: string;
+      targetCwd?: string;
+    };
+    if (!body.backend || !body.cwd || !body.targetCwd) {
+      return c.json({ error: "backend, cwd and targetCwd are required" }, 400);
+    }
+    const result = await host.forkSession(
+      body.backend,
+      body.cwd,
+      c.req.param("id"),
+      body.targetCwd,
+    );
+    return c.json(result, result.ok ? 201 : 409);
   });
 
   app.delete("/sessions/:id", async (c) => {
@@ -678,6 +947,15 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
     const result = await host.listConfigOptions(backend, cwd);
     return c.json(result);
+  });
+
+  app.get("/commands", async (c) => {
+    const backend = c.req.query("backend");
+    const cwd = c.req.query("cwd");
+    if (!backend || !cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    return c.json(await host.listCommands(backend, cwd));
   });
 
   return app;

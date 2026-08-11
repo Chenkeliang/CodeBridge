@@ -5,7 +5,7 @@ export interface AcpSpawnProfile {
   args: string[];
 }
 
-const DEFAULTS: Record<BackendProfile["type"], AcpSpawnProfile> = {
+const DEFAULTS: Record<Exclude<BackendProfile["type"], "pi-sdk">, AcpSpawnProfile> = {
   "cursor-cli": { command: "cursor-agent", args: ["acp"] },
   "claude-code": {
     command: "npx",
@@ -13,12 +13,15 @@ const DEFAULTS: Record<BackendProfile["type"], AcpSpawnProfile> = {
   },
   codex: {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp@1.1.9"],
+    args: ["-y", "@agentclientprotocol/codex-acp@1.1.14"],
   },
   "generic-spawn": { command: "npx", args: [] },
 };
 
 export function resolveAcpSpawn(profile: BackendProfile): AcpSpawnProfile {
+  if (profile.type === "pi-sdk") {
+    throw new Error("Pi SDK backend does not use an ACP spawn command");
+  }
   const defaults = DEFAULTS[profile.type] ?? DEFAULTS["generic-spawn"];
   return {
     command: profile.acpCommand ?? defaults.command,

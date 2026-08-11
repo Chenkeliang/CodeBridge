@@ -1,4 +1,5 @@
 import type {
+  AgentAvailableCommand,
   AgentEvent,
   BackendConfigOption,
   RunRequest,
@@ -62,6 +63,19 @@ export class RunnerClient {
     }>;
   }
 
+  async listCommands(
+    backend: string,
+    cwd: string,
+  ): Promise<{ commands: AgentAvailableCommand[]; error?: string }> {
+    const params = new URLSearchParams({ backend, cwd });
+    const res = await this.fetch(`/commands?${params}`);
+    if (!res.ok) throw new Error(`Runner error: ${res.status} ${await res.text()}`);
+    return res.json() as Promise<{
+      commands: AgentAvailableCommand[];
+      error?: string;
+    }>;
+  }
+
   async authorizeDirectory(
     directory: string,
   ): Promise<{ ok: boolean; path?: string; error?: string }> {
@@ -102,6 +116,27 @@ export class RunnerClient {
     }
   }
 
+  async pickDirectory(): Promise<{
+    ok: boolean;
+    path?: string;
+    cancelled?: boolean;
+    error?: string;
+  }> {
+    const res = await this.fetch("/directories/pick", { method: "POST" });
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      path?: string;
+      cancelled?: boolean;
+      error?: string;
+    };
+    return {
+      ok: res.ok && body.ok === true,
+      path: body.path,
+      cancelled: body.cancelled,
+      error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
+    };
+  }
+
   async closeSession(
     backend: string,
     cwd: string,
@@ -116,6 +151,31 @@ export class RunnerClient {
     sessionId: string,
   ): Promise<{ ok: boolean; error?: string }> {
     return this.sessionLifecycle("delete", backend, cwd, sessionId);
+  }
+
+  async forkSession(
+    backend: string,
+    cwd: string,
+    sessionId: string,
+    targetCwd: string,
+  ): Promise<{ ok: boolean; sessionId?: string; cwd?: string; error?: string }> {
+    const res = await this.fetch(`/sessions/${encodeURIComponent(sessionId)}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ backend, cwd, targetCwd }),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      sessionId?: string;
+      cwd?: string;
+      error?: string;
+    };
+    return {
+      ok: res.ok && body.ok === true,
+      sessionId: body.sessionId,
+      cwd: body.cwd,
+      error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
+    };
   }
 
   async cancel(runId: string): Promise<void> {

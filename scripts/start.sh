@@ -41,6 +41,9 @@ BRIDGE_LOG="$DATA_DIR/bridge.log"
 WATCHDOG_PID="$PID_DIR/watchdog.pid"
 WATCHDOG_LOG="$DATA_DIR/watchdog.log"
 MANUAL_LOCK="$PID_DIR/manual.lock"
+RESTART_LOCK="$HOME/.codebridge-restart.lock"
+RESTART_STAMP="$HOME/.codebridge-restart.stamp"
+RESTART_COOLDOWN_SEC="${CODEBRIDGE_RESTART_COOLDOWN_SEC:-60}"
 RUNNER_PORT="${RUNNER_PORT:-19789}"
 LAUNCHD_RUNNER_LABEL="com.codebridge.runner"
 LAUNCHD_BRIDGE_LABEL="com.codebridge.bridge"
@@ -433,14 +436,57 @@ stop_pid_file() {
 acquire_manual_lock() {
   mkdir -p "$PID_DIR"
   echo $$ >"$MANUAL_LOCK"
-  trap 'rm -f "$MANUAL_LOCK"' EXIT
+  trap 'rm -f "$MANUAL_LOCK" "$RESTART_LOCK"' EXIT
+}
+
+try_acquire_restart_lock() {
+  (set -o noclobber; echo $$ >"$RESTART_LOCK") 2>/dev/null
+}
+
+acquire_restart_guard() {
+  if ! try_acquire_restart_lock; then
+    local owner
+    owner="$(cat "$RESTART_LOCK" 2>/dev/null || true)"
+    if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then
+      warn "已有重启操作正在执行 (pid ${owner})，本次跳过"
+      return 1
+    fi
+    rm -f "$RESTART_LOCK"
+    if ! try_acquire_restart_lock; then
+      warn "无法取得重启锁，本次跳过"
+      return 1
+    fi
+  fi
+
+  local now last elapsed
+  now="$(date +%s)"
+  last="$(cat "$RESTART_STAMP" 2>/dev/null || true)"
+  if [[ "${CODEBRIDGE_FORCE_RESTART:-0}" != "1" && "$last" =~ ^[0-9]+$ ]]; then
+    elapsed=$((now - last))
+    if [[ "$elapsed" -lt "$RESTART_COOLDOWN_SEC" ]]; then
+      warn "${RESTART_COOLDOWN_SEC} 秒内已执行过重启，本次健康检查不再重复重启"
+      rm -f "$RESTART_LOCK"
+      return 1
+    fi
+  fi
+  trap 'rm -f "$MANUAL_LOCK" "$RESTART_LOCK"' EXIT
+  return 0
+}
+
+mark_restart_attempt() {
+  date +%s >"$RESTART_STAMP"
 }
 
 manual_lock_active() {
-  [[ -f "$MANUAL_LOCK" ]] || return 1
-  local pid
-  pid="$(cat "$MANUAL_LOCK" 2>/dev/null || true)"
-  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+  local lock pid
+  for lock in "$MANUAL_LOCK" "$RESTART_LOCK"; do
+    [[ -f "$lock" ]] || continue
+    pid="$(cat "$lock" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 start_watchdog_bg() {
@@ -709,6 +755,18 @@ launchd_bootstrap() {
   local plist="$1"
   launchctl bootstrap "$(launchd_domain)" "$plist" 2>/dev/null \
     || launchctl load "$plist"
+}
+
+restart_launchd_component() {
+  local label="$1"
+  local installer="$2"
+  if launchd_loaded "$label"; then
+    if launchctl kickstart -k "$(launchd_domain)/$label"; then
+      return 0
+    fi
+    warn "launchctl kickstart ${label} 失败，改为重新加载"
+  fi
+  "$installer"
 }
 
 warn_launchd_conflict() {
@@ -1055,6 +1113,7 @@ cmd_start() {
 }
 
 cmd_restart() {
+  acquire_restart_guard || return 0
   # launchd owns services installed with install-launchd; reload those jobs in
   # place so restart never creates a second Runner on the same port.
   local runner_launchd=0 bridge_launchd=0
@@ -1062,12 +1121,16 @@ cmd_restart() {
   need_cmd pnpm || exit 1
   ensure_built
   prepare_default_data_migration
+  acquire_manual_lock
+  check_config_ready
   runner_launchd=$((MIGRATION_NEW_RUNNER || MIGRATION_LEGACY_RUNNER))
   bridge_launchd=$((MIGRATION_NEW_BRIDGE || MIGRATION_LEGACY_BRIDGE))
+  mark_restart_attempt
   if [[ "$runner_launchd" -eq 1 || "$bridge_launchd" -eq 1 ]]; then
-    check_config_ready
-    [[ "$runner_launchd" -eq 1 ]] && install_launchd_runner
-    [[ "$bridge_launchd" -eq 1 ]] && install_launchd_bridge
+    # Bridge 先恢复接收消息，Runner 最后重启；即使当前 Runner 正承载本次操作，
+    # 也不会在 Bridge 尚未拉起时先把重启命令自身杀掉。
+    [[ "$bridge_launchd" -eq 1 ]] && restart_launchd_component "$LAUNCHD_BRIDGE_LABEL" install_launchd_bridge
+    [[ "$runner_launchd" -eq 1 ]] && restart_launchd_component "$LAUNCHD_RUNNER_LABEL" install_launchd_runner
     info "launchd 服务已迁移并重启（电脑重启后仍会自动启动）"
     return 0
   fi

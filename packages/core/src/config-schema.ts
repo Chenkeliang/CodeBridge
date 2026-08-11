@@ -17,8 +17,8 @@ export const FeishuPolicySchema = z.object({
 });
 
 export const BackendProfileSchema = z.object({
-  type: z.enum(["cursor-cli", "claude-code", "codex", "generic-spawn"]),
-  // 兼容旧配置里的显式 `transport: acp`；CLI transport 已移除。
+  type: z.enum(["cursor-cli", "claude-code", "codex", "generic-spawn", "pi-sdk"]),
+  // 兼容旧配置里的显式 `transport: acp`；CLI transport 已移除；pi-sdk 不读取该字段。
   transport: z.literal("acp").optional(),
   acpCommand: z.string().optional(),
   acpArgs: z.array(z.string()).optional(),
@@ -49,6 +49,37 @@ export const WorkspacesConfigSchema = z.object({
   named: z.record(z.string()).optional(),
 });
 
+export const ProjectCatalogConfigSchema = z.object({
+  repositoryPath: z.string().min(1),
+  baseRef: z.string().min(1).default("main"),
+  catalogPath: z.string().min(1).default("catalog/projects.yaml"),
+});
+
+const McpServerCommonSchema = {
+  revision: z.string().min(1).optional(),
+  enabled: z.boolean().default(true),
+};
+
+export const McpServerConfigSchema = z.discriminatedUnion("transport", [
+  z.object({
+    transport: z.literal("stdio"),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    env: z.array(z.string().min(1)).optional(),
+    ...McpServerCommonSchema,
+  }),
+  z.object({
+    transport: z.literal("http"),
+    url: z.string().url(),
+    ...McpServerCommonSchema,
+  }),
+]);
+
+export const OrchestrationConfigSchema = z.object({
+  projectCatalog: ProjectCatalogConfigSchema.optional(),
+  mcpServers: z.record(McpServerConfigSchema).optional(),
+});
+
 export const ConfigSchema = z.object({
   feishu: z.object({
     domain: z.string().url().default("https://open.feishu.cn"),
@@ -68,10 +99,11 @@ export const ConfigSchema = z.object({
     url: z.string().url().default("http://127.0.0.1:19789"),
     token: z.string().min(8),
   }),
-  defaultBackend: z.enum(["cursor", "claude", "codex"]).default("cursor"),
+  defaultBackend: z.enum(["cursor", "claude", "codex", "pi"]).default("cursor"),
   backends: z.record(BackendProfileSchema),
   access: AccessConfigSchema.optional(),
   workspaces: WorkspacesConfigSchema.optional(),
+  orchestration: OrchestrationConfigSchema.optional(),
   runnerHost: z
     .object({
       listen: z.string().default("127.0.0.1:19789"),
@@ -80,12 +112,12 @@ export const ConfigSchema = z.object({
       acpPermissionPolicy: z
         .enum(["auto_allow", "prompt_deny", "prompt_feishu"])
         .default("auto_allow"),
-      /** 一轮无结束信号的总超时（ms），到点判 fatal */
+      /** 一轮无结束信号的总超时（ms）；长任务可运行 6 小时，和停滞检测分开 */
       acpPromptTimeoutMs: z
         .number()
         .int()
         .positive()
-        .default(40 * 60_000),
+        .default(6 * 60 * 60_000),
       /** 从发 prompt 起完全无任何输出的超时（ms） */
       acpNoOutputTimeoutMs: z
         .number()
@@ -166,7 +198,7 @@ export function defaultConfig(): AppConfig {
       codex: {
         type: "codex",
         acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.9"],
+        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.14"],
         // 不钉 model：OpenAI 轮换模型名很快，钉了必过期；用适配器默认，会话内 /model 切
       },
     },
