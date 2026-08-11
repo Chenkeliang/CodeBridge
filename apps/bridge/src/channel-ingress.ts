@@ -12,6 +12,7 @@ interface AcceptedChannelMessage {
 
 interface SessionEvent {
   type?: string;
+  run_id?: string | null;
   payload?: { event?: AgentEvent } & Record<string, unknown>;
 }
 
@@ -46,6 +47,7 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
     const signal = message.signal
       ? AbortSignal.any([message.signal, controller.signal])
       : controller.signal;
+    const fatalAgentErrorRuns = new Set<string>();
     try {
       const response = await app.request(
         `/v1/sessions/${encodeURIComponent(result.session_id)}/events?live=true&after_sequence=${result.event_sequence}`,
@@ -58,7 +60,13 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
         throw new Error(`Channel event stream failed (${response.status})`);
       }
       for await (const event of readSessionEvents(response.body)) {
-        if (event.type === "AGENT_EVENT" && event.payload?.event) yield event.payload.event;
+        if (event.type === "AGENT_EVENT" && event.payload?.event) {
+          const agentEvent = event.payload.event;
+          if (agentEvent.type === "error" && agentEvent.fatal && event.run_id) {
+            fatalAgentErrorRuns.add(event.run_id);
+          }
+          if (agentEvent.type !== "done") yield agentEvent;
+        }
         if (event.type === "APPROVAL_REQUESTED") {
           yield {
             type: "permission_request",
@@ -67,7 +75,9 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
           };
         }
         if (event.type === "STEP_FAILED") {
-          yield { type: "error", message: String((event.payload as Record<string, unknown> | undefined)?.error ?? "Step failed") };
+          if (!event.run_id || !fatalAgentErrorRuns.has(event.run_id)) {
+            yield { type: "error", message: String((event.payload as Record<string, unknown> | undefined)?.error ?? "Step failed") };
+          }
         }
         if (event.type === "RUN_SUCCEEDED") {
           yield { type: "done", exitCode: 0 };

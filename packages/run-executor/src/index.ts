@@ -31,6 +31,7 @@ export interface RunExecutorOptions {
 
 export class RunExecutor {
   private readonly activeControllers = new Map<string, AbortController>();
+  private readonly activeCompletions = new Map<string, Promise<void>>();
 
   constructor(
     private readonly store: SqliteEventStore,
@@ -44,6 +45,22 @@ export class RunExecutor {
     if (["succeeded", "failed", "cancelled"].includes(run.status)) return run;
     this.activeControllers.get(runId)?.abort();
     return this.cancel(run.id, run.workItemId);
+  }
+
+  async cancelRunAndWait(runId: string): Promise<Run> {
+    const run = this.store.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+    if (["succeeded", "failed", "cancelled"].includes(run.status)) return run;
+    const controller = this.activeControllers.get(runId);
+    const completion = this.activeCompletions.get(runId);
+    if (!controller || !completion) return this.cancelRun(runId);
+    controller.abort();
+    await completion;
+    const result = this.store.getRun(runId)!;
+    if (result.status === "failed") {
+      throw new Error("Runner cancellation failed");
+    }
+    return result;
   }
 
   async execute(runId: string, signal?: AbortSignal): Promise<Run> {
@@ -98,7 +115,12 @@ export class RunExecutor {
 
     const controller = new AbortController();
     const activeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    let completeExecution!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      completeExecution = resolve;
+    });
     this.activeControllers.set(runId, controller);
+    this.activeCompletions.set(runId, completion);
     try {
       if (plan) {
         const waiting = await this.executePlan(workItem, initial, plan, activeSignal);
@@ -112,6 +134,7 @@ export class RunExecutor {
           target: runId,
         });
         await this.executeStep(workItem, initial, null, activeSignal);
+        if (activeSignal.aborted) return this.cancel(runId, workItem.id);
         this.store.appendEvent({
           workItemId: workItem.id,
           runId,
@@ -138,7 +161,9 @@ export class RunExecutor {
       });
       return this.store.getRun(runId)!;
     } catch (error) {
-      if (activeSignal.aborted) return this.cancel(runId, workItem.id);
+      if (activeSignal.aborted && !isRunnerCancellationError(error)) {
+        return this.cancel(runId, workItem.id);
+      }
       this.store.updateRunStatus(runId, "failed");
       this.store.appendEvent({
         workItemId: workItem.id,
@@ -158,6 +183,10 @@ export class RunExecutor {
       throw error;
     } finally {
       if (this.activeControllers.get(runId) === controller) this.activeControllers.delete(runId);
+      completeExecution();
+      if (this.activeCompletions.get(runId) === completion) {
+        this.activeCompletions.delete(runId);
+      }
     }
   }
 
@@ -207,6 +236,7 @@ export class RunExecutor {
         continue;
       }
       if (step.branches.length) {
+        if (signal?.aborted) return false;
         const selected = selectBranch(step, workItem.identifiers);
         if (!selected) throw new Error(`No branch matched for step ${step.id}`);
         this.store.appendEvent({
@@ -234,6 +264,7 @@ export class RunExecutor {
           });
           skipped.add(branch.next);
         }
+        if (signal?.aborted) return false;
         this.store.appendEvent({
           workItemId: workItem.id,
           runId: run.id,
@@ -296,6 +327,7 @@ export class RunExecutor {
         payload: { capability_id: step.capabilityId, risk: step.risk },
       });
       await this.executeStep(workItem, run, step, signal);
+      if (signal?.aborted) return false;
       this.store.appendEvent({
         workItemId: workItem.id,
         runId: run.id,
@@ -517,6 +549,10 @@ interface ApprovalScope {
   environment: string;
   targetResource: string;
   input: Record<string, unknown>;
+}
+
+function isRunnerCancellationError(error: unknown): boolean {
+  return error instanceof Error && error.name === "RunnerCancellationError";
 }
 
 function approvalScopeFor(

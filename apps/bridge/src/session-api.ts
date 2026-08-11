@@ -179,12 +179,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     }, 202);
   });
 
-  app.post("/v1/channels/:channel/conversations/:conversation_id/cancel", (c) => {
+  app.post("/v1/channels/:channel/conversations/:conversation_id/cancel", async (c) => {
     const session = options.catalog.getChannelSession(c.req.param("channel"), c.req.param("conversation_id"));
     if (!session?.taskRecordId) return c.json({ stopped: false });
     const run = options.workItems.listRuns(session.taskRecordId).reverse().find((candidate) => ["queued", "running", "waiting"].includes(candidate.status));
     if (!run) return c.json({ stopped: false });
-    if (options.executor) options.executor.cancelRun(run.id);
+    if (options.executor) await options.executor.cancelRunAndWait(run.id);
     else {
       options.workItems.updateRunStatus(run.id, "cancelled");
       options.workItems.appendEvent({

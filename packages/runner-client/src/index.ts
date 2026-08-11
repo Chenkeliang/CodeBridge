@@ -14,6 +14,10 @@ export interface RunnerClientOptions {
 
 export type { CliSessionSummary };
 
+export class RunnerCancellationError extends Error {
+  override readonly name = "RunnerCancellationError";
+}
+
 export class RunnerClient {
   constructor(private readonly options: RunnerClientOptions) {}
 
@@ -179,7 +183,17 @@ export class RunnerClient {
   }
 
   async cancel(runId: string): Promise<void> {
-    await this.fetch(`/runs/${runId}/cancel`, { method: "POST" });
+    let res: Response;
+    try {
+      res = await this.fetch(`/runs/${runId}/cancel`, { method: "POST" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new RunnerCancellationError(`Runner cancellation failed: ${message}`);
+    }
+    const body = (await res.json().catch(() => ({}))) as { ok?: boolean };
+    if (!res.ok || body.ok !== true) {
+      throw new RunnerCancellationError(`Runner cancellation failed: ${res.status}`);
+    }
   }
 
   async steer(
@@ -219,31 +233,48 @@ export class RunnerClient {
     request: RunRequest,
     options?: { signal?: AbortSignal },
   ): AsyncGenerator<AgentEvent> {
-    const res = await this.fetch("/runs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-      signal: options?.signal,
-    });
-    if (!res.ok || !res.body) {
-      throw new Error(`Runner error: ${res.status} ${await res.text()}`);
-    }
-    const reader = res.body.getReader();
+    const signal = options?.signal;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const decoder = new TextDecoder();
     let buffer = "";
     let sawDone = false;
+    let cancelPromise: Promise<void> | undefined;
+    const cancelRemote = () =>
+      (cancelPromise ??= this.cancel(request.runId));
     const onAbort = () => {
-      void reader.cancel().catch(() => {});
+      void cancelRemote().catch(() => {});
+      void reader?.cancel().catch(() => {});
     };
-    const signal = options?.signal;
-    if (signal) {
-      if (signal.aborted) {
-        reader.releaseLock();
+    if (signal?.aborted) {
+      await cancelRemote();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      let res: Response;
+      try {
+        res = await this.fetch("/runs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+          signal,
+        });
+      } catch (err) {
+        if (signal?.aborted) {
+          await cancelRemote();
+          return;
+        }
+        throw err;
+      }
+      if (!res.ok || !res.body) {
+        throw new Error(`Runner error: ${res.status} ${await res.text()}`);
+      }
+      reader = res.body.getReader();
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => {});
+        await cancelRemote();
         return;
       }
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-    try {
       while (true) {
         if (signal?.aborted) {
           await reader.cancel().catch(() => {});
@@ -277,8 +308,9 @@ export class RunnerClient {
         );
       }
     } finally {
+      if (signal?.aborted) await cancelRemote();
       signal?.removeEventListener("abort", onAbort);
-      reader.releaseLock();
+      reader?.releaseLock();
     }
   }
 
