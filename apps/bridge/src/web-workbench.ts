@@ -32,6 +32,117 @@ function toJavaScriptString(value: string): string {
   return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\r?\n/g, " ")}'`;
 }
 
+export function renderSafeMarkdown(value: string): string {
+  const escape = (input: string): string => input.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]!);
+  const renderInline = (input: string): string => {
+    const tokens: string[] = [];
+    const hold = (html: string): string => `\u0000${tokens.push(html) - 1}\u0000`;
+    let source = input
+      .replace(/`([^`\n]+)`/g, (_match, code: string) => hold(`<code>${escape(code)}</code>`))
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label: string, href: string) => hold(`<a href="${escape(href)}" target="_blank" rel="noreferrer">${escape(label)}</a>`));
+    source = escape(source)
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/~~([^~\n]+)~~/g, "<del>$1</del>")
+      .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+    return source.replace(/\u0000(\d+)\u0000/g, (_match, index: string) => tokens[Number(index)] ?? "");
+  };
+  const lines = String(value ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const output: string[] = [];
+  const tableCells = (line: string): string[] => line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
+  const isTableDivider = (line: string): boolean => {
+    const cells = tableCells(line);
+    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  };
+  const startsBlock = (index: number): boolean => {
+    const line = lines[index] ?? "";
+    return !line.trim()
+      || /^\s*```/.test(line)
+      || /^\s{0,3}#{1,6}\s+/.test(line)
+      || /^\s*(?:[-+*]|\d+[.)])\s+/.test(line)
+      || /^\s*>\s?/.test(line)
+      || /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)
+      || (line.includes("|") && isTableDivider(lines[index + 1] ?? ""));
+  };
+
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index] ?? "";
+    if (!line.trim()) { index += 1; continue; }
+
+    const fence = line.match(/^\s*```([\w-]*)\s*$/);
+    if (fence) {
+      const code: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^\s*```\s*$/.test(lines[index] ?? "")) code.push(lines[index++] ?? "");
+      if (index < lines.length) index += 1;
+      const language = fence[1] ? ` class="language-${escape(fence[1])}"` : "";
+      output.push(`<pre><code${language}>${escape(code.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*$/);
+    if (heading) {
+      const level = heading[1]!.length;
+      output.push(`<h${level}>${renderInline(heading[2]!)}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      output.push("<hr>");
+      index += 1;
+      continue;
+    }
+
+    if (line.includes("|") && isTableDivider(lines[index + 1] ?? "")) {
+      const headers = tableCells(line);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && (lines[index] ?? "").includes("|") && (lines[index] ?? "").trim()) rows.push(tableCells(lines[index++] ?? ""));
+      output.push(`<div class="table-scroll"><table><thead><tr>${headers.map((cell) => `<th>${renderInline(cell)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_header, cellIndex) => `<td>${renderInline(row[cellIndex] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      continue;
+    }
+
+    const unordered = line.match(/^\s*[-+*]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      const tag = unordered ? "ul" : "ol";
+      const items: string[] = [];
+      const pattern = unordered ? /^\s*[-+*]\s+(.+)$/ : /^\s*\d+[.)]\s+(.+)$/;
+      while (index < lines.length) {
+        const item = (lines[index] ?? "").match(pattern);
+        if (!item) break;
+        items.push(`<li>${renderInline(item[1]!)}</li>`);
+        index += 1;
+      }
+      output.push(`<${tag}>${items.join("")}</${tag}>`);
+      continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      const quoted: string[] = [];
+      while (index < lines.length) {
+        const quote = (lines[index] ?? "").match(/^\s*>\s?(.*)$/);
+        if (!quote) break;
+        quoted.push(quote[1] ?? "");
+        index += 1;
+      }
+      output.push(`<blockquote>${quoted.map((part) => renderInline(part)).join("<br>")}</blockquote>`);
+      continue;
+    }
+
+    const paragraph: string[] = [];
+    while (index < lines.length && (paragraph.length === 0 || !startsBlock(index))) paragraph.push(lines[index++] ?? "");
+    output.push(`<p>${paragraph.map((part) => renderInline(part)).join("<br>")}</p>`);
+  }
+  return output.join("");
+}
+
 /**
  * A dependency-free local web surface. It deliberately uses the same HTTP
  * contracts as Feishu/Telegram instead of creating a second conversation path.
@@ -187,25 +298,49 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .inspector-link { color:var(--accent); background:transparent; text-align:left; padding:0; font-size:12px; }
     .inspector-link:hover { text-decoration:underline; }
     .artifact-content { max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:#f5f7f5; border-radius:7px; padding:8px; color:var(--muted); font:11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .timeline { min-height:330px; display:grid; align-content:start; gap:18px; }
+    .timeline { min-height:330px; display:grid; align-content:start; gap:22px; }
     .timeline-empty { padding:42px 0; color:var(--muted); }
-    .conversation-turn { display:grid; gap:7px; min-width:0; }
+    .conversation-turn { display:grid; gap:6px; min-width:0; }
     .conversation-turn.user { justify-items:end; }
-    .turn-label { color:var(--muted); font-size:11px; }
-    .message-surface { max-width:min(78%,720px); white-space:pre-wrap; word-break:break-word; font-size:15px; line-height:1.65; }
-    .conversation-turn.user .message-surface { border-radius:15px 15px 4px 15px; background:#e8ece9; padding:10px 14px; }
-    .conversation-turn.agent .message-surface { max-width:820px; }
+    .turn-label { color:var(--muted); font-size:11px; font-weight:400; letter-spacing:.02em; }
+    .message-surface { max-width:min(84%,780px); white-space:normal; word-break:break-word; font-size:14.5px; line-height:1.78; font-weight:400; letter-spacing:.006em; }
+    .conversation-turn.user .message-surface { border-radius:14px 14px 4px 14px; background:#e9eeeb; padding:11px 15px; }
+    .conversation-turn.agent .message-surface { max-width:840px; }
     .message-meta { color:var(--muted); font-size:11px; }
-    .progress-message { max-width:820px; display:flex; gap:8px; align-items:flex-start; color:var(--muted); font-size:13px; }
+    .markdown-body > :first-child { margin-top:0; }
+    .markdown-body > :last-child { margin-bottom:0; }
+    .markdown-body p { margin:0 0 .82em; }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { margin:1.35em 0 .55em; color:var(--ink); font-weight:500; line-height:1.42; letter-spacing:-.008em; }
+    .markdown-body h1 { font-size:1.22em; }
+    .markdown-body h2 { font-size:1.14em; }
+    .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size:1em; }
+    .markdown-body strong { font-weight:500; color:var(--ink); }
+    .markdown-body em { font-style:italic; }
+    .markdown-body ul, .markdown-body ol { margin:.68em 0 .9em; padding-left:1.4em; }
+    .markdown-body li { padding-left:.12em; }
+    .markdown-body li + li { margin-top:.34em; }
+    .markdown-body blockquote { margin:.9em 0; padding:.12em 0 .12em 1em; border-left:2px solid #b8c8c2; color:var(--muted); }
+    .markdown-body code { border-radius:5px; background:#edf1ee; padding:.12em .36em; color:#31514c; font:12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .markdown-body pre { margin:1em 0; overflow:auto; border:1px solid var(--line); border-radius:9px; background:#f4f6f4; padding:12px 14px; }
+    .markdown-body pre code { display:block; min-width:max-content; background:transparent; padding:0; color:#38413e; line-height:1.65; }
+    .markdown-body a { color:var(--accent); text-decoration:none; border-bottom:1px solid #a9c1bb; }
+    .markdown-body a:hover { border-bottom-color:var(--accent); }
+    .markdown-body .table-scroll { max-width:100%; overflow:auto; margin:1em 0; border:1px solid var(--line); border-radius:9px; }
+    .markdown-body table { width:100%; border-collapse:collapse; background:#fff; font-size:13px; line-height:1.55; }
+    .markdown-body th, .markdown-body td { min-width:110px; padding:8px 11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-weight:400; }
+    .markdown-body th { background:#f4f6f4; color:var(--ink); font-weight:500; }
+    .markdown-body tbody tr:last-child td { border-bottom:0; }
+    .markdown-body hr { height:1px; margin:1.2em 0; border:0; background:var(--line); }
+    .progress-message { max-width:840px; display:flex; gap:9px; align-items:flex-start; color:var(--muted); font-size:13px; font-weight:400; }
     .run-activity { font-size:12px; }
     .run-activity::before { animation:activity-pulse 1.2s ease-in-out infinite; }
     @keyframes activity-pulse { 0%,100% { opacity:.35; } 50% { opacity:1; } }
     .progress-message::before { content:""; flex:0 0 6px; width:6px; height:6px; margin-top:7px; border-radius:50%; background:var(--accent); }
-    .tool-call { border:1px solid var(--line); border-radius:10px; background:#fafbf9; overflow:hidden; }
-    .tool-call summary { list-style:none; display:flex; align-items:center; gap:8px; padding:9px 11px; cursor:pointer; }
+    .tool-call { border:1px solid var(--line); border-radius:9px; background:#fafbf9; overflow:hidden; }
+    .tool-call summary { list-style:none; display:flex; align-items:center; gap:8px; padding:8px 11px; cursor:pointer; }
     .tool-call summary::-webkit-details-marker { display:none; }
     .tool-call summary:hover { background:#f2f5f2; }
-    .tool-call strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:650; }
+    .tool-call strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; font-weight:500; letter-spacing:.004em; }
     .tool-status-icon { flex:0 0 16px; width:16px; height:16px; display:grid; place-items:center; border-radius:50%; background:var(--accent-soft); color:var(--accent); font-size:10px; }
     .tool-status-label { margin-left:auto; color:var(--muted); font-size:11px; }
     .tool-call.failed .tool-status-icon { background:#f6e7e3; color:#a14835; }
@@ -214,7 +349,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
     .tool-detail-section span { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
     .tool-detail-section pre { max-height:240px; overflow:auto; margin:0; white-space:pre-wrap; word-break:break-word; color:var(--muted); font:11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
     .plan-card, .approval-request, .run-notice { max-width:820px; border:1px solid var(--line); border-radius:11px; padding:12px 14px; background:#fff; }
-    .plan-card strong, .approval-request strong, .run-notice strong { display:block; font-size:12px; }
+    .plan-card strong, .approval-request strong, .run-notice strong { display:block; font-size:12px; font-weight:500; }
     .plan-list { display:grid; gap:5px; margin:9px 0 0; padding:0; list-style:none; color:var(--muted); font-size:12px; }
     .plan-list li::before { content:"○"; margin-right:7px; }
     .plan-list li.completed::before { content:"✓"; color:var(--accent); }
@@ -333,6 +468,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
   <script>
     const TOKEN = __TOKEN__;
     const agentIcons = {${agentIconSource}};
+    const renderMarkdown = ${renderSafeMarkdown.toString()};
     const state = { selected: null, sequence: 0, timer: null, eventAbort: null, session: null, latestRunId: null, ephemeralFlow: null, projectCandidateId: null, approval: null, attachments: [], commands: [], commandState: 'idle', commandRequestId: 0, resourceKey: null, showArchived: false, messageNodes: new Map(), toolNodes: new Map(), planNodes: new Map(), approvalNodes: new Map(), runActivityNodes: new Map(), failedRuns: new Set(), collapsedAgents: new Set(${JSON.stringify(agentProfiles.map((agent) => agent.id))}) };
     const $ = (id) => document.getElementById(id);
     const api = async (url, init = {}) => {
@@ -740,7 +876,7 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       const message = typeof event.payload?.message === 'string' ? event.payload.message : '';
       if (!message) return false;
       const attachmentCount = Array.isArray(event.payload?.attachment_ids) ? event.payload.attachment_ids.length : 0;
-      appendConversation('<article class="conversation-turn user" title="' + esc(new Date(event.occurred_at).toLocaleString()) + '"><div class="message-surface">' + esc(message) + '</div>' + (attachmentCount ? '<div class="message-meta">' + attachmentCount + ' 个附件</div>' : '') + '</article>');
+      appendConversation('<article class="conversation-turn user" title="' + esc(new Date(event.occurred_at).toLocaleString()) + '"><div class="message-surface markdown-body">' + renderMarkdown(message) + '</div>' + (attachmentCount ? '<div class="message-meta">' + attachmentCount + ' 个附件</div>' : '') + '</article>');
       return true;
     }
     function renderAgentText(event, agentEvent) {
@@ -750,11 +886,13 @@ function renderWorkbench(options: WebWorkbenchOptions): string {
       let node = state.messageNodes.get(key);
       if (!node) {
         node = appendConversation(phase === 'commentary'
-          ? '<article class="progress-message"><div class="message-surface"></div></article>'
-          : '<article class="conversation-turn agent"><div class="turn-label">Agent</div><div class="message-surface"></div></article>');
+          ? '<article class="progress-message"><div class="message-surface markdown-body"></div></article>'
+          : '<article class="conversation-turn agent"><div class="turn-label">Agent</div><div class="message-surface markdown-body"></div></article>');
         state.messageNodes.set(key, node);
       }
-      node.querySelector('.message-surface').textContent += agentEvent.text;
+      node.dataset.markdown = (node.dataset.markdown || '') + agentEvent.text;
+      const surface = node.querySelector('.message-surface');
+      surface.innerHTML = renderMarkdown(node.dataset.markdown);
       return true;
     }
     function formatToolValue(value) {
