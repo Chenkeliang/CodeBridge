@@ -43,4 +43,61 @@ describe("conversation event projection", () => {
       expect.objectContaining({ kind: "tool", id: "tool-1", status: "completed", output: "done" }),
     ]);
   });
+
+  it("keeps user messages and plans in the conversation timeline", () => {
+    const projection = reduceConversationEvents([
+      {
+        event_id: "message-1",
+        sequence: 1,
+        run_id: null,
+        type: "MESSAGE_RECEIVED",
+        occurred_at: "2026-08-11T00:00:00.000Z",
+        payload: { message: "检查当前工作区" },
+      },
+      {
+        event_id: "plan-1",
+        sequence: 2,
+        run_id: "run-1",
+        type: "AGENT_EVENT",
+        occurred_at: "2026-08-11T00:00:01.000Z",
+        payload: {
+          event: {
+            type: "plan",
+            entries: [{ content: "读取目录", priority: "high", status: "in_progress" }],
+          },
+        },
+      },
+    ]);
+
+    expect(projection).toEqual([
+      expect.objectContaining({ kind: "user", content: "检查当前工作区" }),
+      expect.objectContaining({ kind: "plan", entries: [{ content: "读取目录", priority: "high", status: "in_progress" }] }),
+    ]);
+  });
+
+  it("projects permission requests and agent errors as actionable blocks", () => {
+    const projection = reduceConversationEvents([
+      {
+        event_id: "approval-1",
+        sequence: 1,
+        run_id: "run-1",
+        type: "AGENT_EVENT",
+        occurred_at: "2026-08-11T00:00:00.000Z",
+        payload: { event: { type: "permission_request", requestId: "req-1", title: "写入当前分支" } },
+      },
+      {
+        event_id: "error-1",
+        sequence: 2,
+        run_id: "run-1",
+        type: "AGENT_EVENT",
+        occurred_at: "2026-08-11T00:00:01.000Z",
+        payload: { event: { type: "error", message: "Runner 暂时不可用" } },
+      },
+    ]);
+
+    expect(projection).toEqual([
+      expect.objectContaining({ kind: "approval", requestId: "req-1", title: "写入当前分支" }),
+      expect.objectContaining({ kind: "error", content: "Runner 暂时不可用" }),
+    ]);
+  });
 });

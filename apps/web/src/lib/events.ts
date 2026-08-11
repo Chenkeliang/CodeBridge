@@ -24,7 +24,45 @@ export interface ToolProjection {
   runId: string | null;
 }
 
-export type ConversationProjection = AssistantProjection | ToolProjection;
+export interface UserProjection {
+  kind: "user";
+  content: string;
+  eventId: string;
+}
+
+export interface PlanEntryProjection {
+  content: string;
+  priority: string;
+  status: string;
+}
+
+export interface PlanProjection {
+  kind: "plan";
+  entries: PlanEntryProjection[];
+  runId: string | null;
+}
+
+export interface ApprovalProjection {
+  kind: "approval";
+  requestId: string;
+  title: string;
+  runId: string | null;
+}
+
+export interface ErrorProjection {
+  kind: "error";
+  content: string;
+  fatal: boolean;
+  runId: string | null;
+}
+
+export type ConversationProjection =
+  | AssistantProjection
+  | ToolProjection
+  | UserProjection
+  | PlanProjection
+  | ApprovalProjection
+  | ErrorProjection;
 
 type AgentEvent = Record<string, unknown> & { type?: string };
 
@@ -34,6 +72,10 @@ export function reduceConversationEvents(events: ConversationEvent[]): Conversat
   const toolsById = new Map<string, ToolProjection>();
 
   for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    if (event.type === "MESSAGE_RECEIVED" && typeof event.payload?.message === "string") {
+      projection.push({ kind: "user", content: event.payload.message, eventId: event.event_id });
+      continue;
+    }
     const agentEvent = event.payload?.event;
     if (!agentEvent || typeof agentEvent !== "object") continue;
     const value = agentEvent as AgentEvent;
@@ -71,6 +113,33 @@ export function reduceConversationEvents(events: ConversationEvent[]): Conversat
         toolsById.set(id, next);
         projection.push(next);
       }
+      continue;
+    }
+    if (value.type === "plan" && Array.isArray(value.entries)) {
+      const entries = value.entries.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") return [];
+        const item = entry as Record<string, unknown>;
+        if (typeof item.content !== "string") return [];
+        return [{
+          content: item.content,
+          priority: typeof item.priority === "string" ? item.priority : "medium",
+          status: typeof item.status === "string" ? item.status : "pending",
+        }];
+      });
+      projection.push({ kind: "plan", entries, runId: event.run_id });
+      continue;
+    }
+    if (value.type === "permission_request" && typeof value.requestId === "string" && typeof value.title === "string") {
+      projection.push({ kind: "approval", requestId: value.requestId, title: value.title, runId: event.run_id });
+      continue;
+    }
+    if (value.type === "error" && typeof value.message === "string") {
+      projection.push({
+        kind: "error",
+        content: value.message,
+        fatal: value.fatal === true,
+        runId: event.run_id,
+      });
     }
   }
   return projection;
