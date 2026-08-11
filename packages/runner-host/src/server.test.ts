@@ -41,6 +41,26 @@ function request(cwd: string): RunRequest {
 }
 
 describe("RunnerHost cwd validation", () => {
+  it("returns Codex ACP built-in commands without opening the provider Session", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-codex-commands-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.codex = { type: "codex" };
+    const host = new RunnerHost({ token: "token", config, dataDir });
+
+    await expect(host.listCommands("codex", cwd)).resolves.toMatchObject({
+      commands: expect.arrayContaining([
+        expect.objectContaining({ name: "plan", description: "Turn plan mode on." }),
+        expect.objectContaining({ name: "mcp", description: "List configured Model Context Protocol (MCP) tools." }),
+        expect.objectContaining({ name: "skills", description: "List available skills." }),
+        expect.objectContaining({ name: "status", description: "Display session configuration and token usage." }),
+        expect.objectContaining({ name: "review", description: "Review uncommitted changes, or review with custom instructions." }),
+      ]),
+    });
+    host.shutdown();
+  });
+
   it("lists immediate workspace entries without traversing outside the authorized root", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-list-"));

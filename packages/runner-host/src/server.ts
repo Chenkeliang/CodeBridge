@@ -84,6 +84,18 @@ interface RunLifecycle {
 /** prompt_feishu：权限请求等待用户回复的超时（到点自动拒绝）。需小于 noOutput 超时。 */
 const PERMISSION_PROMPT_TIMEOUT_MS = 8 * 60 * 1000;
 const execFileAsync = promisify(execFile);
+const CODEX_BUILTIN_COMMANDS: AgentAvailableCommand[] = [
+  { name: "plan", description: "Turn plan mode on." },
+  { name: "mcp", description: "List configured Model Context Protocol (MCP) tools." },
+  { name: "skills", description: "List available skills." },
+  { name: "status", description: "Display session configuration and token usage." },
+  { name: "review", description: "Review uncommitted changes, or review with custom instructions.", input: { hint: "optional review instructions" } },
+  { name: "review-branch", description: "Review changes relative to a base branch.", input: { hint: "branch name" } },
+  { name: "review-commit", description: "Review a specific commit.", input: { hint: "commit sha" } },
+  { name: "compact", description: "Summarize conversation to avoid hitting the context limit." },
+  { name: "goal", description: "Set a goal to keep pursuing.", input: { hint: "[<objective>|clear|pause|resume]" } },
+  { name: "logout", description: "Sign out of Codex. This option is available when you are logged in via ChatGPT." },
+];
 
 async function pickNativeDirectory(): Promise<string | null> {
   if (process.platform !== "darwin") {
@@ -606,6 +618,7 @@ export class RunnerHost {
     if (!profile) return { commands: [], error: `Unknown backend: ${backendId}` };
     const resolvedCwd = resolveRunCwd(cwd);
     if ("error" in resolvedCwd) return { commands: [], error: resolvedCwd.error };
+    if (profile.type === "codex") return { commands: CODEX_BUILTIN_COMMANDS };
     if (profile.type !== "pi-sdk") return { commands: [] };
     try {
       return { commands: await listPiCommands(resolvedCwd.cwd) };
