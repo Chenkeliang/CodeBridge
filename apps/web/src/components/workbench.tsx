@@ -41,7 +41,7 @@ import type {
   SessionEvent,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { isModelOption, orderSessions } from "@/lib/workbench-logic";
+import { isModelOption, orderSessions, restoreSessionSelection } from "@/lib/workbench-logic";
 
 type Theme = "paper" | "carbon";
 type PanelArea = "agents" | "flows";
@@ -119,6 +119,7 @@ export function Workbench() {
   const [flows, setFlows] = useState<FlowRecord[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [modelOptions, setModelOptions] = useState<ConfigOption[]>([]);
@@ -140,15 +141,20 @@ export function Workbench() {
   const [commandOpen, setCommandOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const streamAbort = useRef<AbortController | null>(null);
+  const selectedAgentRef = useRef<string | null>(null);
+  const selectedSessionRef = useRef<string | null>(null);
   const t = themes[theme];
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
   const agentSessions = useMemo(
     () => orderSessions(sessions.filter((session) => session.agent_id === selectedAgentId))
+      .filter((session) => showArchived ? Boolean(session.archived_at) : !session.archived_at)
       .filter((session) => (session.title || "未命名 Session").toLowerCase().includes(query.toLowerCase())),
-    [query, selectedAgentId, sessions],
+    [query, selectedAgentId, sessions, showArchived],
   );
+  const activeSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && !session.archived_at).length;
+  const archivedSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && session.archived_at).length;
   const projection = useMemo(() => reduceConversationEvents(events), [events]);
   const modelValues = useMemo(
     () => modelOptions.filter(isModelOption).flatMap((option) => option.values),
@@ -166,17 +172,23 @@ export function Workbench() {
     try {
       const [nextAgents, nextSessions, nextFlows] = await Promise.all([
         api.agents(),
-        api.sessions(importProvider),
+        api.sessions(importProvider, true),
         api.flows(),
       ]);
       setAgents(nextAgents);
       setSessions(nextSessions);
       setFlows(nextFlows.filter((flow) => flow.status !== "deprecated"));
-      setSelectedAgentId((current) => current && nextAgents.some((agent) => agent.agent_id === current)
-        ? current
-        : nextAgents[0]?.agent_id ?? null);
-      setSelectedSessionId((current) => current && nextSessions.some((session) => session.session_id === current)
-        ? current
+      const nextAgentId = selectedAgentRef.current && nextAgents.some((agent) => agent.agent_id === selectedAgentRef.current)
+        ? selectedAgentRef.current
+        : nextAgents[0]?.agent_id ?? null;
+      setSelectedAgentId(nextAgentId);
+      setSelectedSessionId(nextAgentId
+        ? restoreSessionSelection(
+          nextSessions,
+          selectedSessionRef.current,
+          nextAgentId,
+          window.localStorage.getItem(`codebridge:last-session:${nextAgentId}`),
+        )
         : null);
     } catch (caught) {
       setError(messageOf(caught));
@@ -186,6 +198,9 @@ export function Workbench() {
   }, []);
 
   useEffect(() => { void reload(true); }, [reload]);
+
+  useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
+  useEffect(() => { selectedSessionRef.current = selectedSessionId; }, [selectedSessionId]);
 
   useEffect(() => {
     window.localStorage.setItem("codebridge:web-theme", theme);
@@ -246,14 +261,20 @@ export function Workbench() {
   }, [selectedSessionId]);
 
   function selectAgent(agentId: string) {
+    selectedAgentRef.current = agentId;
     setSelectedAgentId(agentId);
     setArea("agents");
     setQuery("");
+    setShowArchived(false);
     const remembered = window.localStorage.getItem(`codebridge:last-session:${agentId}`);
-    setSelectedSessionId(remembered && sessions.some((session) => session.session_id === remembered) ? remembered : null);
+    const nextSessionId = restoreSessionSelection(sessions, selectedSessionRef.current, agentId, remembered);
+    selectedSessionRef.current = nextSessionId;
+    setSelectedSessionId(nextSessionId);
   }
 
   function selectSession(session: AgentSession) {
+    selectedAgentRef.current = session.agent_id;
+    selectedSessionRef.current = session.session_id;
     setSelectedAgentId(session.agent_id);
     setSelectedSessionId(session.session_id);
     window.localStorage.setItem(`codebridge:last-session:${session.agent_id}`, session.session_id);
@@ -308,6 +329,12 @@ export function Workbench() {
       const updated = await api.updateSession(selectedSessionId, update);
       setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
       setModel(updated.model ?? "");
+      if (updated.archived_at) {
+        window.localStorage.removeItem(`codebridge:last-session:${updated.agent_id}`);
+        selectedSessionRef.current = null;
+        setSelectedSessionId(null);
+        setShowArchived(false);
+      }
       setMenuOpen(false);
     } catch (caught) {
       setError(messageOf(caught));
@@ -320,6 +347,8 @@ export function Workbench() {
     try {
       await api.deleteSession(deletedId);
       setSessions((current) => current.filter((session) => session.session_id !== deletedId));
+      if (selectedSession) window.localStorage.removeItem(`codebridge:last-session:${selectedSession.agent_id}`);
+      selectedSessionRef.current = null;
       setSelectedSessionId(null);
       setMenuOpen(false);
       notify("Session 已删除");
@@ -388,7 +417,9 @@ export function Workbench() {
 
       <SessionPanel
         agent={selectedAgent}
+        activeSessionCount={activeSessionCount}
         area={area}
+        archivedSessionCount={archivedSessionCount}
         flows={flows}
         flowId={flowId}
         loading={loading}
@@ -401,6 +432,8 @@ export function Workbench() {
         onQuery={setQuery}
         onRefresh={() => void reload(true)}
         onSession={selectSession}
+        onToggleArchived={() => setShowArchived((current) => !current)}
+        showArchived={showArchived}
       />
 
       <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", t.canvas)}>
@@ -539,21 +572,25 @@ function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onArea, onTh
   </aside>;
 }
 
-function SessionPanel({ agent, area, flows, flowId, loading, query, sessions, selectedSessionId, theme, onCreate, onFlow, onQuery, onRefresh, onSession }: {
+function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, flows, flowId, loading, query, sessions, selectedSessionId, showArchived, theme, onCreate, onFlow, onQuery, onRefresh, onSession, onToggleArchived }: {
   agent: AgentProfile | null;
+  activeSessionCount: number;
   area: PanelArea;
+  archivedSessionCount: number;
   flows: FlowRecord[];
   flowId: string;
   loading: boolean;
   query: string;
   sessions: AgentSession[];
   selectedSessionId: string | null;
+  showArchived: boolean;
   theme: Theme;
   onCreate: () => void;
   onFlow: (id: string) => void;
   onQuery: (value: string) => void;
   onRefresh: () => void;
   onSession: (session: AgentSession) => void;
+  onToggleArchived: () => void;
 }) {
   const t = themes[theme];
   return <aside className={cn("flex min-h-0 min-w-0 flex-col border-r", t.sidebar, t.line)}>
@@ -567,11 +604,11 @@ function SessionPanel({ agent, area, flows, flowId, loading, query, sessions, se
     {area === "agents" ? <>
       <div className="px-4 pb-3"><label className={cn("flex h-[34px] items-center gap-2 rounded-md border px-2.5", t.surface, t.line)}><Search className={cn("size-3.5", t.muted)} /><input aria-label="搜索 Session" className={cn("min-w-0 flex-1 bg-transparent text-xs outline-none", t.ink, t.placeholder)} onChange={(event) => onQuery(event.target.value)} placeholder="搜索 Session" value={query} /></label></div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4">
-        <div className={cn("px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.1em]", t.faint)}><span>Sessions</span><span className="float-right font-mono">{sessions.length}</span></div>
+        <div className={cn("px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.1em]", t.faint)}><span>{showArchived ? "Archived" : "Sessions"}</span><span className="float-right font-mono">{showArchived ? archivedSessionCount : activeSessionCount}</span></div>
         {sessions.map((session) => <button className={cn("relative grid w-full gap-1 rounded-md border border-transparent px-3 py-2.5 text-left transition-colors hover:opacity-80", t.ink, selectedSessionId === session.session_id && cn(t.surface, t.line, t.shadowSmall))} key={session.session_id} onClick={() => onSession(session)} title={session.title || "未命名 Session"} type="button"><span className="truncate pr-3 text-xs font-medium">{session.title || "未命名 Session"}</span><span className={cn("flex items-center gap-1.5 text-[10px]", t.muted)}>{session.pinned_at && <Pin className={cn("size-3", t.warning)} />}<span>{statusLabel[session.status] ?? session.status}</span><span>·</span><time className="font-mono">{relativeTime(session.updated_at)}</time></span>{selectedSessionId === session.session_id && <span className={cn("absolute right-2.5 top-3.5 size-1.5 rounded-full", t.accent)} />}</button>)}
-        {!loading && !sessions.length && <div className={cn("px-3 py-8 text-center text-xs", t.muted)}>当前 Agent 暂无 Session</div>}
+        {!loading && !sessions.length && <div className={cn("px-3 py-8 text-center text-xs", t.muted)}>{showArchived ? "暂无已归档 Session" : "当前 Agent 暂无 Session"}</div>}
       </div>
-      <footer className={cn("flex items-center justify-between border-t px-4 py-3 text-[10px]", t.line, t.muted)}><span>已归档</span><span className="font-mono">{sessions.length} active</span></footer>
+      <footer className={cn("border-t px-3 py-2", t.line)}><button className={cn("flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-opacity hover:opacity-80", t.muted)} onClick={onToggleArchived} type="button"><Archive className="size-3.5" /><span className="flex-1">{showArchived ? "返回 Sessions" : "已归档"}</span><span className="font-mono text-[10px]">{showArchived ? activeSessionCount : archivedSessionCount}</span></button></footer>
     </> : <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4"><div className={cn("px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.1em]", t.faint)}>Published</div>{flows.map((flow) => <button className={cn("flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2.5 text-left text-xs transition-colors hover:opacity-80", t.ink, flowId === flow.flow_id && cn(t.surface, t.line))} key={flow.flow_id} onClick={() => onFlow(flow.flow_id)} type="button"><Workflow className={cn("size-3.5", t.muted)} /><span className="min-w-0 flex-1 truncate">{flow.name || flow.flow_id}</span><span className={cn("font-mono text-[10px]", t.faint)}>{flow.kind}</span></button>)}{!flows.length && <div className={cn("px-3 py-8 text-center text-xs", t.muted)}>暂无已发布 Flow</div>}</div>}
   </aside>;
 }
@@ -605,7 +642,7 @@ function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, 
       {menuOpen && <div className={cn("absolute right-0 top-11 z-30 w-56 rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{menuView === "rename" ? <div className="space-y-2 p-2"><label className={cn("text-xs", t.muted)} htmlFor="session-name">Session 名称</label><input autoFocus className={cn("h-9 w-full rounded-md border bg-transparent px-2.5 text-sm outline-none", t.ink, t.lineStrong, t.focus)} id="session-name" onChange={(event) => onRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && renameDraft.trim()) onUpdate({ title: renameDraft.trim() }); if (event.key === "Escape") onMenuView("actions"); }} value={renameDraft} /><div className="flex justify-end gap-1"><MenuButton theme={theme} onClick={() => onMenuView("actions")}>取消</MenuButton><MenuButton disabled={!renameDraft.trim()} theme={theme} onClick={() => onUpdate({ title: renameDraft.trim() })}>保存</MenuButton></div></div> : menuView === "delete" ? <div className="space-y-3 p-2"><p className={cn("text-xs leading-5", t.muted)}>删除后无法从 CodeBridge 恢复这个 Session。</p><div className="flex justify-end gap-1"><MenuButton theme={theme} onClick={() => onMenuView("actions")}>取消</MenuButton><MenuButton danger theme={theme} onClick={onDelete}>删除</MenuButton></div></div> : <>
         <MenuButton theme={theme} onClick={() => onUpdate({ pinned: !session.pinned_at })}><Pin className="size-3.5" />{session.pinned_at ? "取消 PIN" : "PIN Session"}</MenuButton>
         <MenuButton theme={theme} onClick={() => { onRenameDraft(session.title || ""); onMenuView("rename"); }}><Pencil className="size-3.5" />重命名</MenuButton>
-        <MenuButton theme={theme} onClick={() => onUpdate({ archived: true })}><Archive className="size-3.5" />归档</MenuButton>
+        <MenuButton theme={theme} onClick={() => onUpdate({ archived: !session.archived_at })}><Archive className="size-3.5" />{session.archived_at ? "恢复 Session" : "归档"}</MenuButton>
         <MenuButton danger theme={theme} onClick={() => onMenuView("delete")}><Trash2 className="size-3.5" />删除</MenuButton>
       </>}</div>}
     </div>}

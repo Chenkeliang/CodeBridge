@@ -36,8 +36,13 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   agents: async () => (await request<{ agents: AgentProfile[] }>("/v1/agents")).agents,
-  sessions: async (importProvider = false) =>
-    (await request<{ sessions: AgentSession[] }>(`/v1/sessions${importProvider ? "?import=true" : ""}`)).sessions,
+  sessions: async (importProvider = false, includeArchived = false) => {
+    const params = new URLSearchParams();
+    if (importProvider) params.set("import", "true");
+    if (includeArchived) params.set("include_archived", "true");
+    const query = params.toString();
+    return (await request<{ sessions: AgentSession[] }>(`/v1/sessions${query ? `?${query}` : ""}`)).sessions;
+  },
   session: (id: string) => request<AgentSession>(`/v1/sessions/${encodeURIComponent(id)}`),
   openSession: async (id: string) => {
     const encodedId = encodeURIComponent(id);

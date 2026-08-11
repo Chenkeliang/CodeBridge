@@ -10,3 +10,15 @@ export function orderSessions(sessions: AgentSession[]): AgentSession[] {
     return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
   });
 }
+
+export function restoreSessionSelection(
+  sessions: AgentSession[],
+  currentSessionId: string | null,
+  agentId: string,
+  rememberedSessionId: string | null,
+): string | null {
+  const current = sessions.find((session) => session.session_id === currentSessionId);
+  if (current?.agent_id === agentId && !current.archived_at) return current.session_id;
+  const remembered = sessions.find((session) => session.session_id === rememberedSessionId);
+  return remembered?.agent_id === agentId && !remembered.archived_at ? remembered.session_id : null;
+}
