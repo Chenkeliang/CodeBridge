@@ -205,7 +205,6 @@ export function Workbench() {
     }
 
     const sessionId = selectedSessionId;
-    const session = sessions.find((value) => value.session_id === sessionId);
     let active = true;
     streamAbort.current?.abort();
     const controller = new AbortController();
@@ -218,18 +217,14 @@ export function Workbench() {
 
     void (async () => {
       try {
-        const [history, nextCommands, options, runs] = await Promise.all([
-          api.events(sessionId),
-          api.commands(sessionId),
-          api.configOptions(sessionId),
-          api.runs(sessionId),
-        ]);
+        const { session, events: history, commands: nextCommands, options, runs } = await api.openSession(sessionId);
         if (!active) return;
+        setSessions((current) => current.map((value) => value.session_id === session.session_id ? session : value));
         setEvents(history);
         setCommands(nextCommands);
         setModelOptions(options);
-        setModel(session?.model ?? optionValue(options) ?? "");
-        setFlowId(session?.flow_id ?? "");
+        setModel(session.model ?? optionValue(options) ?? "");
+        setFlowId(session.flow_id ?? "");
         const latestRun = runs.at(-1);
         setApprovals(latestRun ? await api.approvals(latestRun.run_id).catch(() => []) : []);
         setLoadingSession(false);

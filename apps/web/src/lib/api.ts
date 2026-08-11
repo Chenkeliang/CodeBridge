@@ -39,6 +39,23 @@ export const api = {
   sessions: async (importProvider = false) =>
     (await request<{ sessions: AgentSession[] }>(`/v1/sessions${importProvider ? "?import=true" : ""}`)).sessions,
   session: (id: string) => request<AgentSession>(`/v1/sessions/${encodeURIComponent(id)}`),
+  openSession: async (id: string) => {
+    const encodedId = encodeURIComponent(id);
+    const session = await request<AgentSession>(`/v1/sessions/${encodedId}`);
+    const [events, commands, options, runs] = await Promise.all([
+      fetchSessionEvents(id, 0),
+      request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodedId}/commands`),
+      request<{ options?: ConfigOption[] }>(`/v1/sessions/${encodedId}/config-options`),
+      request<{ runs: RunRecord[] }>(`/v1/sessions/${encodedId}/runs`),
+    ]);
+    return {
+      session,
+      events,
+      commands: commands.commands ?? [],
+      options: options.options ?? [],
+      runs: runs.runs,
+    };
+  },
   createSession: (agentId: string) =>
     request<AgentSession>("/v1/sessions", { method: "POST", body: JSON.stringify({ agent_id: agentId }) }),
   updateSession: (id: string, update: Record<string, unknown>) =>
