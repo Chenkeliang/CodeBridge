@@ -814,6 +814,7 @@ async function syncProviderSessions(
           cwd: provider.cwd,
           additionalDirectories: provider.additionalDirectories,
           title: provider.preview || null,
+          updatedAt: provider.updatedAt,
         });
         options.catalog.updateSession(session.id, {
           providerSessionId: provider.id,
@@ -821,6 +822,7 @@ async function syncProviderSessions(
           additionalDirectories: provider.additionalDirectories,
           title: provider.preview || session.title,
           status: "idle",
+          updatedAt: provider.updatedAt,
         });
       }
       if (result.error) errors.push(result.error);
