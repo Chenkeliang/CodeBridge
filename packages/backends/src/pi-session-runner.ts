@@ -302,17 +302,25 @@ export async function listPiConfigOptions(
     name: model.name,
     description: model.api,
     }));
-  return values.length
-    ? [
-        {
-          id: "model",
-          name: "Model",
-          type: "select",
-          category: "model",
-          values,
-        },
-      ]
-    : [];
+  return [
+    ...(values.length ? [{
+      id: "model",
+      name: "Model",
+      type: "select" as const,
+      category: "model",
+      values,
+    }] : []),
+    {
+      id: "thinking_level",
+      name: "Reasoning",
+      type: "select",
+      category: "thought_level",
+      values: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((value) => ({
+        value,
+        name: value === "xhigh" ? "Extra high" : value[0]!.toUpperCase() + value.slice(1),
+      })),
+    },
+  ];
 }
 
 export async function listPiCommands(cwd: string): Promise<AgentAvailableCommand[]> {

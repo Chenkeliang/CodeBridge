@@ -192,6 +192,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const session = options.catalog.createSession({
       agentId: agent.agentId,
       model: asNullableString(sessionBody.model),
+      effort: asNullableString(sessionBody.effort),
       permissionMode: asNullableString(sessionBody.permission_mode),
       folderId: asNullableString(sessionBody.folder_id),
       cwd,
@@ -225,6 +226,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       session = options.catalog.createSession({
         agentId: agent.agentId,
         model: asNullableString(body.model),
+        effort: asNullableString(body.effort),
         permissionMode: asNullableString(body.permission_mode),
         cwd: cwd ?? options.defaultCwd ?? null,
         title: asNullableString(body.title),
@@ -476,6 +478,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       }
       update.permissionMode = body.permission_mode === null ? null : (body.permission_mode as string).trim();
     }
+    if (Object.hasOwn(body, "effort")) {
+      if (body.effort !== null && (typeof body.effort !== "string" || !body.effort.trim())) {
+        return c.json({ error: "effort must be a non-empty string or null" }, 400);
+      }
+      update.effort = body.effort === null ? null : (body.effort as string).trim();
+    }
     for (const field of ["pinned", "archived"] as const) {
       if (!Object.hasOwn(body, field)) continue;
       if (typeof body[field] !== "boolean") {
@@ -512,6 +520,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       ? asNullableString(body.flow_id)
       : session.flowId;
     const model = Object.hasOwn(body, "model") ? asNullableString(body.model) : session.model;
+    const effort = Object.hasOwn(body, "effort") ? asNullableString(body.effort) : session.effort;
     const permissionMode = Object.hasOwn(body, "permission_mode")
       ? asNullableString(body.permission_mode)
       : session.permissionMode;
@@ -550,6 +559,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       taskRecordId: workItem.id,
       flowId,
       model,
+      effort,
       permissionMode,
       title: session.title ?? deriveTitle(body.message),
       status: "active",
@@ -602,6 +612,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       ? asNullableString(body.flow_id)
       : session.flowId;
     const model = body && Object.hasOwn(body, "model") ? asNullableString(body.model) : session.model;
+    const effort = body && Object.hasOwn(body, "effort") ? asNullableString(body.effort) : session.effort;
     const permissionMode = body && Object.hasOwn(body, "permission_mode")
       ? asNullableString(body.permission_mode)
       : session.permissionMode;
@@ -640,7 +651,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (task.workflowId !== flowId || task.workflowRevision !== (flow?.definitionRevision ?? null)) {
       options.workItems.updateWorkflowBinding(task.id, flowId, flow?.definitionRevision ?? null);
     }
-    options.catalog.updateSession(session.id, { flowId, model, permissionMode });
+    options.catalog.updateSession(session.id, { flowId, model, effort, permissionMode });
     const runId = `run_${randomUUID().replaceAll("-", "")}`;
     if (plan) {
       options.workItems.savePlan({
@@ -695,6 +706,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       agentId: session.agentId,
       providerSessionId: result.sessionId,
       model: asNullableString(body?.model) ?? session.model,
+      effort: asNullableString(body?.effort) ?? session.effort,
       permissionMode: asNullableString(body?.permission_mode) ?? session.permissionMode,
       folderId: session.folderId,
       cwd: result.cwd ?? targetCwd,
@@ -872,6 +884,7 @@ function toApiSession(session: ReturnType<SessionCatalogStore["getSession"]>): R
     task_record_id: session.taskRecordId,
     flow_id: session.flowId,
     model: session.model,
+    effort: session.effort,
     permission_mode: session.permissionMode,
     folder_id: session.folderId,
     cwd: session.cwd,

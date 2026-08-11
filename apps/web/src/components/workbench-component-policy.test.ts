@@ -47,13 +47,27 @@ describe("Workbench component policy", () => {
     expect(mermaid).toContain('aria-label="Mermaid diagram"');
   });
 
-  it("keeps Agent-native model and permission controls in the Composer", () => {
+  it("keeps Agent-native model, reasoning, and permission controls in the Composer", () => {
     const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const sliderUrl = new URL("./ui/slider.tsx", import.meta.url);
 
     expect(source).toContain("permissionOption={permissionOption}");
+    expect(source).toContain("thoughtLevelOption={thoughtLevelOption}");
     expect(source).toContain("onPermissionMode={setSessionPermissionMode}");
+    expect(source).toContain("onEffort={setSessionEffort}");
+    expect(source).toContain("<ReasoningLevelControl");
+    expect(existsSync(sliderUrl)).toBe(true);
+    expect(source).toContain('const effectiveValue = value || option.currentValue || levels[0]?.value || ""');
+    expect(source).toContain('onClick={() => onValue("")}>Use default</button>');
     expect(source).toContain('label="Agent default"');
     expect(source).toContain("<SelectValue>{triggerLabel}</SelectValue>");
     expect(source).toContain('session.status === "active" || session.status === "idle" ? t.healthyDot : t.offlineDot');
+  });
+
+  it("positions a loaded Session at the newest conversation item", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("conversationViewport.current.scrollTop = conversationViewport.current.scrollHeight");
+    expect(source).toContain("[selectedSessionId, loadingSession]");
   });
 });

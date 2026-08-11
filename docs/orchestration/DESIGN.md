@@ -247,8 +247,11 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 - 输入自然语言是主动作。
 - 模型、权限、Workspace 和 Flow 以紧凑上下文控件出现。
 - 模型与权限选项来自当前 Agent 的 Session Config Options；禁止在 Web 枚举 Codex、Claude Code、Cursor 或其他厂商的固定值。
+- `model` 使用 Select，`thought_level` 使用离散 Slider，`mode` 使用 Select；控件形态由配置类别决定，具体值与说明始终由 Agent Adapter 提供。
+- Reasoning Slider 只展示 Adapter 上报的真实等级；Session 未显式覆盖时，滑块定位到 Adapter 的 `currentValue`，标签追加 `· Default`。用户设置后保存为当前 Session 覆盖，并可通过 `Use default` 清除覆盖。
 - 权限选择是当前 Session 的显式覆盖；未选择时显示 `Agent default` 并服从 Agent、本机或企业策略，不把探测 Session 的临时默认值写入业务 Session。
 - Agent 未报告模型、权限、命令或上下文能力时，不显示对应的空控件。
+- Pi SDK Adapter 应上报模型和原生 Thinking Level；OpenCode 通过 Backend 配置进入 Agent Registry，并沿用相同 Session Config Options，不建立厂商专属页面。
 - `+` 用于选择文件；`@` 用于插入当前 Session 已授权的 Workspace 上下文；`/` 用于当前 Agent 动态返回的命令。
 - 不支持的能力不显示空按钮；运行时无命令时 `/` 不展示。
 - `Enter` 发送、`Shift+Enter` 换行；IME 合成期间不得误发送。
