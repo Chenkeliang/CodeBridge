@@ -785,18 +785,28 @@ function WorkActivity({ cwd, item, theme }: { cwd: string | null; item: WorkProj
   const t = themes[theme];
   const tools = item.entries.filter((entry): entry is ToolProjection => entry.kind === "tool");
   const running = tools.some((tool) => tool.status !== "completed" && tool.status !== "failed");
-  return <details className={cn("group max-w-[780px] border-t", t.line)}>
+  return <details className={cn("group w-full max-w-[780px] border-t", t.line)}>
     <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]", t.muted)}>
       <span className={cn("font-medium", t.inkSoft)}>{running ? "Working" : `Worked for ${formatElapsed(item.startedAt, item.endedAt)}`}</span>
       {tools.length > 0 && <span>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</span>}
       <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
     </summary>
-    <div className="grid gap-2 pb-4">
+    <div className="grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-2 overflow-hidden pb-4">
       {item.entries.map((entry, index) => entry.kind === "tool"
         ? <ToolActivity cwd={cwd} key={entry.id} theme={theme} tool={entry} />
-        : <div className="grid grid-cols-[18px_minmax(0,1fr)] gap-2 px-1 py-1" key={`${entry.kind}-${index}`}><span className={cn("mt-1 size-1.5 rounded-full", entry.kind === "thought" ? t.warning : t.faint)} /><div><p className={cn("mb-1 text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>{entry.kind === "thought" ? "Reasoning summary" : "Progress"}</p><div className={cn("text-xs font-normal leading-5", t.inkSoft)}>{entry.content}</div></div></div>)}
+        : <div className="grid w-full min-w-0 max-w-full grid-cols-[18px_minmax(0,1fr)] gap-2 overflow-hidden px-1 py-1" key={`${entry.kind}-${index}`}><span className={cn("mt-1 size-1.5 rounded-full", entry.kind === "thought" ? t.warning : t.faint)} /><div className="min-w-0"><p className={cn("mb-1 text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>{entry.kind === "thought" ? "Reasoning summary" : "Progress"}</p><WorkMarkdown content={entry.content} theme={theme} /></div></div>)}
     </div>
   </details>;
+}
+
+function WorkMarkdown({ content, theme }: { content: string; theme: Theme }) {
+  const t = themes[theme];
+  return <div className={cn("max-w-full break-words text-xs font-normal leading-5", t.inkSoft)}><ReactMarkdown components={{
+    code: ({ children }) => <code className={cn("rounded px-1 py-0.5 font-mono text-[0.92em]", t.surfaceSoft, t.ink)}>{children}</code>,
+    ol: ({ children }) => <ol className="my-1 list-decimal space-y-0.5 pl-4">{children}</ol>,
+    p: ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
+    ul: ({ children }) => <ul className="my-1 list-disc space-y-0.5 pl-4">{children}</ul>,
+  }} remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown></div>;
 }
 
 function ToolActivity({ cwd, theme, tool }: { cwd: string | null; theme: Theme; tool: ToolProjection }) {

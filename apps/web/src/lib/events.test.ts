@@ -208,6 +208,11 @@ describe("conversation event projection", () => {
       label: "Read file",
       target: "/workspace/app/src/index.ts",
     });
+    expect(describeTool({ name: "exec", input: 'await tools.exec_command({cmd:"pnpm test", workdir:"/workspace/app"})' }, "/workspace/app")).toEqual({
+      category: "command",
+      label: "Ran command",
+      target: "pnpm test",
+    });
   });
 
   it("deduplicates hydrated Codex messages and infers historical progress around tools", () => {

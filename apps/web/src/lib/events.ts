@@ -284,7 +284,7 @@ export function describeTool(
 ): { category: "command" | "file" | "tool"; label: string; target?: string } {
   const name = tool.name.toLowerCase();
   const input = tool.input && typeof tool.input === "object" ? tool.input as Record<string, unknown> : {};
-  const command = stringValue(input.cmd) ?? stringValue(input.command);
+  const command = stringValue(input.cmd) ?? stringValue(input.command) ?? embeddedCommand(tool.input);
   if (command || ["exec", "shell", "terminal", "command"].some((value) => name.includes(value))) {
     return { category: "command", label: "Ran command", ...(command ? { target: command } : {}) };
   }
@@ -310,6 +310,17 @@ function fileToolLabel(name: string): string {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
+}
+
+function embeddedCommand(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = value.match(/\bcmd\s*:\s*("(?:\\.|[^"\\])*")/s);
+  if (!match?.[1]) return undefined;
+  try {
+    return stringValue(JSON.parse(match[1]));
+  } catch {
+    return undefined;
+  }
 }
 
 function isAbsolutePath(value: string): boolean {

@@ -14,6 +14,11 @@ describe("Workbench component policy", () => {
 
     expect(source).toContain("function WorkActivity");
     expect(source).toContain("function ToolActivity");
+    expect(source).toContain("<WorkMarkdown content={entry.content}");
+    expect(source).toContain('"group w-full max-w-[780px] border-t"');
+    expect(source).toContain('"grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-2 overflow-hidden pb-4"');
+    expect(source).toContain('"grid w-full min-w-0 max-w-full grid-cols-[18px_minmax(0,1fr)] gap-2 overflow-hidden px-1 py-1"');
+    expect(source).toContain('"max-w-full break-words text-xs font-normal leading-5"');
     expect(source).not.toContain("Agent · working");
   });
 });
