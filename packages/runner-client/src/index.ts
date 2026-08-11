@@ -16,6 +16,22 @@ export interface RunnerClientOptions {
 
 export type { CliSessionSummary };
 
+export interface WorkspaceDirectoryEntry {
+  name: string;
+  path: string;
+  absolutePath: string;
+  kind: "directory" | "file";
+}
+
+export interface WorkspaceDirectoryListing {
+  ok: boolean;
+  root?: string;
+  path?: string;
+  relativePath?: string;
+  entries?: WorkspaceDirectoryEntry[];
+  error?: string;
+}
+
 export class RunnerCancellationError extends Error {
   override readonly name = "RunnerCancellationError";
 }
@@ -146,6 +162,14 @@ export class RunnerClient {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  async listDirectory(root: string, relativePath = ""): Promise<WorkspaceDirectoryListing> {
+    const params = new URLSearchParams({ root, path: relativePath });
+    const res = await this.fetch(`/directories/list?${params}`);
+    const body = await res.json() as WorkspaceDirectoryListing;
+    if (!res.ok && !body.error) body.error = `Runner error: ${res.status}`;
+    return body;
   }
 
   async pickDirectory(): Promise<{

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
@@ -599,6 +599,34 @@ describe("session API", () => {
       session_id: session.id,
       additional_directories: ["/canonical/shared"],
     });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("lists files only from the current Session workspaces", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const listDirectory = vi.fn().mockResolvedValue({
+      ok: true,
+      root: "/workspace",
+      path: "/workspace/src",
+      entries: [{ name: "index.ts", path: "src/index.ts", absolutePath: "/workspace/src/index.ts", kind: "file" }],
+    });
+    const runner = { listDirectory } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+    const session = catalog.createSession({ agentId: "codex", cwd: "/workspace", additionalDirectories: ["/shared"] });
+
+    const response = await app.request(`/v1/sessions/${session.id}/files?path=src`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ path: "/workspace/src" });
+    expect(listDirectory).toHaveBeenCalledWith("/workspace", "src");
+
+    const outside = await app.request(`/v1/sessions/${session.id}/files?root=${encodeURIComponent("/outside")}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(outside.status).toBe(403);
     catalog.close();
     workItems.close();
   });

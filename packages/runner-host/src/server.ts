@@ -399,6 +399,60 @@ export class RunnerHost {
     }
   }
 
+  async listDirectory(
+    rawRoot: string,
+    relativePath = "",
+  ): Promise<{
+    ok: boolean;
+    root?: string;
+    path?: string;
+    relativePath?: string;
+    entries?: Array<{ name: string; path: string; absolutePath: string; kind: "directory" | "file" }>;
+    error?: string;
+  }> {
+    const resolvedRoot = resolveRunCwd(rawRoot);
+    if ("error" in resolvedRoot) return { ok: false, error: resolvedRoot.error };
+    const target = path.resolve(resolvedRoot.cwd, relativePath || ".");
+    const relativeTarget = path.relative(resolvedRoot.cwd, target);
+    if (relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget)) {
+      return { ok: false, error: "目录必须位于当前 Workspace 内" };
+    }
+    try {
+      const canonicalTarget = await fs.promises.realpath(target);
+      const canonicalRelative = path.relative(resolvedRoot.cwd, canonicalTarget);
+      if (canonicalRelative === ".." || canonicalRelative.startsWith(`..${path.sep}`) || path.isAbsolute(canonicalRelative)) {
+        return { ok: false, error: "目录必须位于当前 Workspace 内" };
+      }
+      const entries = (await fs.promises.readdir(canonicalTarget, { withFileTypes: true }))
+        .filter((entry) => entry.name !== ".git" && !entry.isSymbolicLink())
+        .map((entry) => {
+          const absolutePath = path.join(canonicalTarget, entry.name);
+          return {
+            name: entry.name,
+            path: path.relative(resolvedRoot.cwd, absolutePath),
+            absolutePath,
+            kind: entry.isDirectory() ? "directory" as const : "file" as const,
+          };
+        })
+        .sort((left, right) => left.kind === right.kind
+          ? left.name.localeCompare(right.name)
+          : left.kind === "directory" ? -1 : 1)
+        .slice(0, 200);
+      return {
+        ok: true,
+        root: resolvedRoot.cwd,
+        path: canonicalTarget,
+        relativePath: canonicalRelative,
+        entries,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: `Runner 无法读取目录：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
   async pickDirectory(): Promise<{
     ok: boolean;
     path?: string;
@@ -1028,6 +1082,13 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     if (!body?.path) return c.json({ ok: false, error: "path 必填" }, 400);
     const result = await host.authorizeDirectory(body.path);
     return c.json(result, result.ok ? 200 : 403);
+  });
+
+  app.get("/directories/list", async (c) => {
+    const root = c.req.query("root");
+    if (!root) return c.json({ ok: false, error: "root is required" }, 400);
+    const result = await host.listDirectory(root, c.req.query("path") ?? "");
+    return c.json(result, result.ok ? 200 : 400);
   });
 
   app.post("/directories/pick", async (c) => {
