@@ -19,7 +19,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { AgentIcon } from "@/components/agent-icon";
+import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -126,20 +126,20 @@ export function DesignPreview() {
   }
 
   return (
-    <div className={cn("grid h-[100dvh] min-h-[100dvh] min-w-[1040px] grid-cols-[72px_286px_minmax(0,1fr)] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", t.canvas)}>
+    <div className={cn("grid h-[100dvh] min-h-[100dvh] min-w-[1040px] grid-cols-[60px_286px_minmax(0,1fr)] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", t.canvas)}>
       <aside className={cn("flex min-h-0 flex-col items-center gap-3 border-r px-2.5 py-3", t.sidebar, t.line)}>
-        <div className={cn("mb-3 grid size-10 place-items-center rounded-md border", t.ink, t.lineStrong, t.surface)}><GitBranch className="size-5" strokeWidth={1.6} /></div>
+        <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", t.ink, t.lineStrong, t.surface)}><GitBranch className="size-4" strokeWidth={1.6} /></div>
         <div className="grid w-full gap-2">
-          {agents.map((agent) => <button aria-label={agent.name} aria-pressed={area === "agents" && activeAgent === agent.id} className={cn("group relative grid size-[52px] place-items-center rounded-lg border border-transparent transition-all duration-150 hover:-translate-y-px hover:opacity-80", t.muted, area === "agents" && activeAgent === agent.id && cn(t.surface, t.ink, t.lineStrong, t.shadowSmall))} key={agent.id} onClick={() => selectAgent(agent.id)} title={agent.name} type="button">
-            <AgentIcon agentId={agent.id} className="size-6" />
-            <span className={cn("absolute bottom-2 right-2 size-1.5 rounded-full border-2", theme === "paper" ? "border-[#FBFCFA]" : "border-[#181A17]", agent.status === "Ready" ? "bg-[#74BF8F]" : "bg-[#6E7669]")} />
+          {agents.map((agent) => <button aria-label={agent.name} aria-pressed={area === "agents" && activeAgent === agent.id} className={cn("group relative grid size-[42px] place-items-center rounded-md border border-transparent transition-all duration-150 hover:-translate-y-px hover:opacity-80", t.muted, area === "agents" && activeAgent === agent.id && cn(t.surface, t.ink, t.lineStrong, t.shadowSmall))} key={agent.id} onClick={() => selectAgent(agent.id)} title={agent.name} type="button">
+            <BrandAgentIcon agentId={agent.id} className="size-[18px]" />
+            <span className={cn("absolute bottom-1.5 right-1.5 size-1.5 rounded-full border-2", theme === "paper" ? "border-[#FBFCFA]" : "border-[#181A17]", agent.status === "Ready" ? "bg-[#74BF8F]" : "bg-[#6E7669]")} />
           </button>)}
         </div>
         <div className={cn("my-2 h-px w-8", theme === "paper" ? "bg-[#E0E4DC]" : "bg-[#30352D]")} />
-        <button aria-label="Flows" aria-pressed={area === "flows"} className={cn("grid size-10 place-items-center rounded-md transition-colors hover:opacity-80", t.muted, area === "flows" && cn(t.surface, t.ink, t.shadowSmall))} onClick={() => setArea("flows")} title="Flows" type="button"><Workflow className="size-4" /></button>
+        <button aria-label="Flows" aria-pressed={area === "flows"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", t.muted, area === "flows" && cn(t.surface, t.ink, t.shadowSmall))} onClick={() => setArea("flows")} title="Flows" type="button"><Workflow className="size-3.5" /></button>
         <div className="flex-1" />
-        <button aria-label="切换主题" className={cn("grid size-10 place-items-center rounded-md transition-all hover:-translate-y-px hover:opacity-80", t.muted)} onClick={() => setTheme((current) => current === "paper" ? "carbon" : "paper")} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-4" /></button>
-        <button aria-label="设置" className={cn("grid size-10 place-items-center rounded-md transition-colors hover:opacity-80", t.muted)} onClick={() => notify("设置将在确认设计后接入")} title="设置" type="button"><Settings2 className="size-4" /></button>
+        <button aria-label="切换主题" className={cn("grid size-9 place-items-center rounded-md transition-all hover:-translate-y-px hover:opacity-80", t.muted)} onClick={() => setTheme((current) => current === "paper" ? "carbon" : "paper")} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-3.5" /></button>
+        <button aria-label="设置" className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", t.muted)} onClick={() => notify("设置将在确认设计后接入")} title="设置" type="button"><Settings2 className="size-3.5" /></button>
       </aside>
 
       <aside className={cn("flex min-h-0 min-w-0 flex-col border-r", t.sidebar, t.line)}>
@@ -160,7 +160,7 @@ export function DesignPreview() {
 
       <main className={cn("flex min-h-0 min-w-0 flex-col overflow-hidden", t.canvas)}>
         <header className={cn("flex min-h-[72px] items-center justify-between gap-5 border-b px-8 py-4", t.line)}>
-          <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)}><AgentIcon agentId={activeAgent} /></span><div className="min-w-0"><h2 className={cn("truncate text-sm font-semibold tracking-[-0.02em]", t.ink)}>{activeSession}</h2><p className={cn("mt-0.5 text-[11px]", t.muted)}>{activeProfile.name} · CodeBridge</p></div></div>
+          <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)}><BrandAgentIcon agentId={activeAgent} className="size-3.5" /></span><div className="min-w-0"><h2 className={cn("truncate text-sm font-semibold tracking-[-0.02em]", t.ink)}>{activeSession}</h2><p className={cn("mt-0.5 text-[11px]", t.muted)}>{activeProfile.name} · CodeBridge</p></div></div>
           <div className={cn("flex items-center gap-2 text-[11px]", t.muted)}><span className={cn("size-1.5 rounded-full", t.accent)} /><span>Running</span><code className={cn("rounded border px-1.5 py-0.5 font-mono text-[10px]", t.surfaceSoft, t.inkSoft, t.line)}>run_7a31</code><Button aria-label="更多操作" className={cn("size-8 px-0 hover:opacity-80", t.muted)} onClick={() => notify("Session actions")} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button></div>
         </header>
 
