@@ -242,7 +242,7 @@ program
         health: async () => (await runnerClient.health()).ok ? "healthy" as const : "unavailable" as const,
       }));
     await Promise.all(agentHealthAdapters.map((adapter) => registry.refresh(adapter)));
-    const stopAgentHealthChecks = registry.startHealthChecks(agentHealthAdapters, 60_000);
+    const stopAgentHealthChecks = registry.startHealthChecks(agentHealthAdapters, 5_000);
     const webFrontendApp = surfaces.web
       ? createWebFrontendApp({
           staticDirectory:

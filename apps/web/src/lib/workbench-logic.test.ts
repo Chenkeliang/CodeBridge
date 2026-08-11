@@ -136,4 +136,17 @@ describe("workbench logic", () => {
     expect(applyComposerSuggestion("检查 @src/li", "@/workspace/src/lib.ts ")).toBe("检查 @/workspace/src/lib.ts ");
     expect(applyComposerSuggestion("/sta", "/status ")).toBe("/status ");
   });
+
+  it("creates inline previews only for image attachments", () => {
+    const previewUrl = (workbenchLogic as unknown as {
+      attachmentPreviewUrl?: (attachment: { mimeType: string; dataBase64: string }) => string | null;
+    }).attachmentPreviewUrl;
+    expect(previewUrl).toBeTypeOf("function");
+    if (!previewUrl) return;
+
+    expect(previewUrl({ mimeType: "image/png", dataBase64: "aGVsbG8=" }))
+      .toBe("data:image/png;base64,aGVsbG8=");
+    expect(previewUrl({ mimeType: "application/pdf", dataBase64: "aGVsbG8=" }))
+      .toBeNull();
+  });
 });

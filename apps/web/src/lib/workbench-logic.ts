@@ -1,4 +1,4 @@
-import type { AgentCommand, AgentSession, ConfigOption } from "./types";
+import type { AgentCommand, AgentSession, ConfigOption, MessageAttachmentInput } from "./types";
 
 export function isModelOption(option: ConfigOption): boolean {
   return option.category?.toLowerCase() === "model" || option.id.toLowerCase().includes("model");
@@ -44,4 +44,10 @@ export function filterCommands(commands: AgentCommand[], query: string): AgentCo
 
 export function applyComposerSuggestion(draft: string, replacement: string): string {
   return draft.replace(/([/@])[^\s]*$/, replacement);
+}
+
+export function attachmentPreviewUrl(attachment: MessageAttachmentInput): string | null {
+  return attachment.mimeType.startsWith("image/")
+    ? `data:${attachment.mimeType};base64,${attachment.dataBase64}`
+    : null;
 }
