@@ -18,6 +18,7 @@ import {
   listPiConfigOptions,
   listPiCommands,
   listPiSessions,
+  listCodexSkillCommands,
   loadCodexSessionHistory,
   loadPiSessionHistory,
   loadClaudeSessionHistory,
@@ -63,6 +64,8 @@ export interface RunnerHostOptions {
   ) => Promise<number[]>;
   /** Host-native directory chooser. Production uses the macOS folder panel. */
   directoryPicker?: () => Promise<string | null>;
+  /** Test/embedding hook for Codex app-server Skill discovery. */
+  codexSkillLister?: (cwd: string) => Promise<AgentAvailableCommand[]>;
 }
 
 interface ActiveRun {
@@ -618,7 +621,19 @@ export class RunnerHost {
     if (!profile) return { commands: [], error: `Unknown backend: ${backendId}` };
     const resolvedCwd = resolveRunCwd(cwd);
     if ("error" in resolvedCwd) return { commands: [], error: resolvedCwd.error };
-    if (profile.type === "codex") return { commands: CODEX_BUILTIN_COMMANDS };
+    if (profile.type === "codex") {
+      try {
+        const skills = await (this.options.codexSkillLister ?? listCodexSkillCommands)(resolvedCwd.cwd);
+        const commands = new Map(CODEX_BUILTIN_COMMANDS.map((command) => [command.name, command]));
+        for (const command of skills) commands.set(command.name, command);
+        return { commands: [...commands.values()] };
+      } catch (error) {
+        return {
+          commands: CODEX_BUILTIN_COMMANDS,
+          error: `Codex skills failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
     if (profile.type !== "pi-sdk") return { commands: [] };
     try {
       return { commands: await listPiCommands(resolvedCwd.cwd) };
