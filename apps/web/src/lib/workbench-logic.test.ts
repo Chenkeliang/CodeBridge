@@ -72,4 +72,32 @@ describe("workbench logic", () => {
     expect(restoreSession(sessions, null, "codex", "pi-session")).toBeNull();
     expect(restoreSession(sessions, "codex-session", "codex", "pi-session")).toBe("codex-session");
   });
+
+  it("offers only the current Session workspaces as @ context", () => {
+    const contextPaths = (workbenchLogic as unknown as {
+      workspacePaths?: (session: AgentSession | null) => string[];
+    }).workspacePaths;
+    expect(contextPaths).toBeTypeOf("function");
+    if (!contextPaths) return;
+
+    const session = {
+      session_id: "session-1",
+      agent_id: "codex",
+      provider_session_id: null,
+      task_record_id: null,
+      flow_id: null,
+      model: null,
+      cwd: "/workspace/app",
+      additional_directories: ["/workspace/shared", "/workspace/app"],
+      title: "Session",
+      status: "idle",
+      pinned_at: null,
+      archived_at: null,
+      created_at: "2026-08-11T00:00:00.000Z",
+      updated_at: "2026-08-11T00:00:00.000Z",
+    } satisfies AgentSession;
+
+    expect(contextPaths(session)).toEqual(["/workspace/app", "/workspace/shared"]);
+    expect(contextPaths(null)).toEqual([]);
+  });
 });

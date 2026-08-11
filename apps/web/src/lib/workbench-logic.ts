@@ -22,3 +22,8 @@ export function restoreSessionSelection(
   const remembered = sessions.find((session) => session.session_id === rememberedSessionId);
   return remembered?.agent_id === agentId && !remembered.archived_at ? remembered.session_id : null;
 }
+
+export function workspacePaths(session: AgentSession | null): string[] {
+  if (!session) return [];
+  return [...new Set([session.cwd, ...session.additional_directories].filter((value): value is string => Boolean(value)))];
+}
