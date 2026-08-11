@@ -618,6 +618,30 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("reuses config options for Sessions sharing an Agent workspace", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    let calls = 0;
+    const runner = {
+      listConfigOptions: async () => {
+        calls += 1;
+        return { options: [{ id: "model", name: "Model", type: "select", category: "model", values: [] }] };
+      },
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/workspace" }, TOKEN);
+    const first = catalog.createSession({ agentId: "pi" });
+    const second = catalog.createSession({ agentId: "pi" });
+    for (const session of [first, second]) {
+      const response = await app.request(`/v1/sessions/${session.id}/config-options`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(response.status).toBe(200);
+    }
+    expect(calls).toBe(1);
+    catalog.close();
+    workItems.close();
+  });
+
   it("merges native and session-advertised Agent commands", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
