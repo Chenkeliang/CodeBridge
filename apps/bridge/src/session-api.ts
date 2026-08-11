@@ -34,16 +34,21 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   const currentProfiles = () => new Map(currentAgents().map((agent) => [agent.agentId, agent]));
   const historyHydrations = new Map<string, Promise<void>>();
   const historyHydrated = new Set<string>();
+  const historyRetryAfter = new Map<string, number>();
 
   async function hydrateProviderHistory(session: AgentSession): Promise<AgentSession> {
     if (!options.runner || !session.providerSessionId || historyHydrated.has(session.id)) return session;
+    if ((historyRetryAfter.get(session.id) ?? 0) > Date.now()) return session;
     const existingWorkItem = session.taskRecordId
       ? options.workItems.getWorkItem(session.taskRecordId)
       : undefined;
-    if (existingWorkItem && options.workItems.listEvents(existingWorkItem.id).some(
-      (event) => event.type === "SESSION_HISTORY_HYDRATED",
-    )) {
+    const existingEvents = existingWorkItem
+      ? options.workItems.listEvents(existingWorkItem.id)
+      : [];
+    if (existingEvents.some((event) => event.type === "SESSION_HISTORY_HYDRATED")
+      && hasAgentResponse(existingEvents)) {
       historyHydrated.add(session.id);
+      historyRetryAfter.delete(session.id);
       return session;
     }
     let hydration = historyHydrations.get(session.id);
@@ -101,22 +106,28 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
                 payload: { event: item.event },
               });
         }
-        options.workItems.appendEventOnce({
-          workItemId: workItem.id,
-          type: "SESSION_HISTORY_HYDRATED",
-          actor: "system",
-          inputHash: historyInputHash("complete"),
-          payload: { providerSessionId: session.providerSessionId },
-        });
+        if (history.some((item) => item.kind === "agent_event" && isAgentResponse(item.event))) {
+          options.workItems.appendEventOnce({
+            workItemId: workItem.id,
+            type: "SESSION_HISTORY_HYDRATED",
+            actor: "system",
+            inputHash: historyInputHash("complete"),
+            payload: { providerSessionId: session.providerSessionId },
+          });
+          historyHydrated.add(session.id);
+          historyRetryAfter.delete(session.id);
+        } else {
+          historyRetryAfter.set(session.id, Date.now() + 30_000);
+        }
         options.catalog.updateSession(session.id, { taskRecordId: workItem.id });
-        historyHydrated.add(session.id);
       })();
       historyHydrations.set(session.id, hydration);
     }
     try {
       await hydration;
     } catch {
-      historyHydrated.add(session.id);
+      // Provider history may be temporarily unavailable; a later Session open retries it.
+      historyRetryAfter.set(session.id, Date.now() + 30_000);
     } finally {
       if (historyHydrations.get(session.id) === hydration) historyHydrations.delete(session.id);
     }
@@ -730,6 +741,22 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   });
 
   return app;
+}
+
+function hasAgentResponse(events: ReturnType<SqliteEventStore["listEvents"]>): boolean {
+  return events.some((event) => event.type === "AGENT_EVENT" && isAgentResponse(event.payload.event));
+}
+
+function isAgentResponse(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false;
+  const type = (event as { type?: unknown }).type;
+  return typeof type === "string" && ![
+    "available_commands_update",
+    "current_mode_update",
+    "config_option_update",
+    "session_info_update",
+    "usage_update",
+  ].includes(type);
 }
 
 function toWorkflowDefinition(flow: FlowRecord): Record<string, unknown> {

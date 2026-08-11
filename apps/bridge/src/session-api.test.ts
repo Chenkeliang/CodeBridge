@@ -269,6 +269,91 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("does not mark provider history complete before the Agent has produced output", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    let loads = 0;
+    const runner = {
+      loadSessionHistory: async () => {
+        loads += 1;
+        return [{ kind: "message", text: "尚未完成的问题" }];
+      },
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "claude",
+      providerSessionId: "provider-partial-history",
+      cwd: "/tmp/project",
+    });
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    await app.request(`/v1/sessions/${session.id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    await app.request(`/v1/sessions/${session.id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    const taskId = catalog.getSession(session.id)?.taskRecordId;
+    expect(taskId).toBeTruthy();
+    expect(loads).toBe(1);
+    expect(workItems.listEvents(taskId!).map((event) => event.type)).not.toContain("SESSION_HISTORY_HYDRATED");
+    catalog.close();
+    workItems.close();
+  });
+
+  it("rechecks a legacy hydration marker when the saved history has no Agent output", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const task = workItems.createWorkItem({
+      title: "Partial import",
+      mode: "auto",
+      conversationId: "conv-partial-import",
+      agentId: "claude",
+      riskLevel: "read_only",
+    });
+    workItems.appendEvent({
+      workItemId: task.id,
+      type: "MESSAGE_RECEIVED",
+      actor: "user",
+      payload: { message: "原始问题" },
+    });
+    workItems.appendEvent({
+      workItemId: task.id,
+      type: "SESSION_HISTORY_HYDRATED",
+      actor: "system",
+      payload: { providerSessionId: "provider-partial-history" },
+    });
+    let loads = 0;
+    const runner = {
+      loadSessionHistory: async () => {
+        loads += 1;
+        return [
+          { kind: "message", text: "原始问题" },
+          { kind: "agent_event", event: { type: "text_delta", text: "补齐的回复" } },
+        ];
+      },
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "claude",
+      providerSessionId: "provider-partial-history",
+      taskRecordId: task.id,
+      cwd: "/tmp/project",
+    });
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    await app.request(`/v1/sessions/${session.id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(loads).toBe(1);
+    expect(workItems.listEvents(task.id)).toContainEqual(expect.objectContaining({
+      type: "AGENT_EVENT",
+      payload: { event: { type: "text_delta", text: "补齐的回复" } },
+    }));
+    catalog.close();
+    workItems.close();
+  });
+
   it("repairs an imported Session whose history binding is still empty", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
@@ -325,7 +410,10 @@ describe("session API", () => {
       payload: { message: "原始问题" },
     });
     const runner = {
-      loadSessionHistory: async () => [{ kind: "message", text: "原始问题" }],
+      loadSessionHistory: async () => [
+        { kind: "message", text: "原始问题" },
+        { kind: "agent_event", event: { type: "text_delta", text: "原始回复" } },
+      ],
     } as unknown as RunnerClient;
     const session = catalog.createSession({
       agentId: "claude",

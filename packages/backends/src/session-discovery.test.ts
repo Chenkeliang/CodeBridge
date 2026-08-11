@@ -51,6 +51,38 @@ describe("collectClaudeSessionHistory", () => {
       { kind: "agent_event", event: { type: "tool_end", toolCallId: "t1", status: "completed", output: "会员有效" } },
     ]);
   });
+
+  it("restores the persisted Claude Skill listing as Agent commands", () => {
+    expect(collectClaudeSessionHistory([
+      {
+        type: "attachment",
+        attachment: {
+          type: "skill_listing",
+          names: ["datamaster", "skill-creator"],
+          content: "- datamaster\n- skill-creator: Create and improve Skills",
+        },
+      },
+    ])).toEqual([
+      {
+        kind: "agent_event",
+        event: {
+          type: "available_commands_update",
+          availableCommands: [
+            { name: "datamaster", description: "Agent Skill" },
+            { name: "skill-creator", description: "Create and improve Skills" },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("does not replay Claude local command bookkeeping as user messages", () => {
+    expect(collectClaudeSessionHistory([
+      { type: "user", message: { role: "user", content: "<command-name>/model</command-name>" } },
+      { type: "user", message: { role: "user", content: "<local-command-stdout>Set model</local-command-stdout>" } },
+      { type: "user", message: { role: "user", content: "真正的问题" } },
+    ])).toEqual([{ kind: "message", text: "真正的问题" }]);
+  });
 });
 
 describe("collectCodexSessionHistory", () => {
