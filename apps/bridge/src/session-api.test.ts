@@ -228,7 +228,12 @@ describe("session API", () => {
     } as unknown as RunnerClient;
     const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/tmp/project" }, TOKEN);
     const response = await app.request("/v1/sessions?import=true&agent_id=codex", { headers: { authorization: `Bearer ${TOKEN}` } });
-    expect((await response.json() as { sessions: Array<{ provider_session_id: string }> }).sessions[0]?.provider_session_id).toBe("provider-1");
+    expect((await response.json() as { sessions: Array<{ provider_session_id: string; updated_at: string }> }).sessions[0]).toMatchObject({
+      provider_session_id: "provider-1",
+      updated_at: "2026-08-07T00:00:00.000Z",
+    });
+    const refreshed = await app.request("/v1/sessions?import=true&agent_id=codex", { headers: { authorization: `Bearer ${TOKEN}` } });
+    expect((await refreshed.json() as { sessions: Array<{ updated_at: string }> }).sessions[0]?.updated_at).toBe("2026-08-07T00:00:00.000Z");
     catalog.close();
     workItems.close();
   });

@@ -57,6 +57,7 @@ export interface CreateSessionInput {
   cwd?: string | null;
   additionalDirectories?: string[];
   title?: string | null;
+  updatedAt?: string;
 }
 
 export type UpdateSessionInput = Partial<Omit<CreateSessionInput, "id" | "agentId">> & {
@@ -156,7 +157,7 @@ export class SessionCatalogStore {
       pinnedAt: null,
       archivedAt: null,
       createdAt: now,
-      updatedAt: now,
+      updatedAt: input.updatedAt ?? now,
     };
     this.database
       .prepare(
@@ -283,7 +284,7 @@ export class SessionCatalogStore {
       status: input.status ?? existing.status,
       pinnedAt,
       archivedAt,
-      updatedAt: now,
+      updatedAt: input.updatedAt ?? now,
     };
     this.database
       .prepare(
