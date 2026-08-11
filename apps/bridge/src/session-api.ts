@@ -33,25 +33,15 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   const currentAgents = () => typeof options.agents === "function" ? options.agents() : options.agents;
   const currentProfiles = () => new Map(currentAgents().map((agent) => [agent.agentId, agent]));
   const historyHydrations = new Map<string, Promise<void>>();
-  const historyHydrated = new Set<string>();
   const historyRetryAfter = new Map<string, number>();
   const configOptionRequests = new Map<string, Promise<Awaited<ReturnType<RunnerClient["listConfigOptions"]>>>>();
 
   async function hydrateProviderHistory(session: AgentSession): Promise<AgentSession> {
-    if (!options.runner || !session.providerSessionId || historyHydrated.has(session.id)) return session;
+    if (!options.runner || !session.providerSessionId) return session;
     if ((historyRetryAfter.get(session.id) ?? 0) > Date.now()) return session;
     const existingWorkItem = session.taskRecordId
       ? options.workItems.getWorkItem(session.taskRecordId)
       : undefined;
-    const existingEvents = existingWorkItem
-      ? options.workItems.listEvents(existingWorkItem.id)
-      : [];
-    if (existingEvents.some((event) => event.type === "SESSION_HISTORY_HYDRATED")
-      && hasAgentResponse(existingEvents)) {
-      historyHydrated.add(session.id);
-      historyRetryAfter.delete(session.id);
-      return session;
-    }
     let hydration = historyHydrations.get(session.id);
     if (!hydration) {
       hydration = (async () => {
@@ -115,7 +105,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
             inputHash: historyInputHash("complete"),
             payload: { providerSessionId: session.providerSessionId },
           });
-          historyHydrated.add(session.id);
           historyRetryAfter.delete(session.id);
         } else {
           historyRetryAfter.set(session.id, Date.now() + 30_000);
@@ -767,10 +756,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   });
 
   return app;
-}
-
-function hasAgentResponse(events: ReturnType<SqliteEventStore["listEvents"]>): boolean {
-  return events.some((event) => event.type === "AGENT_EVENT" && isAgentResponse(event.payload.event));
 }
 
 function isAgentResponse(event: unknown): boolean {

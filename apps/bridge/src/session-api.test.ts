@@ -274,6 +274,52 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("imports provider messages appended after the initial history hydration", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    let loads = 0;
+    const initialHistory = [
+      { kind: "message" as const, text: "初始问题" },
+      { kind: "agent_event" as const, event: { type: "text_delta" as const, text: "初始回复" } },
+    ];
+    const runner = {
+      loadSessionHistory: async () => {
+        loads += 1;
+        return loads === 1
+          ? initialHistory
+          : [
+              ...initialHistory,
+              { kind: "message" as const, text: "后来追加的问题" },
+              { kind: "agent_event" as const, event: { type: "text_delta" as const, text: "后来追加的回复" } },
+            ];
+      },
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "codex",
+      providerSessionId: "provider-growing-history",
+      cwd: "/tmp/project",
+    });
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+    const headers = { authorization: `Bearer ${TOKEN}` };
+
+    await app.request(`/v1/sessions/${session.id}`, { headers });
+    await app.request(`/v1/sessions/${session.id}`, { headers });
+
+    const taskId = catalog.getSession(session.id)?.taskRecordId;
+    expect(loads).toBe(2);
+    expect(workItems.listEvents(taskId!).filter((event) => event.type === "MESSAGE_RECEIVED"))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ payload: { message: "初始问题" } }),
+        expect.objectContaining({ payload: { message: "后来追加的问题" } }),
+      ]));
+    expect(workItems.listEvents(taskId!)).toContainEqual(expect.objectContaining({
+      type: "AGENT_EVENT",
+      payload: { event: { type: "text_delta", text: "后来追加的回复" } },
+    }));
+    catalog.close();
+    workItems.close();
+  });
+
   it("does not mark provider history complete before the Agent has produced output", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
