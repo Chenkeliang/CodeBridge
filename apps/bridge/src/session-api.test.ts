@@ -359,68 +359,6 @@ describe("session API", () => {
     workItems.close();
   });
 
-  it("refreshes a hydrated Codex session when its advertised commands are missing", async () => {
-    const catalog = new SessionCatalogStore(":memory:");
-    const workItems = new SqliteEventStore(":memory:");
-    const task = workItems.createWorkItem({
-      title: "Imported Codex session",
-      mode: "auto",
-      conversationId: "conv-codex-commands",
-      agentId: "codex",
-      riskLevel: "read_only",
-    });
-    workItems.appendEvent({
-      workItemId: task.id,
-      type: "AGENT_EVENT",
-      actor: "agent",
-      payload: { event: { type: "text_delta", text: "历史回复" } },
-    });
-    workItems.appendEvent({
-      workItemId: task.id,
-      type: "SESSION_HISTORY_HYDRATED",
-      actor: "system",
-      payload: { providerSessionId: "provider-codex-commands" },
-    });
-    let loads = 0;
-    const runner = {
-      loadSessionHistory: async () => {
-        loads += 1;
-        return [
-          { kind: "agent_event", event: { type: "text_delta", text: "历史回复" } },
-          {
-            kind: "agent_event",
-            event: {
-              type: "available_commands_update",
-              availableCommands: [{ name: "skills", description: "List available skills." }],
-            },
-          },
-        ];
-      },
-      listCommands: async () => ({ commands: [] }),
-    } as unknown as RunnerClient;
-    const session = catalog.createSession({
-      agentId: "codex",
-      providerSessionId: "provider-codex-commands",
-      taskRecordId: task.id,
-      cwd: "/tmp/project",
-    });
-    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
-
-    await app.request(`/v1/sessions/${session.id}`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
-    const response = await app.request(`/v1/sessions/${session.id}/commands`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
-
-    expect(loads).toBe(1);
-    expect(await response.json()).toEqual({
-      commands: [{ name: "skills", description: "List available skills." }],
-    });
-    catalog.close();
-    workItems.close();
-  });
-
   it("repairs an imported Session whose history binding is still empty", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

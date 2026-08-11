@@ -47,8 +47,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       ? options.workItems.listEvents(existingWorkItem.id)
       : [];
     if (existingEvents.some((event) => event.type === "SESSION_HISTORY_HYDRATED")
-      && hasAgentResponse(existingEvents)
-      && (session.agentId !== "codex" || hasAdvertisedCommands(existingEvents))) {
+      && hasAgentResponse(existingEvents)) {
       historyHydrated.add(session.id);
       historyRetryAfter.delete(session.id);
       return session;
@@ -781,15 +780,6 @@ function isAgentResponse(event: unknown): boolean {
     "session_info_update",
     "usage_update",
   ].includes(type);
-}
-
-function hasAdvertisedCommands(events: ReturnType<SqliteEventStore["listEvents"]>): boolean {
-  return events.some((event) => {
-    const agentEvent = event.payload.event as { type?: unknown; availableCommands?: unknown } | undefined;
-    return event.type === "AGENT_EVENT"
-      && agentEvent?.type === "available_commands_update"
-      && Array.isArray(agentEvent.availableCommands);
-  });
 }
 
 function toWorkflowDefinition(flow: FlowRecord): Record<string, unknown> {
