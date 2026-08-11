@@ -180,6 +180,7 @@ program
           },
           prompt,
           model: linkedSession?.model ?? undefined,
+          mode: linkedSession?.permissionMode ?? undefined,
           resumeSessionId: linkedSession?.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
         };

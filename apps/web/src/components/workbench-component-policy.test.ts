@@ -46,4 +46,14 @@ describe("Workbench component policy", () => {
     expect(mermaid).toContain('await import("mermaid")');
     expect(mermaid).toContain('aria-label="Mermaid diagram"');
   });
+
+  it("keeps Agent-native model and permission controls in the Composer", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("permissionOption={permissionOption}");
+    expect(source).toContain("onPermissionMode={setSessionPermissionMode}");
+    expect(source).toContain('label="Agent default"');
+    expect(source).toContain("<SelectValue>{triggerLabel}</SelectValue>");
+    expect(source).toContain('session.status === "active" || session.status === "idle" ? t.healthyDot : t.offlineDot');
+  });
 });

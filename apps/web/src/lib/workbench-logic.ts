@@ -4,6 +4,10 @@ export function isModelOption(option: ConfigOption): boolean {
   return option.category?.toLowerCase() === "model" || option.id.toLowerCase().includes("model");
 }
 
+export function isPermissionOption(option: ConfigOption): boolean {
+  return option.category?.toLowerCase() === "mode" || option.id.toLowerCase().includes("permission");
+}
+
 export function orderSessions(sessions: AgentSession[]): AgentSession[] {
   return [...sessions].sort((left, right) => {
     if (Boolean(left.pinned_at) !== Boolean(right.pinned_at)) return left.pinned_at ? -1 : 1;

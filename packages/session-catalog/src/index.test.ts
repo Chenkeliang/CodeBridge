@@ -38,6 +38,19 @@ describe("session catalog", () => {
     store.close();
   });
 
+  it("persists a Session permission mode override", () => {
+    const store = new SessionCatalogStore(":memory:");
+    const session = store.createSession({ agentId: "codex" });
+
+    const updated = store.updateSession(session.id, {
+      permissionMode: "agent-full-access",
+    } as never);
+
+    expect(updated).toMatchObject({ permissionMode: "agent-full-access" });
+    expect(store.getSession(session.id)).toMatchObject({ permissionMode: "agent-full-access" });
+    store.close();
+  });
+
   it("persists pin and archive metadata while keeping archived sessions out of the default list", () => {
     const store = new SessionCatalogStore(":memory:");
     const first = store.createSession({ agentId: "codex", title: "普通会话" });

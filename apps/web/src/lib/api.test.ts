@@ -91,13 +91,14 @@ describe("workbench API client", () => {
       name: "screen.png",
       mimeType: "image/png",
       dataBase64: "aW1hZ2U=",
-    }]);
+    }], "read-only");
 
     expect(fetch).toHaveBeenCalledWith("/v1/sessions/session-1/messages", expect.objectContaining({
       body: JSON.stringify({
         message: "review this",
         flow_id: null,
         model: null,
+        permission_mode: "read-only",
         attachments: [{ name: "screen.png", mimeType: "image/png", dataBase64: "aW1hZ2U=" }],
       }),
     }));

@@ -246,6 +246,9 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 
 - 输入自然语言是主动作。
 - 模型、权限、Workspace 和 Flow 以紧凑上下文控件出现。
+- 模型与权限选项来自当前 Agent 的 Session Config Options；禁止在 Web 枚举 Codex、Claude Code、Cursor 或其他厂商的固定值。
+- 权限选择是当前 Session 的显式覆盖；未选择时显示 `Agent default` 并服从 Agent、本机或企业策略，不把探测 Session 的临时默认值写入业务 Session。
+- Agent 未报告模型、权限、命令或上下文能力时，不显示对应的空控件。
 - `+` 用于选择文件；`@` 用于插入当前 Session 已授权的 Workspace 上下文；`/` 用于当前 Agent 动态返回的命令。
 - 不支持的能力不显示空按钮；运行时无命令时 `/` 不展示。
 - `Enter` 发送、`Shift+Enter` 换行；IME 合成期间不得误发送。

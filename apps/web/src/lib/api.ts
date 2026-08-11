@@ -79,17 +79,17 @@ export const api = {
     if (root) params.set("root", root);
     return request<WorkspaceListing>(`/v1/sessions/${encodeURIComponent(id)}/files?${params}`);
   },
-  sendMessage: (id: string, message: string, flowId: string | null, model: string | null, attachments: MessageAttachmentInput[] = []) =>
+  sendMessage: (id: string, message: string, flowId: string | null, model: string | null, attachments: MessageAttachmentInput[] = [], permissionMode: string | null = null) =>
     request<{ sequence: number }>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ message, flow_id: flowId, model, attachments }),
+      body: JSON.stringify({ message, flow_id: flowId, model, permission_mode: permissionMode, attachments }),
     }),
   runs: async (id: string) =>
     (await request<{ runs: RunRecord[] }>(`/v1/sessions/${encodeURIComponent(id)}/runs`)).runs,
-  startRun: (id: string, flowId: string | null, model: string | null) =>
+  startRun: (id: string, flowId: string | null, model: string | null, permissionMode: string | null = null) =>
     request<RunRecord>(`/v1/sessions/${encodeURIComponent(id)}/runs`, {
       method: "POST",
-      body: JSON.stringify({ flow_id: flowId, model }),
+      body: JSON.stringify({ flow_id: flowId, model, permission_mode: permissionMode }),
     }),
   events: async (id: string, afterSequence = 0) => fetchSessionEvents(id, afterSequence),
   approvals: async (runId: string) =>
