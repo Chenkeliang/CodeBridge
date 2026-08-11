@@ -161,6 +161,58 @@ describe("web workbench", () => {
     store.close();
   });
 
+  it("renders common Markdown safely inside conversation messages", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+    const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
+    const rendererSource = script.match(/const renderMarkdown = ([\s\S]+?);\n    const state =/)?.[1];
+
+    expect(rendererSource).toBeDefined();
+    if (!rendererSource) return;
+    const context = {
+      input: "## 市场情绪\n\n- 上涨 1243 家\n- 下跌 4100 家\n\n| 指标 | 数值 |\n| --- | --- |\n| 中位数 | `-0.80%` |\n\n[来源](https://example.com)\n\n<script>alert(1)</script>\n[危险](javascript:alert(1))",
+      output: "",
+    };
+    new Script(`const renderMarkdown = ${rendererSource}; output = renderMarkdown(input);`).runInNewContext(context);
+
+    expect(context.output).toContain("<h2>市场情绪</h2>");
+    expect(context.output).toContain("<ul>");
+    expect(context.output).toContain("<li>上涨 1243 家</li>");
+    expect(context.output).toContain("<table>");
+    expect(context.output).toContain("<code>-0.80%</code>");
+    expect(context.output).toContain('<a href="https://example.com" target="_blank" rel="noreferrer">来源</a>');
+    expect(context.output).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(context.output).not.toContain("<script>");
+    expect(context.output).not.toContain('href="javascript:');
+    store.close();
+  });
+
+  it("re-renders streamed Agent text as Markdown instead of appending raw text", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toContain("renderMarkdown(message)");
+    expect(html).toContain("surface.innerHTML = renderMarkdown(node.dataset.markdown);");
+    expect(html).not.toContain("node.querySelector('.message-surface').textContent += agentEvent.text");
+    store.close();
+  });
+
+  it("uses calm typography and regular weights for conversation content", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const app = createWebWorkbenchApp({ store, token: "web-token" });
+    const html = await (await app.request("/")).text();
+
+    expect(html).toMatch(/\.message-surface \{[^}]*font-weight:400/);
+    expect(html).toMatch(/\.markdown-body strong \{[^}]*font-weight:500/);
+    expect(html).toMatch(/\.tool-call strong \{[^}]*font-weight:500/);
+    expect(html).not.toMatch(/\.tool-call strong \{[^}]*font-weight:650/);
+    expect(html).toContain(".markdown-body table");
+    expect(html).toContain(".markdown-body pre");
+    store.close();
+  });
+
   it("preserves an unsent model choice while the Session is polled", async () => {
     const store = new SqliteEventStore(":memory:");
     const app = createWebWorkbenchApp({ store, token: "web-token" });
