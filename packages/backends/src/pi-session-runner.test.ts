@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { afterEach } from "vitest";
 import type { AgentEvent, RunContext } from "@codebridge/core";
 import {
+  collectPiSessionHistory,
   forkPiSession,
   listPiCommands,
   listPiConfigOptions,
@@ -80,6 +81,31 @@ class FakePiSession implements PiSession {
 }
 
 describe("Pi event mapping", () => {
+  it("normalizes persisted Pi messages for the Workbench", () => {
+    expect(collectPiSessionHistory([
+      {
+        id: "user-1",
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "查询会员" }] },
+      },
+      {
+        id: "agent-1",
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "先检查会员记录" },
+            { type: "text", text: "会员有效" },
+          ],
+        },
+      },
+    ])).toEqual([
+      { kind: "message", text: "查询会员" },
+      { kind: "agent_event", event: { type: "thought_delta", text: "先检查会员记录" } },
+      { kind: "agent_event", event: { type: "text_delta", text: "会员有效", messageId: "agent-1" } },
+    ]);
+  });
+
   it("maps text, thinking, and tool lifecycle events to bridge events", () => {
     expect(
       mapPiEvent({

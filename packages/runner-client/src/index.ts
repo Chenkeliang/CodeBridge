@@ -5,11 +5,13 @@ import type {
   RunRequest,
 } from "@codebridge/core";
 import type { CliSessionSummary } from "@codebridge/backends";
+import type { ProviderSessionHistoryEvent } from "@codebridge/backends";
 
 export interface RunnerClientOptions {
   baseUrl: string;
   token: string;
   directoryAuthorizationTimeoutMs?: number;
+  sessionHistoryTimeoutMs?: number;
 }
 
 export type { CliSessionSummary };
@@ -50,6 +52,32 @@ export class RunnerClient {
       sessions: CliSessionSummary[];
       error?: string;
     }>;
+  }
+
+  async loadSessionHistory(
+    backend: string,
+    cwd: string,
+    sessionId: string,
+    additionalDirectories?: string[],
+  ): Promise<ProviderSessionHistoryEvent[]> {
+    const params = new URLSearchParams({ backend, cwd });
+    if (additionalDirectories?.length) {
+      params.set("additional_directories", JSON.stringify(additionalDirectories));
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.options.sessionHistoryTimeoutMs ?? 20_000);
+    timer.unref?.();
+    try {
+      const res = await this.fetch(
+        `/sessions/${encodeURIComponent(sessionId)}/history?${params}`,
+        { signal: controller.signal },
+      );
+      if (!res.ok) throw new Error(`Runner error: ${res.status} ${await res.text()}`);
+      const body = (await res.json()) as { events?: ProviderSessionHistoryEvent[] };
+      return body.events ?? [];
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async listConfigOptions(

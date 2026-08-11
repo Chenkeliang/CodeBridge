@@ -8,6 +8,7 @@ import {
   AcpSessionPool,
   BackendRegistry,
   deleteAcpSession,
+  loadAcpSessionHistory,
   listAcpConfigOptions,
   listAcpSessions,
   runAcpSession,
@@ -17,11 +18,15 @@ import {
   listPiConfigOptions,
   listPiCommands,
   listPiSessions,
+  loadCodexSessionHistory,
+  loadPiSessionHistory,
+  loadClaudeSessionHistory,
   runPiSession,
   type PiRunHandleRef,
   type PiSession,
   type PiSessionLifecycleResult,
   type CliSessionSummary,
+  type ProviderSessionHistoryEvent,
 } from "@codebridge/backends";
 import type {
   AgentEvent,
@@ -336,6 +341,35 @@ export class RunnerHost {
         error: `${profile.type === "pi-sdk" ? "Pi session/list" : "ACP session/list"} failed for ${backendId}: ${message}`,
       };
     }
+  }
+
+  async loadSessionHistory(
+    backendId: string,
+    rawCwd: string,
+    sessionId: string,
+    additionalDirectories?: string[],
+  ): Promise<ProviderSessionHistoryEvent[]> {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) throw new Error(`Unknown backend: ${backendId}`);
+    const resolvedCwd = resolveRunCwd(rawCwd);
+    if ("error" in resolvedCwd) throw new Error(resolvedCwd.error);
+    const resolvedDirectories = resolveAdditionalDirectories(additionalDirectories, resolvedCwd.cwd);
+    if ("error" in resolvedDirectories) throw new Error(resolvedDirectories.error);
+    if (profile.type === "pi-sdk") {
+      return loadPiSessionHistory(resolvedCwd.cwd, sessionId);
+    }
+    if (profile.type === "codex") {
+      return loadCodexSessionHistory(sessionId);
+    }
+    try {
+      const history = await loadAcpSessionHistory(backendId, profile, resolvedCwd.cwd, sessionId, {
+        additionalDirectories: resolvedDirectories.directories,
+      });
+      if (history.length || profile.type !== "claude-code") return history;
+    } catch (error) {
+      if (profile.type !== "claude-code") throw error;
+    }
+    return loadClaudeSessionHistory(resolvedCwd.cwd, sessionId);
   }
 
   async authorizeDirectory(
@@ -955,6 +989,38 @@ export function createRunnerApp(host: RunnerHost, token: string) {
       limit: Number.isFinite(limit) ? limit : 20,
     });
     return c.json(result);
+  });
+
+  app.get("/sessions/:id/history", async (c) => {
+    const backend = c.req.query("backend");
+    const cwd = c.req.query("cwd");
+    if (!backend || !cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    try {
+      const encodedDirectories = c.req.query("additional_directories");
+      const additionalDirectories = encodedDirectories
+        ? JSON.parse(encodedDirectories) as unknown
+        : undefined;
+      if (additionalDirectories !== undefined && (
+        !Array.isArray(additionalDirectories) ||
+        !additionalDirectories.every((directory) => typeof directory === "string")
+      )) {
+        return c.json({ error: "additional_directories must be a string array" }, 400);
+      }
+      const events = await host.loadSessionHistory(
+        backend,
+        cwd,
+        c.req.param("id"),
+        additionalDirectories,
+      );
+      return c.json({ events });
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : String(error) },
+        409,
+      );
+    }
   });
 
   app.post("/directories/authorize", async (c) => {

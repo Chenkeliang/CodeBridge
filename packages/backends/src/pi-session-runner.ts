@@ -12,7 +12,10 @@ import type {
   BackendConfigOption,
   RunContext,
 } from "@codebridge/core";
-import type { CliSessionSummary } from "./session-discovery.js";
+import type {
+  CliSessionSummary,
+  ProviderSessionHistoryEvent,
+} from "./session-discovery.js";
 
 /** The small native-session surface used by the runner and by adapter tests. */
 export interface PiSession {
@@ -193,6 +196,83 @@ export async function listPiSessions(
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, options?.limit ?? 20);
+}
+
+export async function loadPiSessionHistory(
+  cwd: string,
+  sessionId: string,
+): Promise<ProviderSessionHistoryEvent[]> {
+  const match = await findPiSession(cwd, sessionId);
+  if (!match) throw new Error(`Pi session not found in ${cwd}: ${sessionId}`);
+  const manager = SessionManager.open(match.path, undefined, cwd);
+  return collectPiSessionHistory(manager.getBranch());
+}
+
+export function collectPiSessionHistory(entries: unknown[]): ProviderSessionHistoryEvent[] {
+  const result: ProviderSessionHistoryEvent[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || (entry as { type?: unknown }).type !== "message") continue;
+    const value = entry as { id?: unknown; message?: unknown };
+    const message = value.message as {
+      role?: string;
+      content?: unknown;
+      toolCallId?: string;
+      isError?: boolean;
+    } | undefined;
+    if (!message) continue;
+    if (message.role === "user") {
+      const text = textFromPiContent(message.content);
+      if (text) result.push({ kind: "message", text });
+    } else if (message.role === "assistant") {
+      const blocks = Array.isArray(message.content) ? message.content : [message.content];
+      for (const block of blocks) {
+        if (typeof block === "string" && block) {
+          result.push({
+            kind: "agent_event",
+            event: { type: "text_delta", text: block, ...(typeof value.id === "string" ? { messageId: value.id } : {}) },
+          });
+          continue;
+        }
+        if (!block || typeof block !== "object") continue;
+        const content = block as { type?: string; text?: string; thinking?: string };
+        if (content.type === "thinking" && content.thinking) {
+          result.push({ kind: "agent_event", event: { type: "thought_delta", text: content.thinking } });
+        } else if (content.type === "text" && content.text) {
+          result.push({
+            kind: "agent_event",
+            event: { type: "text_delta", text: content.text, ...(typeof value.id === "string" ? { messageId: value.id } : {}) },
+          });
+        }
+      }
+    } else if (message.role === "toolResult") {
+      const text = textFromPiContent(message.content);
+      if (!text) continue;
+      result.push({
+        kind: "agent_event",
+        event: {
+          type: "tool_end",
+          toolCallId: message.toolCallId,
+          status: message.isError ? "failed" : "completed",
+          output: text,
+        },
+      });
+    }
+  }
+  return result;
+}
+
+function textFromPiContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const value = block as { type?: string; text?: string; thinking?: string };
+      if (value.type === "text" && typeof value.text === "string") return value.text;
+      if (value.type === "thinking" && typeof value.thinking === "string") return value.thinking;
+      return "";
+    })
+    .join("");
 }
 
 export async function probePiSdk(

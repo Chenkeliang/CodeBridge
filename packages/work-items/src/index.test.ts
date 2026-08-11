@@ -111,6 +111,38 @@ describe("SqliteEventStore", () => {
     reopenedStore.close();
   });
 
+  it("appends an idempotent event only once across store instances", () => {
+    const databasePath = createDatabasePath();
+    const firstStore = new SqliteEventStore(databasePath);
+    const item = firstStore.createWorkItem({
+      title: "history",
+      mode: "auto",
+      conversationId: "web:history",
+      riskLevel: "read_only",
+    });
+    const secondStore = new SqliteEventStore(databasePath);
+
+    const first = firstStore.appendEventOnce({
+      workItemId: item.id,
+      type: "MESSAGE_RECEIVED",
+      actor: "user",
+      inputHash: "provider-history:message:1",
+      payload: { message: "hello" },
+    });
+    const second = secondStore.appendEventOnce({
+      workItemId: item.id,
+      type: "MESSAGE_RECEIVED",
+      actor: "user",
+      inputHash: "provider-history:message:1",
+      payload: { message: "hello" },
+    });
+
+    expect(second.eventId).toBe(first.eventId);
+    expect(firstStore.listEvents(item.id).filter((event) => event.inputHash === "provider-history:message:1")).toHaveLength(1);
+    secondStore.close();
+    firstStore.close();
+  });
+
   it("updates the WorkItem projection from terminal events", () => {
     const store = new SqliteEventStore(createDatabasePath());
     const workItem = store.createWorkItem({

@@ -5,6 +5,7 @@ import type {
   ListSessionsResponse,
 } from "@agentclientprotocol/sdk";
 import {
+  collectAcpSessionHistory,
   collectAcpSessions,
   hasAcpSessionCapability,
   listAcpConfigOptions,
@@ -108,6 +109,68 @@ describe("collectAcpSessions", () => {
     await expect(
       collectAcpSessions("claude", "/workspace", requestPage),
     ).rejects.toThrow("adapter unavailable");
+  });
+});
+
+describe("collectAcpSessionHistory", () => {
+  it("normalizes user chunks and ACP updates for the Workbench", () => {
+    const history = collectAcpSessionHistory([
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "user_message_chunk",
+          messageId: "user-1",
+          content: { type: "text", text: "查询" },
+        },
+      },
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "user_message_chunk",
+          messageId: "user-1",
+          content: { type: "text", text: "会员状态" },
+        },
+      },
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "agent-1",
+          content: { type: "text", text: "结果" },
+        },
+      },
+    ]);
+
+    expect(history).toEqual([
+      { kind: "message", text: "查询会员状态" },
+      { kind: "agent_event", event: { type: "text_delta", text: "结果", messageId: "agent-1" } },
+    ]);
+  });
+
+  it("keeps adjacent user messages with different ids separate", () => {
+    const history = collectAcpSessionHistory([
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "user_message_chunk",
+          messageId: "user-1",
+          content: { type: "text", text: "第一条" },
+        },
+      },
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "user_message_chunk",
+          messageId: "user-2",
+          content: { type: "text", text: "第二条" },
+        },
+      },
+    ]);
+
+    expect(history).toEqual([
+      { kind: "message", text: "第一条" },
+      { kind: "message", text: "第二条" },
+    ]);
   });
 });
 

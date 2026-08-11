@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type {
   AgentProfile,
+  AgentSession,
   SessionCatalogStore,
   UpdateSessionInput,
 } from "@codebridge/session-catalog";
@@ -31,6 +32,96 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   const app = new Hono();
   const currentAgents = () => typeof options.agents === "function" ? options.agents() : options.agents;
   const currentProfiles = () => new Map(currentAgents().map((agent) => [agent.agentId, agent]));
+  const historyHydrations = new Map<string, Promise<void>>();
+  const historyHydrated = new Set<string>();
+
+  async function hydrateProviderHistory(session: AgentSession): Promise<AgentSession> {
+    if (!options.runner || !session.providerSessionId || historyHydrated.has(session.id)) return session;
+    const existingWorkItem = session.taskRecordId
+      ? options.workItems.getWorkItem(session.taskRecordId)
+      : undefined;
+    if (existingWorkItem && options.workItems.listEvents(existingWorkItem.id).some(
+      (event) => event.type === "SESSION_HISTORY_HYDRATED",
+    )) {
+      historyHydrated.add(session.id);
+      return session;
+    }
+    let hydration = historyHydrations.get(session.id);
+    if (!hydration) {
+      hydration = (async () => {
+        const history = await options.runner!.loadSessionHistory(
+          session.agentId,
+          session.cwd ?? options.defaultCwd ?? process.cwd(),
+          session.providerSessionId!,
+          session.additionalDirectories,
+        );
+        const workItem = existingWorkItem ?? options.workItems.createWorkItem({
+            title: session.title ?? "Imported Session",
+            mode: "auto",
+            conversationId: `conv_${session.id.slice("sess_".length)}`,
+            agentId: session.agentId,
+            workflowId: session.flowId,
+            workspaceScope: session.cwd ? [session.cwd] : [],
+            riskLevel: "read_only",
+          });
+        const existingHistory = new Map<string, number>();
+        for (const event of options.workItems.listEvents(workItem.id)) {
+          const key = event.type === "MESSAGE_RECEIVED" && typeof event.payload.message === "string"
+            ? `message:${event.payload.message}`
+            : event.type === "AGENT_EVENT" && event.payload.event
+              ? `agent:${JSON.stringify(event.payload.event)}`
+              : undefined;
+          if (key) existingHistory.set(key, (existingHistory.get(key) ?? 0) + 1);
+        }
+        const historyInputHash = (position: string | number) => `sha256:${createHash("sha256")
+          .update(`${session.agentId}\0${session.providerSessionId}\0${position}`)
+          .digest("hex")}`;
+        for (const [index, item] of history.entries()) {
+          const key = item.kind === "message"
+            ? `message:${item.text}`
+            : `agent:${JSON.stringify(item.event)}`;
+          const remaining = existingHistory.get(key) ?? 0;
+          if (remaining > 0) {
+            existingHistory.set(key, remaining - 1);
+            continue;
+          }
+          options.workItems.appendEventOnce(item.kind === "message"
+            ? {
+                workItemId: workItem.id,
+                type: "MESSAGE_RECEIVED",
+                actor: "user",
+                inputHash: historyInputHash(index),
+                payload: { message: item.text },
+              }
+            : {
+                workItemId: workItem.id,
+                type: "AGENT_EVENT",
+                actor: "agent",
+                inputHash: historyInputHash(index),
+                payload: { event: item.event },
+              });
+        }
+        options.workItems.appendEventOnce({
+          workItemId: workItem.id,
+          type: "SESSION_HISTORY_HYDRATED",
+          actor: "system",
+          inputHash: historyInputHash("complete"),
+          payload: { providerSessionId: session.providerSessionId },
+        });
+        options.catalog.updateSession(session.id, { taskRecordId: workItem.id });
+        historyHydrated.add(session.id);
+      })();
+      historyHydrations.set(session.id, hydration);
+    }
+    try {
+      await hydration;
+    } catch {
+      historyHydrated.add(session.id);
+    } finally {
+      if (historyHydrations.get(session.id) === hydration) historyHydrations.delete(session.id);
+    }
+    return options.catalog.getSession(session.id) ?? session;
+  }
 
   app.use("/v1/*", async (c, next) => {
     if (c.req.header("authorization") !== `Bearer ${token}`) {
@@ -284,9 +375,10 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiSession(options.catalog.updateSession(session.id, { additionalDirectories })!));
   });
 
-  app.get("/v1/sessions/:session_id", (c) => {
-    const session = options.catalog.getSession(c.req.param("session_id"));
+  app.get("/v1/sessions/:session_id", async (c) => {
+    let session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
+    session = await hydrateProviderHistory(session);
     return c.json(toApiSession(session));
   });
 

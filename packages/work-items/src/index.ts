@@ -36,6 +36,7 @@ export type RiskLevel =
 
 export type DomainEventType =
   | "WORK_ITEM_CREATED"
+  | "SESSION_HISTORY_HYDRATED"
   | "MESSAGE_RECEIVED"
   | "RUN_CREATED"
   | "AGENT_EVENT"
@@ -520,6 +521,25 @@ export class SqliteEventStore {
     this.database.exec("BEGIN IMMEDIATE;");
     try {
       const event = this.appendEventInTransaction(input);
+      this.database.exec("COMMIT;");
+      return event;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
+  appendEventOnce(input: AppendEventInput & { inputHash: string }): DomainEvent {
+    if (!this.getWorkItem(input.workItemId)) {
+      throw new Error(`WorkItem not found: ${input.workItemId}`);
+    }
+
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const existing = this.database
+        .prepare("SELECT * FROM domain_events WHERE work_item_id = ? AND input_hash = ? LIMIT 1")
+        .get(input.workItemId, input.inputHash) as SqliteRow | undefined;
+      const event = existing ? toDomainEvent(existing) : this.appendEventInTransaction(input);
       this.database.exec("COMMIT;");
       return event;
     } catch (error) {

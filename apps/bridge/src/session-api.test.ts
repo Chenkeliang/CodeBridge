@@ -233,6 +233,144 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("hydrates imported provider history into the unified event stream", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      loadSessionHistory: async () => [
+        { kind: "message", text: "查询手机号用户信息" },
+        { kind: "agent_event", event: { type: "text_delta", text: "会员有效期为 30 天" } },
+      ],
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "codex",
+      providerSessionId: "provider-history",
+      cwd: "/tmp/project",
+      title: "查询手机号用户信息和会员状态",
+    });
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    const response = await app.request(`/v1/sessions/${session.id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json() as { task_record_id: string }).task_record_id).toBeTruthy();
+
+    const events = await app.request(`/v1/sessions/${session.id}/events`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const body = await events.text();
+    expect(body).toContain("MESSAGE_RECEIVED");
+    expect(body).toContain("查询手机号用户信息");
+    expect(body).toContain("text_delta");
+    expect(body).toContain("会员有效期为 30 天");
+    expect(body).toContain("SESSION_HISTORY_HYDRATED");
+    catalog.close();
+    workItems.close();
+  });
+
+  it("repairs an imported Session whose history binding is still empty", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const task = workItems.createWorkItem({
+      title: "Imported Session",
+      mode: "auto",
+      conversationId: "conv-imported",
+      agentId: "claude",
+      riskLevel: "read_only",
+    });
+    workItems.appendEvent({
+      workItemId: task.id,
+      type: "MESSAGE_RECEIVED",
+      actor: "user",
+      payload: { message: "当前消息" },
+    });
+    const runner = {
+      loadSessionHistory: async () => [{ kind: "message", text: "原始问题" }],
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "claude",
+      providerSessionId: "provider-empty-history",
+      taskRecordId: task.id,
+      cwd: "/tmp/project",
+    });
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    await app.request(`/v1/sessions/${session.id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(workItems.listEvents(task.id)).toContainEqual(expect.objectContaining({
+      type: "MESSAGE_RECEIVED",
+      payload: { message: "原始问题" },
+    }));
+    catalog.close();
+    workItems.close();
+  });
+
+  it("marks legacy hydrated history without duplicating its existing events", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const task = workItems.createWorkItem({
+      title: "Imported Session",
+      mode: "auto",
+      conversationId: "conv-imported",
+      agentId: "claude",
+      riskLevel: "read_only",
+    });
+    workItems.appendEvent({
+      workItemId: task.id,
+      type: "MESSAGE_RECEIVED",
+      actor: "user",
+      payload: { message: "原始问题" },
+    });
+    const runner = {
+      loadSessionHistory: async () => [{ kind: "message", text: "原始问题" }],
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "claude",
+      providerSessionId: "provider-legacy-history",
+      taskRecordId: task.id,
+      cwd: "/tmp/project",
+    });
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    await app.request(`/v1/sessions/${session.id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    const events = workItems.listEvents(task.id);
+    expect(events.filter((event) => event.type === "MESSAGE_RECEIVED")).toHaveLength(1);
+    expect(events).toContainEqual(expect.objectContaining({ type: "SESSION_HISTORY_HYDRATED" }));
+    catalog.close();
+    workItems.close();
+  });
+
+  it("keeps an imported Session available when provider history cannot be loaded", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      loadSessionHistory: async () => {
+        throw new Error("history unavailable");
+      },
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "claude",
+      providerSessionId: "provider-unavailable",
+      cwd: "/tmp/project",
+    });
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    const response = await app.request(`/v1/sessions/${session.id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json() as { session_id: string }).session_id).toBe(session.id);
+    catalog.close();
+    workItems.close();
+  });
+
   it("creates a new Session from a provider-native fork", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
