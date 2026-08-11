@@ -47,7 +47,14 @@ describe("RunnerHost cwd validation", () => {
     tmpDirs.push(dataDir, cwd);
     const config = defaultConfig();
     config.backends.codex = { type: "codex" };
-    const host = new RunnerHost({ token: "token", config, dataDir });
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      codexSkillLister: async () => [
+        { name: "$dcp", description: "Operate DCP workflows" },
+      ],
+    });
 
     await expect(host.listCommands("codex", cwd)).resolves.toMatchObject({
       commands: expect.arrayContaining([
@@ -56,6 +63,7 @@ describe("RunnerHost cwd validation", () => {
         expect.objectContaining({ name: "skills", description: "List available skills." }),
         expect.objectContaining({ name: "status", description: "Display session configuration and token usage." }),
         expect.objectContaining({ name: "review", description: "Review uncommitted changes, or review with custom instructions." }),
+        expect.objectContaining({ name: "$dcp", description: "Operate DCP workflows" }),
       ]),
     });
     host.shutdown();

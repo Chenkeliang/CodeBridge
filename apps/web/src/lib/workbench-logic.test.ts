@@ -128,7 +128,9 @@ describe("workbench logic", () => {
     const commands = [
       { name: "status", description: "Display status" },
       { name: "skills", description: "List available skills" },
+      { name: "$dcp", description: "Operate DCP workflows" },
     ];
+    expect(filterCommands(commands, "").map((command) => command.name)).toEqual(["$dcp", "status", "skills"]);
     expect(filterCommands(commands, "stat").map((command) => command.name)).toEqual(["status"]);
     expect(filterCommands(commands, "available").map((command) => command.name)).toEqual(["skills"]);
     expect(applyComposerSuggestion("检查 @src/li", "@/workspace/src/lib.ts ")).toBe("检查 @/workspace/src/lib.ts ");

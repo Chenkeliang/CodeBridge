@@ -36,8 +36,10 @@ export function composerTrigger(draft: string): { kind: "command" | "context"; q
 
 export function filterCommands(commands: AgentCommand[], query: string): AgentCommand[] {
   const normalized = query.trim().toLowerCase();
-  if (!normalized) return commands;
-  return commands.filter((command) => `${command.name} ${command.description}`.toLowerCase().includes(normalized));
+  const filtered = normalized
+    ? commands.filter((command) => `${command.name} ${command.description}`.toLowerCase().includes(normalized))
+    : commands;
+  return [...filtered].sort((left, right) => Number(right.name.startsWith("$")) - Number(left.name.startsWith("$")));
 }
 
 export function applyComposerSuggestion(draft: string, replacement: string): string {

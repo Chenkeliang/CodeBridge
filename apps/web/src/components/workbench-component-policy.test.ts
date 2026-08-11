@@ -21,4 +21,13 @@ describe("Workbench component policy", () => {
     expect(source).toContain('"max-w-full break-words text-xs font-normal leading-5"');
     expect(source).not.toContain("Agent · working");
   });
+
+  it("places command and context suggestions outside the composer input surface", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain('"absolute bottom-[calc(100%+0.5rem)] left-3 z-30');
+    expect(source).toContain('"absolute bottom-[calc(100%+0.5rem)] left-12 z-30');
+    expect(source).toContain('<div className="flex items-center gap-1">');
+    expect(source).not.toContain('<div className="relative flex items-center gap-1">');
+  });
 });
