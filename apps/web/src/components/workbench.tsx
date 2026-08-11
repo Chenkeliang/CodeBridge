@@ -49,7 +49,7 @@ import type {
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, isModelOption, orderSessions, restoreSessionSelection, workspacePaths } from "@/lib/workbench-logic";
+import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, isModelOption, isPermissionOption, orderSessions, restoreSessionSelection, workspacePaths } from "@/lib/workbench-logic";
 
 type Theme = "paper" | "carbon";
 type PanelArea = "agents" | "flows";
@@ -134,9 +134,10 @@ export function Workbench() {
   const [showArchived, setShowArchived] = useState(false);
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
-  const [modelOptions, setModelOptions] = useState<ConfigOption[]>([]);
+  const [configOptions, setConfigOptions] = useState<ConfigOption[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
   const [model, setModel] = useState("");
+  const [permissionMode, setPermissionMode] = useState("");
   const [flowId, setFlowId] = useState("");
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
@@ -171,10 +172,8 @@ export function Workbench() {
   const activeSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && !session.archived_at).length;
   const archivedSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && session.archived_at).length;
   const projection = useMemo(() => reduceConversationEvents(events), [events]);
-  const modelValues = useMemo(
-    () => modelOptions.filter(isModelOption).flatMap((option) => option.values),
-    [modelOptions],
-  );
+  const modelOption = useMemo(() => configOptions.find(isModelOption), [configOptions]);
+  const permissionOption = useMemo(() => configOptions.find(isPermissionOption), [configOptions]);
 
   const notify = useCallback((message: string) => {
     setNotice(message);
@@ -226,9 +225,10 @@ export function Workbench() {
       streamAbort.current?.abort();
       setEvents([]);
       setCommands([]);
-      setModelOptions([]);
+      setConfigOptions([]);
       setApprovals([]);
       setModel("");
+      setPermissionMode("");
       setFlowId("");
       setLoadingSession(false);
       setWorkspaceListing(null);
@@ -255,8 +255,9 @@ export function Workbench() {
         setSessions((current) => current.map((value) => value.session_id === session.session_id ? session : value));
         setEvents(history);
         setCommands(nextCommands);
-        setModelOptions(options);
-        setModel(session.model ?? optionValue(options) ?? "");
+        setConfigOptions(options);
+        setModel(session.model ?? "");
+        setPermissionMode(session.permission_mode ?? "");
         setFlowId(session.flow_id ?? "");
         const latestRun = runs.at(-1);
         setApprovals(latestRun ? await api.approvals(latestRun.run_id).catch(() => []) : []);
@@ -326,8 +327,8 @@ export function Workbench() {
     setDraft("");
     setAttachments([]);
     try {
-      await api.sendMessage(sessionId, message, flowId || null, model || null, pendingAttachments);
-      await api.startRun(sessionId, flowId || null, model || null);
+      await api.sendMessage(sessionId, message, flowId || null, model || null, pendingAttachments, permissionMode || null);
+      await api.startRun(sessionId, flowId || null, model || null, permissionMode || null);
       setSessions((current) => current.map((session) => session.session_id === sessionId
         ? { ...session, status: "active", title: session.title ?? message.slice(0, 60), updated_at: new Date().toISOString() }
         : session));
@@ -347,6 +348,7 @@ export function Workbench() {
       const updated = await api.updateSession(selectedSessionId, update);
       setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
       setModel(updated.model ?? "");
+      setPermissionMode(updated.permission_mode ?? "");
       if (updated.archived_at) {
         window.localStorage.removeItem(`codebridge:last-session:${updated.agent_id}`);
         selectedSessionRef.current = null;
@@ -357,6 +359,11 @@ export function Workbench() {
     } catch (caught) {
       setError(messageOf(caught));
     }
+  }
+
+  function setSessionPermissionMode(value: string) {
+    setPermissionMode(value);
+    void updateSession({ permission_mode: value || null });
   }
 
   async function deleteSelected() {
@@ -475,9 +482,6 @@ export function Workbench() {
       <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", t.canvas)}>
         <SessionHeader
           agent={selectedAgent}
-          model={model}
-          modelOptions={modelValues}
-          pickingDirectory={pickingDirectory}
           session={selectedSession}
           theme={theme}
           menuOpen={menuOpen}
@@ -486,8 +490,6 @@ export function Workbench() {
           onDelete={() => void deleteSelected()}
           onMenu={() => { setMenuOpen((current) => !current); setMenuView("actions"); }}
           onMenuView={setMenuView}
-          onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
-          onPickDirectory={() => void pickDirectory()}
           onRenameDraft={setRenameDraft}
           onUpdate={(update) => void updateSession(update)}
         />
@@ -513,6 +515,9 @@ export function Workbench() {
                 flowId={flowId}
                 flows={flows}
                 model={model}
+                modelOption={modelOption}
+                permissionMode={permissionMode}
+                permissionOption={permissionOption}
                 sending={sending}
                 session={null}
                 theme={theme}
@@ -525,6 +530,8 @@ export function Workbench() {
                 onDraft={setDraft}
                 onFiles={() => fileInput.current?.click()}
                 onFlow={setFlowId}
+                onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
+                onPermissionMode={setSessionPermissionMode}
                 onPickDirectory={() => notify("Session 创建后可添加 Workspace")}
                 onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, valueIndex) => valueIndex !== index))}
                 onSubmit={() => void submit()}
@@ -564,6 +571,9 @@ export function Workbench() {
                   flowId={flowId}
                   flows={flows}
                   model={model}
+                  modelOption={modelOption}
+                  permissionMode={permissionMode}
+                  permissionOption={permissionOption}
                   sending={sending}
                   session={selectedSession}
                   theme={theme}
@@ -576,6 +586,8 @@ export function Workbench() {
                   onDraft={setDraft}
                   onFiles={() => fileInput.current?.click()}
                   onFlow={setFlowId}
+                  onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
+                  onPermissionMode={setSessionPermissionMode}
                   onPickDirectory={() => void pickDirectory()}
                   onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, valueIndex) => valueIndex !== index))}
                   onSubmit={() => void submit()}
@@ -661,11 +673,8 @@ function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, f
   </aside>;
 }
 
-function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, theme, menuOpen, menuView, renameDraft, onDelete, onMenu, onMenuView, onModel, onPickDirectory, onRenameDraft, onUpdate }: {
+function SessionHeader({ agent, session, theme, menuOpen, menuView, renameDraft, onDelete, onMenu, onMenuView, onRenameDraft, onUpdate }: {
   agent: AgentProfile | null;
-  model: string;
-  modelOptions: Array<{ value: string; name?: string }>;
-  pickingDirectory: boolean;
   session: AgentSession | null;
   theme: Theme;
   menuOpen: boolean;
@@ -674,8 +683,6 @@ function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, 
   onDelete: () => void;
   onMenu: () => void;
   onMenuView: (view: MenuView) => void;
-  onModel: (value: string) => void;
-  onPickDirectory: () => void;
   onRenameDraft: (value: string) => void;
   onUpdate: (update: Record<string, unknown>) => void;
 }) {
@@ -683,15 +690,7 @@ function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, 
   return <header className={cn("flex min-h-[72px] shrink-0 items-center justify-between gap-5 border-b px-8 py-4", t.line)}>
     <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <GitBranch className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate text-sm font-semibold tracking-[-0.02em]", t.ink)}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", t.muted)}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
     {session && <div className="relative flex items-center gap-2">
-      {modelOptions.length > 0 && <Select onValueChange={(value) => onModel(value === DEFAULT_SELECT_VALUE ? "" : value)} value={model || DEFAULT_SELECT_VALUE}>
-        <SelectTrigger aria-label="模型" className={cn("h-8 max-w-52 px-2.5 text-xs", t.surface, t.inkSoft, t.line, t.focus)}><SelectValue /></SelectTrigger>
-        <SelectContent className={cn(t.surface, t.inkSoft, t.lineStrong, t.shadow)}>
-          <SelectItem className={t.menuItemFocus} value={DEFAULT_SELECT_VALUE}>默认模型</SelectItem>
-          {modelOptions.map((value) => <SelectItem className={t.menuItemFocus} key={value.value} value={value.value}>{value.name || value.value}</SelectItem>)}
-        </SelectContent>
-      </Select>}
-      <Button aria-label="添加 Workspace" className={cn("h-8 border px-2.5 text-xs", t.surface, t.muted, t.line)} disabled={pickingDirectory} onClick={onPickDirectory} size="sm" variant="outline">{pickingDirectory ? <LoaderCircle className="size-3.5 animate-spin" /> : <FolderOpen className="size-3.5" />}Workspace</Button>
-      <span className={cn("hidden items-center gap-1.5 text-[11px] xl:flex", t.muted)}><span className={cn("size-1.5 rounded-full", session.status === "active" ? t.accent : t.offlineDot)} />{statusLabel[session.status] ?? session.status}</span>
+      <span className={cn("hidden items-center gap-1.5 text-[11px] sm:flex", t.muted)}><span className={cn("size-1.5 rounded-full", session.status === "active" || session.status === "idle" ? t.healthyDot : t.offlineDot)} />{statusLabel[session.status] ?? session.status}</span>
       <Button aria-label="Session 操作" className={cn("size-8 px-0", t.muted)} onClick={onMenu} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button>
       {menuOpen && <div className={cn("absolute right-0 top-11 z-30 w-56 rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{menuView === "rename" ? <div className="space-y-2 p-2"><label className={cn("text-xs", t.muted)} htmlFor="session-name">Session 名称</label><input autoFocus className={cn("h-9 w-full rounded-md border bg-transparent px-2.5 text-sm outline-none", t.ink, t.lineStrong, t.focus)} id="session-name" onChange={(event) => onRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && renameDraft.trim()) onUpdate({ title: renameDraft.trim() }); if (event.key === "Escape") onMenuView("actions"); }} value={renameDraft} /><div className="flex justify-end gap-1"><MenuButton theme={theme} onClick={() => onMenuView("actions")}>取消</MenuButton><MenuButton disabled={!renameDraft.trim()} theme={theme} onClick={() => onUpdate({ title: renameDraft.trim() })}>保存</MenuButton></div></div> : menuView === "delete" ? <div className="space-y-3 p-2"><p className={cn("text-xs leading-5", t.muted)}>删除后无法从 CodeBridge 恢复这个 Session。</p><div className="flex justify-end gap-1"><MenuButton theme={theme} onClick={() => onMenuView("actions")}>取消</MenuButton><MenuButton danger theme={theme} onClick={onDelete}>删除</MenuButton></div></div> : <>
         <MenuButton theme={theme} onClick={() => onUpdate({ pinned: !session.pinned_at })}><Pin className="size-3.5" />{session.pinned_at ? "取消 PIN" : "PIN Session"}</MenuButton>
@@ -703,7 +702,7 @@ function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, 
   </header>;
 }
 
-function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onPickDirectory, onRemoveAttachment, onSubmit }: {
+function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, modelOption, permissionMode, permissionOption, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onModel, onPermissionMode, onPickDirectory, onRemoveAttachment, onSubmit }: {
   attachments: MessageAttachmentInput[];
   commands: AgentCommand[];
   contextOpen: boolean;
@@ -714,6 +713,9 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   flowId: string;
   flows: FlowRecord[];
   model: string;
+  modelOption?: ConfigOption;
+  permissionMode: string;
+  permissionOption?: ConfigOption;
   sending: boolean;
   session: AgentSession | null;
   theme: Theme;
@@ -726,6 +728,8 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   onDraft: (value: string) => void;
   onFiles: () => void;
   onFlow: (value: string) => void;
+  onModel: (value: string) => void;
+  onPermissionMode: (value: string) => void;
   onPickDirectory: () => void;
   onRemoveAttachment: (index: number) => void;
   onSubmit: () => void;
@@ -738,7 +742,8 @@ function Composer({ attachments, commands, contextOpen, workspaceListing, worksp
   const hasWorkspace = workspacePaths(session).length > 0;
   return <div className={cn("relative rounded-xl border", t.surface, t.lineStrong, t.shadow)}>
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5">
-      <ContextChip label={model || "Agent default"} theme={theme} />
+      {modelOption ? <SessionConfigSelect label={defaultModelLabel(modelOption)} onValue={onModel} option={modelOption} theme={theme} value={model} /> : <ContextChip label="Agent default" theme={theme} />}
+      {permissionOption && <SessionConfigSelect label="Agent default" onValue={onPermissionMode} option={permissionOption} theme={theme} value={permissionMode} />}
       <button className={cn("inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded border px-2 text-[10px] transition-opacity hover:opacity-80", t.surfaceSoft, t.muted, t.line)} onClick={onPickDirectory} type="button"><FolderOpen className="size-3" /><span className={cn("font-medium", t.inkSoft)}>{workspaceLabel(session)}</span></button>
       {flows.length > 0 && <div className={cn("inline-flex min-h-6 shrink-0 items-center rounded border pl-2 text-[10px]", t.surfaceSoft, t.muted, t.line)}><Workflow className="mr-1 size-3" /><Select onValueChange={(value) => onFlow(value === DEFAULT_SELECT_VALUE ? "" : value)} value={flowId || DEFAULT_SELECT_VALUE}>
         <SelectTrigger aria-label="Flow" className={cn("h-6 max-w-44 gap-1 border-0 bg-transparent px-1.5 py-0 text-[10px] shadow-none focus-visible:ring-0", t.inkSoft)}><SelectValue /></SelectTrigger>
@@ -877,13 +882,27 @@ function ContextChip({ label, theme }: { label: string; theme: Theme }) {
   return <span className={cn("inline-flex min-h-6 max-w-44 shrink-0 items-center rounded border px-2 text-[10px]", t.surfaceSoft, t.line)}><span className={cn("truncate font-medium", t.inkSoft)}>{label}</span></span>;
 }
 
+function SessionConfigSelect({ label, onValue, option, theme, value }: { label: string; onValue: (value: string) => void; option: ConfigOption; theme: Theme; value: string }) {
+  const t = themes[theme];
+  const selected = option.values.find((candidate) => candidate.value === value);
+  const triggerLabel = selected ? selected.name || selected.value : label;
+  return <Select onValueChange={(next) => onValue(next === DEFAULT_SELECT_VALUE ? "" : next)} value={value || DEFAULT_SELECT_VALUE}>
+    <SelectTrigger aria-label={option.name} className={cn("h-6 max-w-52 shrink-0 gap-1 border px-2 py-0 text-[10px] shadow-none focus-visible:ring-1", t.surfaceSoft, t.inkSoft, t.line, t.focus)} title={selected?.description}><SelectValue>{triggerLabel}</SelectValue></SelectTrigger>
+    <SelectContent className={cn("max-w-80", t.surface, t.inkSoft, t.lineStrong, t.shadow)}>
+      <SelectItem className={t.menuItemFocus} value={DEFAULT_SELECT_VALUE}>{label}</SelectItem>
+      {option.values.map((candidate) => <SelectItem className={t.menuItemFocus} key={candidate.value} textValue={candidate.name || candidate.value} value={candidate.value}><span className="grid gap-0.5 py-0.5"><span>{candidate.name || candidate.value}</span>{candidate.description && <span className={cn("max-w-72 text-[10px] font-normal leading-4", t.muted)}>{candidate.description}</span>}</span></SelectItem>)}
+    </SelectContent>
+  </Select>;
+}
+
 function MenuButton({ children, danger = false, disabled = false, onClick, theme }: { children: ReactNode; danger?: boolean; disabled?: boolean; onClick: () => void; theme: Theme }) {
   const t = themes[theme];
   return <Button className={cn("w-full justify-start text-xs", danger ? t.danger : t.inkSoft)} disabled={disabled} onClick={onClick} size="sm" variant="ghost">{children}</Button>;
 }
 
-function optionValue(options: ConfigOption[]): string | undefined {
-  return options.find(isModelOption)?.currentValue;
+function defaultModelLabel(option: ConfigOption): string {
+  const current = option.values.find((candidate) => candidate.value === option.currentValue);
+  return current ? `${current.name || current.value} · Default` : "Agent default";
 }
 
 function projectionKey(item: ConversationProjection, index: number): string {

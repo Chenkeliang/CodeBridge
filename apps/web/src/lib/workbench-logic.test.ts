@@ -11,6 +11,17 @@ describe("workbench logic", () => {
     expect(isModelOption({ id: "legacy-model-picker", name: "Model", type: "select", values: [] })).toBe(true);
   });
 
+  it("recognizes only Agent permission configuration as a permission selector", () => {
+    const isPermissionOption = (workbenchLogic as unknown as {
+      isPermissionOption?: (option: { id: string; name: string; type: string; category?: string; values: [] }) => boolean;
+    }).isPermissionOption;
+    expect(isPermissionOption).toBeTypeOf("function");
+    if (!isPermissionOption) return;
+
+    expect(isPermissionOption({ id: "mode", name: "Mode", type: "select", category: "mode", values: [] })).toBe(true);
+    expect(isPermissionOption({ id: "model", name: "Model", type: "select", category: "model", values: [] })).toBe(false);
+  });
+
   it("places pinned Sessions before the most recently updated Sessions", () => {
     const session = (id: string, updatedAt: string, pinnedAt: string | null): AgentSession => ({
       session_id: id,
@@ -19,6 +30,7 @@ describe("workbench logic", () => {
       task_record_id: null,
       flow_id: null,
       model: null,
+      permission_mode: null,
       cwd: null,
       additional_directories: [],
       title: id,
@@ -57,6 +69,7 @@ describe("workbench logic", () => {
       task_record_id: null,
       flow_id: null,
       model: null,
+      permission_mode: null,
       cwd: null,
       additional_directories: [],
       title: id,
@@ -87,6 +100,7 @@ describe("workbench logic", () => {
       task_record_id: null,
       flow_id: null,
       model: null,
+      permission_mode: null,
       cwd: "/workspace/app",
       additional_directories: ["/workspace/shared", "/workspace/app"],
       title: "Session",
