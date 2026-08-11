@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("Workbench component policy", () => {
@@ -29,5 +29,21 @@ describe("Workbench component policy", () => {
     expect(source).toContain('"absolute bottom-[calc(100%+0.5rem)] left-12 z-30');
     expect(source).toContain('<div className="flex items-center gap-1">');
     expect(source).not.toContain('<div className="relative flex items-center gap-1">');
+  });
+
+  it("renders math and Mermaid diagrams as rich conversation content", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const mermaidUrl = new URL("./mermaid-diagram.tsx", import.meta.url);
+
+    expect(existsSync(mermaidUrl)).toBe(true);
+    if (!existsSync(mermaidUrl)) return;
+    const mermaid = readFileSync(mermaidUrl, "utf8");
+    expect(source).toContain('import remarkMath from "remark-math"');
+    expect(source).toContain('import rehypeKatex from "rehype-katex"');
+    expect(source).toContain('import "katex/dist/katex.min.css"');
+    expect(source).toContain('className?.includes("language-mermaid")');
+    expect(source).toContain("<MermaidDiagram");
+    expect(mermaid).toContain('await import("mermaid")');
+    expect(mermaid).toContain('aria-label="Mermaid diagram"');
   });
 });
