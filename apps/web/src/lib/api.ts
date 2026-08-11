@@ -3,8 +3,10 @@ import type {
   AgentCommand,
   AgentProfile,
   AgentSession,
+  ApprovalRecord,
   ConfigOption,
   FlowRecord,
+  MessageAttachmentInput,
   RunRecord,
   SessionEvent,
 } from "./types";
@@ -47,21 +49,27 @@ export const api = {
     (await request<{ options?: ConfigOption[] }>(`/v1/sessions/${encodeURIComponent(id)}/config-options`)).options ?? [],
   commands: async (id: string) =>
     (await request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodeURIComponent(id)}/commands`)).commands ?? [],
-  sendMessage: (id: string, message: string, flowId: string | null, model: string | null) =>
+  pickDirectory: (id: string) =>
+    request<AgentSession | { cancelled: true }>(`/v1/sessions/${encodeURIComponent(id)}/directories/pick`, { method: "POST", body: "{}" }),
+  sendMessage: (id: string, message: string, flowId: string | null, model: string | null, attachments: MessageAttachmentInput[] = []) =>
     request<{ sequence: number }>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ message, flow_id: flowId, model }),
+      body: JSON.stringify({ message, flow_id: flowId, model, attachments }),
     }),
+  runs: async (id: string) =>
+    (await request<{ runs: RunRecord[] }>(`/v1/sessions/${encodeURIComponent(id)}/runs`)).runs,
   startRun: (id: string, flowId: string | null, model: string | null) =>
     request<RunRecord>(`/v1/sessions/${encodeURIComponent(id)}/runs`, {
       method: "POST",
       body: JSON.stringify({ flow_id: flowId, model }),
     }),
   events: async (id: string, afterSequence = 0) => fetchSessionEvents(id, afterSequence),
-  approve: (runId: string) =>
-    request(`/v1/runs/${encodeURIComponent(runId)}/approve`, { method: "POST", body: "{}" }),
-  reject: (runId: string) =>
-    request(`/v1/runs/${encodeURIComponent(runId)}/reject`, { method: "POST", body: "{}" }),
+  approvals: async (runId: string) =>
+    (await request<{ approvals: ApprovalRecord[] }>(`/v1/runs/${encodeURIComponent(runId)}/approvals`)).approvals,
+  approve: (runId: string, approvalId: string) =>
+    request(`/v1/runs/${encodeURIComponent(runId)}/approve`, { method: "POST", body: JSON.stringify({ approval_id: approvalId }) }),
+  reject: (runId: string, approvalId: string) =>
+    request(`/v1/runs/${encodeURIComponent(runId)}/reject`, { method: "POST", body: JSON.stringify({ approval_id: approvalId }) }),
 };
 
 async function fetchSessionEvents(id: string, afterSequence: number): Promise<SessionEvent[]> {

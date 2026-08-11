@@ -56,9 +56,28 @@ export interface AgentCommand {
   input?: { hint: string };
 }
 
+export interface MessageAttachmentInput {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+}
+
 export interface RunRecord {
   run_id: string;
   status: string;
+}
+
+export interface ApprovalRecord {
+  id: string;
+  run_id: string;
+  step_id: string;
+  capability_id: string;
+  session_id: string;
+  environment: string;
+  target_resource: string;
+  status: "requested" | "granted" | "revoked" | "expired" | string;
+  created_at: string;
+  expires_at: string | null;
 }
 
 export type SessionEvent = ConversationEvent & {
