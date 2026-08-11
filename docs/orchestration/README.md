@@ -69,7 +69,7 @@ examples/orchestration/     非业务的配置形状参考（保持通用）
 5. [Flow、Run 与 DSL 引擎](engine.md)
 6. [项目发现和自生成](self-generation.md)
 7. [交互建议](interaction.md)
-8. [设计规范](design-system.md)
+8. [AGNET Design System](DESIGN.md)
 9. [扩展性与移植性](extensibility-portability.md)
 10. [多 Agent 运行时调研](agent-runtime-research.md)
 
