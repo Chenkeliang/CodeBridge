@@ -376,6 +376,19 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiSession(options.catalog.updateSession(session.id, { additionalDirectories })!));
   });
 
+  app.get("/v1/sessions/:session_id/files", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    const roots = [session.cwd, ...session.additionalDirectories]
+      .filter((value): value is string => Boolean(value));
+    const root = c.req.query("root") ?? roots[0];
+    if (!root) return c.json({ ok: true, entries: [], error: "workspace_required" });
+    if (!roots.includes(root)) return c.json({ error: "workspace_not_authorized" }, 403);
+    const result = await options.runner.listDirectory(root, c.req.query("path") ?? "");
+    return c.json(result, result.ok ? 200 : 400);
+  });
+
   app.delete("/v1/sessions/:session_id/directories", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);

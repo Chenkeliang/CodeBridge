@@ -41,6 +41,31 @@ function request(cwd: string): RunRequest {
 }
 
 describe("RunnerHost cwd validation", () => {
+  it("lists immediate workspace entries without traversing outside the authorized root", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-list-"));
+    fs.mkdirSync(path.join(cwd, "src"));
+    fs.writeFileSync(path.join(cwd, "README.md"), "readme");
+    tmpDirs.push(dataDir, cwd);
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
+    const listDirectory = (host as unknown as {
+      listDirectory?: (root: string, relativePath?: string) => Promise<unknown>;
+    }).listDirectory;
+
+    expect(listDirectory).toBeTypeOf("function");
+    if (!listDirectory) return;
+    await expect(listDirectory.call(host, cwd)).resolves.toMatchObject({
+      ok: true,
+      root: fs.realpathSync(cwd),
+      entries: [
+        { name: "src", path: "src", absolutePath: path.join(fs.realpathSync(cwd), "src"), kind: "directory" },
+        { name: "README.md", path: "README.md", absolutePath: path.join(fs.realpathSync(cwd), "README.md"), kind: "file" },
+      ],
+    });
+    await expect(listDirectory.call(host, cwd, "../")).resolves.toMatchObject({ ok: false });
+    host.shutdown();
+  });
+
   it("exposes provider session history for imported Workbench sessions", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-history-"));

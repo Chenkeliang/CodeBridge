@@ -56,6 +56,22 @@ export interface AgentCommand {
   input?: { hint: string };
 }
 
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  absolutePath: string;
+  kind: "directory" | "file";
+}
+
+export interface WorkspaceListing {
+  ok: boolean;
+  root?: string;
+  path?: string;
+  relativePath?: string;
+  entries: WorkspaceEntry[];
+  error?: string;
+}
+
 export interface MessageAttachmentInput {
   name: string;
   mimeType: string;

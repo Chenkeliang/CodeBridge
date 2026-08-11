@@ -5,8 +5,10 @@ import {
   Archive,
   Check,
   ChevronDown,
+  ChevronRight,
   Circle,
   Code2,
+  FileText,
   FolderOpen,
   GitBranch,
   LoaderCircle,
@@ -39,9 +41,10 @@ import type {
   FlowRecord,
   MessageAttachmentInput,
   SessionEvent,
+  WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { isModelOption, orderSessions, restoreSessionSelection, workspacePaths } from "@/lib/workbench-logic";
+import { applyComposerSuggestion, composerTrigger, filterCommands, isModelOption, orderSessions, restoreSessionSelection, workspacePaths } from "@/lib/workbench-logic";
 
 type Theme = "paper" | "carbon";
 type PanelArea = "agents" | "flows";
@@ -144,6 +147,8 @@ export function Workbench() {
   const [renameDraft, setRenameDraft] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const [workspaceListing, setWorkspaceListing] = useState<WorkspaceListing | null>(null);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const streamAbort = useRef<AbortController | null>(null);
   const selectedAgentRef = useRef<string | null>(null);
@@ -221,6 +226,7 @@ export function Workbench() {
       setModel("");
       setFlowId("");
       setLoadingSession(false);
+      setWorkspaceListing(null);
       return;
     }
 
@@ -235,6 +241,7 @@ export function Workbench() {
     setMenuView("actions");
     setCommandOpen(false);
     setContextOpen(false);
+    setWorkspaceListing(null);
 
     void (async () => {
       try {
@@ -409,6 +416,24 @@ export function Workbench() {
     }
   }
 
+  async function browseWorkspace(relativePath = "", root?: string) {
+    if (!selectedSessionId) return;
+    setContextOpen(true);
+    setWorkspaceLoading(true);
+    try {
+      setWorkspaceListing(await api.workspaceEntries(selectedSessionId, root, relativePath));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }
+
+  function toggleContext(open: boolean) {
+    setContextOpen(open);
+    if (open && !workspaceListing && selectedSessionId) void browseWorkspace();
+  }
+
   return (
     <div className={cn("grid h-[100dvh] min-h-[100dvh] min-w-[1040px] grid-cols-[60px_286px_minmax(0,1fr)] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", t.canvas)}>
       <AgentRail
@@ -476,7 +501,8 @@ export function Workbench() {
                 attachments={attachments}
                 commands={commands}
                 contextOpen={contextOpen}
-                contextPaths={[]}
+                workspaceListing={null}
+                workspaceLoading={false}
                 disabled={!selectedAgent || selectedAgent.status !== "healthy"}
                 draft={draft}
                 flowId={flowId}
@@ -489,7 +515,8 @@ export function Workbench() {
                 onAddFiles={addFiles}
                 onCommandOpen={setCommandOpen}
                 onContext={() => undefined}
-                onContextOpen={setContextOpen}
+                onContextNavigate={() => undefined}
+                onContextOpen={toggleContext}
                 onDraft={setDraft}
                 onFiles={() => fileInput.current?.click()}
                 onFlow={setFlowId}
@@ -524,7 +551,8 @@ export function Workbench() {
                   attachments={attachments}
                   commands={commands}
                   contextOpen={contextOpen}
-                  contextPaths={workspacePaths(selectedSession)}
+                  workspaceListing={workspaceListing}
+                  workspaceLoading={workspaceLoading}
                   disabled={false}
                   draft={draft}
                   flowId={flowId}
@@ -536,8 +564,9 @@ export function Workbench() {
                   commandOpen={commandOpen}
                   onAddFiles={addFiles}
                   onCommandOpen={setCommandOpen}
-                  onContext={(path) => setDraft((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}@${path} `)}
-                  onContextOpen={setContextOpen}
+                  onContext={(path) => setDraft((current) => applyComposerSuggestion(current, `@${path} `))}
+                  onContextNavigate={(path, root) => void browseWorkspace(path, root)}
+                  onContextOpen={toggleContext}
                   onDraft={setDraft}
                   onFiles={() => fileInput.current?.click()}
                   onFlow={setFlowId}
@@ -668,11 +697,12 @@ function SessionHeader({ agent, model, modelOptions, pickingDirectory, session, 
   </header>;
 }
 
-function Composer({ attachments, commands, contextOpen, contextPaths, disabled, draft, flowId, flows, model, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextOpen, onDraft, onFiles, onFlow, onPickDirectory, onRemoveAttachment, onSubmit }: {
+function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, sending, session, theme, commandOpen, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onPickDirectory, onRemoveAttachment, onSubmit }: {
   attachments: MessageAttachmentInput[];
   commands: AgentCommand[];
   contextOpen: boolean;
-  contextPaths: string[];
+  workspaceListing: WorkspaceListing | null;
+  workspaceLoading: boolean;
   disabled: boolean;
   draft: string;
   flowId: string;
@@ -685,6 +715,7 @@ function Composer({ attachments, commands, contextOpen, contextPaths, disabled, 
   onAddFiles: (files: FileList | File[]) => Promise<void>;
   onCommandOpen: (open: boolean) => void;
   onContext: (path: string) => void;
+  onContextNavigate: (path: string, root?: string) => void;
   onContextOpen: (open: boolean) => void;
   onDraft: (value: string) => void;
   onFiles: () => void;
@@ -694,6 +725,11 @@ function Composer({ attachments, commands, contextOpen, contextPaths, disabled, 
   onSubmit: () => void;
 }) {
   const t = themes[theme];
+  const trigger = composerTrigger(draft);
+  const visibleCommands = filterCommands(commands, trigger?.kind === "command" ? trigger.query : "");
+  const contextQuery = trigger?.kind === "context" ? trigger.query.toLowerCase() : "";
+  const visibleEntries = (workspaceListing?.entries ?? []).filter((entry) => !contextQuery || `${entry.name} ${entry.path}`.toLowerCase().includes(contextQuery));
+  const hasWorkspace = workspacePaths(session).length > 0;
   return <div className={cn("relative rounded-xl border", t.surface, t.lineStrong, t.shadow)}>
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5">
       <ContextChip label={model || "Agent default"} theme={theme} />
@@ -708,14 +744,22 @@ function Composer({ attachments, commands, contextOpen, contextPaths, disabled, 
       <span className="flex-1" /><span className={cn("hidden shrink-0 text-[10px] sm:inline", t.faint)}>Enter to send</span>
     </div>
     {attachments.length > 0 && <div className="flex flex-wrap gap-1.5 px-3 pt-2">{attachments.map((attachment, index) => <span className={cn("inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[10px]", t.surfaceTint, t.inkSoft, t.line)} key={`${attachment.name}-${index}`}><Paperclip className="size-3" /><span className="max-w-40 truncate">{attachment.name}</span><button aria-label={`移除 ${attachment.name}`} onClick={() => onRemoveAttachment(index)} type="button"><X className="size-3" /></button></span>)}</div>}
-    <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", t.ink, t.placeholder)} disabled={disabled || sending} onChange={(event) => onDraft(event.target.value)} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); onSubmit(); } }} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} placeholder="输入目标，或继续当前工作…" value={draft} />
+    <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", t.ink, t.placeholder)} disabled={disabled || sending} onChange={(event) => { const value = event.target.value; const nextTrigger = composerTrigger(value); onCommandOpen(nextTrigger?.kind === "command" && commands.length > 0); onContextOpen(nextTrigger?.kind === "context" && hasWorkspace); onDraft(value); }} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Escape") { onCommandOpen(false); onContextOpen(false); return; } if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); onSubmit(); } }} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} placeholder="输入目标，或继续当前工作…" value={draft} />
     <div className="flex items-center justify-between gap-3 px-3 pb-2.5">
       <div className="relative flex items-center gap-1">
         <Button aria-label="添加文件" className={cn("size-7 px-0", t.muted)} onClick={onFiles} size="icon" variant="ghost"><Plus className="size-3.5" /></Button>
-        {session && contextPaths.length > 0 && <Button aria-label="插入上下文" className={cn("size-7 px-0 text-xs", t.muted)} onClick={() => onContextOpen(!contextOpen)} size="icon" variant="ghost"><span>@</span></Button>}
-        {contextOpen && contextPaths.length > 0 && <div className={cn("absolute bottom-9 left-8 z-30 max-h-64 w-72 overflow-y-auto rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{contextPaths.map((path) => <button className={cn("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs hover:opacity-80", t.ink)} key={path} onClick={() => { onContext(path); onContextOpen(false); }} type="button"><FolderOpen className={cn("size-3.5", t.muted)} /><span className="truncate">{path}</span></button>)}</div>}
+        {session && hasWorkspace && <Button aria-label="插入上下文" className={cn("size-7 px-0 text-xs", t.muted)} onClick={() => onContextOpen(!contextOpen)} size="icon" variant="ghost"><span>@</span></Button>}
+        {contextOpen && hasWorkspace && <div className={cn("absolute bottom-9 left-8 z-30 w-[420px] overflow-hidden rounded-lg border", t.surface, t.lineStrong, t.shadow)}>
+          <div className={cn("flex h-9 items-center gap-2 border-b px-2.5 text-[10px]", t.line, t.muted)}>
+            {workspaceListing?.relativePath && <button aria-label="返回上级目录" className="grid size-6 place-items-center rounded-md hover:opacity-70" onClick={() => onContextNavigate(workspaceListing.relativePath!.split("/").slice(0, -1).join("/"), workspaceListing.root)} type="button"><ChevronDown className="size-3.5 rotate-90" /></button>}
+            <FolderOpen className="size-3.5" /><span className="min-w-0 flex-1 truncate font-mono">{workspaceListing?.path ?? workspacePaths(session)[0]}</span>
+          </div>
+          <div className="max-h-72 overflow-y-auto p-1">
+            {workspaceLoading ? <div className={cn("px-3 py-6 text-center text-xs", t.muted)}>正在读取 Workspace…</div> : visibleEntries.length ? visibleEntries.map((entry) => <button className={cn("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs hover:opacity-80", t.ink)} key={entry.absolutePath} onClick={() => entry.kind === "directory" ? onContextNavigate(entry.path, workspaceListing?.root) : (onContext(entry.absolutePath), onContextOpen(false))} type="button">{entry.kind === "directory" ? <FolderOpen className={cn("size-3.5 shrink-0", t.muted)} /> : <FileText className={cn("size-3.5 shrink-0", t.muted)} />}<span className="min-w-0 flex-1 truncate">{entry.name}</span><span className={cn("max-w-48 truncate font-mono text-[10px]", t.faint)}>{entry.path}</span>{entry.kind === "directory" && <ChevronRight className={cn("size-3.5 shrink-0", t.faint)} />}</button>) : <div className={cn("px-3 py-6 text-center text-xs", t.muted)}>没有匹配的文件或目录</div>}
+          </div>
+        </div>}
         {commands.length > 0 && <Button aria-label="Agent commands" className={cn("size-7 px-0 text-xs", t.muted)} onClick={() => onCommandOpen(!commandOpen)} size="icon" variant="ghost"><span>/</span></Button>}
-        {commandOpen && commands.length > 0 && <div className={cn("absolute bottom-9 left-0 z-30 max-h-64 w-72 overflow-y-auto rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{commands.map((command) => <button className={cn("grid w-full gap-0.5 rounded-md px-2.5 py-2 text-left hover:opacity-80", t.ink)} key={command.name} onClick={() => { onDraft(`/${command.name} `); onCommandOpen(false); }} type="button"><span className="font-mono text-xs">/{command.name}</span><span className={cn("truncate text-[10px]", t.muted)}>{command.description}</span></button>)}</div>}
+        {commandOpen && visibleCommands.length > 0 && <div className={cn("absolute bottom-9 left-0 z-30 max-h-72 w-[420px] overflow-y-auto rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)}>{visibleCommands.map((command) => <button className={cn("grid w-full gap-0.5 rounded-md px-3 py-2.5 text-left hover:opacity-80", t.ink)} key={command.name} onClick={() => { onDraft(applyComposerSuggestion(draft, `/${command.name} `)); onCommandOpen(false); }} type="button"><span className="font-mono text-xs">/{command.name}</span><span className={cn("truncate text-[10px]", t.muted)}>{command.description}</span></button>)}</div>}
       </div>
       <Button aria-label="发送" className={cn("size-8 px-0", t.accent, t.accentText)} disabled={disabled || sending || !draft.trim()} onClick={onSubmit} size="icon">{sending ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}</Button>
     </div>

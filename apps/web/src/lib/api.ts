@@ -9,6 +9,7 @@ import type {
   MessageAttachmentInput,
   RunRecord,
   SessionEvent,
+  WorkspaceListing,
 } from "./types";
 
 let runtimeToken = "";
@@ -73,6 +74,11 @@ export const api = {
     (await request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodeURIComponent(id)}/commands`)).commands ?? [],
   pickDirectory: (id: string) =>
     request<AgentSession | { cancelled: true }>(`/v1/sessions/${encodeURIComponent(id)}/directories/pick`, { method: "POST", body: "{}" }),
+  workspaceEntries: (id: string, root?: string, relativePath = "") => {
+    const params = new URLSearchParams({ path: relativePath });
+    if (root) params.set("root", root);
+    return request<WorkspaceListing>(`/v1/sessions/${encodeURIComponent(id)}/files?${params}`);
+  },
   sendMessage: (id: string, message: string, flowId: string | null, model: string | null, attachments: MessageAttachmentInput[] = []) =>
     request<{ sequence: number }>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
       method: "POST",

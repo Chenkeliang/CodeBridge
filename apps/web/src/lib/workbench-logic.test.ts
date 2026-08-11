@@ -100,4 +100,38 @@ describe("workbench logic", () => {
     expect(contextPaths(session)).toEqual(["/workspace/app", "/workspace/shared"]);
     expect(contextPaths(null)).toEqual([]);
   });
+
+  it("detects slash and workspace triggers from the active composer token", () => {
+    const composerTrigger = (workbenchLogic as unknown as {
+      composerTrigger?: (draft: string) => { kind: "command" | "context"; query: string } | null;
+    }).composerTrigger;
+    expect(composerTrigger).toBeTypeOf("function");
+    if (!composerTrigger) return;
+
+    expect(composerTrigger("/sta")).toEqual({ kind: "command", query: "sta" });
+    expect(composerTrigger("检查 @src/lib")).toEqual({ kind: "context", query: "src/lib" });
+    expect(composerTrigger("普通消息")).toBeNull();
+    expect(composerTrigger("/status ready")).toBeNull();
+  });
+
+  it("filters commands and replaces only the active composer token", () => {
+    const filterCommands = (workbenchLogic as unknown as {
+      filterCommands?: (commands: Array<{ name: string; description: string }>, query: string) => Array<{ name: string }>;
+    }).filterCommands;
+    const applyComposerSuggestion = (workbenchLogic as unknown as {
+      applyComposerSuggestion?: (draft: string, replacement: string) => string;
+    }).applyComposerSuggestion;
+    expect(filterCommands).toBeTypeOf("function");
+    expect(applyComposerSuggestion).toBeTypeOf("function");
+    if (!filterCommands || !applyComposerSuggestion) return;
+
+    const commands = [
+      { name: "status", description: "Display status" },
+      { name: "skills", description: "List available skills" },
+    ];
+    expect(filterCommands(commands, "stat").map((command) => command.name)).toEqual(["status"]);
+    expect(filterCommands(commands, "available").map((command) => command.name)).toEqual(["skills"]);
+    expect(applyComposerSuggestion("检查 @src/li", "@/workspace/src/lib.ts ")).toBe("检查 @/workspace/src/lib.ts ");
+    expect(applyComposerSuggestion("/sta", "/status ")).toBe("/status ");
+  });
 });

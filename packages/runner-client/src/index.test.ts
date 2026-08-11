@@ -256,6 +256,31 @@ describe("RunnerClient session lifecycle", () => {
 });
 
 describe("RunnerClient directory authorization", () => {
+  it("lists an authorized workspace directory through Runner", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      root: "/workspace",
+      path: "/workspace/src",
+      entries: [{ name: "index.ts", path: "src/index.ts", absolutePath: "/workspace/src/index.ts", kind: "file" }],
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+    const listDirectory = (client as unknown as {
+      listDirectory?: (root: string, relativePath?: string) => Promise<unknown>;
+    }).listDirectory;
+
+    expect(listDirectory).toBeTypeOf("function");
+    if (!listDirectory) return;
+    await expect(listDirectory.call(client, "/workspace", "src")).resolves.toMatchObject({
+      ok: true,
+      path: "/workspace/src",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/directories/list?root=%2Fworkspace&path=src",
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+  });
+
   it("picks a directory through the Runner host", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true, path: "/Users/tester/Projects/app" })),
