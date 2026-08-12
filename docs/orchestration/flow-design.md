@@ -192,7 +192,114 @@ Flows 面板分组：**待评审**（红点计数置顶）/ **已发布**（版�
 
 候选详情 = 语义 Diff（与上一版本，复用红绿 Diff 组件）+ 校验结果 + 来源 Run 证据。操作条：`[通过并发布]`（自动写 git 仓、取 HEAD revision，用户无感知）/ `[打回]`（必填原因，回流为推荐负样本）。校验失败禁用通过。
 
-## 10. 实现边界（明确不做）
+## 10. 能力契约（Capability Contract)
+
+**目标**：能力体系是通用的。DCP、SLS 日志、飞书通知是磐石环境的插件；其他部署方没有这些系统时，按契约实现自己的 adapter、注册同名 capability，Flow 定义零改动。可移植性来自契约，不来自适配。
+
+### 10.1 三层模型
+
+```text
+Capability ID       稳定语义名,Flow 只引用它       如 equity.deliver
+  └─ Capability     注册表条目:风险、环境、schema   治理层,审核后生效
+       └─ Adapter   执行实现:本环境的具体系统       插件层,可替换
+```
+
+Flow → Capability ID → 注册表查治理规则 → Runtime 找当前环境绑定的 Adapter 执行。**Flow 永远不知道 DCP 存在**。
+
+### 10.2 命名规范（注册时强校验）
+
+`<domain>.<action>`,domain 白名单制,小写蛇形:
+
+- 通用域（任何部署都可有）:`fs.*`、`git.*`、`http.*`、`agent.*`、`flow.*`
+- 领域域（按业务注册）:`equity.*`、`order.*`、`notify.*`、`deploy.*`、`log.*`
+- 禁止厂商/系统名直接做域:~~`dcp.*`~~ → 用 `deploy.*`;~~`sls.*`~~ → 用 `log.query`。**DCP 是 `deploy.*` 的一个 adapter,不是能力本身**
+
+### 10.3 Capability Manifest（注册时必须提供）
+
+```yaml
+id: equity.deliver
+version: 1
+description: 向企业交付权益包
+risk: production_write           # read_only | workspace_write | git_write | production_write
+environments: [production]
+resources:                       # 资源作用域:风险是参数敏感的(见 §10.6)
+  company_id: { pattern: "^\\d{4,}$" }
+input_schema:                    # JSON Schema,Runtime 强校验
+  type: object
+  required: [company_id, package_id, duration_months]
+  properties:
+    company_id: { type: string }
+    package_id: { type: string }
+    duration_months: { type: integer, minimum: 1, maximum: 36 }
+output_schema:                   # 成功时的输出契约,供下一步引用与校验
+  type: object
+  required: [equity_order_id]
+  properties:
+    equity_order_id: { type: string }
+idempotency:
+  key: ["company_id", "package_id"]   # 由这些输入派生幂等键
+retryable_errors: [rate_limited, upstream_timeout]
+side_effects: true
+timeout_ms: 30000
+adapter_hint: [function, http, mcp]   # 声明可承载的 adapter 类型
+```
+
+`input_schema` / `output_schema` 是**强约束**:入参不过 schema 不执行;出参不过 schema 记 verification failed,不进入下一步。
+
+### 10.4 统一出入参信封
+
+所有 adapter 的 execute 输入输出遵守同一信封（扩展现有 `CapabilityInvocation`):
+
+```yaml
+# 输入 envelope(由 Runtime 构造,adapter 不感知 Run 细节之外的东西)
+input: { ... }                 # 已过 input_schema 的参数
+context:
+  run_id / step_id / attempt
+  workspace: { root, authorized_paths }
+  environment: test | production
+  secrets: { dcp_token: "secret://..." }   # 仅注入声明了的 secret 引用
+  dry_run: true | false                     # true 时写类 adapter 必须只校验不落副作用
+  idempotency_key: "flow:…/step:…/hash:…"
+  signal: AbortSignal
+
+# 输出 envelope
+output: { ... }                # 必须过 output_schema
+artifacts: [{ name, artifact_ref, mime_type }]   # 大内容只存引用
+verification: { status, summary }               # adapter 的自证
+logs_ref: artifact://…         # 执行日志引用,不内联
+dry_run_report:                # 仅 dry_run 时返回
+  would_do: "向企业 8821 写入年度大会员 × 12 个月"
+  checks: [{ name: 幂等键冲突, passed: true }]
+```
+
+**dry_run 是契约级要求**:任何 `side_effects: true` 的 adapter 必须实现 dry-run 分支（校验 + 描述将做什么）,否则该能力不能标记为可预演,Flow 含它时禁用预演按钮。
+
+### 10.5 内建 Adapter 类型与扩展点
+
+| kind | 用途 | 举例 |
+| --- | --- | --- |
+| `function` | 进程内函数 | 内部直连接口 |
+| `http` | 受控 HTTP(allowlist host + 方法 + 头) | 内部 REST 服务 |
+| `mcp` | MCP server tool | 标准协议接入第三方 |
+| `cli` | 无 shell spawn,JSON stdin | 本地命令行工具 |
+| `skill` | SKILL.md 注入为 Agent 上下文(不执行脚本) | 知识型能力 |
+
+扩展点只有一个：**实现 `CapabilityAdapter` 接口 + 提供 manifest**。别人接入自己的部署系统 = 写一个 `kind: http` 的 adapter,manifest 里注册 `deploy.create`——磐石的 DCP adapter 和这个自定义 adapter 平级,Flow 无感知。
+
+### 10.6 风险与资源作用域（修正四档枚举的不足）
+
+风险不只是静态等级,是 `f(capability, 参数)`:
+
+- manifest 的 `resources` 声明参数级约束(如 `notify.send` 的 `channel` 必须在白名单)
+- `risk` 是静态底线;命中敏感参数模式时 Runtime 动态升级审批(如 `env=production` 强制审批,即使 capability 只是 `workspace_write`)
+- 会话授权目录是 `fs.*` 能力的硬边界,与 capability 审核独立叠加
+
+### 10.7 版本与演进
+
+- Capability 内容 hash + adapter revision 记入每次 Run;manifest 变更 = 新 version,Flow 可pin `equity.deliver@1`
+- 已注册能力被修改风险等级/schema 时,引用它的已发布 Flow 标记 `stale`,需重新评审——防止"流程没变,脚下的能力变了"
+
+## 11. 实现边界（明确不做）
 
 - v1 不做并行、循环、补偿、定时器（engine.md §9 既定）
 - v1 不做 DAG 可视化编辑器 / 拖拽编排
@@ -201,7 +308,7 @@ Flows 面板分组：**待评审**（红点计数置顶）/ **已发布**（版�
 - 不做跨 Agent 自动移植；只做**可移植性校验**（Flow 声明能力集 vs 目标 Agent Adapter 覆盖度，不足则置灰）
 - 对话内不做就地参数编辑表单
 
-## 11. 分期
+## 12. 分期
 
 ### P0 · 引擎安全底线
 
@@ -230,7 +337,7 @@ Flows 面板分组：**待评审**（红点计数置顶）/ **已发布**（版�
 - golden-run 回放对账（新版本离线回放历史成功 Run 验证语义等价）
 - 资源互斥 lease、跨 Agent 移植性检查完善
 
-## 12. 验收指标
+## 13. 验收指标
 
 - 缓存命中率：注入改造前后 adapter 上报 cache_read 占比不下降
 - 参数准确率：评审中被打回原因分布；Agent 提取参数的改错率
