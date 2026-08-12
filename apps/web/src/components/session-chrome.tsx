@@ -29,7 +29,6 @@ export function AgentRail({ agents, area, selectedAgentId, theme, density, readi
         return <button aria-label={agent.display_name} aria-pressed={selected} className={cn("group relative grid size-[42px] place-items-center rounded-md border border-transparent transition-all duration-150 hover:-translate-y-px hover:opacity-80", "text-muted", selected && cn("bg-surface", "text-ink", "border-line-strong", "shadow-card"))} key={agent.agent_id} onClick={() => onAgent(agent.agent_id)} title={`${agent.display_name} · ${statusLabel[agent.status] ?? agent.status}`} type="button">
           {selected && <span aria-hidden="true" className={cn("absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-full", agentTintClass(agent.agent_id))} />}
           <BrandAgentIcon agentId={agent.agent_id} className="size-[18px]" />
-          <span className={cn("absolute bottom-1.5 right-1.5 size-1.5 rounded-full border-2", "border-sidebar", agent.status === "healthy" ? "bg-success" : "bg-faint")} />
         </button>;
       })}
     </div>
