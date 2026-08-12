@@ -1,1 +1,30 @@
 @import "tailwindcss";
+
+@font-face {
+  font-family: "Departure Mono";
+  src: url("/workbench/fonts/DepartureMono-Regular.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  src: url("/workbench/fonts/CommitMono-400-Regular.otf") format("opentype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  src: url("/workbench/fonts/CommitMono-700-Regular.otf") format("opentype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@theme {
+  --font-brand: "Departure Mono", ui-monospace, monospace;
+  --font-mono: "Commit Mono", ui-monospace, monospace;
+}

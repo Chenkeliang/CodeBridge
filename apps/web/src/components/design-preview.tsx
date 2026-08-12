@@ -5,7 +5,6 @@ import {
   Circle,
   Code2,
   FileCode2,
-  GitBranch,
   Layers3,
   MoreHorizontal,
   Paperclip,
@@ -20,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { BrandAgentIcon } from "@/components/brand-agent-icon";
+import { PixelMark } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -128,7 +128,7 @@ export function DesignPreview() {
   return (
     <div className={cn("grid h-[100dvh] min-h-[100dvh] min-w-[1040px] grid-cols-[60px_286px_minmax(0,1fr)] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", t.canvas)}>
       <aside className={cn("flex min-h-0 flex-col items-center gap-3 border-r px-2.5 py-3", t.sidebar, t.line)}>
-        <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", t.ink, t.lineStrong, t.surface)}><GitBranch className="size-4" strokeWidth={1.6} /></div>
+        <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", t.accent, t.accentText, t.lineStrong)}><PixelMark className="size-4" /></div>
         <div className="grid w-full gap-2">
           {agents.map((agent) => <button aria-label={agent.name} aria-pressed={area === "agents" && activeAgent === agent.id} className={cn("group relative grid size-[42px] place-items-center rounded-md border border-transparent transition-all duration-150 hover:-translate-y-px hover:opacity-80", t.muted, area === "agents" && activeAgent === agent.id && cn(t.surface, t.ink, t.lineStrong, t.shadowSmall))} key={agent.id} onClick={() => selectAgent(agent.id)} title={agent.name} type="button">
             <BrandAgentIcon agentId={agent.id} className="size-[18px]" />
