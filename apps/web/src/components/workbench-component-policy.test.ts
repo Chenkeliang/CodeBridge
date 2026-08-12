@@ -128,4 +128,12 @@ describe("Workbench component policy", () => {
     expect(source).toContain('h2: ({ children }) => <h2 className="mb-1 text-xs font-medium leading-5"');
     expect(source).toContain('h3: ({ children }) => <h3 className="mb-1 text-xs font-medium leading-5"');
   });
+
+  it("projects the accepted user message before the run starts", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("const receipt = await api.sendMessage");
+    expect(source).toContain("event_id: receipt.event_id");
+    expect(source).toContain("mergeConversationEvents");
+  });
 });
