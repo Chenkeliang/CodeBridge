@@ -334,6 +334,36 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("does not persist a provider snapshot after the same response was streamed", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const workItem = workItems.createWorkItem({
+      title: "重复快照",
+      mode: "auto",
+      conversationId: "snapshot-dedupe",
+      agentId: "pi",
+      workspaceScope: ["/tmp/project"],
+      riskLevel: "read_only",
+    });
+    workItems.appendEvent({ workItemId: workItem.id, type: "MESSAGE_RECEIVED", actor: "user", payload: { message: "问题" } });
+    workItems.appendEvent({ workItemId: workItem.id, type: "AGENT_EVENT", actor: "agent", payload: { event: { type: "thought_delta", text: "**先确认" } } });
+    workItems.appendEvent({ workItemId: workItem.id, type: "AGENT_EVENT", actor: "agent", payload: { event: { type: "thought_delta", text: "问题范围**" } } });
+    const session = catalog.createSession({ agentId: "pi", providerSessionId: "provider-snapshot", taskRecordId: workItem.id, cwd: "/tmp/project" });
+    const runner = {
+      loadSessionHistory: async () => [
+        { kind: "message" as const, text: "问题" },
+        { kind: "agent_event" as const, event: { type: "thought_delta", text: "**先确认问题范围**" } },
+      ],
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    await app.request(`/v1/sessions/${session.id}`, { headers: { authorization: `Bearer ${TOKEN}` } });
+
+    expect(workItems.listEvents(workItem.id).filter((event) => event.type === "AGENT_EVENT")).toHaveLength(2);
+    catalog.close();
+    workItems.close();
+  });
+
   it("imports provider messages appended after the initial history hydration", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

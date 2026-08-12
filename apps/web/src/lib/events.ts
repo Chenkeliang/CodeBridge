@@ -208,6 +208,7 @@ export function reduceConversationEvents(events: ConversationEvent[]): Conversat
 function normalizeConversationEvents(events: ConversationEvent[]): ConversationEvent[] {
   const deduplicated: ConversationEvent[] = [];
   for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    if (isProviderSnapshotDuplicate(deduplicated, event)) continue;
     const previous = deduplicated.at(-1);
     if (previous && isHydratedTextDuplicate(previous, event)) {
       const previousValue = agentEventValue(previous);
@@ -228,6 +229,27 @@ function normalizeConversationEvents(events: ConversationEvent[]): ConversationE
     turnStart = index + 1;
   }
   return normalized;
+}
+
+function isProviderSnapshotDuplicate(previousEvents: ConversationEvent[], event: ConversationEvent): boolean {
+  if (event.run_id !== null) return false;
+  const current = agentEventValue(event);
+  if (!current || (current.type !== "thought_delta" && current.type !== "text_delta") || typeof current.text !== "string") return false;
+  for (let start = 0; start < previousEvents.length; start += 1) {
+    let combined = "";
+    let count = 0;
+    for (let index = start; index < previousEvents.length; index += 1) {
+      const value = agentEventValue(previousEvents[index]);
+      if (value?.type !== current.type || typeof value.text !== "string") break;
+      combined += value.text;
+      count += 1;
+      if (combined.length >= current.text.length) {
+        if (count > 1 && combined === current.text) return true;
+        break;
+      }
+    }
+  }
+  return false;
 }
 
 function isHydratedTextDuplicate(previous: ConversationEvent, current: ConversationEvent): boolean {
