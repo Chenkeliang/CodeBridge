@@ -24,7 +24,81 @@
   font-weight: 700;
 }
 
-@theme {
+/* Semantic design tokens — values defined in docs/orchestration/DESIGN.md §3.
+   Themes switch via data-theme on the app root; components only consume the
+   semantic utilities generated from the @theme inline block below. */
+:root {
+  color-scheme: light;
+  --agnet-canvas: #F6F7F4;
+  --agnet-sidebar: #FBFCFA;
+  --agnet-surface: #FFFFFF;
+  --agnet-surface-soft: #EEF1EB;
+  --agnet-surface-tint: #F2F4EF;
+  --agnet-ink: #191C16;
+  --agnet-ink-soft: #373C32;
+  --agnet-muted: #73796C;
+  --agnet-faint: #9CA296;
+  --agnet-line: #E0E4DC;
+  --agnet-line-strong: #CDD3C8;
+  --agnet-accent: #CCFF00;
+  --agnet-accent-ink: #171A11;
+  --agnet-accent-soft: #E9F6AD;
+  --agnet-success: #3B8659;
+  --agnet-warning: #C27B18;
+  --agnet-danger: #D25D3D;
+  --agnet-danger-soft: #FCEBE6;
+  --agnet-control-accent: #3B8659;
+  --agnet-shadow-panel: 0 20px 48px rgba(25, 28, 22, 0.08);
+  --agnet-shadow-card: 0 4px 16px rgba(25, 28, 22, 0.07);
+}
+
+[data-theme="carbon"] {
+  color-scheme: dark;
+  --agnet-canvas: #121411;
+  --agnet-sidebar: #181A17;
+  --agnet-surface: #1C1F1B;
+  --agnet-surface-soft: #282C25;
+  --agnet-surface-tint: #20231E;
+  --agnet-ink: #F1F2EA;
+  --agnet-ink-soft: #D2D6C9;
+  --agnet-muted: #9DA496;
+  --agnet-faint: #6E7669;
+  --agnet-line: #30352D;
+  --agnet-line-strong: #444B40;
+  --agnet-accent: #FF683D;
+  --agnet-accent-ink: #211610;
+  --agnet-accent-soft: #4B281F;
+  --agnet-success: #74BF8F;
+  --agnet-warning: #E7AA4E;
+  --agnet-danger: #FF8063;
+  --agnet-danger-soft: #41231D;
+  --agnet-control-accent: #FF683D;
+  --agnet-shadow-panel: 0 20px 56px rgba(0, 0, 0, 0.28);
+  --agnet-shadow-card: 0 5px 18px rgba(0, 0, 0, 0.22);
+}
+
+@theme inline {
   --font-brand: "Departure Mono", ui-monospace, monospace;
   --font-mono: "Commit Mono", ui-monospace, monospace;
+  --color-canvas: var(--agnet-canvas);
+  --color-sidebar: var(--agnet-sidebar);
+  --color-surface: var(--agnet-surface);
+  --color-surface-soft: var(--agnet-surface-soft);
+  --color-surface-tint: var(--agnet-surface-tint);
+  --color-ink: var(--agnet-ink);
+  --color-ink-soft: var(--agnet-ink-soft);
+  --color-muted: var(--agnet-muted);
+  --color-faint: var(--agnet-faint);
+  --color-line: var(--agnet-line);
+  --color-line-strong: var(--agnet-line-strong);
+  --color-accent: var(--agnet-accent);
+  --color-accent-ink: var(--agnet-accent-ink);
+  --color-accent-soft: var(--agnet-accent-soft);
+  --color-success: var(--agnet-success);
+  --color-warning: var(--agnet-warning);
+  --color-danger: var(--agnet-danger);
+  --color-danger-soft: var(--agnet-danger-soft);
+  --color-control-accent: var(--agnet-control-accent);
+  --shadow-panel: var(--agnet-shadow-panel);
+  --shadow-card: var(--agnet-shadow-card);
 }

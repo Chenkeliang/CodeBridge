@@ -9,6 +9,24 @@ describe("Workbench component policy", () => {
     expect(source).not.toMatch(/<select\b/);
   });
 
+  it("consumes semantic design tokens instead of hardcoded palette colors", () => {
+    const files = ["./workbench.tsx", "./design-preview.tsx", "./ui/button.tsx", "./ui/textarea.tsx", "./ui/badge.tsx", "./ui/slider.tsx", "./ui/select.tsx", "./ui/popover.tsx"];
+    for (const file of files) {
+      const source = readFileSync(new URL(file, import.meta.url), "utf8");
+
+      expect(source, file).not.toMatch(/#[0-9A-Fa-f]{6}/);
+      expect(source, file).not.toMatch(/(?:bg|text|border|ring)-(?:zinc|slate|gray|neutral|stone|red|amber|emerald|blue|indigo|purple)-\d/);
+    }
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(workbench).not.toContain("const themes = {");
+    expect(workbench).toContain('data-theme={theme}');
+    const styles = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+
+    expect(styles).toContain('[data-theme="carbon"]');
+    expect(styles).toContain("--color-surface: var(--agnet-surface)");
+  });
+
   it("renders working activity separately from final Agent messages", () => {
     const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
 
@@ -69,7 +87,7 @@ describe("Workbench component policy", () => {
     expect(source).toContain('onClick={() => onValue("")}>Use default</button>');
     expect(source).toContain('label="Agent default"');
     expect(source).toContain("<SelectValue>{triggerLabel}</SelectValue>");
-    expect(source).toContain('session.status === "active" || session.status === "idle" ? t.healthyDot : t.offlineDot');
+    expect(source).toContain('session.status === "active" || session.status === "idle" ? "bg-success" : "bg-faint"');
   });
 
   it("uses reduced-motion-safe feedback for the discrete reasoning slider", () => {
@@ -92,7 +110,7 @@ describe("Workbench component policy", () => {
     expect(mark).toContain("shapeRendering=\"crispEdges\"");
     expect(styles).toContain("Departure Mono");
     expect(styles).toContain("Commit Mono");
-    expect(source).toContain('<h1 className={cn("font-brand text-2xl font-normal leading-none tracking-normal", t.ink)}>');
+    expect(source).toContain('<h1 className={cn("font-brand text-2xl font-normal leading-none tracking-normal", "text-ink")}>');
     expect(source).not.toContain('<GitBranch className="size-4"');
   });
 
@@ -109,7 +127,8 @@ describe("Workbench component policy", () => {
   it("locks the document viewport so the Agent Rail cannot scroll out of view", () => {
     const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
 
-    expect(html).toContain('<body class="h-full overflow-hidden bg-zinc-950 text-zinc-100 antialiased">');
+    expect(html).toContain('<body class="h-full overflow-hidden bg-canvas text-ink antialiased">');
+    expect(html).toContain("document.documentElement.dataset.theme = theme");
   });
 
   it("positions a loaded Session at the newest conversation item", () => {

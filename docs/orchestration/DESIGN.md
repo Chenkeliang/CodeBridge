@@ -83,9 +83,9 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 ### 3.1 实现约束
 
 - Token 名称使用 `agnet.{role}`，页面只消费语义角色。
-- 颜色、阴影、尺寸通过 TypeScript Token/Class Map 和 Tailwind Utility 实现。
-- `src/index.css` 只保留 Tailwind 框架入口；不新增 CSS Selector、CSS Module、styled-components 或内联 `style`。
-- 组件内部禁止直接写原始颜色；阴影透明度除外。
+- 颜色与阴影 Token 在 `src/index.css` 中以 CSS 自定义属性（`--agnet-{role}`）定义：`Paper Lime` 挂在 `:root`，`Carbon Vermilion` 挂在 `[data-theme="carbon"]`，通过 `@theme inline` 暴露为 Tailwind 语义 Utility（`bg-surface`、`text-ink`、`border-line`、`shadow-panel` 等）。主题由应用根节点的 `data-theme` 属性切换；`index.html` 内联脚本在首帧前从 localStorage/系统偏好恢复主题，避免启动闪屏。
+- `src/index.css` 只允许 Tailwind 框架入口、字体 `@font-face` 和上述 Token 层；不新增其他 CSS Selector、CSS Module、styled-components 或内联 `style`。
+- 组件内部禁止直接写原始颜色或 TS Class Map；阴影透明度除外。组件之间不再传递 `theme` 属性来改变颜色（Mermaid 等需要 JS 感知主题的第三方渲染除外）。
 - 数值尺寸必须来自本节的间距、圆角、字号或组件尺寸。
 
 ### 3.2 Paper Lime
@@ -104,10 +104,13 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.line` | `#E0E4DC` | 普通边线 |
 | `agnet.lineStrong` | `#CDD3C8` | 强调边线 |
 | `agnet.accent` | `#CCFF00` | 主动作和活动标识 |
+| `agnet.accentInk` | `#171A11` | Accent 底色上的文字 |
 | `agnet.accentSoft` | `#E9F6AD` | 用户消息和轻强调 |
 | `agnet.success` | `#3B8659` | 成功 |
 | `agnet.warning` | `#C27B18` | 等待和审批 |
 | `agnet.danger` | `#D25D3D` | 失败和删除 |
+| `agnet.dangerSoft` | `#FCEBE6` | 错误卡片底色 |
+| `agnet.controlAccent` | `#3B8659` | 高亮不足场景下的控件强调（Slider 等） |
 
 ### 3.3 Carbon Vermilion
 
@@ -125,10 +128,13 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.line` | `#30352D` | 普通边线 |
 | `agnet.lineStrong` | `#444B40` | 强调边线 |
 | `agnet.accent` | `#FF683D` | 主动作和活动标识 |
+| `agnet.accentInk` | `#211610` | Accent 底色上的文字 |
 | `agnet.accentSoft` | `#4B281F` | 用户消息和轻强调 |
 | `agnet.success` | `#74BF8F` | 成功 |
 | `agnet.warning` | `#E7AA4E` | 等待和审批 |
 | `agnet.danger` | `#FF8063` | 失败和删除 |
+| `agnet.dangerSoft` | `#41231D` | 错误卡片底色 |
+| `agnet.controlAccent` | `#FF683D` | 高亮不足场景下的控件强调（Slider 等） |
 
 ### 3.4 几何 Token
 
