@@ -135,6 +135,16 @@ describe("Workbench component policy", () => {
     expect(source).toContain('h3: ({ children }) => <h3 className="mb-1 text-xs font-medium leading-5"');
   });
 
+  it("aligns work entries and normalizes semantic icon frames", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain('"flex cursor-pointer list-none items-center gap-2 py-3 pl-6 text-[11px]"');
+    expect(source).toContain('"w-full min-w-0 max-w-full pl-6"');
+    expect(source).toContain('"grid size-4 shrink-0 place-items-center"');
+    expect(source).toContain("<PixelMark");
+    expect(source).toContain("<BrandAgentIcon");
+  });
+
   it("projects the accepted user message before the run starts", () => {
     const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
 
