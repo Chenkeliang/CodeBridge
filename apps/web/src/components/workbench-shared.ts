@@ -20,7 +20,7 @@ export const statusLabel: Record<string, string> = {
 
 export function defaultModelLabel(option: ConfigOption): string {
   const current = option.values.find((candidate) => candidate.value === option.currentValue);
-  return current ? `${current.name || current.value} · 默认` : "Agent 默认";
+  return current ? current.name || current.value : "Agent 默认";
 }
 
 export function projectionKey(item: ConversationProjection, index: number): string {
