@@ -17,14 +17,27 @@ const TYPEWRITER_HINTS = [
   "⌘K 打开命令面板",
 ];
 
-/** Rotating typewriter placeholder shown while the draft is empty.
- *  Pure CSS: a stepped width reveal cycles four lines on a 20s timeline. */
-function TypewriterPlaceholder() {
+const TYPE_INTERVAL = 55;   // ms per character
+const HOLD_MS = 2000;
+const NEXT_MS = 400;
+
+/** Rotating typewriter placeholder shown while the draft is empty and the
+ *  textarea is not focused. Characters appear one by one via CSS animation
+ *  delays, so timing is exact and independent of CJK font metrics. */
+function TypewriterPlaceholder({ active }: { active: boolean }) {
+  const [line, setLine] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const current = TYPEWRITER_HINTS[line]!;
+    const duration = current.length * TYPE_INTERVAL + HOLD_MS + NEXT_MS;
+    const timer = window.setTimeout(() => setLine((value) => (value + 1) % TYPEWRITER_HINTS.length), duration);
+    return () => window.clearTimeout(timer);
+  }, [active, line]);
+  if (!active) return null;
+  const hint = TYPEWRITER_HINTS[line]!;
   return <div aria-hidden="true" className={cn("pointer-events-none absolute inset-x-3.5 top-3 font-mono text-sm", "text-faint")}>
-    <span className="relative inline-block">
-      {TYPEWRITER_HINTS.map((hint) => <span className="typewriter-line" key={hint}>{hint}</span>)}
-      {/* keeps container height */}
-      <span className="invisible">{TYPEWRITER_HINTS[0]}</span>
+    <span className="typewriter-line" key={line}>
+      {[...hint].map((ch, index) => <span className="typewriter-ch" key={`${line}-${index}`} style={{ animationDelay: `${index * TYPE_INTERVAL}ms` }}>{ch === " " ? " " : ch}</span>)}
     </span>
     <span className="typewriter-caret" />
   </div>;
@@ -113,7 +126,8 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
     if (!disabled && !sending && draft.trim()) setSweepKey((value) => value + 1);
     onSubmit();
   }
-  const showTypewriter = !draft && !disabled;
+  const [focused, setFocused] = useState(false);
+  const showTypewriter = !draft && !disabled && !focused;
 
   return <div className={cn("relative rounded-xl border", "bg-surface", "border-line-strong", "shadow-panel", running && "motion-safe:animate-breathe")}>
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5 [mask-image:linear-gradient(to_right,black_90%,transparent)]">
@@ -139,8 +153,8 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
       </div>;
     })}</div>}
     <div className="relative">
-      <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", "text-ink", showTypewriter ? "placeholder:text-transparent" : "placeholder:text-faint")} disabled={disabled || sending} onChange={(event) => { const value = event.target.value; const nextTrigger = composerTrigger(value); onCommandOpen(nextTrigger?.kind === "command" && commands.length > 0); onContextOpen(nextTrigger?.kind === "context" && hasWorkspace); onDraft(value); }} onKeyDown={handleKeyDown} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} placeholder="输入目标，或继续当前工作…" value={draft} />
-      {showTypewriter && <TypewriterPlaceholder />}
+      <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", "text-ink", showTypewriter ? "placeholder:text-transparent" : "placeholder:text-faint")} disabled={disabled || sending} onChange={(event) => { const value = event.target.value; const nextTrigger = composerTrigger(value); onCommandOpen(nextTrigger?.kind === "command" && commands.length > 0); onContextOpen(nextTrigger?.kind === "context" && hasWorkspace); onDraft(value); }} onKeyDown={handleKeyDown} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} placeholder="输入目标，或继续当前工作…" value={draft} />
+      {showTypewriter && <TypewriterPlaceholder active />}
     </div>
     <div className="flex items-center justify-between gap-3 px-3 pb-2.5">
       <div className="flex items-center gap-1">
