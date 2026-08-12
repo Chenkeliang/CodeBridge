@@ -169,6 +169,58 @@
   }
 }
 
+/* Typewriter placeholder: pure CSS stepped reveal over a 20s, 4-line cycle.
+   Each line: 0-11% type in, 11-21% hold, 21-24% erase, 24-25% gap. No per-keystroke renders. */
+.typewriter-line {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0;
+  display: inline-flex;
+  overflow: hidden;
+  white-space: nowrap;
+  visibility: hidden;
+  max-width: 0;
+}
+
+@keyframes typewriter-cycle {
+  0% { visibility: visible; max-width: 0; }
+  11% { max-width: 100%; }
+  21% { max-width: 100%; }
+  24% { max-width: 0; visibility: visible; }
+  24.01% { visibility: hidden; max-width: 0; }
+  100% { visibility: hidden; max-width: 0; }
+}
+
+.typewriter-line:nth-child(1) { animation: typewriter-cycle 20s steps(30, end) infinite; }
+.typewriter-line:nth-child(2) { animation: typewriter-cycle 20s steps(30, end) infinite; animation-delay: 5s; }
+.typewriter-line:nth-child(3) { animation: typewriter-cycle 20s steps(30, end) infinite; animation-delay: 10s; }
+.typewriter-line:nth-child(4) { animation: typewriter-cycle 20s steps(30, end) infinite; animation-delay: 15s; }
+
+.typewriter-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--agnet-control-accent);
+  animation: caret-blink 0.85s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typewriter-line {
+    position: static;
+    visibility: visible;
+    max-width: 100%;
+    animation: none;
+  }
+  .typewriter-line:nth-child(n + 2) {
+    display: none;
+  }
+  .typewriter-caret {
+    animation: none;
+  }
+}
+
 /* E5: submit sweep — a single accent line racing along the composer bottom edge. */
 .composer-sweep {
   position: absolute;

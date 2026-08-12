@@ -17,37 +17,16 @@ const TYPEWRITER_HINTS = [
   "⌘K 打开命令面板",
 ];
 
-/** Rotating typewriter placeholder shown while the draft is empty. */
+/** Rotating typewriter placeholder shown while the draft is empty.
+ *  Pure CSS: a stepped width reveal cycles four lines on a 20s timeline. */
 function TypewriterPlaceholder() {
-  const [text, setText] = useState("");
-  useEffect(() => {
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-      setText(TYPEWRITER_HINTS[0]!);
-      return;
-    }
-    let line = 0;
-    let char = 0;
-    let deleting = false;
-    let timer = 0;
-    const tick = () => {
-      const current = TYPEWRITER_HINTS[line]!;
-      if (!deleting) {
-        char += 1;
-        setText(current.slice(0, char));
-        if (char === current.length) { deleting = true; timer = window.setTimeout(tick, 2200); return; }
-        timer = window.setTimeout(tick, 45 + Math.random() * 60);
-      } else {
-        char -= 1;
-        setText(current.slice(0, char));
-        if (char === 0) { deleting = false; line = (line + 1) % TYPEWRITER_HINTS.length; timer = window.setTimeout(tick, 500); return; }
-        timer = window.setTimeout(tick, 22);
-      }
-    };
-    timer = window.setTimeout(tick, 300);
-    return () => window.clearTimeout(timer);
-  }, []);
-  return <div aria-hidden="true" className={cn("pointer-events-none absolute inset-x-3.5 top-3 text-sm", "text-faint")}>
-    {text}<span className={cn("ml-px inline-block h-[1.1em] w-px translate-y-[3px]", "bg-control-accent", "motion-safe:animate-caret-blink")} />
+  return <div aria-hidden="true" className={cn("pointer-events-none absolute inset-x-3.5 top-3 font-mono text-sm", "text-faint")}>
+    <span className="relative inline-block">
+      {TYPEWRITER_HINTS.map((hint) => <span className="typewriter-line" key={hint}>{hint}</span>)}
+      {/* keeps container height */}
+      <span className="invisible">{TYPEWRITER_HINTS[0]}</span>
+    </span>
+    <span className="typewriter-caret" />
   </div>;
 }
 
