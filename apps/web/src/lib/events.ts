@@ -159,9 +159,19 @@ export function reduceConversationEvents(events: ConversationEvent[]): Conversat
       continue;
     }
     if (value.type === "tool_start" || value.type === "tool_update" || value.type === "tool_end") {
-      const work = ensureWork(event);
       const id = typeof value.toolCallId === "string" ? value.toolCallId : `${event.run_id ?? "run"}:${projection.length}`;
       const current = toolsById.get(id);
+      if (current && event.run_id === null) {
+        if (typeof value.name === "string") current.name = value.name;
+        if (typeof value.kind === "string") current.toolKind = value.kind;
+        if (value.input !== undefined) current.input = value.input;
+        if (value.output !== undefined) current.output = value.output;
+        if (Array.isArray(value.locations)) current.locations = toolLocations(value.locations);
+        if (typeof value.status === "string") current.status = value.status;
+        if (value.type === "tool_end" && typeof value.status !== "string") current.status = "completed";
+        continue;
+      }
+      const work = ensureWork(event);
       if (current) {
         if (typeof value.name === "string") current.name = value.name;
         if (typeof value.kind === "string") current.toolKind = value.kind;

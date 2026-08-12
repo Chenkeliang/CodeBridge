@@ -65,6 +65,33 @@ describe("conversation event projection", () => {
     ]);
   });
 
+  it("does not create a trailing work block for hydrated provider tool snapshots", () => {
+    const event = (eventId: string, sequence: number, runId: string | null, type: string, value: Record<string, unknown> = {}) => ({
+      event_id: eventId,
+      sequence,
+      run_id: runId,
+      type,
+      occurred_at: `2026-08-11T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+      payload: type === "AGENT_EVENT" ? { event: value } : type === "MESSAGE_RECEIVED" ? value : {},
+    });
+    const projection = reduceConversationEvents([
+      event("message-1", 1, null, "MESSAGE_RECEIVED", { message: "检查项目" }),
+      event("run-started-1", 2, "run-1", "RUN_STARTED"),
+      event("tool-start-1", 3, "run-1", "AGENT_EVENT", { type: "tool_start", toolCallId: "tool-1", name: "exec" }),
+      event("tool-end-1", 4, "run-1", "AGENT_EVENT", { type: "tool_end", toolCallId: "tool-1", status: "completed" }),
+      event("answer-1", 5, "run-1", "AGENT_EVENT", { type: "text_delta", phase: "final_answer", text: "检查完成" }),
+      event("run-succeeded-1", 6, "run-1", "RUN_SUCCEEDED"),
+      event("hydrated-tool-1", 7, null, "AGENT_EVENT", { type: "tool_end", toolCallId: "tool-1", status: "completed", output: "历史快照" }),
+      event("hydrated-1", 8, null, "SESSION_HISTORY_HYDRATED"),
+    ]);
+
+    expect(projection.map((item) => item.kind)).toEqual(["user", "work", "assistant"]);
+    expect(projection[1]).toMatchObject({
+      kind: "work",
+      entries: [expect.objectContaining({ kind: "tool", id: "tool-1", output: "历史快照" })],
+    });
+  });
+
   it("merges streamed text deltas and tool lifecycle events", () => {
     const projection = reduceConversationEvents([
       {
