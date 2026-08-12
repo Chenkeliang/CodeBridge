@@ -41,7 +41,7 @@ describe("workbench API client", () => {
 
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       "/v1/sessions/session-1",
-      "/v1/sessions/session-1/events?after_sequence=0",
+      "/v1/sessions/session-1/events?after_sequence=0&tail=2000",
       "/v1/sessions/session-1/commands",
       "/v1/sessions/session-1/config-options",
       "/v1/sessions/session-1/runs",

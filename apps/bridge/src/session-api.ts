@@ -60,20 +60,36 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
             workspaceScope: session.cwd ? [session.cwd] : [],
             riskLevel: "read_only",
           });
+        const persistedInputHashes = options.workItems.listEventInputHashes(workItem.id);
+        let persistedEvents: ReturnType<SqliteEventStore["listEvents"]> | undefined;
+        const existingEvents = () => {
+          if (!persistedEvents) {
+            persistedEvents = persistedInputHashes.size > 0
+              ? options.workItems.listRecentEvents(workItem.id, 2_000)
+              : options.workItems.listEvents(workItem.id);
+          }
+          return persistedEvents;
+        };
         const existingHistory = new Map<string, number>();
-        for (const event of options.workItems.listEvents(workItem.id)) {
-          const key = event.type === "MESSAGE_RECEIVED" && typeof event.payload.message === "string"
-            ? `message:${event.payload.message}`
-            : event.type === "AGENT_EVENT" && event.payload.event
-              ? `agent:${JSON.stringify(event.payload.event)}`
-              : undefined;
-          if (key) existingHistory.set(key, (existingHistory.get(key) ?? 0) + 1);
-        }
+        let existingHistoryLoaded = false;
+        const loadExistingHistory = () => {
+          if (existingHistoryLoaded) return;
+          existingHistoryLoaded = true;
+          for (const event of existingEvents()) {
+            const key = event.type === "MESSAGE_RECEIVED" && typeof event.payload.message === "string"
+              ? `message:${event.payload.message}`
+              : event.type === "AGENT_EVENT" && event.payload.event
+                ? `agent:${JSON.stringify(event.payload.event)}`
+                : undefined;
+            if (key) existingHistory.set(key, (existingHistory.get(key) ?? 0) + 1);
+          }
+        };
         const historyInputHash = (position: string | number) => `sha256:${createHash("sha256")
           .update(`${session.agentId}\0${session.providerSessionId}\0${position}`)
           .digest("hex")}`;
         for (const [index, item] of history.entries()) {
-          if (item.kind === "agent_event" && isProviderSnapshotCovered(options.workItems.listEvents(workItem.id), item.event)) continue;
+          if (persistedInputHashes.has(historyInputHash(index))) continue;
+          loadExistingHistory();
           const key = item.kind === "message"
             ? `message:${item.text}`
             : `agent:${JSON.stringify(item.event)}`;
@@ -82,6 +98,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
             existingHistory.set(key, remaining - 1);
             continue;
           }
+          if (item.kind === "agent_event" && isProviderSnapshotCovered(existingEvents(), item.event)) continue;
           options.workItems.appendEventOnce(item.kind === "message"
             ? {
                 workItemId: workItem.id,
@@ -773,8 +790,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         headers: { "cache-control": "no-cache", "content-type": "text/event-stream; charset=utf-8" },
       });
     }
-    const stream = options.workItems
-      .listEvents(session.taskRecordId, after)
+    const tail = Number(c.req.query("tail") ?? "0");
+    const history = after > 0
+      ? options.workItems.listEvents(session.taskRecordId, after)
+      : Number.isInteger(tail) && tail > 0
+        ? options.workItems.listRecentEvents(session.taskRecordId, tail)
+        : options.workItems.listEvents(session.taskRecordId);
+    const stream = history
       .map((event) => toSseEvent(event))
       .join("");
     return new Response(stream, {

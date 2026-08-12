@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
@@ -360,6 +361,67 @@ describe("session API", () => {
     await app.request(`/v1/sessions/${session.id}`, { headers: { authorization: `Bearer ${TOKEN}` } });
 
     expect(workItems.listEvents(workItem.id).filter((event) => event.type === "AGENT_EVENT")).toHaveLength(2);
+    catalog.close();
+    workItems.close();
+  });
+
+  it("reads persisted events once while reconciling provider snapshots", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const workItem = workItems.createWorkItem({
+      title: "Large imported history",
+      mode: "auto",
+      conversationId: "snapshot-linear-scan",
+      agentId: "pi",
+      workspaceScope: ["/tmp/project"],
+      riskLevel: "read_only",
+    });
+    const session = catalog.createSession({ agentId: "pi", providerSessionId: "provider-linear-scan", taskRecordId: workItem.id, cwd: "/tmp/project" });
+    const inputHash = (position: number) => `sha256:${createHash("sha256")
+      .update(`${session.agentId}\0${session.providerSessionId}\0${position}`)
+      .digest("hex")}`;
+    workItems.appendEventOnce({ workItemId: workItem.id, type: "AGENT_EVENT", actor: "agent", inputHash: inputHash(0), payload: { event: { type: "thought_delta", text: "first second" } } });
+    workItems.appendEventOnce({ workItemId: workItem.id, type: "AGENT_EVENT", actor: "agent", inputHash: inputHash(1), payload: { event: { type: "text_delta", text: "answer" } } });
+    const runner = {
+      loadSessionHistory: async () => [
+        { kind: "agent_event" as const, event: { type: "thought_delta", text: "first second" } },
+        { kind: "agent_event" as const, event: { type: "text_delta", text: "answer" } },
+      ],
+    } as unknown as RunnerClient;
+    const listEvents = vi.spyOn(workItems, "listEvents");
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+
+    await app.request(`/v1/sessions/${session.id}`, { headers: { authorization: `Bearer ${TOKEN}` } });
+
+    expect(listEvents).not.toHaveBeenCalled();
+    catalog.close();
+    workItems.close();
+  });
+
+  it("returns only the requested tail of historical events", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const workItem = workItems.createWorkItem({
+      title: "Bounded history",
+      mode: "auto",
+      conversationId: "bounded-history",
+      agentId: "pi",
+      riskLevel: "read_only",
+    });
+    for (const message of ["first", "second", "third"]) {
+      workItems.appendEvent({ workItemId: workItem.id, type: "MESSAGE_RECEIVED", actor: "user", payload: { message } });
+    }
+    const session = catalog.createSession({ agentId: "pi", taskRecordId: workItem.id });
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+
+    const response = await app.request(`/v1/sessions/${session.id}/events?tail=2`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const body = await response.text();
+
+    expect(body).not.toContain("first");
+    expect(body).toContain("second");
+    expect(body).toContain("third");
     catalog.close();
     workItems.close();
   });

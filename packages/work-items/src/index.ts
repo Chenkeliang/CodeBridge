@@ -559,6 +559,29 @@ export class SqliteEventStore {
     return rows.map(toDomainEvent);
   }
 
+  listRecentEvents(workItemId: string, limit: number): DomainEvent[] {
+    const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM domain_events
+         WHERE work_item_id = ?
+         ORDER BY sequence DESC
+         LIMIT ?`,
+      )
+      .all(workItemId, boundedLimit) as SqliteRow[];
+    return rows.reverse().map(toDomainEvent);
+  }
+
+  listEventInputHashes(workItemId: string): Set<string> {
+    const rows = this.database
+      .prepare(
+        `SELECT input_hash FROM domain_events
+         WHERE work_item_id = ? AND input_hash IS NOT NULL`,
+      )
+      .all(workItemId) as Array<{ input_hash?: unknown }>;
+    return new Set(rows.map((row) => String(row.input_hash)));
+  }
+
   sequenceForEventId(workItemId: string, eventId: string): number {
     const row = this.database
       .prepare("SELECT sequence FROM domain_events WHERE work_item_id = ? AND event_id = ?")
