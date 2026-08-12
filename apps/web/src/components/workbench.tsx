@@ -918,7 +918,7 @@ function ProjectionItem({ approvals, cwd, item, onApproval, theme }: { approvals
 function WorkActivity({ cwd, item, theme }: { cwd: string | null; item: WorkProjection; theme: Theme }) {
   const t = themes[theme];
   const tools = item.entries.filter((entry): entry is ToolProjection => entry.kind === "tool");
-  const running = tools.some((tool) => tool.status !== "completed" && tool.status !== "failed");
+  const running = item.running;
   return <details open={running || undefined} className={cn("group w-full max-w-[780px] border-t", t.line)}>
     <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]", t.muted)}>
       <span className={cn("font-medium", t.inkSoft)}>{running ? "Working" : `Worked for ${formatElapsed(item.startedAt, item.endedAt)}`}</span>

@@ -38,6 +38,7 @@ export interface WorkProjection {
   startedAt: string;
   endedAt: string;
   runId: string | null;
+  running: boolean;
 }
 
 export interface UserProjection {
@@ -85,6 +86,7 @@ type AgentEvent = Record<string, unknown> & { type?: string };
 export function reduceConversationEvents(events: ConversationEvent[]): ConversationProjection[] {
   const projection: ConversationProjection[] = [];
   const toolsById = new Map<string, ToolProjection>();
+  const worksByRun = new Map<string, WorkProjection>();
   let activeAssistant: AssistantProjection | undefined;
   let activeWork: WorkProjection | undefined;
 
@@ -97,8 +99,10 @@ export function reduceConversationEvents(events: ConversationEvent[]): Conversat
         startedAt: event.occurred_at,
         endedAt: event.occurred_at,
         runId: event.run_id,
+        running: false,
       };
       projection.push(activeWork);
+      if (event.run_id) worksByRun.set(event.run_id, activeWork);
     }
     activeWork.endedAt = event.occurred_at;
     activeAssistant = undefined;
@@ -110,6 +114,20 @@ export function reduceConversationEvents(events: ConversationEvent[]): Conversat
       activeAssistant = undefined;
       activeWork = undefined;
       projection.push({ kind: "user", content: event.payload.message, eventId: event.event_id });
+      continue;
+    }
+    if (event.type === "RUN_STARTED") {
+      const work = ensureWork(event);
+      work.running = true;
+      continue;
+    }
+    if (event.type === "RUN_SUCCEEDED" || event.type === "RUN_FAILED" || event.type === "RUN_CANCELLED") {
+      const work = event.run_id ? worksByRun.get(event.run_id) : undefined;
+      if (work) {
+        work.running = false;
+        work.endedAt = event.occurred_at;
+        if (activeWork === work) activeWork = undefined;
+      }
       continue;
     }
     const agentEvent = event.payload?.event;
