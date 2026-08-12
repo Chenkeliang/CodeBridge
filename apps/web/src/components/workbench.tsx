@@ -193,9 +193,9 @@ export function Workbench() {
     window.setTimeout(() => setNotice((current) => current === message ? "" : current), 1800);
   }, []);
 
-  const reload = useCallback(async (importProvider = false) => {
-    setLoading(true);
-    setError(null);
+  const reload = useCallback(async (importProvider = false, silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setError(null);
     try {
       const [nextAgents, nextSessions, nextFlows] = await Promise.all([
         api.agents(),
@@ -218,13 +218,13 @@ export function Workbench() {
         )
         : null);
     } catch (caught) {
-      setError(messageOf(caught));
+      if (!silent) setError(messageOf(caught));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { void reload(true); }, [reload]);
+  useEffect(() => { void reload(false).then(() => void reload(true, true)); }, [reload]);
 
   useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
   useEffect(() => { selectedSessionRef.current = selectedSessionId; }, [selectedSessionId]);
@@ -860,7 +860,7 @@ function WorkActivity({ cwd, item, theme }: { cwd: string | null; item: WorkProj
   const t = themes[theme];
   const tools = item.entries.filter((entry): entry is ToolProjection => entry.kind === "tool");
   const running = tools.some((tool) => tool.status !== "completed" && tool.status !== "failed");
-  return <details className={cn("group w-full max-w-[780px] border-t", t.line)}>
+  return <details open={running || undefined} className={cn("group w-full max-w-[780px] border-t", t.line)}>
     <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]", t.muted)}>
       <span className={cn("font-medium", t.inkSoft)}>{running ? "Working" : `Worked for ${formatElapsed(item.startedAt, item.endedAt)}`}</span>
       {tools.length > 0 && <span>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</span>}
@@ -869,7 +869,7 @@ function WorkActivity({ cwd, item, theme }: { cwd: string | null; item: WorkProj
     <div className="grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-2 overflow-hidden pb-4">
       {item.entries.map((entry, index) => entry.kind === "tool"
         ? <ToolActivity cwd={cwd} key={entry.id} theme={theme} tool={entry} />
-        : <div className="grid w-full min-w-0 max-w-full grid-cols-[18px_minmax(0,1fr)] gap-2 overflow-hidden px-1 py-1" key={`${entry.kind}-${index}`}><span className={cn("mt-1 size-1.5 rounded-full", entry.kind === "thought" ? t.warning : t.faint)} /><div className="min-w-0"><p className={cn("mb-1 text-[10px] font-medium uppercase tracking-[0.08em]", t.muted)}>{entry.kind === "thought" ? "Reasoning summary" : "Progress"}</p><WorkMarkdown content={entry.content} theme={theme} /></div></div>)}
+        : <div className="grid w-full min-w-0 max-w-full grid-cols-[18px_minmax(0,1fr)] gap-2 overflow-hidden px-1 py-1" key={`${entry.kind}-${index}`}><span className={cn("mt-1 size-1.5 rounded-full", entry.kind === "thought" ? t.warning : t.faint)} /><div className="min-w-0"><p className={cn("mb-1 text-[10px] font-medium uppercase tracking-[0.08em]", entry.kind === "thought" ? t.warning : t.muted)}>{entry.kind === "thought" ? "Reasoning" : "Progress"}</p><WorkMarkdown content={entry.content} theme={theme} /></div></div>)}
     </div>
   </details>;
 }
@@ -878,6 +878,9 @@ function WorkMarkdown({ content, theme }: { content: string; theme: Theme }) {
   const t = themes[theme];
   return <div className={cn("max-w-full break-words text-xs font-normal leading-5", t.inkSoft)}><ReactMarkdown components={{
     code: ({ children }) => <code className={cn("rounded px-1 py-0.5 font-mono text-[0.92em]", t.surfaceSoft, t.ink)}>{children}</code>,
+    h1: ({ children }) => <h1 className="mb-1 text-xs font-medium leading-5">{children}</h1>,
+    h2: ({ children }) => <h2 className="mb-1 text-xs font-medium leading-5">{children}</h2>,
+    h3: ({ children }) => <h3 className="mb-1 text-xs font-medium leading-5">{children}</h3>,
     ol: ({ children }) => <ol className="my-1 list-decimal space-y-0.5 pl-4">{children}</ol>,
     p: ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
     ul: ({ children }) => <ul className="my-1 list-disc space-y-0.5 pl-4">{children}</ul>,

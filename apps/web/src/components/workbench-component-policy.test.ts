@@ -112,4 +112,20 @@ describe("Workbench component policy", () => {
     expect(source).toContain("[events, selectedSessionId, loadingSession, sending]");
     expect(source).toContain("requestAnimationFrame");
   });
+
+  it("does not block the first paint on provider Session import", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("void reload(false).then(() => void reload(true, true));");
+    expect(source).toContain("async (importProvider = false, silent = false)");
+  });
+
+  it("opens live work and keeps reasoning headings lighter than answer headings", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("<details open={running || undefined}");
+    expect(source).toContain('h1: ({ children }) => <h1 className="mb-1 text-xs font-medium leading-5"');
+    expect(source).toContain('h2: ({ children }) => <h2 className="mb-1 text-xs font-medium leading-5"');
+    expect(source).toContain('h3: ({ children }) => <h3 className="mb-1 text-xs font-medium leading-5"');
+  });
 });
