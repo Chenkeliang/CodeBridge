@@ -13,7 +13,6 @@ import {
   FileText,
   FolderOpen,
   Gauge,
-  GitBranch,
   LoaderCircle,
   MoreHorizontal,
   Paperclip,
@@ -34,6 +33,7 @@ import {
 } from "lucide-react";
 import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
+import { PixelMark } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -540,8 +540,8 @@ export function Workbench() {
           <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">
             <div className="w-full max-w-[760px]">
               <div className="mb-7 text-center">
-                <div className={cn("mx-auto mb-4 grid size-10 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)}>{selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id} className="size-[18px]" /> : <GitBranch className="size-4" />}</div>
-                <h1 className={cn("text-2xl font-medium tracking-[-0.04em]", t.ink)}>{selectedAgent ? selectedAgent.display_name : "CodeBridge"}</h1>
+                <div className={cn("mx-auto mb-4 grid size-10 place-items-center rounded-md border", t.accent, t.accentText, t.lineStrong)}>{selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id} className="size-[18px]" /> : <PixelMark className="size-5" />}</div>
+                <h1 className={cn("text-2xl font-medium tracking-[-0.04em]", selectedAgent ? "" : "font-brand", t.ink)}>{selectedAgent ? selectedAgent.display_name : "CodeBridge"}</h1>
                 <p className={cn("mt-2 text-xs", t.muted)}>{selectedAgent ? "创建 Session，或直接输入目标" : "选择一个可用的 Agent"}</p>
               </div>
               <Composer
@@ -667,7 +667,7 @@ function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onArea, onTh
 }) {
   const t = themes[theme];
   return <aside className={cn("flex min-h-0 flex-col items-center gap-3 border-r px-2.5 py-3", t.sidebar, t.line)}>
-    <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)} title="CodeBridge"><GitBranch className="size-4" strokeWidth={1.6} /></div>
+    <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", t.accent, t.accentText, t.lineStrong)} title="AGNET · CodeBridge"><PixelMark className="size-4" /></div>
     <div className="grid w-full gap-2">
       {agents.map((agent) => {
         const selected = area === "agents" && selectedAgentId === agent.agent_id;
@@ -740,7 +740,7 @@ function SessionHeader({ agent, session, theme, menuOpen, menuView, renameDraft,
 }) {
   const t = themes[theme];
   return <header className={cn("flex min-h-[72px] shrink-0 items-center justify-between gap-5 border-b px-8 py-4", t.line)}>
-    <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", t.surface, t.ink, t.lineStrong)}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <GitBranch className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate text-sm font-semibold tracking-[-0.02em]", t.ink)}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", t.muted)}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
+    <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", t.accent, t.accentText, t.lineStrong)}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <PixelMark className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate text-sm font-semibold tracking-[-0.02em]", t.ink)}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", t.muted)}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
     {session && <div className="relative flex items-center gap-2">
       <span className={cn("hidden items-center gap-1.5 text-[11px] sm:flex", t.muted)}><span className={cn("size-1.5 rounded-full", session.status === "active" || session.status === "idle" ? t.healthyDot : t.offlineDot)} />{statusLabel[session.status] ?? session.status}</span>
       <Button aria-label="Session 操作" className={cn("size-8 px-0", t.muted)} onClick={onMenu} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button>

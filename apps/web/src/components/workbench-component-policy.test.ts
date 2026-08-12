@@ -82,6 +82,29 @@ describe("Workbench component policy", () => {
     expect(slider).toContain("motion-safe:transition-[width]");
   });
 
+  it("uses the open pixel typography and AGNET product mark", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const mark = readFileSync(new URL("./pixel-mark.tsx", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+
+    expect(source).toContain('import { PixelMark } from "@/components/pixel-mark"');
+    expect(source).toContain("<PixelMark");
+    expect(mark).toContain("shapeRendering=\"crispEdges\"");
+    expect(styles).toContain("Departure Mono");
+    expect(styles).toContain("Commit Mono");
+    expect(source).not.toContain('<GitBranch className="size-4"');
+  });
+
+  it("publishes the product mark as the browser icon", () => {
+    const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+    const mark = new URL("../../public/brand/agnet-mark.svg", import.meta.url);
+
+    expect(existsSync(mark)).toBe(true);
+    expect(html).toContain('rel="icon"');
+    expect(html).toContain("/workbench/brand/agnet-mark.svg");
+    expect(html).toContain("AGNET · CodeBridge Workbench");
+  });
+
   it("positions a loaded Session at the newest conversation item", () => {
     const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
 
