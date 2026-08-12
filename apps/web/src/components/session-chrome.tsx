@@ -76,7 +76,7 @@ function SessionRow({ session, selected, onSession, onUpdateSession, onDeleteSes
     setMenuView("actions");
   }
 
-  return <div className="group relative [content-visibility:auto] [contain-intrinsic-size:60px]">
+  return <div className="group relative">
     <button className={cn("relative grid w-full gap-1 rounded-md border border-transparent px-3 py-2.5 pr-10 text-left transition-colors hover:opacity-80", "text-ink", selected && cn("bg-surface", "border-line", "shadow-card"))} onClick={() => { closeMenu(); onSession(session); }} title={title} type="button">
       <span className="truncate text-xs font-medium">{title}</span>
       <span className={cn("flex items-center gap-1.5 text-[11px]", "text-muted")}>{session.pinned_at && <Pin className={cn("size-3", "text-warning")} />}{session.status !== "idle" && <><span>{statusLabel[session.status] ?? session.status}</span><span>·</span></>}<time className="font-mono">{relativeTime(session.updated_at)}</time></span>
