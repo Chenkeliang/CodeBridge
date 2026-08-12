@@ -10,39 +10,6 @@ import { cn } from "@/lib/utils";
 import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, speedValueLabel, workspacePaths } from "@/lib/workbench-logic";
 import { DEFAULT_SELECT_VALUE, defaultModelLabel, workspaceLabel } from "@/components/workbench-shared";
 
-const TYPEWRITER_HINTS = [
-  "输入目标，或继续当前工作…",
-  "试试：/review 让 Agent 审查当前变更",
-  "@ 引用工作区文件，/ 唤起命令",
-  "⌘K 打开命令面板",
-];
-
-const TYPE_INTERVAL = 55;   // ms per character
-const HOLD_MS = 2000;
-const NEXT_MS = 400;
-
-/** Rotating typewriter placeholder shown while the draft is empty and the
- *  textarea is not focused. Characters appear one by one via CSS animation
- *  delays, so timing is exact and independent of CJK font metrics. */
-function TypewriterPlaceholder({ active }: { active: boolean }) {
-  const [line, setLine] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const current = TYPEWRITER_HINTS[line]!;
-    const duration = current.length * TYPE_INTERVAL + HOLD_MS + NEXT_MS;
-    const timer = window.setTimeout(() => setLine((value) => (value + 1) % TYPEWRITER_HINTS.length), duration);
-    return () => window.clearTimeout(timer);
-  }, [active, line]);
-  if (!active) return null;
-  const hint = TYPEWRITER_HINTS[line]!;
-  return <div aria-hidden="true" className={cn("pointer-events-none absolute inset-x-3.5 top-3 font-mono text-sm", "text-faint")}>
-    <span className="typewriter-line" key={line}>
-      {[...hint].map((ch, index) => <span className="typewriter-ch" key={`${line}-${index}`} style={{ animationDelay: `${index * TYPE_INTERVAL}ms` }}>{ch === " " ? " " : ch}</span>)}
-    </span>
-    <span className="typewriter-caret" />
-  </div>;
-}
-
 export function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, modelOption, effort, thoughtLevelOption, configOverrides, speedOption, permissionMode, permissionOption, sending, session, commandOpen, running, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onModel, onEffort, onConfigOverride, onPermissionMode, onPickDirectory, onRemoveAttachment, onSubmit, onStop }: {
   attachments: MessageAttachmentInput[];
   commands: AgentCommand[];
@@ -126,9 +93,6 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
     if (!disabled && !sending && draft.trim()) setSweepKey((value) => value + 1);
     onSubmit();
   }
-  const [focused, setFocused] = useState(false);
-  const showTypewriter = !draft && !disabled && !focused;
-
   return <div className={cn("relative rounded-xl border", "bg-surface", "border-line-strong", "shadow-panel", running && "motion-safe:animate-breathe")}>
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5 [mask-image:linear-gradient(to_right,black_90%,transparent)]">
       {modelOption ? <SessionConfigSelect label={defaultModelLabel(modelOption)} onValue={onModel} option={modelOption} value={model} /> : <ContextChip label="Agent 默认" />}
@@ -152,10 +116,7 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
         <button aria-label={`移除 ${attachment.name}`} className={cn(preview && "absolute right-1 top-1 grid size-5 place-items-center rounded-full", preview && "bg-surface")} onClick={() => onRemoveAttachment(index)} type="button"><X className="size-3" /></button>
       </div>;
     })}</div>}
-    <div className="relative">
-      <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", "text-ink", showTypewriter ? "placeholder:text-transparent" : "placeholder:text-faint")} disabled={disabled || sending} onChange={(event) => { const value = event.target.value; const nextTrigger = composerTrigger(value); onCommandOpen(nextTrigger?.kind === "command" && commands.length > 0); onContextOpen(nextTrigger?.kind === "context" && hasWorkspace); onDraft(value); }} onKeyDown={handleKeyDown} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} placeholder="输入目标，或继续当前工作…" value={draft} />
-      {showTypewriter && <TypewriterPlaceholder active />}
-    </div>
+    <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", "text-ink", "placeholder:text-faint")} disabled={disabled || sending} onChange={(event) => { const value = event.target.value; const nextTrigger = composerTrigger(value); onCommandOpen(nextTrigger?.kind === "command" && commands.length > 0); onContextOpen(nextTrigger?.kind === "context" && hasWorkspace); onDraft(value); }} onKeyDown={handleKeyDown} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} placeholder="输入目标，或继续当前工作…" value={draft} />
     <div className="flex items-center justify-between gap-3 px-3 pb-2.5">
       <div className="flex items-center gap-1">
         <Button aria-label="添加文件" className={cn("size-8 px-0", "text-muted")} onClick={onFiles} size="icon" title="添加文件或图片" variant="ghost"><Plus className="size-3.5" /></Button>
