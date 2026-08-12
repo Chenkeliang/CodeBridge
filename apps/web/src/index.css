@@ -103,12 +103,16 @@
 @theme inline {
   --font-brand: "Departure Mono", ui-monospace, monospace;
   --animate-march: march 1.2s linear infinite;
+  --animate-breathe: breathe 2.2s ease-in-out infinite;
+  --animate-chip-pop: chip-pop 0.3s cubic-bezier(0.2, 1.6, 0.4, 1) backwards;
+  --animate-caret-blink: caret-blink 0.85s steps(1) infinite;
 
   @keyframes march {
     to {
       stroke-dashoffset: -16;
     }
   }
+
   --font-mono: "Commit Mono", ui-monospace, monospace;
   --color-canvas: var(--agnet-canvas);
   --color-sidebar: var(--agnet-sidebar);
@@ -137,6 +141,66 @@
   --color-agent-opencode: var(--agnet-agent-opencode);
   --shadow-panel: var(--agnet-shadow-panel);
   --shadow-card: var(--agnet-shadow-card);
+}
+
+@keyframes breathe {
+  0%, 100% {
+    border-color: var(--agnet-line-strong);
+  }
+  50% {
+    border-color: color-mix(in oklab, var(--agnet-accent) 55%, transparent);
+  }
+}
+
+@keyframes chip-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.8) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* E5: submit sweep — a single accent line racing along the composer bottom edge. */
+.composer-sweep {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--agnet-accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.composer-sweep.sent {
+  animation: composer-sweep 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+
+@keyframes composer-sweep {
+  0% {
+    transform: scaleX(0);
+    opacity: 1;
+  }
+  70% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
+  }
 }
 
 /* Pixel-checker texture for skeleton blocks (brand pixel motif). */

@@ -10,6 +10,47 @@ import { cn } from "@/lib/utils";
 import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, speedValueLabel, workspacePaths } from "@/lib/workbench-logic";
 import { DEFAULT_SELECT_VALUE, defaultModelLabel, workspaceLabel } from "@/components/workbench-shared";
 
+const TYPEWRITER_HINTS = [
+  "输入目标，或继续当前工作…",
+  "试试：/review 让 Agent 审查当前变更",
+  "@ 引用工作区文件，/ 唤起命令",
+  "⌘K 打开命令面板",
+];
+
+/** Rotating typewriter placeholder shown while the draft is empty. */
+function TypewriterPlaceholder() {
+  const [text, setText] = useState("");
+  useEffect(() => {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setText(TYPEWRITER_HINTS[0]!);
+      return;
+    }
+    let line = 0;
+    let char = 0;
+    let deleting = false;
+    let timer = 0;
+    const tick = () => {
+      const current = TYPEWRITER_HINTS[line]!;
+      if (!deleting) {
+        char += 1;
+        setText(current.slice(0, char));
+        if (char === current.length) { deleting = true; timer = window.setTimeout(tick, 2200); return; }
+        timer = window.setTimeout(tick, 45 + Math.random() * 60);
+      } else {
+        char -= 1;
+        setText(current.slice(0, char));
+        if (char === 0) { deleting = false; line = (line + 1) % TYPEWRITER_HINTS.length; timer = window.setTimeout(tick, 500); return; }
+        timer = window.setTimeout(tick, 22);
+      }
+    };
+    timer = window.setTimeout(tick, 300);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return <div aria-hidden="true" className={cn("pointer-events-none absolute inset-x-3.5 top-3 text-sm", "text-faint")}>
+    {text}<span className={cn("ml-px inline-block h-[1.1em] w-px translate-y-[3px]", "bg-control-accent", "motion-safe:animate-caret-blink")} />
+  </div>;
+}
+
 export function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, flowId, flows, model, modelOption, effort, thoughtLevelOption, configOverrides, speedOption, permissionMode, permissionOption, sending, session, commandOpen, running, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onFlow, onModel, onEffort, onConfigOverride, onPermissionMode, onPickDirectory, onRemoveAttachment, onSubmit, onStop }: {
   attachments: MessageAttachmentInput[];
   commands: AgentCommand[];
@@ -86,9 +127,16 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
       if (event.key === "ArrowUp") { event.preventDefault(); setContextIndex((i) => (i - 1 + visibleEntries.length) % visibleEntries.length); return; }
       if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && visibleEntries[contextIndex]?.kind !== "directory")) { event.preventDefault(); pickEntry(contextIndex); return; }
     }
-    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); onSubmit(); }
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitWithSweep(); }
   }
-  return <div className={cn("relative rounded-xl border", "bg-surface", "border-line-strong", "shadow-panel")}>
+  const [sweepKey, setSweepKey] = useState(0);
+  function submitWithSweep() {
+    if (!disabled && !sending && draft.trim()) setSweepKey((value) => value + 1);
+    onSubmit();
+  }
+  const showTypewriter = !draft && !disabled;
+
+  return <div className={cn("relative rounded-xl border", "bg-surface", "border-line-strong", "shadow-panel", running && "motion-safe:animate-breathe")}>
     <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto px-3 pt-2.5 [mask-image:linear-gradient(to_right,black_90%,transparent)]">
       {modelOption ? <SessionConfigSelect label={defaultModelLabel(modelOption)} onValue={onModel} option={modelOption} value={model} /> : <ContextChip label="Agent 默认" />}
       {thoughtLevelOption && <ReasoningLevelControl onValue={onEffort} option={thoughtLevelOption} value={effort} />}
@@ -106,12 +154,15 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
     </div>
     {attachments.length > 0 && <div className="flex flex-wrap gap-2 px-3 pt-2">{attachments.map((attachment, index) => {
       const preview = attachmentPreviewUrl(attachment);
-      return <div className={cn("group relative overflow-hidden rounded-md border", preview ? "size-16" : "inline-flex items-center gap-1.5 px-2 py-1 text-[11px]", "bg-surface-tint", "text-ink-soft", "border-line")} key={`${attachment.name}-${index}`}>
+      return <div className={cn("group relative overflow-hidden rounded-md border", "motion-safe:animate-chip-pop", preview ? "size-16" : "inline-flex items-center gap-1.5 px-2 py-1 text-[11px]", "bg-surface-tint", "text-ink-soft", "border-line")} key={`${attachment.name}-${index}`} style={{ animationDelay: `${index * 50}ms` }}>
         {preview ? <img alt={attachment.name} className="size-full object-cover" src={preview} /> : <><Paperclip className="size-3" /><span className="max-w-40 truncate">{attachment.name}</span></>}
         <button aria-label={`移除 ${attachment.name}`} className={cn(preview && "absolute right-1 top-1 grid size-5 place-items-center rounded-full", preview && "bg-surface")} onClick={() => onRemoveAttachment(index)} type="button"><X className="size-3" /></button>
       </div>;
     })}</div>}
-    <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", "text-ink", "placeholder:text-faint")} disabled={disabled || sending} onChange={(event) => { const value = event.target.value; const nextTrigger = composerTrigger(value); onCommandOpen(nextTrigger?.kind === "command" && commands.length > 0); onContextOpen(nextTrigger?.kind === "context" && hasWorkspace); onDraft(value); }} onKeyDown={handleKeyDown} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} placeholder="输入目标，或继续当前工作…" value={draft} />
+    <div className="relative">
+      <Textarea aria-label="消息" className={cn("min-h-[76px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus:border-0 focus:ring-0", "text-ink", showTypewriter ? "placeholder:text-transparent" : "placeholder:text-faint")} disabled={disabled || sending} onChange={(event) => { const value = event.target.value; const nextTrigger = composerTrigger(value); onCommandOpen(nextTrigger?.kind === "command" && commands.length > 0); onContextOpen(nextTrigger?.kind === "context" && hasWorkspace); onDraft(value); }} onKeyDown={handleKeyDown} onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => { if (event.clipboardData.files.length) void onAddFiles(event.clipboardData.files); }} placeholder="输入目标，或继续当前工作…" value={draft} />
+      {showTypewriter && <TypewriterPlaceholder />}
+    </div>
     <div className="flex items-center justify-between gap-3 px-3 pb-2.5">
       <div className="flex items-center gap-1">
         <Button aria-label="添加文件" className={cn("size-8 px-0", "text-muted")} onClick={onFiles} size="icon" title="添加文件或图片" variant="ghost"><Plus className="size-3.5" /></Button>
@@ -130,9 +181,10 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
       </div>
       <div className="flex items-center gap-1.5">
         {running && <Button aria-label="停止当前 Run" className={cn("size-8 px-0", "bg-danger-soft", "text-danger")} onClick={onStop} size="icon" title="停止当前 Run"><Square className="size-3.5 fill-current" /></Button>}
-        <Button aria-label="发送" className={cn("size-8 px-0 transition-transform active:translate-y-px", "bg-accent", "text-accent-ink")} disabled={disabled || sending || !draft.trim()} onClick={onSubmit} size="icon">{sending ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}</Button>
+        <Button aria-label="发送" className={cn("size-8 px-0 transition-transform active:translate-y-px", "bg-accent", "text-accent-ink")} disabled={disabled || sending || !draft.trim()} onClick={submitWithSweep} size="icon">{sending ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}</Button>
       </div>
     </div>
+    {sweepKey > 0 && <span aria-hidden="true" className="composer-sweep sent" key={sweepKey} />}
   </div>;
 }
 
