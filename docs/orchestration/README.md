@@ -67,11 +67,12 @@ examples/orchestration/     非业务的配置形状参考（保持通用）
 3. [CodeBridge 集成边界](codebridge-integration.md)
 4. [接口规范](api-contract.md)
 5. [Flow、Run 与 DSL 引擎](engine.md)
-6. [项目发现和自生成](self-generation.md)
-7. [交互建议](interaction.md)
-8. [AGNET Design System](DESIGN.md)
-9. [扩展性与移植性](extensibility-portability.md)
-10. [多 Agent 运行时调研](agent-runtime-research.md)
+6. [Flow 产品与运行时设计](flow-design.md)
+7. [项目发现和自生成](self-generation.md)
+8. [交互建议](interaction.md)
+9. [AGNET Design System](DESIGN.md)
+10. [扩展性与移植性](extensibility-portability.md)
+11. [多 Agent 运行时调研](agent-runtime-research.md)
 
 ## 已落地切片
 
