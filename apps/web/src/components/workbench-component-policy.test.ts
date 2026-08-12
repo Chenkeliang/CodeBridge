@@ -106,6 +106,12 @@ describe("Workbench component policy", () => {
     expect(html).toContain("AGNET · CodeBridge Workbench");
   });
 
+  it("locks the document viewport so the Agent Rail cannot scroll out of view", () => {
+    const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+
+    expect(html).toContain('<body class="h-full overflow-hidden bg-zinc-950 text-zinc-100 antialiased">');
+  });
+
   it("positions a loaded Session at the newest conversation item", () => {
     const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
 
