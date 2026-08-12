@@ -564,7 +564,7 @@ export function Workbench() {
             <div className="w-full max-w-[760px]">
               <div className="mb-7 text-center">
                 <div className={cn("mx-auto mb-4 grid size-10 place-items-center rounded-md border", t.accent, t.accentText, t.lineStrong)}>{selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id} className="size-[18px]" /> : <PixelMark className="size-5" />}</div>
-                <h1 className={cn("text-2xl font-medium tracking-[-0.04em]", selectedAgent ? "" : "font-brand", t.ink)}>{selectedAgent ? selectedAgent.display_name : "CodeBridge"}</h1>
+                <h1 className={cn("font-brand text-2xl font-normal leading-none tracking-normal", t.ink)}>{selectedAgent ? selectedAgent.display_name : "CodeBridge"}</h1>
                 <p className={cn("mt-2 text-xs", t.muted)}>{selectedAgent ? "创建 Session，或直接输入目标" : "选择一个可用的 Agent"}</p>
               </div>
               <Composer
@@ -920,7 +920,7 @@ function WorkActivity({ cwd, item, theme }: { cwd: string | null; item: WorkProj
   const tools = item.entries.filter((entry): entry is ToolProjection => entry.kind === "tool");
   const running = item.running;
   return <details open={running || undefined} className={cn("group w-full max-w-[780px] border-t", t.line)}>
-    <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 pl-6 text-[11px]", t.muted)}>
+    <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]", t.muted)}>
       <span className={cn("font-medium", t.inkSoft)}>{running ? "Working" : `Worked for ${formatElapsed(item.startedAt, item.endedAt)}`}</span>
       {tools.length > 0 && <span>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</span>}
       <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />

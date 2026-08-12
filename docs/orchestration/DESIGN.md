@@ -165,10 +165,12 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | Machine label | `11–12px / 18px`, `400` mono | `font-mono text-[11px]` | `/command`、工具名、模型 ID |
 | Path and code | `12px / 20px`, `400` mono | `font-mono text-xs leading-5` | 文件路径、命令、代码和 Diff |
 | Brand wordmark | `14–24px / 1`, `400` pixel mono | `font-brand` | AGNET 品牌字标和少量产品识别位 |
+| Empty-state display | `24px / 1`, `400` pixel mono | `font-brand text-2xl leading-none` | 空 Session 中的拉丁字符 Agent 或产品名称 |
 
 约束：
 
 - 中文正文、标题和 Session 名称使用系统无衬线字体栈，不使用全大写或人为增加字间距。
+- `font-brand` 不用于中文、Session 名称或长篇内容，只用于 AGNET 字标和空 Session 的拉丁字符 Agent / 产品名称。
 - 对话正文默认正常字重；粗体只来自 Markdown 语义，不将整段 Agent 输出加粗。
 - 等宽字体只用于机器生成或需要字符对齐的信息，不能用于长篇自然语言正文。
 - 同一信息层级在 Paper Lime 与 Carbon Vermilion 中保持完全一致的字号、行高和字重。
