@@ -99,8 +99,8 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.surfaceTint` | `#F2F4EF` | 代码、Diff 和分组底色 |
 | `agnet.ink` | `#191C16` | 一级文字 |
 | `agnet.inkSoft` | `#373C32` | 正文 |
-| `agnet.muted` | `#73796C` | 次级文字 |
-| `agnet.faint` | `#9CA296` | 辅助信息 |
+| `agnet.muted` | `#5C6255` | 次级文字（canvas 上对比度 5.9:1） |
+| `agnet.faint` | `#6B7163` | 辅助信息（canvas 上对比度 4.7:1，满足 WCAG AA） |
 | `agnet.line` | `#E0E4DC` | 普通边线 |
 | `agnet.lineStrong` | `#CDD3C8` | 强调边线 |
 | `agnet.accent` | `#CCFF00` | 主动作和活动标识 |
@@ -109,7 +109,8 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.success` | `#3B8659` | 成功 |
 | `agnet.warning` | `#C27B18` | 等待和审批 |
 | `agnet.danger` | `#D25D3D` | 失败和删除 |
-| `agnet.dangerSoft` | `#FCEBE6` | 错误卡片底色 |
+| `agnet.dangerSoft` | `#FCEBE6` | 错误卡片与 Diff 删除行底色 |
+| `agnet.successSoft` | `#E2EEE7` | Diff 新增行底色 |
 | `agnet.controlAccent` | `#3B8659` | 高亮不足场景下的控件强调（Slider 等） |
 
 ### 3.3 Carbon Vermilion
@@ -123,8 +124,8 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.surfaceTint` | `#20231E` | 代码、Diff 和分组底色 |
 | `agnet.ink` | `#F1F2EA` | 一级文字 |
 | `agnet.inkSoft` | `#D2D6C9` | 正文 |
-| `agnet.muted` | `#9DA496` | 次级文字 |
-| `agnet.faint` | `#6E7669` | 辅助信息 |
+| `agnet.muted` | `#A8AFA0` | 次级文字（canvas 上对比度 8.2:1） |
+| `agnet.faint` | `#868D7E` | 辅助信息（canvas 上对比度 5.4:1，满足 WCAG AA） |
 | `agnet.line` | `#30352D` | 普通边线 |
 | `agnet.lineStrong` | `#444B40` | 强调边线 |
 | `agnet.accent` | `#FF683D` | 主动作和活动标识 |
@@ -133,7 +134,8 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.success` | `#74BF8F` | 成功 |
 | `agnet.warning` | `#E7AA4E` | 等待和审批 |
 | `agnet.danger` | `#FF8063` | 失败和删除 |
-| `agnet.dangerSoft` | `#41231D` | 错误卡片底色 |
+| `agnet.dangerSoft` | `#41231D` | 错误卡片与 Diff 删除行底色 |
+| `agnet.successSoft` | `#223128` | Diff 新增行底色 |
 | `agnet.controlAccent` | `#FF683D` | 高亮不足场景下的控件强调（Slider 等） |
 
 ### 3.4 几何 Token
@@ -152,7 +154,7 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | Control radius | `6px` |
 | Body font | `13px` |
 | Conversation font | `14px / 28px` |
-| Metadata font | `10–11px` |
+| Metadata font | `11px` |
 
 间距使用 `4px` 基础网格。常用间距为 `4 / 8 / 12 / 16 / 20 / 24 / 32`，禁止为单个页面引入没有语义的近似值。
 
@@ -167,7 +169,7 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | Session title | `12px / 18px`, `500` | `text-xs font-medium` | Session 列表与对话标题 |
 | Conversation | `14px / 28px`, `400` | `text-sm font-normal leading-7` | 用户消息与 Agent 最终回答 |
 | UI body | `13px / 20px`, `400` | `text-[13px] font-normal leading-5` | 菜单描述、普通界面文本 |
-| Metadata | `10–11px / 16px`, `500` | `text-[10px] font-medium` | 状态、时间、数量；英文状态可使用 `tracking-[0.08em] uppercase` |
+| Metadata | `11px / 16px`, `500` | `text-[11px] font-medium` | 状态、时间、数量；英文状态可使用 `tracking-[0.08em] uppercase` |
 | Machine label | `11–12px / 18px`, `400` mono | `font-mono text-[11px]` | `/command`、工具名、模型 ID |
 | Path and code | `12px / 20px`, `400` mono | `font-mono text-xs leading-5` | 文件路径、命令、代码和 Diff |
 | Brand wordmark | `14–24px / 1`, `400` pixel mono | `font-brand` | AGNET 品牌字标和少量产品识别位 |

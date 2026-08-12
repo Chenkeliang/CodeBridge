@@ -289,17 +289,17 @@ describe("conversation event projection", () => {
 
     expect(describeTool({ name: "exec", input: { cmd: "pnpm test" } }, "/workspace/app")).toEqual({
       category: "command",
-      label: "Ran command",
+      label: "运行命令",
       target: "pnpm test",
     });
     expect(describeTool({ name: "read_file", input: { path: "src/index.ts" } }, "/workspace/app")).toEqual({
       category: "file",
-      label: "Read file",
+      label: "读取文件",
       target: "/workspace/app/src/index.ts",
     });
     expect(describeTool({ name: "exec", input: 'await tools.exec_command({cmd:"pnpm test", workdir:"/workspace/app"})' }, "/workspace/app")).toEqual({
       category: "command",
-      label: "Ran command",
+      label: "运行命令",
       target: "pnpm test",
     });
   });

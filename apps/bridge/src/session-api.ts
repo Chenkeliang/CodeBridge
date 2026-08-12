@@ -627,6 +627,26 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json({ runs: options.workItems.listRuns(session.taskRecordId).map((run) => toApiRun(run, session.id)) });
   });
 
+  app.post("/v1/sessions/:session_id/cancel", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    if (!session.taskRecordId) return c.json({ stopped: false });
+    const run = options.workItems.listRuns(session.taskRecordId).reverse().find((candidate) => ["queued", "running", "waiting"].includes(candidate.status));
+    if (!run) return c.json({ stopped: false });
+    if (options.executor) await options.executor.cancelRunAndWait(run.id);
+    else {
+      options.workItems.updateRunStatus(run.id, "cancelled");
+      options.workItems.appendEvent({
+        workItemId: run.workItemId,
+        runId: run.id,
+        type: "RUN_CANCELLED",
+        actor: "user",
+        target: run.id,
+      });
+    }
+    return c.json({ stopped: true, run_id: run.id });
+  });
+
   app.post("/v1/sessions/:session_id/runs", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);

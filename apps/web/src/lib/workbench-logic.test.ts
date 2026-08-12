@@ -49,8 +49,8 @@ describe("workbench logic", () => {
     expect(logic.isSpeedOption({ id: "model", name: "Model", type: "select", category: "model", values: [] })).toBe(false);
     expect(logic.serializeConfigOverride({ type: "boolean" }, "true")).toBe(true);
     expect(logic.serializeConfigOverride({ type: "select" }, "fast")).toBe("fast");
-    expect(logic.speedValueLabel("true", "On")).toBe("Fast");
-    expect(logic.speedValueLabel("false", "Off")).toBe("Standard");
+    expect(logic.speedValueLabel("true", "On")).toBe("快速");
+    expect(logic.speedValueLabel("false", "Off")).toBe("标准");
   });
 
   it("places pinned Sessions before the most recently updated Sessions", () => {

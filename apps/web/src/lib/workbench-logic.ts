@@ -30,7 +30,7 @@ export function serializeConfigOverride(option: Pick<ConfigOption, "type">, valu
 
 export function speedValueLabel(value: string, name?: string): string {
   const identity = `${value} ${name ?? ""}`.toLowerCase();
-  return value.toLowerCase() === "true" || /\b(fast|quick)\b/.test(identity) ? "Fast" : "Standard";
+  return value.toLowerCase() === "true" || /\b(fast|quick)\b/.test(identity) ? "快速" : "标准";
 }
 
 export function orderSessions(sessions: AgentSession[]): AgentSession[] {
