@@ -238,4 +238,30 @@ describe("conversation event projection", () => {
       expect.objectContaining({ kind: "assistant", content: "检查完成" }),
     ]);
   });
+
+  it("hides provider snapshot thought and answer events already represented by streamed deltas", () => {
+    const event = (eventId: string, sequence: number, runId: string | null, value: Record<string, unknown>) => ({
+      event_id: eventId,
+      sequence,
+      run_id: runId,
+      type: "AGENT_EVENT",
+      occurred_at: `2026-08-11T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+      payload: { event: value },
+    });
+    const projection = reduceConversationEvents([
+      { event_id: "user", sequence: 1, run_id: null, type: "MESSAGE_RECEIVED", occurred_at: "2026-08-11T00:00:00.000Z", payload: { message: "问题" } },
+      event("thought-1", 2, "run-1", { type: "thought_delta", text: "**先确认" }),
+      event("thought-2", 3, "run-1", { type: "thought_delta", text: "问题范围**" }),
+      event("answer-1", 4, "run-1", { type: "text_delta", text: "答案的前半段" }),
+      event("answer-2", 5, "run-1", { type: "text_delta", text: "，以及后半段" }),
+      event("imported-thought", 6, null, { type: "thought_delta", text: "**先确认问题范围**" }),
+      event("imported-answer", 7, null, { type: "text_delta", text: "答案的前半段，以及后半段" }),
+    ]);
+    expect(projection.map((item) => item.kind)).toEqual(["user", "work", "assistant"]);
+    expect(projection[1]).toMatchObject({
+      kind: "work",
+      entries: [expect.objectContaining({ kind: "thought", content: "**先确认问题范围**" })],
+    });
+    expect(projection[2]).toMatchObject({ kind: "assistant", content: "答案的前半段，以及后半段" });
+  });
 });

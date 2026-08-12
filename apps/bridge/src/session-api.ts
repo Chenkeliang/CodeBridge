@@ -73,6 +73,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
           .update(`${session.agentId}\0${session.providerSessionId}\0${position}`)
           .digest("hex")}`;
         for (const [index, item] of history.entries()) {
+          if (item.kind === "agent_event" && isProviderSnapshotCovered(options.workItems.listEvents(workItem.id), item.event)) continue;
           const key = item.kind === "message"
             ? `message:${item.text}`
             : `agent:${JSON.stringify(item.event)}`;
@@ -809,6 +810,27 @@ function isAgentResponse(event: unknown): boolean {
     "session_info_update",
     "usage_update",
   ].includes(type);
+}
+
+function isProviderSnapshotCovered(existingEvents: Array<{ payload?: Record<string, unknown> }>, candidate: Record<string, unknown>): boolean {
+  const type = candidate.type;
+  const text = candidate.text;
+  if ((type !== "thought_delta" && type !== "text_delta") || typeof text !== "string") return false;
+  for (let start = 0; start < existingEvents.length; start += 1) {
+    let combined = "";
+    let count = 0;
+    for (let index = start; index < existingEvents.length; index += 1) {
+      const value = existingEvents[index].payload?.event;
+      if (!value || typeof value !== "object" || (value as Record<string, unknown>).type !== type || typeof (value as Record<string, unknown>).text !== "string") break;
+      combined += String((value as Record<string, unknown>).text);
+      count += 1;
+      if (combined.length >= text.length) {
+        if (count > 1 && combined === text) return true;
+        break;
+      }
+    }
+  }
+  return false;
 }
 
 function toWorkflowDefinition(flow: FlowRecord): Record<string, unknown> {
