@@ -1,20 +1,25 @@
 import { useState, type ReactNode } from "react";
-import { Archive, ChevronDown, Circle, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search, Sun, Trash2, Workflow } from "lucide-react";
-import { BrandAgentIcon } from "@/components/brand-agent-icon";
+import { Archive, ChevronDown, Circle, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Sun, Trash2, Workflow } from "lucide-react";
+import { BrandAgentIcon, agentTintClass } from "@/components/brand-agent-icon";
 import { PixelMark } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { AgentProfile, AgentSession, FlowRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { relativeTime, statusLabel, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
+import { relativeTime, statusLabel, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
 
-export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onArea, onTheme }: {
+export function AgentRail({ agents, area, selectedAgentId, theme, density, reading, onAgent, onArea, onTheme, onDensity, onReading }: {
   agents: AgentProfile[];
   area: PanelArea;
   selectedAgentId: string | null;
   onAgent: (id: string) => void;
   onArea: (area: PanelArea) => void;
   theme: Theme;
+  density: Density;
+  reading: boolean;
   onTheme: () => void;
+  onDensity: (density: Density) => void;
+  onReading: (reading: boolean) => void;
 }) {
   return <aside className={cn("flex min-h-0 flex-col items-center gap-3 border-r px-2.5 py-3", "bg-sidebar", "border-line")}>
     <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")} title="AGNET · CodeBridge"><PixelMark className="size-4" /></div>
@@ -22,6 +27,7 @@ export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onAre
       {agents.map((agent) => {
         const selected = area === "agents" && selectedAgentId === agent.agent_id;
         return <button aria-label={agent.display_name} aria-pressed={selected} className={cn("group relative grid size-[42px] place-items-center rounded-md border border-transparent transition-all duration-150 hover:-translate-y-px hover:opacity-80", "text-muted", selected && cn("bg-surface", "text-ink", "border-line-strong", "shadow-card"))} key={agent.agent_id} onClick={() => onAgent(agent.agent_id)} title={`${agent.display_name} · ${statusLabel[agent.status] ?? agent.status}`} type="button">
+          {selected && <span aria-hidden="true" className={cn("absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-full", agentTintClass(agent.agent_id))} />}
           <BrandAgentIcon agentId={agent.agent_id} className="size-[18px]" />
           <span className={cn("absolute bottom-1.5 right-1.5 size-1.5 rounded-full border-2", "border-sidebar", agent.status === "healthy" ? "bg-success" : "bg-faint")} />
         </button>;
@@ -30,6 +36,26 @@ export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onAre
     <div className={cn("my-2 h-px w-8 border-t", "border-line")} />
     <button aria-label="Flows" aria-pressed={area === "flows"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "flows" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("flows")} title="Flows" type="button"><Workflow className="size-3.5" /></button>
     <div className="flex-1" />
+    <Popover>
+      <PopoverTrigger asChild>
+        <button aria-label="显示设置" className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted")} title="显示设置" type="button"><Settings2 className="size-3.5" /></button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className={cn("w-60", "bg-surface", "text-ink-soft", "border-line-strong", "shadow-panel")} side="right" sideOffset={10}>
+        <p className={cn("mb-2 text-[11px] font-semibold uppercase tracking-[0.1em]", "text-faint")}>显示设置</p>
+        <div className="grid gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs">对话密度</span>
+            <div className={cn("flex rounded-md border p-0.5", "border-line")}>
+              {(["compact", "comfortable"] as const).map((value) => <button aria-pressed={density === value} className={cn("h-6 rounded px-2 text-[11px] transition-colors", density === value ? cn("bg-surface-soft", "text-ink") : "text-muted")} key={value} onClick={() => onDensity(value)} type="button">{value === "compact" ? "紧凑" : "舒展"}</button>)}
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs">衬线阅读模式</span>
+            <button aria-pressed={reading} className={cn("h-6 rounded-md border px-2 text-[11px] transition-colors", "border-line", reading ? cn("bg-surface-soft", "text-ink") : "text-muted")} onClick={() => onReading(!reading)} type="button">{reading ? "已开启" : "已关闭"}</button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
     <button aria-label="切换主题" className={cn("grid size-9 place-items-center rounded-md transition-all hover:-translate-y-px hover:opacity-80", "text-muted")} onClick={onTheme} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-3.5" /></button>
   </aside>;
 }
@@ -123,7 +149,7 @@ export function SessionHeader({ agent, session, menuOpen, menuView, panelOpen, r
 }) {
   return <header className={cn("flex min-h-[72px] shrink-0 items-center justify-between gap-5 border-b px-8 py-4", "border-line")}>
     <div className="flex min-w-0 items-center gap-3">
-      <Button aria-label={panelOpen ? "收起 Session 面板" : "展开 Session 面板"} className={cn("size-8 shrink-0 px-0", "text-muted")} onClick={onTogglePanel} size="icon" title={panelOpen ? "收起面板" : "展开面板"} variant="ghost"><ChevronDown className={cn("size-4 transition-transform", panelOpen ? "rotate-90" : "-rotate-90")} /></Button><span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <PixelMark className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate font-brand text-sm font-normal tracking-[-0.02em]", "text-ink")}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", "text-muted")}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
+      <Button aria-label={panelOpen ? "收起 Session 面板" : "展开 Session 面板"} className={cn("size-8 shrink-0 px-0", "text-muted")} onClick={onTogglePanel} size="icon" title={panelOpen ? "收起面板" : "展开面板"} variant="ghost"><ChevronDown className={cn("size-4 transition-transform", panelOpen ? "rotate-90" : "-rotate-90")} /></Button>{agent && <span aria-hidden="true" className={cn("w-[3px] self-stretch shrink-0 rounded-full", agentTintClass(agent.agent_id))} />}<span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <PixelMark className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate font-brand text-sm font-normal tracking-[-0.02em]", "text-ink")}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", "text-muted")}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
     {session && <div className="relative flex items-center gap-2">
       <span className={cn("hidden items-center gap-1.5 text-[11px] sm:flex", "text-muted")}><span className={cn("size-1.5 rounded-full", session.status === "active" || session.status === "idle" ? "bg-success" : "bg-faint")} />{statusLabel[session.status] ?? session.status}</span>
       <Button aria-label="Session 操作" className={cn("size-8 px-0", "text-muted")} onClick={onMenu} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button>
