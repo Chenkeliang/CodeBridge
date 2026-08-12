@@ -3,6 +3,68 @@ import { reduceConversationEvents } from "./events";
 import * as eventLogic from "./events";
 
 describe("conversation event projection", () => {
+  it("projects a running work block as soon as a Run starts", () => {
+    const projection = reduceConversationEvents([
+      {
+        event_id: "message-1",
+        sequence: 1,
+        run_id: null,
+        type: "MESSAGE_RECEIVED",
+        occurred_at: "2026-08-11T00:00:00.000Z",
+        payload: { message: "检查项目" },
+      },
+      {
+        event_id: "run-started-1",
+        sequence: 2,
+        run_id: "run-1",
+        type: "RUN_STARTED",
+        occurred_at: "2026-08-11T00:00:01.000Z",
+        payload: {},
+      },
+    ]);
+
+    expect(projection).toEqual([
+      expect.objectContaining({ kind: "user", content: "检查项目" }),
+      expect.objectContaining({
+        kind: "work",
+        id: "run-started-1",
+        entries: [],
+        runId: "run-1",
+        running: true,
+      }),
+    ]);
+  });
+
+  it("marks the running work block complete when the Run finishes", () => {
+    const projection = reduceConversationEvents([
+      {
+        event_id: "run-started-1",
+        sequence: 1,
+        run_id: "run-1",
+        type: "RUN_STARTED",
+        occurred_at: "2026-08-11T00:00:01.000Z",
+        payload: {},
+      },
+      {
+        event_id: "run-succeeded-1",
+        sequence: 2,
+        run_id: "run-1",
+        type: "RUN_SUCCEEDED",
+        occurred_at: "2026-08-11T00:00:06.000Z",
+        payload: {},
+      },
+    ]);
+
+    expect(projection).toEqual([
+      expect.objectContaining({
+        kind: "work",
+        runId: "run-1",
+        running: false,
+        endedAt: "2026-08-11T00:00:06.000Z",
+      }),
+    ]);
+  });
+
   it("merges streamed text deltas and tool lifecycle events", () => {
     const projection = reduceConversationEvents([
       {
