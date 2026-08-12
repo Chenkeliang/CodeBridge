@@ -36,8 +36,8 @@
   --agnet-surface-tint: #F2F4EF;
   --agnet-ink: #191C16;
   --agnet-ink-soft: #373C32;
-  --agnet-muted: #73796C;
-  --agnet-faint: #9CA296;
+  --agnet-muted: #5C6255;
+  --agnet-faint: #6B7163;
   --agnet-line: #E0E4DC;
   --agnet-line-strong: #CDD3C8;
   --agnet-accent: #CCFF00;
@@ -47,6 +47,7 @@
   --agnet-warning: #C27B18;
   --agnet-danger: #D25D3D;
   --agnet-danger-soft: #FCEBE6;
+  --agnet-success-soft: #E2EEE7;
   --agnet-control-accent: #3B8659;
   --agnet-shadow-panel: 0 20px 48px rgba(25, 28, 22, 0.08);
   --agnet-shadow-card: 0 4px 16px rgba(25, 28, 22, 0.07);
@@ -61,8 +62,8 @@
   --agnet-surface-tint: #20231E;
   --agnet-ink: #F1F2EA;
   --agnet-ink-soft: #D2D6C9;
-  --agnet-muted: #9DA496;
-  --agnet-faint: #6E7669;
+  --agnet-muted: #A8AFA0;
+  --agnet-faint: #868D7E;
   --agnet-line: #30352D;
   --agnet-line-strong: #444B40;
   --agnet-accent: #FF683D;
@@ -72,6 +73,7 @@
   --agnet-warning: #E7AA4E;
   --agnet-danger: #FF8063;
   --agnet-danger-soft: #41231D;
+  --agnet-success-soft: #223128;
   --agnet-control-accent: #FF683D;
   --agnet-shadow-panel: 0 20px 56px rgba(0, 0, 0, 0.28);
   --agnet-shadow-card: 0 5px 18px rgba(0, 0, 0, 0.22);
@@ -98,6 +100,7 @@
   --color-warning: var(--agnet-warning);
   --color-danger: var(--agnet-danger);
   --color-danger-soft: var(--agnet-danger-soft);
+  --color-success-soft: var(--agnet-success-soft);
   --color-control-accent: var(--agnet-control-accent);
   --shadow-panel: var(--agnet-shadow-panel);
   --shadow-card: var(--agnet-shadow-card);

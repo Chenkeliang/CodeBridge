@@ -71,6 +71,8 @@ final result: passed
 
 Source: code review of `apps/web/src/components/workbench.tsx` (1128 lines). Not yet fixed; grouped by priority.
 
+> **落地状态（2026-08-12 下午）**：P0-1/2/3/4、P1-5/6/7/8/9/10/12、P2-13/14/15 已完成；P1-11（Session 列表虚拟化）以 `content-visibility` 廉价方案落地。提案 A4（Working 实时耗时）、D10（时间线脊柱）、E12（Cmd+K 面板 + 弹层键盘导航）、E13（发送键冲压）已落地。主题切换圆形揭示以 transform-scale 实现（未违反 opacity/transform 约束）。未落地：A1/A2 像素转场、B5 accent 减量、B6 per-Agent 标识色、B7 语法高亮、C8 阅读模式、C9 密度档位、D11 审批走线动画。停止 Run 按钮依赖新的 `POST /v1/sessions/:id/cancel` 端点，**需重启 bridge 进程生效**。
+
 ## P0 — 可用性
 
 1. `/` 命令与 `@` 上下文弹层不支持键盘导航（无 ↑↓ 选择、Enter 确认），只能鼠标点击。

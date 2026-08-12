@@ -86,6 +86,8 @@ export const api = {
     }),
   runs: async (id: string) =>
     (await request<{ runs: RunRecord[] }>(`/v1/sessions/${encodeURIComponent(id)}/runs`)).runs,
+  cancelRun: (id: string) =>
+    request<{ stopped: boolean; run_id?: string }>(`/v1/sessions/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" }),
   startRun: (id: string, flowId: string | null, model: string | null, permissionMode: string | null = null, effort: string | null = null) =>
     request<RunRecord>(`/v1/sessions/${encodeURIComponent(id)}/runs`, {
       method: "POST",

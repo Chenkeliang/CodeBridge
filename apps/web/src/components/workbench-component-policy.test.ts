@@ -1,9 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+/** The workbench component tree, concatenated: policy assertions apply to the whole surface. */
+function readSource(): string {
+  return ["./workbench.tsx", "./composer.tsx", "./conversation.tsx", "./session-chrome.tsx", "./command-palette.tsx"]
+    .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
+    .join("\n");
+}
+
 describe("Workbench component policy", () => {
   it("uses the shadcn Select primitive instead of native select controls", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain('from "@/components/ui/select"');
     expect(source).not.toMatch(/<select\b/);
@@ -28,20 +35,20 @@ describe("Workbench component policy", () => {
   });
 
   it("renders working activity separately from final Agent messages", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain("function WorkActivity");
     expect(source).toContain("function ToolActivity");
     expect(source).toContain("<WorkMarkdown content={entry.content}");
     expect(source).toContain('"group w-full max-w-[780px] border-t"');
-    expect(source).toContain('"grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-2 overflow-hidden pb-4"');
-    expect(source).toContain('"grid w-full min-w-0 max-w-full grid-cols-[18px_minmax(0,1fr)] gap-2 overflow-hidden px-1 py-1"');
+    expect(source).toContain('"relative grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-2 overflow-hidden pb-4"');
+    expect(source).toContain('"grid w-full min-w-0 max-w-full grid-cols-[21px_minmax(0,1fr)] gap-2 overflow-hidden px-1 py-1"');
     expect(source).toContain('"max-w-full break-words text-xs font-normal leading-5"');
     expect(source).not.toContain("Agent · working");
   });
 
   it("places command and context suggestions outside the composer input surface", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain('"absolute bottom-[calc(100%+0.5rem)] left-3 z-30');
     expect(source).toContain('"absolute bottom-[calc(100%+0.5rem)] left-12 z-30');
@@ -50,7 +57,7 @@ describe("Workbench component policy", () => {
   });
 
   it("renders math and Mermaid diagrams as rich conversation content", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
     const mermaidUrl = new URL("./mermaid-diagram.tsx", import.meta.url);
 
     expect(existsSync(mermaidUrl)).toBe(true);
@@ -66,13 +73,13 @@ describe("Workbench component policy", () => {
   });
 
   it("keeps rendered Markdown mounted while unrelated Session controls change", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain("const Markdown = memo(function Markdown");
   });
 
   it("keeps Agent-native model, reasoning, and permission controls in the Composer", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
     const sliderUrl = new URL("./ui/slider.tsx", import.meta.url);
 
     expect(source).toContain("permissionOption={permissionOption}");
@@ -84,14 +91,14 @@ describe("Workbench component policy", () => {
     expect(source).toContain("<SpeedControl");
     expect(existsSync(sliderUrl)).toBe(true);
     expect(source).toContain('const effectiveValue = value || option.currentValue || levels[0]?.value || ""');
-    expect(source).toContain('onClick={() => onValue("")}>Use default</button>');
-    expect(source).toContain('label="Agent default"');
+    expect(source).toContain('onClick={() => onValue("")}>恢复默认</button>');
+    expect(source).toContain('label="Agent 默认"');
     expect(source).toContain("<SelectValue>{triggerLabel}</SelectValue>");
     expect(source).toContain('session.status === "active" || session.status === "idle" ? "bg-success" : "bg-faint"');
   });
 
   it("uses reduced-motion-safe feedback for the discrete reasoning slider", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
     const slider = readFileSync(new URL("./ui/slider.tsx", import.meta.url), "utf8");
 
     expect(source).toContain("previewIndex >= index");
@@ -101,7 +108,7 @@ describe("Workbench component policy", () => {
   });
 
   it("uses the open pixel typography and AGNET product mark", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
     const mark = readFileSync(new URL("./pixel-mark.tsx", import.meta.url), "utf8");
     const styles = readFileSync(new URL("../index.css", import.meta.url), "utf8");
 
@@ -132,28 +139,29 @@ describe("Workbench component policy", () => {
   });
 
   it("positions a loaded Session at the newest conversation item", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
-    expect(source).toContain("conversationViewport.current.scrollTop = conversationViewport.current.scrollHeight");
-    expect(source).toContain("[events, selectedSessionId, loadingSession, sending]");
+    expect(source).toContain("viewport.scrollTop = viewport.scrollHeight");
+    expect(source).toContain("stuckToBottom");
+    expect(source).toContain("[events, selectedSessionId, loadingSession, sending, stuckToBottom]");
     expect(source).toContain("requestAnimationFrame");
   });
 
   it("clears the previous Session projection before hydrating the next one", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain("setEvents(pendingEvents.current[sessionId] ?? [])");
   });
 
   it("does not block the first paint on provider Session import", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain("void reload(false).then(() => void reload(true, true));");
     expect(source).toContain("async (importProvider = false, silent = false)");
   });
 
   it("opens live work and keeps reasoning headings lighter than answer headings", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain("<details open={running || undefined}");
     expect(source).toContain('h1: ({ children }) => <h1 className="mb-1 text-xs font-medium leading-5"');
@@ -162,7 +170,7 @@ describe("Workbench component policy", () => {
   });
 
   it("shows the Agent identity when an existing Session has no messages", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain('aria-label="Empty Session"');
     expect(source).toContain("selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id}");
@@ -170,18 +178,19 @@ describe("Workbench component policy", () => {
   });
 
   it("aligns work entries and normalizes semantic icon frames", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain('"flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]"');
     expect(source).not.toContain('"flex cursor-pointer list-none items-center gap-2 py-3 pl-6 text-[11px]"');
-    expect(source).toContain('"w-full min-w-0 max-w-full pl-6"');
+    expect(source).toContain('"bg-line"');
+    expect(source).toContain("LiveElapsed");
     expect(source).toContain('"grid size-4 shrink-0 place-items-center"');
     expect(source).toContain("<PixelMark");
     expect(source).toContain("<BrandAgentIcon");
   });
 
   it("projects the accepted user message before the run starts", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain("const receipt = await api.sendMessage");
     expect(source).toContain("event_id: receipt.event_id");
@@ -189,7 +198,7 @@ describe("Workbench component policy", () => {
   });
 
   it("offers per-Session management from each Session row", () => {
-    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const source = readSource();
 
     expect(source).toContain("function SessionRow");
     expect(source).toContain("aria-label={`管理 ${title}`}");

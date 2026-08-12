@@ -336,7 +336,7 @@ export function describeTool(
   const input = tool.input && typeof tool.input === "object" ? tool.input as Record<string, unknown> : {};
   const command = stringValue(input.cmd) ?? stringValue(input.command) ?? embeddedCommand(tool.input);
   if (command || ["exec", "shell", "terminal", "command"].some((value) => name.includes(value))) {
-    return { category: "command", label: "Ran command", ...(command ? { target: command } : {}) };
+    return { category: "command", label: "运行命令", ...(command ? { target: command } : {}) };
   }
   const rawPath = tool.locations?.[0]?.path
     ?? stringValue(input.path)
@@ -348,14 +348,14 @@ export function describeTool(
       : rawPath;
     return { category: "file", label: fileToolLabel(name), ...(target ? { target } : {}) };
   }
-  return { category: "tool", label: `Used ${tool.name}` };
+  return { category: "tool", label: `使用 ${tool.name}` };
 }
 
 function fileToolLabel(name: string): string {
-  if (name.includes("read")) return "Read file";
-  if (name.includes("write") || name.includes("create")) return "Wrote file";
-  if (name.includes("edit") || name.includes("patch")) return "Edited file";
-  return "Used file";
+  if (name.includes("read")) return "读取文件";
+  if (name.includes("write") || name.includes("create")) return "写入文件";
+  if (name.includes("edit") || name.includes("patch")) return "编辑文件";
+  return "使用文件";
 }
 
 function stringValue(value: unknown): string | undefined {
