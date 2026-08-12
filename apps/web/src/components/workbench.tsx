@@ -920,14 +920,14 @@ function WorkActivity({ cwd, item, theme }: { cwd: string | null; item: WorkProj
   const tools = item.entries.filter((entry): entry is ToolProjection => entry.kind === "tool");
   const running = item.running;
   return <details open={running || undefined} className={cn("group w-full max-w-[780px] border-t", t.line)}>
-    <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]", t.muted)}>
+    <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 pl-6 text-[11px]", t.muted)}>
       <span className={cn("font-medium", t.inkSoft)}>{running ? "Working" : `Worked for ${formatElapsed(item.startedAt, item.endedAt)}`}</span>
       {tools.length > 0 && <span>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</span>}
       <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
     </summary>
     <div className="grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-2 overflow-hidden pb-4">
       {item.entries.map((entry, index) => entry.kind === "tool"
-        ? <ToolActivity cwd={cwd} key={entry.id} theme={theme} tool={entry} />
+        ? <div className="w-full min-w-0 max-w-full pl-6" key={entry.id}><ToolActivity cwd={cwd} theme={theme} tool={entry} /></div>
         : <div className="grid w-full min-w-0 max-w-full grid-cols-[18px_minmax(0,1fr)] gap-2 overflow-hidden px-1 py-1" key={`${entry.kind}-${index}`}><span className={cn("mt-1 size-1.5 rounded-full", entry.kind === "thought" ? t.warning : t.faint)} /><div className="min-w-0"><p className={cn("mb-1 text-[10px] font-medium uppercase tracking-[0.08em]", entry.kind === "thought" ? t.warning : t.muted)}>{entry.kind === "thought" ? "Reasoning" : "Progress"}</p><WorkMarkdown content={entry.content} theme={theme} /></div></div>)}
     </div>
   </details>;
@@ -953,7 +953,7 @@ function ToolActivity({ cwd, theme, tool }: { cwd: string | null; theme: Theme; 
   const status = tool.status === "failed" ? "Failed" : tool.status === "completed" ? "Completed" : "Running";
   return <details className={cn("group/tool rounded-md border", t.surfaceTint, t.line)}>
     <summary className={cn("flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-xs", t.muted)}>
-      <ToolIcon className="size-3.5 shrink-0" />
+      <span className="grid size-4 shrink-0 place-items-center"><ToolIcon className="size-3.5" /></span>
       <span className={cn("shrink-0 font-medium", t.inkSoft)}>{presentation.label}</span>
       {presentation.target && <span className={cn("min-w-0 flex-1 truncate font-mono text-[10px]", t.muted)} title={presentation.target}>{presentation.target}</span>}
       <span className={cn("text-[10px]", tool.status === "failed" ? t.danger : tool.status === "completed" ? t.success : t.warning)}>{status}</span>
