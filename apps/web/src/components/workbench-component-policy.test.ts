@@ -113,6 +113,12 @@ describe("Workbench component policy", () => {
     expect(source).toContain("requestAnimationFrame");
   });
 
+  it("clears the previous Session projection before hydrating the next one", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("setEvents(pendingEvents.current[sessionId] ?? [])");
+  });
+
   it("does not block the first paint on provider Session import", () => {
     const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
 

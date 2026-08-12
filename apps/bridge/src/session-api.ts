@@ -741,11 +741,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   app.get("/v1/sessions/:session_id/events", (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
-    if (!session.taskRecordId || !options.workItems.getWorkItem(session.taskRecordId)) {
-      return new Response("", {
-        headers: { "cache-control": "no-cache", "content-type": "text/event-stream; charset=utf-8" },
-      });
-    }
     const after = Number(c.req.query("after_sequence") ?? c.req.header("last-event-id") ?? "0");
     if (!Number.isInteger(after) || after < 0) return c.json({ error: "invalid_after_sequence" }, 400);
     if (c.req.query("live") === "true") {
@@ -754,7 +749,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         let open = true;
         stream.onAbort(() => { open = false; });
         while (open) {
-          const events = options.workItems.listEvents(session.taskRecordId!, cursor);
+          const current = options.catalog.getSession(session.id);
+          const taskRecordId = current?.taskRecordId;
+          if (!taskRecordId || !options.workItems.getWorkItem(taskRecordId)) {
+            await stream.sleep(250);
+            continue;
+          }
+          const events = options.workItems.listEvents(taskRecordId, cursor);
           for (const event of events) {
             await stream.writeSSE({
               id: event.eventId,
@@ -765,6 +766,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
           }
           if (!events.length) await stream.sleep(250);
         }
+      });
+    }
+    if (!session.taskRecordId || !options.workItems.getWorkItem(session.taskRecordId)) {
+      return new Response("", {
+        headers: { "cache-control": "no-cache", "content-type": "text/event-stream; charset=utf-8" },
       });
     }
     const stream = options.workItems

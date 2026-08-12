@@ -1033,6 +1033,36 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("keeps a new Session live stream open until its first message creates a work item", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    const response = await app.request(`/v1/sessions/${session.id}/events?after_sequence=0&live=true`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const reader = response.body!.getReader();
+    const message = await app.request(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ message: "首条实时消息" }),
+    });
+    expect(message.status).toBe(202);
+    let received = "";
+    for (let attempt = 0; attempt < 8 && !received.includes("MESSAGE_RECEIVED"); attempt += 1) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE timeout")), 2_000)),
+      ]);
+      expect(chunk.done).toBe(false);
+      received += new TextDecoder().decode(chunk.value);
+    }
+    expect(received).toContain("MESSAGE_RECEIVED");
+    await reader.cancel();
+    catalog.close();
+    workItems.close();
+  });
+
   it("makes Session creation, messages and Runs idempotent", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

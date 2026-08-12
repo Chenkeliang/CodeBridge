@@ -257,6 +257,7 @@ export function Workbench() {
     const controller = new AbortController();
     streamAbort.current = controller;
     setLoadingSession(true);
+    setEvents(pendingEvents.current[sessionId] ?? []);
     setError(null);
     setMenuOpen(false);
     setMenuView("actions");
