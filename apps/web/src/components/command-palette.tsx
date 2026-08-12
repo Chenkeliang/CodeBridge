@@ -13,10 +13,9 @@ interface PaletteItem {
   run: () => void;
 }
 
-export function CommandPalette({ agents, sessions, selectedAgentId, canCreate, onClose, onSelectAgent, onSelectSession, onCreateSession, onToggleTheme }: {
+export function CommandPalette({ agents, sessions, canCreate, onClose, onSelectAgent, onSelectSession, onCreateSession, onToggleTheme }: {
   agents: AgentProfile[];
   sessions: AgentSession[];
-  selectedAgentId: string | null;
   canCreate: boolean;
   onClose: () => void;
   onSelectAgent: (id: string) => void;
