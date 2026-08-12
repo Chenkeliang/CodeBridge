@@ -149,10 +149,10 @@ function ReasoningLevelControl({ onValue, option, value }: { onValue: (value: st
   const [previewIndex, setPreviewIndex] = useState(committedIndex);
   useEffect(() => setPreviewIndex(committedIndex), [committedIndex]);
   const active = levels[previewIndex] ?? levels[0]!;
-  const activeLabel = `${active.name || active.value}${value ? "" : " · 默认"}`;
+  const activeLabel = active.name || active.value;
   return <Popover>
     <PopoverTrigger asChild>
-      <Button aria-label={option.name} className={cn("h-7 max-w-44 shrink-0 gap-1 border px-2 py-0 text-[11px] shadow-none", "bg-surface-soft", "text-ink-soft", "border-line", "hover:bg-line")} title={activeLabel} type="button" variant="outline"><Zap className="size-3" /><span className="truncate">{activeLabel}</span><ChevronDown className="size-3 opacity-60" /></Button>
+      <Button aria-label={option.name} className={cn("h-7 max-w-44 shrink-0 gap-1 border px-2 py-0 text-[11px] shadow-none", "bg-surface-soft", value ? "text-ink-soft" : "text-muted", "border-line", "hover:bg-line")} title={activeLabel} type="button" variant="outline"><Zap className="size-3" /><span className="truncate">{activeLabel}</span><ChevronDown className="size-3 opacity-60" /></Button>
     </PopoverTrigger>
     <PopoverContent align="start" className={cn("w-72", "bg-surface", "text-ink-soft", "border-line-strong", "shadow-panel")} side="top">
       <div className="mb-5 flex items-center justify-between gap-3"><span className={cn("text-xs font-medium", "text-ink")}>推理强度</span><span className="flex min-w-0 items-center gap-2">{value && <span className={cn("text-[11px] underline underline-offset-2", "text-muted")}><button onClick={() => onValue("")}>恢复默认</button></span>}<span className={cn("truncate text-[11px]", "text-muted")}>{activeLabel}</span></span></div>
@@ -168,11 +168,11 @@ function ReasoningLevelControl({ onValue, option, value }: { onValue: (value: st
 
 function SpeedControl({ onValue, option, overridden, value }: { onValue: (value: string) => void; option: ConfigOption; overridden: boolean; value: string }) {
   const selected = option.values.find((candidate) => candidate.value === value);
-  const label = `${speedValueLabel(selected?.value ?? value, selected?.name)}${overridden ? "" : " · 默认"}`;
+  const label = speedValueLabel(selected?.value ?? value, selected?.name);
   return <Select onValueChange={(next) => onValue(next === DEFAULT_SELECT_VALUE ? "" : next)} value={overridden ? value : DEFAULT_SELECT_VALUE}>
-    <SelectTrigger aria-label="Speed" className={cn("h-7 max-w-44 shrink-0 gap-1 border px-2 py-0 text-[11px] shadow-none focus-visible:ring-1", "bg-surface-soft", "text-ink-soft", "border-line", "focus:border-muted focus-visible:ring-line-strong")} title={selected?.description}><Gauge className="size-3" /><SelectValue>{label}</SelectValue></SelectTrigger>
+    <SelectTrigger aria-label="速度" className={cn("h-7 max-w-44 shrink-0 gap-1 border px-2 py-0 text-[11px] shadow-none focus-visible:ring-1", "bg-surface-soft", overridden ? "text-ink-soft" : "text-muted", "border-line", "focus:border-muted focus-visible:ring-line-strong")} title={selected?.description}><Gauge className="size-3" /><SelectValue>{label}</SelectValue></SelectTrigger>
     <SelectContent className={cn("max-w-80", "bg-surface", "text-ink-soft", "border-line-strong", "shadow-panel")}>
-      <SelectItem className={"data-[highlighted]:bg-surface-soft"} value={DEFAULT_SELECT_VALUE}>{speedValueLabel(option.currentValue ?? "false")} · Default</SelectItem>
+      <SelectItem className={"data-[highlighted]:bg-surface-soft"} value={DEFAULT_SELECT_VALUE}>跟随默认（{speedValueLabel(option.currentValue ?? "false")}）</SelectItem>
       {option.values.map((candidate) => <SelectItem className={"data-[highlighted]:bg-surface-soft"} key={candidate.value} textValue={speedValueLabel(candidate.value, candidate.name)} value={candidate.value}><span className="grid gap-0.5 py-0.5"><span>{speedValueLabel(candidate.value, candidate.name)}</span><span className={cn("max-w-72 text-[11px] font-normal leading-4", "text-muted")}>{candidate.description ?? (speedValueLabel(candidate.value, candidate.name) === "快速" ? "响应更快，配额消耗更高" : "标准响应速度")}</span></span></SelectItem>)}
     </SelectContent>
   </Select>;
@@ -182,7 +182,7 @@ function SessionConfigSelect({ label, onValue, option, value }: { label: string;
   const selected = option.values.find((candidate) => candidate.value === value);
   const triggerLabel = selected ? selected.name || selected.value : label;
   return <Select onValueChange={(next) => onValue(next === DEFAULT_SELECT_VALUE ? "" : next)} value={value || DEFAULT_SELECT_VALUE}>
-    <SelectTrigger aria-label={option.name} className={cn("h-7 max-w-52 shrink-0 gap-1 border px-2 py-0 text-[11px] shadow-none focus-visible:ring-1", "bg-surface-soft", "text-ink-soft", "border-line", "focus:border-muted focus-visible:ring-line-strong")} title={selected?.description}><SelectValue>{triggerLabel}</SelectValue></SelectTrigger>
+    <SelectTrigger aria-label={option.name} className={cn("h-7 max-w-52 shrink-0 gap-1 border px-2 py-0 text-[11px] shadow-none focus-visible:ring-1", "bg-surface-soft", value ? "text-ink-soft" : "text-muted", "border-line", "focus:border-muted focus-visible:ring-line-strong")} title={selected?.description}><SelectValue>{triggerLabel}</SelectValue></SelectTrigger>
     <SelectContent className={cn("max-w-80", "bg-surface", "text-ink-soft", "border-line-strong", "shadow-panel")}>
       <SelectItem className={"data-[highlighted]:bg-surface-soft"} value={DEFAULT_SELECT_VALUE}>{label}</SelectItem>
       {option.values.map((candidate) => <SelectItem className={"data-[highlighted]:bg-surface-soft"} key={candidate.value} textValue={candidate.name || candidate.value} value={candidate.value}><span className="grid gap-0.5 py-0.5"><span>{candidate.name || candidate.value}</span>{candidate.description && <span className={cn("max-w-72 text-[11px] font-normal leading-4", "text-muted")}>{candidate.description}</span>}</span></SelectItem>)}

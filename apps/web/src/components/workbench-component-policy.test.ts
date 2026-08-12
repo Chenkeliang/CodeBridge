@@ -94,7 +94,8 @@ describe("Workbench component policy", () => {
     expect(source).toContain('onClick={() => onValue("")}>恢复默认</button>');
     expect(source).toContain('label="Agent 默认"');
     expect(source).toContain("<SelectValue>{triggerLabel}</SelectValue>");
-    expect(source).toContain('session.status === "active" || session.status === "idle" ? "bg-success" : "bg-faint"');
+    expect(source).toContain('session.status === "active" ? "bg-success" : "bg-faint"');
+    expect(source).toContain('session.status !== "idle"');
   });
 
   it("uses reduced-motion-safe feedback for the discrete reasoning slider", () => {
