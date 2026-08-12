@@ -86,7 +86,6 @@ export function DesignPreview() {
         <div className="grid w-full gap-2">
           {agents.map((agent) => <button aria-label={agent.name} aria-pressed={area === "agents" && activeAgent === agent.id} className={cn("group relative grid size-[42px] place-items-center rounded-md border border-transparent transition-all duration-150 hover:-translate-y-px hover:opacity-80", "text-muted", area === "agents" && activeAgent === agent.id && cn("bg-surface", "text-ink", "border-line-strong", "shadow-card"))} key={agent.id} onClick={() => selectAgent(agent.id)} title={agent.name} type="button">
             <BrandAgentIcon agentId={agent.id} className="size-[18px]" />
-            <span className={cn("absolute bottom-1.5 right-1.5 size-1.5 rounded-full border-2", "border-sidebar", agent.status === "Ready" ? "bg-success" : "bg-faint")} />
           </button>)}
         </div>
         <div className={cn("my-2 h-px w-8", "bg-line")} />

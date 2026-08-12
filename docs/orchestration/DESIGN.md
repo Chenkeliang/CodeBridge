@@ -203,7 +203,7 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 
 - 只展示 Agent 品牌图形，不展示字母缩写。
 - 点击 Agent 切换到该 Agent 的 Session Panel。
-- 选中态同时使用边框、表面色和阴影，健康状态使用独立状态点。
+- 选中态同时使用边框、表面色、阴影和 3px Agent 身份色条；健康状态不占常驻视觉位——异常状态由 Session Panel 头部文字与 Rail tooltip 表达。
 - Flow 与 Agent 平级，位于 Agent 组下方并由分割线隔开。
 - 主题固定在 Rail 底部；设置入口只在存在完整设置界面时展示，禁止保留无动作入口。
 
