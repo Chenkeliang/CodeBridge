@@ -20,7 +20,7 @@ import type {
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, mergeConversationEvents, orderSessions, restoreSessionSelection, serializeConfigOverride } from "@/lib/workbench-logic";
+import { applyComposerSuggestion, composerTrigger, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, mergeConversationEvents, orderSessions, restoreSessionSelection, serializeConfigOverride, workspacePaths } from "@/lib/workbench-logic";
 import { messageOf, projectionKey, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
 
 export function Workbench() {
@@ -472,6 +472,17 @@ export function Workbench() {
     if (open && !workspaceListing && selectedSessionId) void browseWorkspace();
   }
 
+  function handleDraftChange(value: string) {
+    const nextTrigger = composerTrigger(value);
+    setCommandOpen(nextTrigger?.kind === "command" && commands.length > 0);
+    // Opening the context popup via typing "@" must also load the listing;
+    // previously only the toolbar "@" button fetched it, leaving an empty panel.
+    const openContext = nextTrigger?.kind === "context" && workspacePaths(selectedSession).length > 0;
+    setContextOpen(openContext);
+    if (openContext && !workspaceListing && selectedSessionId) void browseWorkspace();
+    setDraft(value);
+  }
+
   return (
     <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", panelOpen ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
       <AgentRail
@@ -563,7 +574,7 @@ export function Workbench() {
                 onContext={() => undefined}
                 onContextNavigate={() => undefined}
                 onContextOpen={toggleContext}
-                onDraft={setDraft}
+                onDraft={handleDraftChange}
                 onFiles={() => fileInput.current?.click()}
                 onFlow={setFlowId}
                 onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
@@ -631,7 +642,7 @@ export function Workbench() {
                   onContext={(path) => setDraft((current) => applyComposerSuggestion(current, `@${path} `))}
                   onContextNavigate={(path, root) => void browseWorkspace(path, root)}
                   onContextOpen={toggleContext}
-                  onDraft={setDraft}
+                  onDraft={handleDraftChange}
                   onFiles={() => fileInput.current?.click()}
                   onFlow={setFlowId}
                   onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
