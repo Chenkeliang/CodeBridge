@@ -136,4 +136,15 @@ describe("Workbench component policy", () => {
     expect(source).toContain("event_id: receipt.event_id");
     expect(source).toContain("mergeConversationEvents");
   });
+
+  it("offers per-Session management from each Session row", () => {
+    const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("function SessionRow");
+    expect(source).toContain("aria-label={`管理 ${title}`}");
+    expect(source).toContain("onUpdateSession");
+    expect(source).toContain("重命名");
+    expect(source).toContain("归档");
+    expect(source).toContain("删除");
+  });
 });

@@ -377,17 +377,18 @@ export function Workbench() {
     }
   }
 
-  async function updateSession(update: Record<string, unknown>) {
-    if (!selectedSessionId) return;
+  async function applySessionUpdate(sessionId: string, update: Record<string, unknown>) {
     setError(null);
     try {
-      const updated = await api.updateSession(selectedSessionId, update);
+      const updated = await api.updateSession(sessionId, update);
       setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
-      setModel(updated.model ?? "");
-      setEffort(updated.effort ?? "");
-      setConfigOverrides(updated.config_overrides ?? {});
-      setPermissionMode(updated.permission_mode ?? "");
-      if (updated.archived_at) {
+      if (selectedSessionId === sessionId) {
+        setModel(updated.model ?? "");
+        setEffort(updated.effort ?? "");
+        setConfigOverrides(updated.config_overrides ?? {});
+        setPermissionMode(updated.permission_mode ?? "");
+      }
+      if (updated.archived_at && selectedSessionId === sessionId) {
         window.localStorage.removeItem(`codebridge:last-session:${updated.agent_id}`);
         selectedSessionRef.current = null;
         setSelectedSessionId(null);
@@ -397,6 +398,10 @@ export function Workbench() {
     } catch (caught) {
       setError(messageOf(caught));
     }
+  }
+
+  async function updateSession(update: Record<string, unknown>) {
+    if (selectedSessionId) await applySessionUpdate(selectedSessionId, update);
   }
 
   function setSessionPermissionMode(value: string) {
@@ -417,20 +422,24 @@ export function Workbench() {
     void updateSession({ config_overrides: next });
   }
 
-  async function deleteSelected() {
-    if (!selectedSessionId) return;
-    const deletedId = selectedSessionId;
+  async function deleteSessionById(sessionId: string) {
     try {
-      await api.deleteSession(deletedId);
-      setSessions((current) => current.filter((session) => session.session_id !== deletedId));
-      if (selectedSession) window.localStorage.removeItem(`codebridge:last-session:${selectedSession.agent_id}`);
-      selectedSessionRef.current = null;
-      setSelectedSessionId(null);
-      setMenuOpen(false);
+      await api.deleteSession(sessionId);
+      setSessions((current) => current.filter((session) => session.session_id !== sessionId));
+      if (selectedSessionId === sessionId) {
+        if (selectedSession) window.localStorage.removeItem(`codebridge:last-session:${selectedSession.agent_id}`);
+        selectedSessionRef.current = null;
+        setSelectedSessionId(null);
+        setMenuOpen(false);
+      }
       notify("Session 已删除");
     } catch (caught) {
       setError(messageOf(caught));
     }
+  }
+
+  async function deleteSelected() {
+    if (selectedSessionId) await deleteSessionById(selectedSessionId);
   }
 
   async function pickDirectory() {
@@ -526,6 +535,8 @@ export function Workbench() {
         onQuery={setQuery}
         onRefresh={() => void reload(true)}
         onSession={selectSession}
+        onUpdateSession={(session, update) => applySessionUpdate(session.session_id, update)}
+        onDeleteSession={(session) => deleteSessionById(session.session_id)}
         onToggleArchived={() => setShowArchived((current) => !current)}
         showArchived={showArchived}
       />
@@ -695,7 +706,41 @@ function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onArea, onTh
   </aside>;
 }
 
-function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, flows, flowId, loading, query, sessions, selectedSessionId, showArchived, theme, onCreate, onFlow, onQuery, onRefresh, onSession, onToggleArchived }: {
+function SessionRow({ session, selected, theme, onSession, onUpdateSession, onDeleteSession }: {
+  session: AgentSession;
+  selected: boolean;
+  theme: Theme;
+  onSession: (session: AgentSession) => void;
+  onUpdateSession: (session: AgentSession, update: Record<string, unknown>) => Promise<void>;
+  onDeleteSession: (session: AgentSession) => Promise<void>;
+}) {
+  const t = themes[theme];
+  const title = session.title || "未命名 Session";
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuView, setMenuView] = useState<MenuView>("actions");
+  const [renameDraft, setRenameDraft] = useState(title);
+
+  function closeMenu() {
+    setMenuOpen(false);
+    setMenuView("actions");
+  }
+
+  return <div className="group relative">
+    <button className={cn("relative grid w-full gap-1 rounded-md border border-transparent px-3 py-2.5 pr-10 text-left transition-colors hover:opacity-80", t.ink, selected && cn(t.surface, t.line, t.shadowSmall))} onClick={() => { closeMenu(); onSession(session); }} title={title} type="button">
+      <span className="truncate text-xs font-medium">{title}</span>
+      <span className={cn("flex items-center gap-1.5 text-[10px]", t.muted)}>{session.pinned_at && <Pin className={cn("size-3", t.warning)} />}<span>{statusLabel[session.status] ?? session.status}</span><span>·</span><time className="font-mono">{relativeTime(session.updated_at)}</time></span>
+      {selected && <span className={cn("absolute right-2.5 top-3.5 size-1.5 rounded-full", t.accent)} />}
+    </button>
+    <Button aria-label={`管理 ${title}`} className={cn("absolute right-1.5 top-2.5 size-7 px-0", t.muted, menuOpen ? cn(t.surfaceSoft, t.ink) : "")} onClick={(event) => { event.stopPropagation(); setMenuOpen((current) => !current); setMenuView("actions"); }} size="icon" variant="ghost"><MoreHorizontal className="size-3.5" /></Button>
+    {menuOpen && <div className={cn("absolute right-1.5 top-10 z-40 w-48 rounded-lg border p-1", t.surface, t.lineStrong, t.shadow)} onClick={(event) => event.stopPropagation()}>
+      {menuView === "rename" ? <div className="space-y-2 p-2"><label className={cn("text-xs", t.muted)} htmlFor={`session-name-${session.session_id}`}>Session 名称</label><input autoFocus className={cn("h-8 w-full rounded-md border bg-transparent px-2 text-xs outline-none", t.ink, t.lineStrong, t.focus)} id={`session-name-${session.session_id}`} onChange={(event) => setRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && renameDraft.trim()) { void onUpdateSession(session, { title: renameDraft.trim() }); closeMenu(); } if (event.key === "Escape") closeMenu(); }} value={renameDraft} /><div className="flex justify-end gap-1"><MenuButton theme={theme} onClick={closeMenu}>取消</MenuButton><MenuButton disabled={!renameDraft.trim()} theme={theme} onClick={() => { void onUpdateSession(session, { title: renameDraft.trim() }); closeMenu(); }}>保存</MenuButton></div></div>
+        : menuView === "delete" ? <div className="space-y-3 p-2"><p className={cn("text-xs leading-5", t.muted)}>删除后无法恢复这个 Session。</p><div className="flex justify-end gap-1"><MenuButton theme={theme} onClick={() => setMenuView("actions")}>取消</MenuButton><MenuButton danger theme={theme} onClick={() => { void onDeleteSession(session); closeMenu(); }}>删除</MenuButton></div></div>
+          : <><MenuButton theme={theme} onClick={() => { void onUpdateSession(session, { pinned: !session.pinned_at }); closeMenu(); }}><Pin className="size-3.5" />{session.pinned_at ? "取消 PIN" : "PIN Session"}</MenuButton><MenuButton theme={theme} onClick={() => { setRenameDraft(title); setMenuView("rename"); }}><Pencil className="size-3.5" />重命名</MenuButton><MenuButton theme={theme} onClick={() => { void onUpdateSession(session, { archived: !session.archived_at }); closeMenu(); }}><Archive className="size-3.5" />{session.archived_at ? "恢复 Session" : "归档"}</MenuButton><MenuButton danger theme={theme} onClick={() => setMenuView("delete")}><Trash2 className="size-3.5" />删除</MenuButton></>}
+    </div>}
+  </div>;
+}
+
+function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, flows, flowId, loading, query, sessions, selectedSessionId, showArchived, theme, onCreate, onFlow, onQuery, onRefresh, onSession, onUpdateSession, onDeleteSession, onToggleArchived }: {
   agent: AgentProfile | null;
   activeSessionCount: number;
   area: PanelArea;
@@ -713,6 +758,8 @@ function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, f
   onQuery: (value: string) => void;
   onRefresh: () => void;
   onSession: (session: AgentSession) => void;
+  onUpdateSession: (session: AgentSession, update: Record<string, unknown>) => Promise<void>;
+  onDeleteSession: (session: AgentSession) => Promise<void>;
   onToggleArchived: () => void;
 }) {
   const t = themes[theme];
@@ -728,7 +775,7 @@ function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, f
       <div className="px-4 pb-3"><label className={cn("flex h-[34px] items-center gap-2 rounded-md border px-2.5", t.surface, t.line)}><Search className={cn("size-3.5", t.muted)} /><input aria-label="搜索 Session" className={cn("min-w-0 flex-1 bg-transparent text-xs outline-none", t.ink, t.placeholder)} onChange={(event) => onQuery(event.target.value)} placeholder="搜索 Session" value={query} /></label></div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4">
         <div className={cn("px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.1em]", t.faint)}><span>{showArchived ? "Archived" : "Sessions"}</span><span className="float-right font-mono">{showArchived ? archivedSessionCount : activeSessionCount}</span></div>
-        {sessions.map((session) => <button className={cn("relative grid w-full gap-1 rounded-md border border-transparent px-3 py-2.5 text-left transition-colors hover:opacity-80", t.ink, selectedSessionId === session.session_id && cn(t.surface, t.line, t.shadowSmall))} key={session.session_id} onClick={() => onSession(session)} title={session.title || "未命名 Session"} type="button"><span className="truncate pr-3 text-xs font-medium">{session.title || "未命名 Session"}</span><span className={cn("flex items-center gap-1.5 text-[10px]", t.muted)}>{session.pinned_at && <Pin className={cn("size-3", t.warning)} />}<span>{statusLabel[session.status] ?? session.status}</span><span>·</span><time className="font-mono">{relativeTime(session.updated_at)}</time></span>{selectedSessionId === session.session_id && <span className={cn("absolute right-2.5 top-3.5 size-1.5 rounded-full", t.accent)} />}</button>)}
+        {sessions.map((session) => <SessionRow key={session.session_id} onDeleteSession={onDeleteSession} onSession={onSession} onUpdateSession={onUpdateSession} selected={selectedSessionId === session.session_id} session={session} theme={theme} />)}
         {!loading && !sessions.length && <div className={cn("px-3 py-8 text-center text-xs", t.muted)}>{showArchived ? "暂无已归档 Session" : "当前 Agent 暂无 Session"}</div>}
       </div>
       <footer className={cn("border-t px-3 py-2", t.line)}><button className={cn("flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-opacity hover:opacity-80", t.muted)} onClick={onToggleArchived} type="button"><Archive className="size-3.5" /><span className="flex-1">{showArchived ? "返回 Sessions" : "已归档"}</span><span className="font-mono text-[10px]">{showArchived ? activeSessionCount : archivedSessionCount}</span></button></footer>
