@@ -53,7 +53,7 @@ import type {
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, orderSessions, restoreSessionSelection, serializeConfigOverride, speedValueLabel, workspacePaths } from "@/lib/workbench-logic";
+import { applyComposerSuggestion, attachmentPreviewUrl, composerTrigger, filterCommands, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, mergeConversationEvents, orderSessions, restoreSessionSelection, serializeConfigOverride, speedValueLabel, workspacePaths } from "@/lib/workbench-logic";
 
 type Theme = "paper" | "carbon";
 type PanelArea = "agents" | "flows";
@@ -158,6 +158,7 @@ export function Workbench() {
   const [pickingDirectory, setPickingDirectory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const pendingEvents = useRef<Record<string, SessionEvent[]>>({});
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<MenuView>("actions");
   const [renameDraft, setRenameDraft] = useState("");
@@ -266,9 +267,9 @@ export function Workbench() {
     void (async () => {
       try {
         const { session, events: history, commands: nextCommands, options, runs } = await api.openSession(sessionId);
-        if (!active) return;
+      if (!active) return;
         setSessions((current) => current.map((value) => value.session_id === session.session_id ? session : value));
-        setEvents(history);
+        setEvents((current) => mergeConversationEvents(pendingEvents.current[sessionId] ?? current, history));
         setCommands(nextCommands);
         setConfigOptions(options);
         setModel(session.model ?? "");
@@ -352,7 +353,17 @@ export function Workbench() {
     setDraft("");
     setAttachments([]);
     try {
-      await api.sendMessage(sessionId, message, flowId || null, model || null, pendingAttachments, permissionMode || null, effort || null);
+      const receipt = await api.sendMessage(sessionId, message, flowId || null, model || null, pendingAttachments, permissionMode || null, effort || null);
+      const messageEvent: SessionEvent = {
+        event_id: receipt.event_id,
+        sequence: receipt.sequence,
+        run_id: null,
+        type: "MESSAGE_RECEIVED",
+        occurred_at: new Date().toISOString(),
+        payload: { message, attachment_ids: [] },
+      };
+      pendingEvents.current[sessionId] = [...(pendingEvents.current[sessionId] ?? []), messageEvent];
+      setEvents((current) => mergeConversationEvents(current, [messageEvent]));
       await api.startRun(sessionId, flowId || null, model || null, permissionMode || null, effort || null);
       setSessions((current) => current.map((session) => session.session_id === sessionId
         ? { ...session, status: "active", title: session.title ?? message.slice(0, 60), updated_at: new Date().toISOString() }

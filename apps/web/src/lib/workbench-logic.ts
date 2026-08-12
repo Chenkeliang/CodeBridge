@@ -1,4 +1,11 @@
+import type { ConversationEvent } from "./events";
 import type { AgentCommand, AgentSession, ConfigOption, MessageAttachmentInput } from "./types";
+
+export function mergeConversationEvents(current: ConversationEvent[], incoming: ConversationEvent[]): ConversationEvent[] {
+  const events = new Map(current.map((event) => [event.event_id, event]));
+  for (const event of incoming) events.set(event.event_id, event);
+  return [...events.values()].sort((left, right) => left.sequence - right.sequence);
+}
 
 export function isModelOption(option: ConfigOption): boolean {
   return option.category?.toLowerCase() === "model" || option.id.toLowerCase().includes("model");

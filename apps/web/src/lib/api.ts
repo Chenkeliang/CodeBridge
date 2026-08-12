@@ -80,7 +80,7 @@ export const api = {
     return request<WorkspaceListing>(`/v1/sessions/${encodeURIComponent(id)}/files?${params}`);
   },
   sendMessage: (id: string, message: string, flowId: string | null, model: string | null, attachments: MessageAttachmentInput[] = [], permissionMode: string | null = null, effort: string | null = null) =>
-    request<{ sequence: number }>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
+    request<{ event_id: string; sequence: number }>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
       method: "POST",
       body: JSON.stringify({ message, flow_id: flowId, model, permission_mode: permissionMode, effort, attachments }),
     }),

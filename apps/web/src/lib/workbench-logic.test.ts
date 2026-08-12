@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as workbenchLogic from "./workbench-logic";
 import type { AgentSession } from "./types";
+import type { ConversationEvent } from "./events";
 
 const { isModelOption, orderSessions } = workbenchLogic;
 
@@ -195,5 +196,19 @@ describe("workbench logic", () => {
       .toBe("data:image/png;base64,aGVsbG8=");
     expect(previewUrl({ mimeType: "application/pdf", dataBase64: "aGVsbG8=" }))
       .toBeNull();
+  });
+
+  it("merges an optimistic message with history and live events by event id", () => {
+    const mergeEvents = (workbenchLogic as unknown as {
+      mergeConversationEvents?: (current: ConversationEvent[], incoming: ConversationEvent[]) => ConversationEvent[];
+    }).mergeConversationEvents;
+    expect(mergeEvents).toBeTypeOf("function");
+    if (!mergeEvents) return;
+
+    const optimistic = { event_id: "message-1", sequence: 2, run_id: null, type: "MESSAGE_RECEIVED", occurred_at: "2026-08-12T00:00:01.000Z", payload: { message: "新问题" } } satisfies ConversationEvent;
+    const history = { ...optimistic };
+    const live = { event_id: "answer-1", sequence: 3, run_id: "run-1", type: "AGENT_EVENT", occurred_at: "2026-08-12T00:00:02.000Z", payload: { event: { type: "text_delta", text: "已收到" } } } satisfies ConversationEvent;
+
+    expect(mergeEvents([optimistic], [history, live])).toEqual([optimistic, live]);
   });
 });
