@@ -1,6 +1,6 @@
-/** AGNET's pixel bridge: independent agent nodes joined by a shared work surface. */
+/** AGNET's pixel bridge: a tied arch over a shared deck, with water reflections below. */
 export function PixelMark({ className = "size-4" }: { className?: string }) {
-  return <svg aria-hidden="true" className={className} fill="currentColor" shapeRendering="crispEdges" viewBox="0 0 8 8"><title>AGNET</title><path d="M0 0h1v1h1v1h4V1h1V0h1v8H7V7H6V6H2v1H1v1H0zm2 3v2h4V3z" /></svg>;
+  return <svg aria-hidden="true" className={className} fill="currentColor" shapeRendering="crispEdges" viewBox="0 0 8 8"><title>AGNET</title><path d="M3 1h2v1H3zM2 2h1v1H2zM5 2h1v1H5zM1 3h1v2H1zM6 3h1v2H6zM0 5h8v1H0zM2 7h1v1H2zM4 7h1v1H4zM6 7h1v1H6z" /></svg>;
 }
 
 export function PixelWordmark({ className = "font-brand text-sm" }: { className?: string }) {

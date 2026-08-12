@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/brand/agnet-logo-carbon.svg" />
+    <img alt="AGNET · CodeBridge" src="apps/web/public/brand/agnet-logo.svg" width="320" />
+  </picture>
+</p>
+
 # CodeBridge（码桥）
 
 一个自托管的多通道 [Agent Client Protocol（ACP）](https://agentclientprotocol.com) 网关。

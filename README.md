@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/brand/agnet-logo-carbon.svg" />
+    <img alt="AGNET · CodeBridge" src="apps/web/public/brand/agnet-logo.svg" width="320" />
+  </picture>
+</p>
+
 # CodeBridge
 
 Self-hosted, multi-channel [Agent Client Protocol (ACP)](https://agentclientprotocol.com) gateway for coding agents.
