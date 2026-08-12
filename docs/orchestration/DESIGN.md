@@ -181,7 +181,8 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 - 等宽字体只用于机器生成或需要字符对齐的信息，不能用于长篇自然语言正文。
 - 同一信息层级在 Paper Lime 与 Carbon Vermilion 中保持完全一致的字号、行高和字重。
 - 字体层级必须通过基础组件落地，页面层不得临时引入新的字号或字体族。
-- 产品识别使用 AGNET 像素桥标记；Agent 自身仍使用各 Agent 的官方几何图标，不能用像素化 AGNET 标记冒充 Agent Logo。
+- 产品识别使用 AGNET 像素桥标记（系杆拱 + 桥面 + 水面倒影，8×8 像素网格）；Agent 自身仍使用各 Agent 的官方几何图标，不能用像素化 AGNET 标记冒充 Agent Logo。
+- 品牌资产位于 `apps/web/public/brand/`：`agnet-mark.svg`（Paper 图标）、`agnet-mark-carbon.svg`（Carbon 图标）、`agnet-logo.svg` / `agnet-logo-carbon.svg`（横向字标组合，字标为 Departure Mono 字形转路径，无字体依赖）。组件内联版本为 `PixelMark`，必须与 SVG 资产保持同一图形。
 
 ## 4. 信息架构
 
