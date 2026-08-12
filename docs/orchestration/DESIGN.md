@@ -101,7 +101,7 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.ink` | `#191C16` | 一级文字 |
 | `agnet.inkSoft` | `#373C32` | 正文 |
 | `agnet.muted` | `#5C6255` | 次级文字（canvas 上对比度 5.9:1） |
-| `agnet.faint` | `#6B7163` | 辅助信息（canvas 上对比度 4.7:1，满足 WCAG AA） |
+| `agnet.faint` | `#656D5C` | 辅助信息（canvas 上对比度 5.0:1，满足 WCAG AA） |
 | `agnet.line` | `#E0E4DC` | 普通边线 |
 | `agnet.lineStrong` | `#CDD3C8` | 强调边线 |
 | `agnet.accent` | `#CCFF00` | 主动作和活动标识 |
@@ -128,7 +128,7 @@ Agent 标识色（Paper / Carbon）：`codex #10A37F / #2FC79E`，`claude #D9775
 | `agnet.ink` | `#F1F2EA` | 一级文字 |
 | `agnet.inkSoft` | `#D2D6C9` | 正文 |
 | `agnet.muted` | `#A8AFA0` | 次级文字（canvas 上对比度 8.2:1） |
-| `agnet.faint` | `#868D7E` | 辅助信息（canvas 上对比度 5.4:1，满足 WCAG AA） |
+| `agnet.faint` | `#909789` | 辅助信息（canvas 上对比度 6.2:1，满足 WCAG AA） |
 | `agnet.line` | `#30352D` | 普通边线 |
 | `agnet.lineStrong` | `#444B40` | 强调边线 |
 | `agnet.accent` | `#FF683D` | 主动作和活动标识 |
