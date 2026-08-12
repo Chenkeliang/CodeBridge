@@ -109,6 +109,7 @@ describe("Workbench component policy", () => {
     const source = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
 
     expect(source).toContain("conversationViewport.current.scrollTop = conversationViewport.current.scrollHeight");
-    expect(source).toContain("[selectedSessionId, loadingSession]");
+    expect(source).toContain("[events, selectedSessionId, loadingSession, sending]");
+    expect(source).toContain("requestAnimationFrame");
   });
 });

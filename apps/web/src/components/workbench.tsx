@@ -302,7 +302,7 @@ export function Workbench() {
       if (conversationViewport.current) conversationViewport.current.scrollTop = conversationViewport.current.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [selectedSessionId, loadingSession]);
+  }, [events, selectedSessionId, loadingSession, sending]);
 
   function selectAgent(agentId: string) {
     selectedAgentRef.current = agentId;
