@@ -13,20 +13,26 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:acp-probe": "node scripts/acp-probe.mjs",
-    "lint": "tsc -b",
+    "lint": "tsc -b && eslint apps/web/src",
     "doctor": "node apps/bridge/dist/cli.js doctor",
     "start": "node apps/bridge/dist/cli.js start",
     "runner": "node packages/runner-host/dist/cli.js",
     "start:all": "bash scripts/start.sh",
-    "setup": "bash scripts/start.sh setup"
+    "setup": "bash scripts/start.sh setup",
+    "design:qa": "node scripts/design-qa.mjs"
   },
   "bin": {
     "codebridge": "./apps/bridge/dist/cli.js",
     "codebridge-runner": "./packages/runner-host/dist/cli.js"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.0",
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "playwright-core": "^1.62.1",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^2.1.8"
   }
 }

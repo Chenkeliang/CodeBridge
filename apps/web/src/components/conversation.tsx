@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { describeTool, type ApprovalProjection, type ConversationProjection, type ToolProjection, type WorkProjection } from "@/lib/events";
 import type { ApprovalRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { formatElapsed, formatValue, projectionKey, type Theme } from "@/components/workbench-shared";
+import { formatElapsed, formatValue, type Theme } from "@/components/workbench-shared";
 
 export function ProjectionItem({ approvals, cwd, item, onApproval, theme }: { approvals: ApprovalRecord[]; cwd: string | null; item: ConversationProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void>; theme: Theme }) {
   if (item.kind === "user") return <article className="grid justify-items-end gap-2"><span className={cn("text-[11px] font-medium uppercase tracking-[0.08em]", "text-muted")}>你</span><div className={cn("max-w-[72%] rounded-xl px-3.5 py-3 text-sm leading-6", "text-ink", "bg-accent-soft")}>{item.content}</div></article>;

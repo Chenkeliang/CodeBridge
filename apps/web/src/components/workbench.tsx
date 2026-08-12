@@ -658,7 +658,6 @@ export function Workbench() {
         onSelectAgent={(id) => { selectAgent(id); }}
         onSelectSession={selectSession}
         onToggleTheme={toggleTheme}
-        selectedAgentId={selectedAgentId}
         sessions={sessions.filter((session) => session.agent_id === selectedAgentId && !session.archived_at)}
       />}
       {themeWipe && <span aria-hidden="true" className={cn("pointer-events-none fixed bottom-6 left-6 z-[60] size-4 rounded-full transition-transform duration-500 ease-out", themeWipeActive ? "scale-[600]" : "scale-0", "bg-canvas")} data-theme={themeWipe} />}
