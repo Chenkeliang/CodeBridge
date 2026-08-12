@@ -49,7 +49,7 @@ export const api = {
     const encodedId = encodeURIComponent(id);
     const session = await request<AgentSession>(`/v1/sessions/${encodedId}`);
     const [events, commands, options, runs] = await Promise.all([
-      fetchSessionEvents(id, 0),
+      fetchSessionEvents(id, 0, 2_000),
       request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodedId}/commands`),
       request<{ options?: ConfigOption[] }>(`/v1/sessions/${encodedId}/config-options`),
       request<{ runs: RunRecord[] }>(`/v1/sessions/${encodedId}/runs`),
@@ -91,7 +91,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ flow_id: flowId, model, permission_mode: permissionMode, effort }),
     }),
-  events: async (id: string, afterSequence = 0) => fetchSessionEvents(id, afterSequence),
+  events: async (id: string, afterSequence = 0) => fetchSessionEvents(id, afterSequence, afterSequence === 0 ? 2_000 : undefined),
   approvals: async (runId: string) =>
     (await request<{ approvals: ApprovalRecord[] }>(`/v1/runs/${encodeURIComponent(runId)}/approvals`)).approvals,
   approve: (runId: string, approvalId: string) =>
@@ -100,9 +100,11 @@ export const api = {
     request(`/v1/runs/${encodeURIComponent(runId)}/reject`, { method: "POST", body: JSON.stringify({ approval_id: approvalId }) }),
 };
 
-async function fetchSessionEvents(id: string, afterSequence: number): Promise<SessionEvent[]> {
+async function fetchSessionEvents(id: string, afterSequence: number, tail?: number): Promise<SessionEvent[]> {
+  const params = new URLSearchParams({ after_sequence: String(afterSequence) });
+  if (tail) params.set("tail", String(tail));
   const response = await fetch(
-    `/v1/sessions/${encodeURIComponent(id)}/events?after_sequence=${afterSequence}`,
+    `/v1/sessions/${encodeURIComponent(id)}/events?${params}`,
     { headers: { authorization: `Bearer ${runtimeToken}` } },
   );
   if (!response.ok) throw new Error(`无法读取会话事件（HTTP ${response.status}）`);

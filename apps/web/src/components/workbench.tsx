@@ -624,7 +624,11 @@ export function Workbench() {
                       />
                     ))}
                   </div>
-                ) : <div className={cn("flex min-h-[42vh] items-center justify-center text-xs", t.muted)}>输入目标开始当前 Session</div>}
+                ) : <div aria-label="Empty Session" className="flex min-h-[42vh] flex-col items-center justify-center text-center">
+                  <div className={cn("mb-4 grid size-10 place-items-center rounded-md border", t.accent, t.accentText, t.lineStrong)}>{selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id} className="size-[18px]" /> : <PixelMark className="size-5" />}</div>
+                  <h2 className={cn("font-brand text-xl font-normal tracking-[-0.02em]", t.ink)}>{selectedSession.title || (selectedAgent ? `${selectedAgent.display_name} Session` : "Session")}</h2>
+                  <p className={cn("mt-2 text-xs", t.muted)}>输入目标开始当前 Session</p>
+                </div>}
               </div>
             </section>
             <footer className="px-8 pb-5 pt-3">
@@ -766,7 +770,7 @@ function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, f
   const t = themes[theme];
   return <aside className={cn("flex min-h-0 min-w-0 flex-col border-r", t.sidebar, t.line)}>
     <header className="flex items-start justify-between gap-3 px-5 pb-4 pt-6">
-      <div className="min-w-0"><p className={cn("mb-1 text-[10px] font-semibold uppercase tracking-[0.1em]", t.muted)}>{area === "agents" ? "Agent profile" : "Catalog"}</p><h1 className={cn("truncate text-lg font-semibold tracking-[-0.035em]", t.ink)}>{area === "agents" ? agent?.display_name ?? "Agents" : "Flows"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-[11px]", t.muted)}><Circle className={cn("size-1.5 fill-current", area === "agents" && agent?.status === "healthy" ? t.success : t.faint)} />{area === "agents" ? `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "Unavailable"} · ${sessions.length} sessions` : `${flows.length} published definitions`}</p></div>
+      <div className="min-w-0"><p className={cn("mb-1 font-brand text-[10px] font-normal uppercase tracking-[0.1em]", t.muted)}>{area === "agents" ? "Agent profile" : "Catalog"}</p><h1 className={cn("truncate font-brand text-lg font-normal tracking-[-0.035em]", t.ink)}>{area === "agents" ? agent?.display_name ?? "Agents" : "Flows"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-[11px]", t.muted)}><Circle className={cn("size-1.5 fill-current", area === "agents" && agent?.status === "healthy" ? t.success : t.faint)} />{area === "agents" ? `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "Unavailable"} · ${sessions.length} sessions` : `${flows.length} published definitions`}</p></div>
       <div className="flex gap-1">
         <Button aria-label="刷新" className={cn("size-8 px-0 hover:opacity-80", t.muted)} onClick={onRefresh} size="icon" variant="ghost"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} /></Button>
         {area === "agents" && <Button aria-label="新建 Session" className={cn("size-8 border px-0 hover:-translate-y-px hover:opacity-80", t.surface, t.ink, t.lineStrong)} disabled={!agent || agent.status !== "healthy"} onClick={onCreate} size="icon" variant="outline"><Plus className="size-4" /></Button>}
@@ -799,7 +803,7 @@ function SessionHeader({ agent, session, theme, menuOpen, menuView, renameDraft,
 }) {
   const t = themes[theme];
   return <header className={cn("flex min-h-[72px] shrink-0 items-center justify-between gap-5 border-b px-8 py-4", t.line)}>
-    <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", t.accent, t.accentText, t.lineStrong)}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <PixelMark className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate text-sm font-semibold tracking-[-0.02em]", t.ink)}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", t.muted)}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
+    <div className="flex min-w-0 items-center gap-3"><span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", t.accent, t.accentText, t.lineStrong)}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <PixelMark className="size-3.5" />}</span><div className="min-w-0"><h2 className={cn("truncate font-brand text-sm font-normal tracking-[-0.02em]", t.ink)}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-[11px]", t.muted)}>{session?.cwd || agent?.display_name || "Agent Workbench"}</p></div></div>
     {session && <div className="relative flex items-center gap-2">
       <span className={cn("hidden items-center gap-1.5 text-[11px] sm:flex", t.muted)}><span className={cn("size-1.5 rounded-full", session.status === "active" || session.status === "idle" ? t.healthyDot : t.offlineDot)} />{statusLabel[session.status] ?? session.status}</span>
       <Button aria-label="Session 操作" className={cn("size-8 px-0", t.muted)} onClick={onMenu} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button>
