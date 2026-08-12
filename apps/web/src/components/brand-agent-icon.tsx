@@ -6,6 +6,19 @@ const paths: Record<string, string> = {
   opencode: "M22 24H2V0h20zM17 4.8H7v14.4h10z",
 };
 
+/** Per-agent identity tint, used only for the 3px identity bar (DESIGN.md §2.1 exception). */
+const tintClasses: Record<string, string> = {
+  claude: "bg-agent-claude",
+  codex: "bg-agent-codex",
+  cursor: "bg-agent-cursor",
+  opencode: "bg-agent-opencode",
+  pi: "bg-agent-pi",
+};
+
+export function agentTintClass(agentId: string | null | undefined): string {
+  return (agentId && tintClasses[agentId]) || "bg-line-strong";
+}
+
 /** Monochrome official brand geometry sourced from Simple Icons. */
 export function BrandAgentIcon({ agentId, className = "size-4" }: { agentId: string; className?: string }) {
   const path = paths[agentId];

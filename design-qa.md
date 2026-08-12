@@ -71,7 +71,7 @@ final result: passed
 
 Source: code review of `apps/web/src/components/workbench.tsx` (1128 lines). Not yet fixed; grouped by priority.
 
-> **落地状态（2026-08-12 下午）**：P0-1/2/3/4、P1-5/6/7/8/9/10/12、P2-13/14/15 已完成；P1-11（Session 列表虚拟化）以 `content-visibility` 廉价方案落地。提案 A4（Working 实时耗时）、D10（时间线脊柱）、E12（Cmd+K 面板 + 弹层键盘导航）、E13（发送键冲压）已落地。主题切换圆形揭示以 transform-scale 实现（未违反 opacity/transform 约束）。未落地：A1/A2 像素转场、B5 accent 减量、B6 per-Agent 标识色、B7 语法高亮、C8 阅读模式、C9 密度档位、D11 审批走线动画。停止 Run 按钮依赖新的 `POST /v1/sessions/:id/cancel` 端点，**需重启 bridge 进程生效**。
+> **落地状态（2026-08-12 下午）**：P0-1/2/3/4、P1-5/6/7/8/9/10/12、P2-13/14/15 已完成；P1-11（Session 列表虚拟化）以 `content-visibility` 廉价方案落地。提案 A1（Agent 切换像素溶解）、A2（像素格纹 skeleton）、A4（Working 实时耗时）、B6（Agent 3px 身份色条，DESIGN.md 2.1 已开例外）、B7（代码块极简语法高亮）、C8（衬线阅读模式）、C9（紧凑/舒展密度档）、D10（时间线脊柱）、D11（审批卡虚线走线，动效白名单已修订）、E12（Cmd+K 面板 + 弹层键盘导航）、E13（发送键冲压）均已落地；主题切换圆形揭示以 transform-scale 实现。B5（accent 减量）复查后确认现状已合理（accent 只剩品牌位与信号位），不改。未落地：无。停止 Run 按钮依赖新的 `POST /v1/sessions/:id/cancel` 端点，**需重启 bridge 进程生效**。
 
 ## P0 — 可用性
 

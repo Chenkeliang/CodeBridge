@@ -68,6 +68,7 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 
 - 不使用纯黑 `#000000`。
 - 不使用紫蓝色 AI 渐变。
+- 例外：Agent 品牌标识色（`agnet.agent-*`）仅允许用于 3px 身份条（Rail 选中态与 Session Header），不得用于背景、文字或其他组件。
 - 不使用外发光、霓虹阴影或彩色光晕。
 - 不使用大面积渐变文字。
 - 不使用全局玻璃拟态。
@@ -113,6 +114,8 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.successSoft` | `#E2EEE7` | Diff 新增行底色 |
 | `agnet.controlAccent` | `#3B8659` | 高亮不足场景下的控件强调（Slider 等） |
 
+Agent 标识色（Paper / Carbon）：`codex #10A37F / #2FC79E`，`claude #D97757 / #E88A68`，`cursor #525761 / #9AA0AA`，`pi #7A6FF0 / #9A8FF7`，`opencode #E8863C / #F09A55`。仅用于 3px 身份条。
+
 ### 3.3 Carbon Vermilion
 
 | Token | Value | Use |
@@ -137,6 +140,8 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.dangerSoft` | `#41231D` | 错误卡片与 Diff 删除行底色 |
 | `agnet.successSoft` | `#223128` | Diff 新增行底色 |
 | `agnet.controlAccent` | `#FF683D` | 高亮不足场景下的控件强调（Slider 等） |
+
+Agent 标识色 Carbon 取值见 §3.2 末。
 
 ### 3.4 几何 Token
 
@@ -302,7 +307,7 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 - 所有按钮具备可读 `aria-label`，纯装饰 SVG 使用 `aria-hidden`。
 - 键盘可完成 Agent/Session 切换、新建、发送、审批和关闭菜单。
 - 焦点状态必须可见；颜色对比满足 WCAG AA。
-- 动效只使用 `opacity` 和 `transform`，并尊重 `prefers-reduced-motion`。
+- 动效只使用 `opacity` 和 `transform`，并尊重 `prefers-reduced-motion`。唯一例外：待审批卡片的虚线边框允许使用 `stroke-dashoffset` 走线动画（审批是唯一需要用户决策的阻塞态，值得持续视觉提醒）。
 
 ## 9. 工程约束
 

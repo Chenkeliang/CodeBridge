@@ -3,6 +3,7 @@ import type { AgentSession, ConfigOption } from "@/lib/types";
 import { workspacePaths } from "@/lib/workbench-logic";
 
 export type Theme = "paper" | "carbon";
+export type Density = "compact" | "comfortable";
 export type PanelArea = "agents" | "flows";
 export type MenuView = "actions" | "rename" | "delete";
 

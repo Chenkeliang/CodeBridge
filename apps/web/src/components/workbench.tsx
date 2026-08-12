@@ -21,7 +21,7 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { applyComposerSuggestion, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, mergeConversationEvents, orderSessions, restoreSessionSelection, serializeConfigOverride } from "@/lib/workbench-logic";
-import { messageOf, projectionKey, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
+import { messageOf, projectionKey, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
 
 export function Workbench() {
   const [theme, setTheme] = useState<Theme>(() => readTheme());
@@ -222,6 +222,11 @@ export function Workbench() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [themeWipe, setThemeWipe] = useState<Theme | null>(null);
   const [themeWipeActive, setThemeWipeActive] = useState(false);
+  const [density, setDensity] = useState<Density>(() => window.localStorage.getItem("codebridge:web-density") === "comfortable" ? "comfortable" : "compact");
+  const [reading, setReading] = useState(() => window.localStorage.getItem("codebridge:web-reading") === "serif");
+
+  useEffect(() => { window.localStorage.setItem("codebridge:web-density", density); }, [density]);
+  useEffect(() => { window.localStorage.setItem("codebridge:web-reading", reading ? "serif" : "sans"); }, [reading]);
 
   function toggleTheme() {
     const next = theme === "paper" ? "carbon" : "paper";
@@ -250,7 +255,13 @@ export function Workbench() {
     return () => window.removeEventListener("keydown", onGlobalKey);
   });
 
+  const [pixelWipe, setPixelWipe] = useState(0);
+
   function selectAgent(agentId: string) {
+    if (agentId !== selectedAgentRef.current && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setPixelWipe((value) => value + 1);
+      window.setTimeout(() => setPixelWipe(0), 650);
+    }
     selectedAgentRef.current = agentId;
     setSelectedAgentId(agentId);
     setArea("agents");
@@ -462,14 +473,18 @@ export function Workbench() {
   }
 
   return (
-    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", panelOpen ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-theme={theme}>
+    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", panelOpen ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
       <AgentRail
         agents={agents}
         area={area}
+        density={density}
+        reading={reading}
         selectedAgentId={selectedAgentId}
         theme={theme}
         onAgent={selectAgent}
         onArea={setArea}
+        onDensity={setDensity}
+        onReading={setReading}
         onTheme={toggleTheme}
       />
 
@@ -496,6 +511,7 @@ export function Workbench() {
       />}
 
       <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", "bg-canvas text-ink")}>
+        {pixelWipe > 0 && <PixelWipe key={pixelWipe} seed={pixelWipe} />}
         <SessionHeader
           agent={selectedAgent}
           session={selectedSession}
@@ -652,6 +668,22 @@ export function Workbench() {
   );
 }
 
+
+/** Pixel-dissolve wipe shown briefly when switching agents: a grid of cells
+ *  fading in with pseudo-random delays, then out — opacity only. */
+function PixelWipe({ seed }: { seed: number }) {
+  const [on, setOn] = useState(false);
+  const [out, setOut] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOn(true));
+    const timer = window.setTimeout(() => setOut(true), 400);
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
+  }, []);
+  const delays = useMemo(() => Array.from({ length: 60 }, (_, index) => ((index * 73 + seed * 191) % 37) * 8), [seed]);
+  return <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-30 grid grid-cols-10 grid-rows-6">
+    {delays.map((delay, index) => <span className={cn("bg-canvas transition-opacity duration-150", on && !out ? "opacity-100" : "opacity-0")} key={index} style={{ transitionDelay: `${out ? 0 : delay}ms` }} />)}
+  </div>;
+}
 
 function readTheme(): Theme {
   const stored = window.localStorage.getItem("codebridge:web-theme");

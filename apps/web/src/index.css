@@ -51,6 +51,11 @@
   --agnet-control-accent: #3B8659;
   --agnet-shadow-panel: 0 20px 48px rgba(25, 28, 22, 0.08);
   --agnet-shadow-card: 0 4px 16px rgba(25, 28, 22, 0.07);
+  --agnet-agent-codex: #10A37F;
+  --agnet-agent-claude: #D97757;
+  --agnet-agent-cursor: #525761;
+  --agnet-agent-pi: #7A6FF0;
+  --agnet-agent-opencode: #E8863C;
 }
 
 [data-theme="carbon"] {
@@ -77,10 +82,33 @@
   --agnet-control-accent: #FF683D;
   --agnet-shadow-panel: 0 20px 56px rgba(0, 0, 0, 0.28);
   --agnet-shadow-card: 0 5px 18px rgba(0, 0, 0, 0.22);
+  --agnet-agent-codex: #2FC79E;
+  --agnet-agent-claude: #E88A68;
+  --agnet-agent-cursor: #9AA0AA;
+  --agnet-agent-pi: #9A8FF7;
+  --agnet-agent-opencode: #F09A55;
+}
+
+/* Display preferences (user-controlled): density and reading mode.
+   These are preference dimensions, not page-level styling. */
+[data-density="comfortable"] .conversation-body {
+  font-size: 15px;
+  line-height: 2rem;
+}
+
+[data-reading="serif"] .conversation-body {
+  font-family: Georgia, "Songti SC", "Noto Serif CJK SC", ui-serif, serif;
 }
 
 @theme inline {
   --font-brand: "Departure Mono", ui-monospace, monospace;
+  --animate-march: march 1.2s linear infinite;
+
+  @keyframes march {
+    to {
+      stroke-dashoffset: -16;
+    }
+  }
   --font-mono: "Commit Mono", ui-monospace, monospace;
   --color-canvas: var(--agnet-canvas);
   --color-sidebar: var(--agnet-sidebar);
@@ -102,6 +130,17 @@
   --color-danger-soft: var(--agnet-danger-soft);
   --color-success-soft: var(--agnet-success-soft);
   --color-control-accent: var(--agnet-control-accent);
+  --color-agent-codex: var(--agnet-agent-codex);
+  --color-agent-claude: var(--agnet-agent-claude);
+  --color-agent-cursor: var(--agnet-agent-cursor);
+  --color-agent-pi: var(--agnet-agent-pi);
+  --color-agent-opencode: var(--agnet-agent-opencode);
   --shadow-panel: var(--agnet-shadow-panel);
   --shadow-card: var(--agnet-shadow-card);
+}
+
+/* Pixel-checker texture for skeleton blocks (brand pixel motif). */
+@utility skeleton-pixel {
+  background-image: repeating-conic-gradient(var(--agnet-line) 0% 25%, transparent 0% 50%);
+  background-size: 4px 4px;
 }
