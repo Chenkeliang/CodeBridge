@@ -60,17 +60,17 @@
 
 [data-theme="carbon"] {
   color-scheme: dark;
-  --agnet-canvas: #121411;
-  --agnet-sidebar: #181A17;
-  --agnet-surface: #1C1F1B;
-  --agnet-surface-soft: #282C25;
-  --agnet-surface-tint: #20231E;
-  --agnet-ink: #F1F2EA;
-  --agnet-ink-soft: #D2D6C9;
-  --agnet-muted: #A8AFA0;
-  --agnet-faint: #909789;
-  --agnet-line: #30352D;
-  --agnet-line-strong: #444B40;
+  --agnet-canvas: #121212;
+  --agnet-sidebar: #171717;
+  --agnet-surface: #1D1D1D;
+  --agnet-surface-soft: #292929;
+  --agnet-surface-tint: #232323;
+  --agnet-ink: #F1F1ED;
+  --agnet-ink-soft: #D4D3CE;
+  --agnet-muted: #AAA9A3;
+  --agnet-faint: #92918B;
+  --agnet-line: #343434;
+  --agnet-line-strong: #4A4A48;
   --agnet-accent: #FF683D;
   --agnet-accent-ink: #211610;
   --agnet-accent-soft: #4B281F;

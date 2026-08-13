@@ -120,17 +120,17 @@ Agent 标识色（Paper / Carbon）：`codex #10A37F / #2FC79E`，`claude #D9775
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `agnet.canvas` | `#121411` | 应用画布 |
-| `agnet.sidebar` | `#181A17` | 左侧导航 |
-| `agnet.surface` | `#1C1F1B` | 对话区、浮层和面板 |
-| `agnet.surfaceSoft` | `#282C25` | 次级控件 |
-| `agnet.surfaceTint` | `#20231E` | 代码、Diff 和分组底色 |
-| `agnet.ink` | `#F1F2EA` | 一级文字 |
-| `agnet.inkSoft` | `#D2D6C9` | 正文 |
-| `agnet.muted` | `#A8AFA0` | 次级文字（canvas 上对比度 8.2:1） |
-| `agnet.faint` | `#909789` | 辅助信息（canvas 上对比度 6.2:1，满足 WCAG AA） |
-| `agnet.line` | `#30352D` | 普通边线 |
-| `agnet.lineStrong` | `#444B40` | 强调边线 |
+| `agnet.canvas` | `#121212` | 应用画布 |
+| `agnet.sidebar` | `#171717` | 左侧导航 |
+| `agnet.surface` | `#1D1D1D` | 对话区、浮层和面板 |
+| `agnet.surfaceSoft` | `#292929` | 次级控件 |
+| `agnet.surfaceTint` | `#232323` | 代码、Diff 和分组底色 |
+| `agnet.ink` | `#F1F1ED` | 一级文字 |
+| `agnet.inkSoft` | `#D4D3CE` | 正文 |
+| `agnet.muted` | `#AAA9A3` | 次级文字 |
+| `agnet.faint` | `#92918B` | 辅助信息（满足 WCAG AA） |
+| `agnet.line` | `#343434` | 普通边线 |
+| `agnet.lineStrong` | `#4A4A48` | 强调边线 |
 | `agnet.accent` | `#FF683D` | 主动作和活动标识 |
 | `agnet.accentInk` | `#211610` | Accent 底色上的文字 |
 | `agnet.accentSoft` | `#4B281F` | 用户消息和轻强调 |
@@ -142,6 +142,8 @@ Agent 标识色（Paper / Carbon）：`codex #10A37F / #2FC79E`，`claude #D9775
 | `agnet.controlAccent` | `#FF683D` | 高亮不足场景下的控件强调（Slider 等） |
 
 Agent 标识色 Carbon 取值见 §3.2 末。
+
+状态底色约束：`successSoft` 仅用于 Diff 新增行，不作为普通“已安装 / 已配置 / 运行正常”状态或大面积面板底色。被动成功状态使用中性 `surface` 底色，并以文字和图标表达；只有错误、警告等需要用户处理的状态可以使用对应的轻量语义底色。
 
 ### 3.4 几何 Token
 
