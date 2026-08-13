@@ -128,6 +128,19 @@ export function reduceConversationEvents(events: ConversationEvent[]): Conversat
         work.endedAt = event.occurred_at;
         if (activeWork === work) activeWork = undefined;
       }
+      // RUN_FAILED carries the error only on the preceding STEP_FAILED event;
+      // without this the failure closes the work block silently (no UI error).
+      if (event.type === "RUN_FAILED" && !projection.some((item) => item.kind === "error" && item.runId === event.run_id)) {
+        activeAssistant = undefined;
+        activeWork = undefined;
+        const reason = typeof event.payload?.error === "string" ? event.payload.error : "";
+        projection.push({
+          kind: "error",
+          content: reason || "运行失败,未返回详细错误。请检查所选模型在当前 Provider 下是否可用。",
+          fatal: true,
+          runId: event.run_id,
+        });
+      }
       continue;
     }
     const agentEvent = event.payload?.event;
