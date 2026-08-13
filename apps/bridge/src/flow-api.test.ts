@@ -174,4 +174,41 @@ describe("flow API", () => {
     sessions.close();
     catalog.close();
   });
+
+  it("computes content-hash revisions server-side and stores the compile tuple", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    const app = createFlowApp(catalog, "token", { sessions });
+    const body = {
+      session_id: session.id,
+      definition_revision: "agent:caller-supplied-will-be-ignored",
+      flow: {
+        flow_id: "flow-hashed",
+        name: "Hashed",
+        kind: "runbook",
+        inputs: [{ id: "company_id", type: "string", source: "user", required: true }],
+        steps: [{ id: "deliver", capability: "equity.deliver", mode: "read_only" }],
+      },
+    };
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(201);
+    const flow = catalog.get("flow-hashed");
+    expect(flow?.definitionRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(flow?.planIrHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(flow?.definitionRevision).not.toBe(flow?.planIrHash);
+    // Typed inputs must survive the API boundary end-to-end (not silently dropped).
+    expect(flow?.inputs).toEqual([{ id: "company_id", type: "string", source: "user", required: true }]);
+    // Re-posting the identical definition yields identical hashes (deterministic).
+    await app.request("/v1/flows/candidates", { method: "POST", headers, body: JSON.stringify(body) });
+    expect(catalog.get("flow-hashed")?.definitionRevision).toBe(flow?.definitionRevision);
+    expect(catalog.get("flow-hashed")?.planIrHash).toBe(flow?.planIrHash);
+    sessions.close();
+    catalog.close();
+  });
 });
