@@ -135,7 +135,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
   }
 
   return <div className="mx-auto w-full max-w-[760px] px-8 py-8">
-    <h1 className={cn("font-brand text-xl font-normal tracking-[-0.02em]", "text-ink")}>设置</h1>
+    <h1 className={cn("font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>设置</h1>
 
     {error && <div className={cn("mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span></div>}
 
