@@ -141,7 +141,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
 
     <section className="mt-8">
       <div className="flex items-center justify-between">
-        <h2 className={cn("text-[11px] font-semibold uppercase tracking-[0.1em]", "text-faint")}>Providers(Pi)</h2>
+        <h2 className={cn("text-xs font-semibold uppercase tracking-[0.1em]", "text-faint")}>Providers(Pi)</h2>
       </div>
       <p className={cn("mt-1.5 text-xs leading-5", "text-muted")}>管理 Pi 的模型供应商,写入本机 ~/.pi/agent/models.json。密钥仅保存在本机。</p>
 
@@ -153,17 +153,17 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
             <div className={cn("flex items-center gap-3 rounded-lg border px-3.5 py-3", "bg-surface", "border-line")} key={id}>
               <Plug className={cn("size-4 shrink-0", "text-muted")} />
               <div className="min-w-0 flex-1">
-                <div className={cn("flex items-center gap-2 text-[13px] font-medium", "text-ink")}>
+                <div className={cn("flex items-center gap-2 text-sm font-medium", "text-ink")}>
                   <span className="font-mono">{id}</span>
-                  <span className={cn("text-[11px] font-normal", provider.apiKey ? "text-success" : "text-warning")}>{provider.apiKey ? "已配置 key" : "缺 key"}</span>
+                  <span className={cn("text-xs font-normal", provider.apiKey ? "text-success" : "text-warning")}>{provider.apiKey ? "已配置 key" : "缺 key"}</span>
                 </div>
-                <div className={cn("mt-0.5 truncate text-[11px]", "text-muted")}>{provider.baseUrl} · {provider.models?.length ?? 0} 个模型</div>
+                <div className={cn("mt-0.5 truncate text-xs", "text-muted")}>{provider.baseUrl} · {provider.models?.length ?? 0} 个模型</div>
               </div>
               {deleting === id ? (
                 <span className="flex items-center gap-1.5">
-                  <span className={cn("text-[11px]", "text-danger")}>确认删除?</span>
-                  <button className={cn("rounded-md border px-2 py-1 text-[11px]", "text-danger", "border-line-strong")} onClick={() => void remove(id)} type="button">删除</button>
-                  <button className={cn("rounded-md px-2 py-1 text-[11px]", "text-muted")} onClick={() => setDeleting(null)} type="button">取消</button>
+                  <span className={cn("text-xs", "text-danger")}>确认删除?</span>
+                  <button className={cn("rounded-md border px-2 py-1 text-xs", "text-danger", "border-line-strong")} onClick={() => void remove(id)} type="button">删除</button>
+                  <button className={cn("rounded-md px-2 py-1 text-xs", "text-muted")} onClick={() => setDeleting(null)} type="button">取消</button>
                 </span>
               ) : (
                 <span className="flex items-center gap-1">
@@ -188,19 +188,19 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
     </section>
 
     <section className="mt-10">
-      <h2 className={cn("text-[11px] font-semibold uppercase tracking-[0.1em]", "text-faint")}>显示</h2>
+      <h2 className={cn("text-xs font-semibold uppercase tracking-[0.1em]", "text-faint")}>显示</h2>
       <div className={cn("mt-3 grid gap-3 rounded-lg border px-4 py-4", "bg-surface", "border-line")}>
         <div className="flex items-center justify-between gap-3">
           <span className={cn("text-xs", "text-ink-soft")}>对话密度</span>
           <div className={cn("flex rounded-md border p-0.5", "border-line")}>
             {(["compact", "comfortable"] as const).map((value) => (
-              <button aria-pressed={density === value} className={cn("h-6 rounded px-2 text-[11px] transition-colors", density === value ? cn("bg-surface-soft", "text-ink") : "text-muted")} key={value} onClick={() => onDensity(value)} type="button">{value === "compact" ? "紧凑" : "舒展"}</button>
+              <button aria-pressed={density === value} className={cn("h-6 rounded px-2 text-xs transition-colors", density === value ? cn("bg-surface-soft", "text-ink") : "text-muted")} key={value} onClick={() => onDensity(value)} type="button">{value === "compact" ? "紧凑" : "舒展"}</button>
             ))}
           </div>
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className={cn("text-xs", "text-ink-soft")}>衬线阅读模式</span>
-          <button aria-pressed={reading} className={cn("h-6 rounded-md border px-2 text-[11px] transition-colors", "border-line", reading ? cn("bg-surface-soft", "text-ink") : "text-muted")} onClick={() => onReading(!reading)} type="button">{reading ? "已开启" : "已关闭"}</button>
+          <button aria-pressed={reading} className={cn("h-6 rounded-md border px-2 text-xs transition-colors", "border-line", reading ? cn("bg-surface-soft", "text-ink") : "text-muted")} onClick={() => onReading(!reading)} type="button">{reading ? "已开启" : "已关闭"}</button>
         </div>
       </div>
     </section>
@@ -265,8 +265,8 @@ function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose,
         </label>
 
         <div className="mt-1 flex items-center justify-between">
-          <span className={cn("text-[11px] font-semibold uppercase tracking-[0.08em]", "text-faint")}>模型({draft.models.length})</span>
-          <button className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px]", "text-ink-soft", "border-line", "hover:bg-surface-soft")} onClick={() => patch({ models: [...draft.models, { id: "", reasoning: false, input: ["text"] }] })} type="button"><Plus className="size-3" />添加模型</button>
+          <span className={cn("text-xs font-semibold uppercase tracking-[0.08em]", "text-faint")}>模型({draft.models.length})</span>
+          <button className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-xs", "text-ink-soft", "border-line", "hover:bg-surface-soft")} onClick={() => patch({ models: [...draft.models, { id: "", reasoning: false, input: ["text"] }] })} type="button"><Plus className="size-3" />添加模型</button>
         </div>
         {draft.models.map((model, index) => (
           <div className={cn("grid gap-2 rounded-lg border p-3", "bg-surface-tint", "border-line")} key={index}>
@@ -305,7 +305,7 @@ function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose,
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="grid gap-1">
-    <span className={cn("text-[11px]", "text-muted")}>{label}</span>
+    <span className={cn("text-xs", "text-muted")}>{label}</span>
     {children}
   </label>;
 }

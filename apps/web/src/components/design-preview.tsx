@@ -212,7 +212,7 @@ export function DesignPreview() {
   const session = sessions.find((candidate) => candidate.session_id === activeSession) ?? null;
   const agentSessions = sessions.filter((candidate) => candidate.agent_id === activeAgent);
 
-  return <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", panelOpen ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
+  return <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
     <AgentRail
       agents={agents}
       area={area}
@@ -261,7 +261,7 @@ export function DesignPreview() {
       <section aria-label="预览对话" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7">
         {new URLSearchParams(window.location.search).get("state") === "states" ? (
           <div className="mx-auto grid w-full max-w-[880px] gap-8 pb-7">
-            {stateShowcase.map((block) => <div key={block.title}><p className={cn("mb-2 text-[11px] font-semibold uppercase tracking-[0.1em]", "text-faint")}>{block.title}</p>{block.node}</div>)}
+            {stateShowcase.map((block) => <div key={block.title}><p className={cn("mb-2 text-xs font-semibold uppercase tracking-[0.1em]", "text-faint")}>{block.title}</p>{block.node}</div>)}
           </div>
         ) : (
           <div className="mx-auto grid w-full max-w-[880px] gap-6 pb-7">

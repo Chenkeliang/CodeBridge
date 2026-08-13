@@ -181,8 +181,8 @@ describe("Workbench component policy", () => {
   it("aligns work entries and normalizes semantic icon frames", () => {
     const source = readSource();
 
-    expect(source).toContain('"flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]"');
-    expect(source).not.toContain('"flex cursor-pointer list-none items-center gap-2 py-3 pl-6 text-[11px]"');
+    expect(source).toContain('"flex cursor-pointer list-none items-center gap-2 py-3 text-xs"');
+    expect(source).not.toContain('"flex cursor-pointer list-none items-center gap-2 py-3 pl-6 text-xs"');
     expect(source).toContain('"bg-line"');
     expect(source).toContain("LiveElapsed");
     expect(source).toContain('"grid size-4 shrink-0 place-items-center"');

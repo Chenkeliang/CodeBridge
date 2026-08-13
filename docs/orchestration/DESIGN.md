@@ -157,9 +157,9 @@ Agent 标识色 Carbon 取值见 §3.2 末。
 | Input radius | `12px` |
 | Panel radius | `8px` |
 | Control radius | `6px` |
-| Body font | `13px` |
+| Body font | `14px` |
 | Conversation font | `14px / 28px` |
-| Metadata font | `11px` |
+| Metadata font | `11–12px`(控件 12px) |
 
 间距使用 `4px` 基础网格。常用间距为 `4 / 8 / 12 / 16 / 20 / 24 / 32`，禁止为单个页面引入没有语义的近似值。
 
@@ -173,8 +173,8 @@ Agent 标识色 Carbon 取值见 §3.2 末。
 | Section title | `13px / 20px`, `600` | `text-[13px] font-semibold` | Plan、Approval、设置分组 |
 | Session title | `12px / 18px`, `500` | `text-xs font-medium` | Session 列表与对话标题 |
 | Conversation | `14px / 28px`, `400` | `text-sm font-normal leading-7` | 用户消息与 Agent 最终回答 |
-| UI body | `13px / 20px`, `400` | `text-[13px] font-normal leading-5` | 菜单描述、普通界面文本 |
-| Metadata | `11px / 16px`, `500` | `text-[11px] font-medium` | 状态、时间、数量；英文状态可使用 `tracking-[0.08em] uppercase` |
+| UI body | `14px / 22px`, `400` | `text-sm font-normal leading-5` | 菜单描述、普通界面文本 |
+| Metadata | `12px / 16px`, `500` | `text-xs font-medium` | 状态、时间、数量；英文状态可使用 `tracking-[0.08em] uppercase` |
 | Machine label | `11–12px / 18px`, `400` mono | `font-mono text-[11px]` | `/command`、工具名、模型 ID |
 | Path and code | `12px / 20px`, `400` mono | `font-mono text-xs leading-5` | 文件路径、命令、代码和 Diff |
 | Brand wordmark | `14–24px / 1`, `400` pixel mono | `font-brand` | AGNET 品牌字标和少量产品识别位 |

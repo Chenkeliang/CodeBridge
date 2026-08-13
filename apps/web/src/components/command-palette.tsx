@@ -67,15 +67,15 @@ export function CommandPalette({ agents, sessions, canCreate, onClose, onSelectA
       <div className={cn("flex h-11 items-center gap-2 border-b px-3.5", "border-line")}>
         <Search className={cn("size-4 shrink-0", "text-muted")} />
         <input aria-label="命令面板" autoFocus className={cn("min-w-0 flex-1 bg-transparent text-sm outline-none", "text-ink", "placeholder:text-faint")} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKey} placeholder="切换 Agent / Session，或执行操作…" value={query} />
-        <kbd className={cn("rounded border px-1.5 py-0.5 font-mono text-[11px]", "text-faint", "border-line")}>esc</kbd>
+        <kbd className={cn("rounded border px-1.5 py-0.5 font-mono text-xs", "text-faint", "border-line")}>esc</kbd>
       </div>
       <div className="max-h-80 overflow-y-auto p-1.5">
         {items.map((item, itemIndex) => {
-          const header = item.group !== lastGroup ? (lastGroup = item.group, <div className={cn("px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.1em]", "text-faint")} key={`group-${item.group}`}>{item.group}</div>) : null;
-          return <Fragment key={item.id}>{header}<button aria-selected={itemIndex === index} className={cn("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px]", "text-ink", itemIndex === index ? "bg-surface-soft" : "")} onClick={() => { onClose(); item.run(); }} onMouseEnter={() => setIndex(itemIndex)} ref={itemIndex === index ? (node) => node?.scrollIntoView({ block: "nearest" }) : undefined} type="button">
+          const header = item.group !== lastGroup ? (lastGroup = item.group, <div className={cn("px-2.5 pb-1 pt-2 text-xs font-semibold uppercase tracking-[0.1em]", "text-faint")} key={`group-${item.group}`}>{item.group}</div>) : null;
+          return <Fragment key={item.id}>{header}<button aria-selected={itemIndex === index} className={cn("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm", "text-ink", itemIndex === index ? "bg-surface-soft" : "")} onClick={() => { onClose(); item.run(); }} onMouseEnter={() => setIndex(itemIndex)} ref={itemIndex === index ? (node) => node?.scrollIntoView({ block: "nearest" }) : undefined} type="button">
             {item.id.startsWith("agent:") ? <BrandAgentIcon agentId={item.id.slice(6)} className="size-3.5 shrink-0" /> : item.id.startsWith("session:") ? <Terminal className={cn("size-3.5 shrink-0", "text-muted")} /> : <Zap className={cn("size-3.5 shrink-0", "text-muted")} />}
             <span className="min-w-0 flex-1 truncate">{item.title}</span>
-            {item.hint && <span className={cn("shrink-0 font-mono text-[11px]", "text-faint")}>{item.hint}</span>}
+            {item.hint && <span className={cn("shrink-0 font-mono text-xs", "text-faint")}>{item.hint}</span>}
           </button></Fragment>;
         })}
         {items.length === 0 && <div className={cn("px-3 py-8 text-center text-xs", "text-muted")}>没有匹配项</div>}
