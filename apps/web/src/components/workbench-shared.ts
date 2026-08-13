@@ -3,7 +3,7 @@ import type { AgentSession, ConfigOption } from "@/lib/types";
 
 export type Theme = "paper" | "carbon";
 export type Density = "compact" | "comfortable";
-export type PanelArea = "agents" | "flows";
+export type PanelArea = "agents" | "flows" | "settings";
 export type MenuView = "actions" | "rename" | "delete";
 
 export const DEFAULT_SELECT_VALUE = "__default__";

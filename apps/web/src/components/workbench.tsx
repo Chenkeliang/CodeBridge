@@ -4,6 +4,7 @@ import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { CommandPalette } from "@/components/command-palette";
 import { Composer } from "@/components/composer";
 import { LoadingConversation, ProjectionItem } from "@/components/conversation";
+import { SettingsPage } from "@/components/settings-page";
 import { PixelMark } from "@/components/pixel-mark";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
 import { api, streamSessionEvents } from "@/lib/api";
@@ -353,6 +354,12 @@ export function Workbench() {
         setEffort(updated.effort ?? "");
         setConfigOverrides(updated.config_overrides ?? {});
         setPermissionMode(updated.permission_mode ?? "");
+        // Model capabilities differ per model — refetch options so the
+        // reasoning/speed controls follow the new model (agent-providers §2.6).
+        if (Object.hasOwn(update, "model")) {
+          const nextOptions = await api.configOptions(sessionId).catch(() => null);
+          if (nextOptions) setConfigOptions(nextOptions);
+        }
       }
       if (updated.archived_at && selectedSessionId === sessionId) {
         window.localStorage.removeItem(`codebridge:last-session:${updated.agent_id}`);
@@ -488,18 +495,14 @@ export function Workbench() {
       <AgentRail
         agents={agents}
         area={area}
-        density={density}
-        reading={reading}
         selectedAgentId={selectedAgentId}
         theme={theme}
         onAgent={selectAgent}
         onArea={setArea}
-        onDensity={setDensity}
-        onReading={setReading}
         onTheme={toggleTheme}
       />
 
-      {panelOpen && <SessionPanel
+      {panelOpen && area !== "settings" && <SessionPanel
         agent={selectedAgent}
         activeSessionCount={activeSessionCount}
         area={area}
@@ -540,7 +543,11 @@ export function Workbench() {
 
         {error && <div className={cn("mx-8 mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span><button aria-label="关闭错误" onClick={() => setError(null)} type="button"><X className="size-3.5" /></button></div>}
 
-        {!selectedSession ? (
+        {area === "settings" ? (
+          <section aria-label="设置" className="min-h-0 flex-1 overflow-y-auto">
+            <SettingsPage density={density} reading={reading} onDensity={setDensity} onNotify={notify} onReading={setReading} />
+          </section>
+        ) : !selectedSession ? (
           <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">
             <div className="w-full max-w-[760px]">
               <div className="mb-7 text-center">

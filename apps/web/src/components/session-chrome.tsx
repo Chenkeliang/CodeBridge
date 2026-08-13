@@ -3,23 +3,18 @@ import { Archive, ChevronDown, Circle, MoreHorizontal, Pencil, Pin, Plus, Refres
 import { BrandAgentIcon, agentTintClass } from "@/components/brand-agent-icon";
 import { PixelMark } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { AgentProfile, AgentSession, FlowRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { relativeTime, statusLabel, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
+import { relativeTime, statusLabel, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
 
-export function AgentRail({ agents, area, selectedAgentId, theme, density, reading, onAgent, onArea, onTheme, onDensity, onReading }: {
+export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onArea, onTheme }: {
   agents: AgentProfile[];
   area: PanelArea;
   selectedAgentId: string | null;
   onAgent: (id: string) => void;
   onArea: (area: PanelArea) => void;
   theme: Theme;
-  density: Density;
-  reading: boolean;
   onTheme: () => void;
-  onDensity: (density: Density) => void;
-  onReading: (reading: boolean) => void;
 }) {
   return <aside className={cn("flex min-h-0 flex-col items-center gap-3 border-r px-2.5 py-3", "bg-sidebar", "border-line")}>
     <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")} title="AGNET · CodeBridge"><PixelMark className="size-4" /></div>
@@ -35,26 +30,7 @@ export function AgentRail({ agents, area, selectedAgentId, theme, density, readi
     <div className={cn("my-2 h-px w-8 border-t", "border-line")} />
     <button aria-label="Flows" aria-pressed={area === "flows"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "flows" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("flows")} title="Flows" type="button"><Workflow className="size-3.5" /></button>
     <div className="flex-1" />
-    <Popover>
-      <PopoverTrigger asChild>
-        <button aria-label="显示设置" className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted")} title="显示设置" type="button"><Settings2 className="size-3.5" /></button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className={cn("w-60", "bg-surface", "text-ink-soft", "border-line-strong", "shadow-panel")} side="right" sideOffset={10}>
-        <p className={cn("mb-2 text-[11px] font-semibold uppercase tracking-[0.1em]", "text-faint")}>显示设置</p>
-        <div className="grid gap-3">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs">对话密度</span>
-            <div className={cn("flex rounded-md border p-0.5", "border-line")}>
-              {(["compact", "comfortable"] as const).map((value) => <button aria-pressed={density === value} className={cn("h-6 rounded px-2 text-[11px] transition-colors", density === value ? cn("bg-surface-soft", "text-ink") : "text-muted")} key={value} onClick={() => onDensity(value)} type="button">{value === "compact" ? "紧凑" : "舒展"}</button>)}
-            </div>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs">衬线阅读模式</span>
-            <button aria-pressed={reading} className={cn("h-6 rounded-md border px-2 text-[11px] transition-colors", "border-line", reading ? cn("bg-surface-soft", "text-ink") : "text-muted")} onClick={() => onReading(!reading)} type="button">{reading ? "已开启" : "已关闭"}</button>
-          </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+    <button aria-label="设置" aria-pressed={area === "settings"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "settings" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("settings")} title="设置" type="button"><Settings2 className="size-3.5" /></button>
     <button aria-label="切换主题" className={cn("grid size-9 place-items-center rounded-md transition-all hover:-translate-y-px hover:opacity-80", "text-muted")} onClick={onTheme} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-3.5" /></button>
   </aside>;
 }

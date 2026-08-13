@@ -70,3 +70,16 @@ export {
   type PiSessionLifecycleResult,
   type PiSessionRunnerOptions,
 } from "./pi-session-runner.js";
+
+export {
+  PI_PROVIDER_PRESETS,
+  piModelsPath,
+  readPiProviders,
+  testPiProviderConnection,
+  validateProviders,
+  writePiProviders,
+  type PiProvider,
+  type PiProviderModel,
+  type PiProviderPreset,
+  type PiProvidersFile,
+} from "./pi-providers.js";

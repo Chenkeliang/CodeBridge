@@ -104,3 +104,31 @@ export type SessionEvent = ConversationEvent & {
   actor?: string;
   target?: string | null;
 };
+
+export interface PiProviderModel {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
+  input?: Array<"text" | "image">;
+  contextWindow?: number;
+  maxTokens?: number;
+  [key: string]: unknown;
+}
+
+export interface PiProvider {
+  baseUrl: string;
+  api: string;
+  apiKey?: string;
+  authHeader?: boolean;
+  models: PiProviderModel[];
+  [key: string]: unknown;
+}
+
+export interface PiProviderPreset {
+  id: string;
+  name: string;
+  baseUrl: string;
+  api: string;
+  models: PiProviderModel[];
+}

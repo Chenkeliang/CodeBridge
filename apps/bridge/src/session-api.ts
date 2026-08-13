@@ -163,6 +163,35 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiAttachment(attachment));
   });
 
+  // Pi provider management, proxied to the runner (docs/orchestration/agent-providers.md).
+  app.get("/v1/providers", async (c) => {
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    return c.json(await options.runner.listPiProviders());
+  });
+
+  app.put("/v1/providers", async (c) => {
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    const body = await c.req.json().catch(() => null);
+    if (!body) return c.json({ error: "invalid_json" }, 400);
+    try {
+      return c.json(await options.runner.savePiProviders(body));
+    } catch (error) {
+      return c.json({ error: "invalid_providers", message: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.get("/v1/providers/presets", async (c) => {
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    return c.json(await options.runner.listPiProviderPresets());
+  });
+
+  app.post("/v1/providers/test", async (c) => {
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    const body = (await c.req.json().catch(() => null)) as { baseUrl?: string; apiKey?: string; authHeader?: boolean } | null;
+    if (!body || typeof body.baseUrl !== "string") return c.json({ error: "baseUrl is required" }, 400);
+    return c.json(await options.runner.testPiProvider({ baseUrl: body.baseUrl, apiKey: body.apiKey, authHeader: body.authHeader }));
+  });
+
   app.get("/v1/sessions", async (c) => {
     const agentId = c.req.query("agent_id");
     const importSessions = c.req.query("import") === "true";
@@ -429,10 +458,10 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
     const cwd = session.cwd ?? options.defaultCwd;
     if (!cwd) return c.json({ options: [], error: "workspace_required" });
-    const cacheKey = `${session.agentId}\0${cwd}`;
+    const cacheKey = `${session.agentId}\0${cwd}\0${session.model ?? ""}`;
     let request = configOptionRequests.get(cacheKey);
     if (!request) {
-      request = options.runner.listConfigOptions(session.agentId, cwd);
+      request = options.runner.listConfigOptions(session.agentId, cwd, session.model);
       configOptionRequests.set(cacheKey, request);
       request.catch(() => {
         if (configOptionRequests.get(cacheKey) === request) configOptionRequests.delete(cacheKey);
