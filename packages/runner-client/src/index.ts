@@ -99,8 +99,10 @@ export class RunnerClient {
   async listConfigOptions(
     backend: string,
     cwd: string,
+    model?: string | null,
   ): Promise<{ options: BackendConfigOption[]; error?: string }> {
     const params = new URLSearchParams({ backend, cwd });
+    if (model) params.set("model", model);
     const res = await this.fetch(`/config-options?${params}`);
     if (!res.ok) {
       throw new Error(`Runner error: ${res.status} ${await res.text()}`);
@@ -109,6 +111,39 @@ export class RunnerClient {
       options: BackendConfigOption[];
       error?: string;
     }>;
+  }
+
+  async listPiProviderPresets(): Promise<unknown> {
+    const res = await this.fetch("/pi/providers/presets");
+    if (!res.ok) throw new Error(`Runner error: ${res.status} ${await res.text()}`);
+    return res.json();
+  }
+
+  async listPiProviders(): Promise<unknown> {
+    const res = await this.fetch("/pi/providers");
+    if (!res.ok) throw new Error(`Runner error: ${res.status} ${await res.text()}`);
+    return res.json();
+  }
+
+  async savePiProviders(file: unknown): Promise<{ ok: boolean }> {
+    const res = await this.fetch("/pi/providers", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(file),
+    });
+    const payload = (await res.json().catch(() => ({}))) as { error?: string; issues?: string[] };
+    if (!res.ok) throw new Error(payload.issues?.join("; ") ?? payload.error ?? `Runner error: ${res.status}`);
+    return { ok: true };
+  }
+
+  async testPiProvider(provider: { baseUrl: string; apiKey?: string; authHeader?: boolean }): Promise<{ ok: boolean; detail: string }> {
+    const res = await this.fetch("/pi/providers/test", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(provider),
+    });
+    if (!res.ok) throw new Error(`Runner error: ${res.status} ${await res.text()}`);
+    return res.json() as Promise<{ ok: boolean; detail: string }>;
   }
 
   async listCommands(

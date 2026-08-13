@@ -6,7 +6,7 @@ import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chr
 import type { ConversationProjection } from "@/lib/events";
 import type { AgentCommand, AgentProfile, AgentSession, ApprovalRecord, ConfigOption, FlowRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import type { Density, MenuView, Theme } from "@/components/workbench-shared";
+import type { Density, MenuView, PanelArea, Theme } from "@/components/workbench-shared";
 
 /**
  * Design preview rendered with the real workbench components fed by mock
@@ -192,9 +192,9 @@ const stateShowcase: Array<{ title: string; node: React.ReactNode }> = [
 
 export function DesignPreview() {
   const [theme, setTheme] = useState<Theme>("paper");
-  const [density, setDensity] = useState<Density>("compact");
-  const [reading, setReading] = useState(false);
-  const [area, setArea] = useState<"agents" | "flows">("agents");
+  const [density] = useState<Density>("compact");
+  const [reading] = useState(false);
+  const [area, setArea] = useState<PanelArea>("agents");
   const [activeAgent, setActiveAgent] = useState("codex");
   const [activeSession, setActiveSession] = useState("s1");
   const [panelOpen, setPanelOpen] = useState(true);
@@ -216,14 +216,10 @@ export function DesignPreview() {
     <AgentRail
       agents={agents}
       area={area}
-      density={density}
-      reading={reading}
       selectedAgentId={activeAgent}
       theme={theme}
       onAgent={(id) => { setActiveAgent(id); setArea("agents"); }}
       onArea={setArea}
-      onDensity={setDensity}
-      onReading={setReading}
       onTheme={() => setTheme((current) => current === "paper" ? "carbon" : "paper")}
     />
     {panelOpen && <SessionPanel

@@ -291,8 +291,38 @@ export async function probePiSdk(
   }
 }
 
+const ALL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const LEVEL_LABEL: Record<string, string> = {
+  off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max",
+};
+
+type PiModelLike = {
+  provider: string;
+  id: string;
+  name?: string;
+  api?: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null | undefined>;
+};
+
+type PiConfigRuntime = Pick<ModelRuntime, "getModels" | "hasConfiguredAuth"> & {
+  getModel?: (provider: string, modelId: string) => PiModelLike | undefined;
+};
+
+/** Thinking levels supported by a specific model: keys of thinkingLevelMap
+ *  with a non-null mapping, in canonical order. Falls back to all levels for
+ *  reasoning models without a map; empty for non-reasoning models. */
+export function piThinkingLevelsForModel(model: Pick<PiModelLike, "reasoning" | "thinkingLevelMap"> | undefined | null): string[] {
+  if (model && model.reasoning === false) return [];
+  const map = model?.thinkingLevelMap;
+  if (!map) return [...ALL_THINKING_LEVELS];
+  const levels = ALL_THINKING_LEVELS.filter((level) => typeof map[level] === "string" && map[level]);
+  return levels.length ? levels : [...ALL_THINKING_LEVELS];
+}
+
 export async function listPiConfigOptions(
-  runtime?: Pick<ModelRuntime, "getModels" | "hasConfiguredAuth">,
+  runtime?: PiConfigRuntime,
+  currentModel?: string | null,
 ): Promise<BackendConfigOption[]> {
   const activeRuntime = runtime ?? await createPiModelRuntime();
   const values = activeRuntime.getModels()
@@ -302,6 +332,18 @@ export async function listPiConfigOptions(
     name: model.name,
     description: model.api,
     }));
+
+  // Derive the thinking-level control from the *selected* model's declared
+  // capabilities: hidden for non-reasoning models, restricted to the mapped
+  // levels otherwise (docs/orchestration/agent-providers.md §2.6).
+  let selected: PiModelLike | undefined;
+  if (currentModel && activeRuntime.getModel) {
+    const separator = currentModel.includes("/") ? "/" : ":";
+    const [provider, ...rest] = currentModel.split(separator);
+    if (provider && rest.length) selected = activeRuntime.getModel(provider, rest.join(separator)) as PiModelLike | undefined;
+  }
+  const levels = piThinkingLevelsForModel(selected);
+
   return [
     ...(values.length ? [{
       id: "model",
@@ -310,16 +352,13 @@ export async function listPiConfigOptions(
       category: "model",
       values,
     }] : []),
-    {
+    ...(levels.length ? [{
       id: "thinking_level",
       name: "Reasoning",
-      type: "select",
+      type: "select" as const,
       category: "thought_level",
-      values: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((value) => ({
-        value,
-        name: value === "xhigh" ? "Extra high" : value[0]!.toUpperCase() + value.slice(1),
-      })),
-    },
+      values: levels.map((value) => ({ value, name: LEVEL_LABEL[value] ?? value })),
+    }] : []),
   ];
 }
 

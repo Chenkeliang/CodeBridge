@@ -7,6 +7,8 @@ import type {
   ConfigOption,
   FlowRecord,
   MessageAttachmentInput,
+  PiProvider,
+  PiProviderPreset,
   RunRecord,
   SessionEvent,
   WorkspaceListing,
@@ -70,6 +72,14 @@ export const api = {
   flows: async () => (await request<{ flows: FlowRecord[] }>("/v1/flows")).flows,
   configOptions: async (id: string) =>
     (await request<{ options?: ConfigOption[] }>(`/v1/sessions/${encodeURIComponent(id)}/config-options`)).options ?? [],
+  providers: async () =>
+    (await request<{ providers?: Record<string, PiProvider> }>("/v1/providers")).providers ?? {},
+  saveProviders: (file: { providers: Record<string, PiProvider> }) =>
+    request<{ ok: boolean }>("/v1/providers", { method: "PUT", body: JSON.stringify(file) }),
+  providerPresets: async () =>
+    (await request<{ presets?: PiProviderPreset[] }>("/v1/providers/presets")).presets ?? [],
+  testProvider: (provider: { baseUrl: string; apiKey?: string; authHeader?: boolean }) =>
+    request<{ ok: boolean; detail: string }>("/v1/providers/test", { method: "POST", body: JSON.stringify(provider) }),
   commands: async (id: string) =>
     (await request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodeURIComponent(id)}/commands`)).commands ?? [],
   pickDirectory: (id: string) =>

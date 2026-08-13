@@ -23,6 +23,12 @@ import {
   loadPiSessionHistory,
   loadClaudeSessionHistory,
   runPiSession,
+  PI_PROVIDER_PRESETS,
+  readPiProviders,
+  testPiProviderConnection,
+  writePiProviders,
+  validateProviders,
+  type PiProvidersFile,
   type PiRunHandleRef,
   type PiSession,
   type PiSessionLifecycleResult,
@@ -589,6 +595,7 @@ export class RunnerHost {
   async listConfigOptions(
     backendId: string,
     cwd: string,
+    model?: string | null,
   ): Promise<{ options: BackendConfigOption[]; error?: string }> {
     const profile = this.options.config.backends[backendId];
     if (!profile) {
@@ -601,7 +608,7 @@ export class RunnerHost {
     cwd = resolvedCwd.cwd;
     try {
       if (profile.type === "pi-sdk") {
-        return { options: await listPiConfigOptions() };
+        return { options: await listPiConfigOptions(undefined, model) };
       }
       return { options: await listAcpConfigOptions(profile, cwd) };
     } catch (err) {
@@ -987,6 +994,39 @@ export function createRunnerApp(host: RunnerHost, token: string) {
 
   app.get("/doctor", async (c) => c.json(await host.doctor()));
 
+  // Pi provider management (docs/orchestration/agent-providers.md).
+  // models.json lives on this host; bridge proxies and never persists it.
+  app.get("/pi/providers/presets", (c) => c.json({ presets: PI_PROVIDER_PRESETS }));
+
+  app.get("/pi/providers", (c) => {
+    try {
+      return c.json(readPiProviders());
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  });
+
+  app.put("/pi/providers", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as PiProvidersFile | null;
+    if (!body) return c.json({ error: "invalid_json" }, 400);
+    const issues = validateProviders(body);
+    if (issues.length) return c.json({ error: "invalid_providers", issues }, 400);
+    try {
+      writePiProviders(body);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  });
+
+  app.post("/pi/providers/test", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { baseUrl?: string; apiKey?: string; authHeader?: boolean } | null;
+    if (!body || typeof body.baseUrl !== "string" || !/^https?:\/\//.test(body.baseUrl)) {
+      return c.json({ error: "baseUrl (http/https) is required" }, 400);
+    }
+    return c.json(await testPiProviderConnection({ baseUrl: body.baseUrl, apiKey: body.apiKey, authHeader: body.authHeader }));
+  });
+
   app.post("/runs/:id/permission", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       approve?: boolean;
@@ -1172,7 +1212,7 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     if (!backend || !cwd) {
       return c.json({ error: "backend and cwd are required" }, 400);
     }
-    const result = await host.listConfigOptions(backend, cwd);
+    const result = await host.listConfigOptions(backend, cwd, c.req.query("model") || null);
     return c.json(result);
   });
 
