@@ -224,8 +224,6 @@ export function Workbench() {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
-  const [themeWipe, setThemeWipe] = useState<Theme | null>(null);
-  const [themeWipeActive, setThemeWipeActive] = useState(false);
   const [density, setDensity] = useState<Density>(() => window.localStorage.getItem("codebridge:web-density") === "comfortable" ? "comfortable" : "compact");
   const [reading, setReading] = useState(() => window.localStorage.getItem("codebridge:web-reading") === "serif");
 
@@ -234,12 +232,12 @@ export function Workbench() {
 
   function toggleTheme() {
     const next = theme === "paper" ? "carbon" : "paper";
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { setTheme(next); return; }
-    setThemeWipe(next);
-    setThemeWipeActive(false);
-    requestAnimationFrame(() => requestAnimationFrame(() => setThemeWipeActive(true)));
-    window.setTimeout(() => setTheme(next), 400);
-    window.setTimeout(() => { setThemeWipe(null); setThemeWipeActive(false); }, 750);
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    // View Transitions crossfade a captured frame, so the theme flip never
+    // reads as a full re-render; fall back to an instant switch.
+    const startViewTransition = (document as Document & { startViewTransition?: (update: () => void) => void }).startViewTransition;
+    if (reduced || !startViewTransition) { setTheme(next); return; }
+    startViewTransition.call(document, () => setTheme(next));
   }
 
   useEffect(() => {
@@ -612,7 +610,6 @@ export function Workbench() {
                         item={item}
                         key={projectionKey(item, index)}
                         onApproval={resolveApproval}
-                        theme={theme}
                       />
                     ))}
                   </div>
@@ -681,7 +678,6 @@ export function Workbench() {
         onToggleTheme={toggleTheme}
         sessions={sessions.filter((session) => session.agent_id === selectedAgentId && !session.archived_at)}
       />}
-      {themeWipe && <span aria-hidden="true" className={cn("pointer-events-none fixed bottom-6 left-6 z-[60] size-4 rounded-full transition-transform duration-500 ease-out", themeWipeActive ? "scale-[600]" : "scale-0", "bg-canvas")} data-theme={themeWipe} />}
       <input className="hidden" multiple onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ""; }} ref={fileInput} type="file" />
       {notice && <div className={cn("fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-md border px-3 py-2 text-xs", notice.kind === "error" ? cn("bg-danger-soft", "text-danger", "border-line-strong") : cn("bg-surface", "text-ink", "border-line-strong"), "shadow-panel")} role="status">{notice.kind === "error" && <X className="size-3.5 shrink-0" />}{notice.text}</div>}
     </div>
