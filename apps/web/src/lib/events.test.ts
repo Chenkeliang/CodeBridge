@@ -194,6 +194,27 @@ describe("conversation event projection", () => {
     ]);
   });
 
+  it("surfaces a fatal error card when a run fails without an error event", () => {
+    const projection = reduceConversationEvents([
+      { event_id: "m1", sequence: 1, type: "MESSAGE_RECEIVED", occurred_at: "2026-08-13T10:00:00Z", run_id: null, payload: { message: "交付" } },
+      { event_id: "r1", sequence: 2, type: "RUN_STARTED", occurred_at: "2026-08-13T10:00:01Z", run_id: "run-1", payload: {} },
+      { event_id: "r2", sequence: 3, type: "RUN_FAILED", occurred_at: "2026-08-13T10:00:05Z", run_id: "run-1", payload: {} },
+    ]);
+    expect(projection).toEqual([
+      expect.objectContaining({ kind: "user" }),
+      expect.objectContaining({ kind: "work", running: false }),
+      expect.objectContaining({ kind: "error", fatal: true, runId: "run-1" }),
+    ]);
+  });
+
+  it("does not duplicate the error card when a fatal error event already exists", () => {
+    const projection = reduceConversationEvents([
+      { event_id: "e1", sequence: 1, type: "AGENT_EVENT", occurred_at: "2026-08-13T10:00:01Z", run_id: "run-1", payload: { event: { type: "error", message: "模型不可用", fatal: true } } },
+      { event_id: "r2", sequence: 2, type: "RUN_FAILED", occurred_at: "2026-08-13T10:00:05Z", run_id: "run-1", payload: {} },
+    ]);
+    expect(projection.filter((item) => item.kind === "error")).toHaveLength(1);
+  });
+
   it("groups commentary, thought summaries, and tools into one collapsible work block", () => {
     const projection = reduceConversationEvents([
       {

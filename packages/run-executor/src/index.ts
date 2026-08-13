@@ -179,6 +179,7 @@ export class RunExecutor {
         type: "RUN_FAILED",
         actor: "system",
         target: runId,
+        payload: { error: error instanceof Error ? error.message : String(error) },
       });
       throw error;
     } finally {
