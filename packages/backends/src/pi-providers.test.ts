@@ -56,6 +56,15 @@ describe("pi providers", () => {
     expect(readPiProviders(modelsPath).providers.deepseek?.models).toHaveLength(2);
   });
 
+  it("defaults OpenAI-compatible models to the conservative system role without overriding explicit compat", () => {
+    const file = validFile();
+    file.providers.deepseek!.models[1]!.compat = { supportsDeveloperRole: true };
+    writePiProviders(file, modelsPath);
+    const saved = readPiProviders(modelsPath).providers.deepseek!;
+    expect((saved.models[0]!.compat as Record<string, unknown>).supportsDeveloperRole).toBe(false);
+    expect((saved.models[1]!.compat as Record<string, unknown>).supportsDeveloperRole).toBe(true);
+  });
+
   it("rejects invalid providers with field-level issues", () => {
     const bad = validFile();
     bad.providers["Bad ID"] = { baseUrl: "not-a-url", api: "", models: [] };

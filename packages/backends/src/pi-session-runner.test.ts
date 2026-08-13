@@ -179,6 +179,38 @@ describe("Pi event mapping", () => {
       },
     ]);
   });
+
+  it("maps the final Pi assistant failure to a fatal bridge error", () => {
+    expect(
+      mapPiEvent({
+        type: "agent_end",
+        willRetry: false,
+        messages: [{
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "OpenAI API error (404): model unavailable",
+        }],
+      }),
+    ).toEqual([{
+      type: "error",
+      message: "OpenAI API error (404): model unavailable",
+      fatal: true,
+    }]);
+  });
+
+  it("does not surface an intermediate Pi failure while it will retry", () => {
+    expect(
+      mapPiEvent({
+        type: "agent_end",
+        willRetry: true,
+        messages: [{
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "temporary provider failure",
+        }],
+      }),
+    ).toEqual([]);
+  });
 });
 
 describe("Pi session runner", () => {
@@ -350,6 +382,55 @@ describe("Pi session runner", () => {
     }));
 
     expect(events).toEqual([{ type: "error", message: "provider unavailable", fatal: true }]);
+  });
+
+  it("fails instead of reporting success when Pi produces no output", async () => {
+    const session = new FakePiSession();
+    session.prompt = async () => {};
+
+    const events = await collect(runPiSession(context(), {
+      createSession: async () => session,
+      isAborted: () => false,
+    }));
+
+    expect(events).toEqual([{
+      type: "error",
+      message: "Pi run completed without assistant output or a provider error",
+      fatal: true,
+    }]);
+  });
+
+  it("deduplicates the final Pi error emitted by agent and retry events", async () => {
+    let listener: ((event: unknown) => void) | undefined;
+    const session: PiSession = {
+      sessionId: "pi-session-error",
+      subscribe(next) {
+        listener = next;
+        return () => { listener = undefined; };
+      },
+      async prompt() {
+        const message = {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "OpenAI API error (404): model unavailable",
+        };
+        listener?.({ type: "agent_end", willRetry: false, messages: [message] });
+        listener?.({ type: "auto_retry_end", success: false, attempt: 3, finalError: message.errorMessage });
+      },
+      async steer() {},
+      async abort() {},
+      dispose() {},
+    };
+
+    const events = await collect(runPiSession(context(), {
+      createSession: async () => session,
+      isAborted: () => false,
+    }));
+
+    expect(events).toEqual([
+      { type: "error", message: "OpenAI API error (404): model unavailable", fatal: true },
+      { type: "session", sessionId: "pi-session-error" },
+    ]);
   });
 
   it("starts a fresh native Session when a stored Pi Session no longer exists", async () => {

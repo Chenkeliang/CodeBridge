@@ -51,6 +51,7 @@ export {
   loadClaudeSessionHistory,
 } from "./session-discovery.js";
 
+export { testProviderConnection, type ProviderConnectionProbe } from "./provider-connection.js";
 export { listCodexSkillCommands } from "./codex-skill-commands.js";
 
 export {
@@ -84,7 +85,6 @@ export {
   PI_PROVIDER_PRESETS,
   piModelsPath,
   readPiProviders,
-  testPiProviderConnection,
   validateProviders,
   writePiProviders,
   type PiProvider,

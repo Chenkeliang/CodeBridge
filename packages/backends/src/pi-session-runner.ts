@@ -63,6 +63,12 @@ export function mapPiEvent(event: unknown): AgentEvent[] {
     result?: unknown;
     isError?: boolean;
     assistantMessageEvent?: { type?: string; delta?: string };
+    willRetry?: boolean;
+    messages?: Array<{
+      role?: string;
+      stopReason?: string;
+      errorMessage?: string;
+    }>;
   };
 
   if (value.type === "message_update") {
@@ -111,6 +117,19 @@ export function mapPiEvent(event: unknown): AgentEvent[] {
     ];
   }
 
+  if (value.type === "agent_end" && value.willRetry === false) {
+    const assistant = [...(value.messages ?? [])]
+      .reverse()
+      .find((message) => message.role === "assistant");
+    if (assistant?.stopReason === "error") {
+      return [{
+        type: "error",
+        message: assistant.errorMessage || "Pi model request failed without an error message",
+        fatal: true,
+      }];
+    }
+  }
+
   // Provider/transport failures must surface as real error events instead of
   // silently ending the run (auto-retry exhaustion carries the final error).
   if (value.type === "auto_retry_end") {
@@ -134,13 +153,25 @@ export async function* runPiSession(
   let finished = false;
   let promptError: unknown;
   const pending: AgentEvent[] = [];
+  const seenErrors = new Set<string>();
+  let sawOutput = false;
+  let sawError = false;
   const notify = () => {
     const current = wake;
     wake = undefined;
     current?.();
   };
   const unsubscribe = session.subscribe((event) => {
-    pending.push(...mapPiEvent(event));
+    for (const mapped of mapPiEvent(event)) {
+      if (mapped.type === "error") {
+        if (seenErrors.has(mapped.message)) continue;
+        seenErrors.add(mapped.message);
+        sawError = true;
+      } else {
+        sawOutput = true;
+      }
+      pending.push(mapped);
+    }
     notify();
   });
   const handle: PiRunHandle = {
@@ -179,7 +210,15 @@ export async function* runPiSession(
         fatal: true,
       };
     } else if (!options.isAborted()) {
-      yield { type: "session", sessionId: session.sessionId };
+      if (!sawOutput && !sawError) {
+        yield {
+          type: "error",
+          message: "Pi run completed without assistant output or a provider error",
+          fatal: true,
+        };
+      } else {
+        yield { type: "session", sessionId: session.sessionId };
+      }
     }
   } finally {
     unsubscribe();
@@ -355,6 +394,21 @@ export async function listPiConfigOptions(
   }
   const levels = piThinkingLevelsForModel(selected);
 
+  // Surface Pi's configured defaults so "Agent 默认" shows what it resolves to
+  // (settings.json defaultProvider/defaultModel/defaultThinkingLevel).
+  let defaultModelValue: string | undefined;
+  let defaultThinkingLevel: string | undefined;
+  if (!runtime) {
+    const settings = SettingsManager.create(process.cwd(), getAgentDir());
+    const provider = settings.getDefaultProvider();
+    const modelId = settings.getDefaultModel();
+    if (provider && modelId && values.some((v) => v.value === `${provider}/${modelId}`)) {
+      defaultModelValue = `${provider}/${modelId}`;
+    }
+    const thinking = settings.getDefaultThinkingLevel();
+    if (thinking && levels.includes(thinking)) defaultThinkingLevel = thinking;
+  }
+
   return [
     ...(values.length ? [{
       id: "model",
@@ -362,6 +416,7 @@ export async function listPiConfigOptions(
       type: "select" as const,
       category: "model",
       values,
+      currentValue: defaultModelValue,
     }] : []),
     ...(levels.length ? [{
       id: "thinking_level",
@@ -369,6 +424,7 @@ export async function listPiConfigOptions(
       type: "select" as const,
       category: "thought_level",
       values: levels.map((value) => ({ value, name: LEVEL_LABEL[value] ?? value })),
+      currentValue: defaultThinkingLevel,
     }] : []),
   ];
 }
