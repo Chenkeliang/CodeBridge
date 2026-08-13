@@ -8,6 +8,8 @@ function readSource(): string {
     .join("\n");
 }
 
+// Enforces spec rules FE-TOKEN-005, FE-COMP-001, FE-COMP-002, FE-COMP-003,
+// FE-STATE-001, FE-STATE-002, FE-STATE-003 (docs/spec/RULES.md).
 describe("Workbench component policy", () => {
   it("uses the shadcn Select primitive instead of native select controls", () => {
     const source = readSource();

@@ -2,7 +2,9 @@
 
 状态：Session-first 架构规范；当前运行时仍使用 WorkItem/Run 作为内部持久化和兼容 API，Web 的目标入口是 Agent 分组下的 Session，Workflow 是与 Agents 平级的可选资源。
 
-本目录是 CodeBridge 多项目 Agent 工作台的设计规范入口，也是这套架构文档的唯一事实源。Orchestration 作为 CodeBridge 内部模块运行，与现有 Bridge、Runner、ACP 和 Channel 共享同一版本事实源。
+本目录是 CodeBridge 多项目 Agent 工作台的设计规范入口，也是这套架构文档的唯一事实源。
+
+规范性强制规则（MUST/SHOULD 级别、可执行校验）见 [../spec/](../spec/README.md);冲突时以 spec 为准。Orchestration 作为 CodeBridge 内部模块运行，与现有 Bridge、Runner、ACP 和 Channel 共享同一版本事实源。
 
 ## 目标架构
 

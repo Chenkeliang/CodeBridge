@@ -28,6 +28,7 @@ function contrast(fg: string, bg: string): number {
 
 const TEXT_ON = ["--agnet-canvas", "--agnet-surface", "--agnet-surface-soft", "--agnet-surface-tint"] as const;
 
+// Enforces spec rules FE-TOKEN-001, FE-TOKEN-002, FE-TOKEN-003, FE-TOKEN-004 (docs/spec/RULES.md).
 describe("design tokens", () => {
   it("keeps text tokens at WCAG AA contrast on every surface, in both themes", () => {
     for (const [name, vars] of [["paper", paper], ["carbon", carbon]] as const) {
