@@ -736,6 +736,7 @@ Append inside the main describe in `apps/bridge/src/flow-api.test.ts`:
         flow_id: "flow-hashed",
         name: "Hashed",
         kind: "runbook",
+        inputs: [{ id: "company_id", type: "string", source: "user", required: true }],
         steps: [{ id: "deliver", capability: "equity.deliver", mode: "read_only" }],
       },
     };
@@ -750,6 +751,8 @@ Append inside the main describe in `apps/bridge/src/flow-api.test.ts`:
     expect(flow?.definitionRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(flow?.planIrHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(flow?.definitionRevision).not.toBe(flow?.planIrHash);
+    // Typed inputs must survive the API boundary end-to-end (not silently dropped).
+    expect(flow?.inputs).toEqual([{ id: "company_id", type: "string", source: "user", required: true }]);
     // Re-posting the identical definition yields identical hashes (deterministic).
     await app.request("/v1/flows/candidates", { method: "POST", headers, body: JSON.stringify(body) });
     expect(catalog.get("flow-hashed")?.definitionRevision).toBe(flow?.definitionRevision);
@@ -775,12 +778,14 @@ import { compileWorkflow, definitionHash, WorkflowValidationError } from "@codeb
 In the `POST /v1/flows/candidates` handler, replace the block from `const definition = {` through the `catalog.save({...})` call with:
 
 ```ts
+    const rawInputs = Array.isArray(input.inputs) ? input.inputs : [];
     const definition = {
       schema_version: 1,
       workflow_id: flowId,
       name: typeof input.name === "string" && input.name.trim() ? input.name : flowId,
       kind: input.kind === "runbook" ? ("runbook" as const) : ("guide" as const),
       status: "draft",
+      inputs: rawInputs,
       steps: rawSteps,
     };
     // The server owns revision computation (spec §6.2): a caller-supplied
