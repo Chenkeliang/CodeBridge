@@ -141,7 +141,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
 
     <section className="mt-8">
       <div className="flex items-center justify-between">
-        <h2 className={cn("text-xs font-semibold uppercase tracking-[0.1em]", "text-faint")}>Providers(Pi)</h2>
+        <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>Providers(Pi)</h2>
       </div>
       <p className={cn("mt-1.5 text-xs leading-5", "text-muted")}>管理 Pi 的模型供应商,写入本机 ~/.pi/agent/models.json。密钥仅保存在本机。</p>
 
@@ -188,7 +188,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
     </section>
 
     <section className="mt-10">
-      <h2 className={cn("text-xs font-semibold uppercase tracking-[0.1em]", "text-faint")}>显示</h2>
+      <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>显示</h2>
       <div className={cn("mt-3 grid gap-3 rounded-lg border px-4 py-4", "bg-surface", "border-line")}>
         <div className="flex items-center justify-between gap-3">
           <span className={cn("text-xs", "text-ink-soft")}>对话密度</span>
@@ -265,7 +265,7 @@ function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose,
         </label>
 
         <div className="mt-1 flex items-center justify-between">
-          <span className={cn("text-xs font-semibold uppercase tracking-[0.08em]", "text-faint")}>模型({draft.models.length})</span>
+          <span className={cn("font-brand text-xs font-normal uppercase tracking-[0.08em]", "text-faint")}>模型({draft.models.length})</span>
           <button className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-xs", "text-ink-soft", "border-line", "hover:bg-surface-soft")} onClick={() => patch({ models: [...draft.models, { id: "", reasoning: false, input: ["text"] }] })} type="button"><Plus className="size-3" />添加模型</button>
         </div>
         {draft.models.map((model, index) => (
