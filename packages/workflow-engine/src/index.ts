@@ -95,6 +95,9 @@ export interface PlanIR {
 export interface CompileWorkflowOptions {
   definitionRevision?: string | null;
   source?: "workflow" | "agent_generated";
+  /** Deterministic plan id. Defaults to a random UUID; pass a stable id when the
+   *  resulting PlanIR will be content-hashed (the id must not be part of the hash). */
+  planId?: string;
 }
 
 export class WorkflowValidationError extends Error {
@@ -125,7 +128,7 @@ export function compileWorkflow(
   if (issues.length) throw new WorkflowValidationError(issues);
 
   return {
-    planId: `plan_${randomUUID().replaceAll("-", "")}`,
+    planId: options.planId ?? `plan_${randomUUID().replaceAll("-", "")}`,
     source: options.source ?? "workflow",
     workflowId: definition.workflowId,
     definitionRevision: options.definitionRevision ?? null,

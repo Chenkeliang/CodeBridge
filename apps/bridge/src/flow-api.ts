@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { FlowCatalogStore } from "@codebridge/flow-catalog";
-import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
+import { compileWorkflow, definitionHash, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import type { SqliteEventStore } from "@codebridge/work-items";
 
@@ -73,27 +73,35 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
   });
   app.post("/v1/flows/candidates", async (c) => {
     const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || typeof body.session_id !== "string" || typeof body.definition_revision !== "string") {
-      return c.json({ error: "session_id and definition_revision are required" }, 400);
+    if (!body || typeof body.session_id !== "string") {
+      return c.json({ error: "session_id is required" }, 400);
     }
     const input = body.flow && typeof body.flow === "object" && !Array.isArray(body.flow)
       ? body.flow as Record<string, unknown>
       : {};
     const flowId = typeof input.flow_id === "string" ? input.flow_id : `flow_${randomUUID().replaceAll("-", "")}`;
     const rawSteps = Array.isArray(input.steps) ? input.steps : [];
+    const rawInputs = Array.isArray(input.inputs) ? input.inputs : [];
     const definition = {
       schema_version: 1,
       workflow_id: flowId,
       name: typeof input.name === "string" && input.name.trim() ? input.name : flowId,
-      kind: input.kind === "runbook" ? "runbook" : "guide",
+      kind: input.kind === "runbook" ? ("runbook" as const) : ("guide" as const),
       status: "draft",
+      inputs: rawInputs,
       steps: rawSteps,
     };
+    // The server owns revision computation (spec §6.2): a caller-supplied
+    // definition_revision is accepted for backward compatibility but ignored.
+    const definitionRevision = definitionHash(definition);
     let plan;
     try {
+      // A stable planId keeps the compiled IR byte-identical across re-saves of
+      // the same definition — the id is an identity, not contract content.
       plan = compileWorkflow(definition, {
         source: "agent_generated",
-        definitionRevision: body.definition_revision,
+        definitionRevision,
+        planId: `plan_${flowId}`,
       });
     } catch (error) {
       if (error instanceof WorkflowValidationError) {
@@ -101,6 +109,7 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       }
       throw error;
     }
+    const planIrHash = definitionHash(plan);
     const steps = plan.steps.map((step) => ({
       id: step.id,
       capability: step.capabilityId ?? undefined,
@@ -113,11 +122,13 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     }));
     const flow = catalog.save({
       flowId,
-      name: typeof input.name === "string" && input.name.trim() ? input.name : flowId,
-      kind: input.kind === "runbook" ? "runbook" : "guide",
+      name: definition.name,
+      kind: definition.kind,
       status: "candidate",
       source: "agent_generated",
-      definitionRevision: body.definition_revision,
+      definitionRevision,
+      planIrHash,
+      inputs: plan.inputs,
       reviewStatus: "pending",
       validationIssues: [],
       steps,
