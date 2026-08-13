@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   WorkflowValidationError,
   compileWorkflow,
+  definitionHash,
   parseWorkflow,
+  promptHash,
 } from "./index.js";
 
 const workflow = {
@@ -147,5 +149,34 @@ describe("workflow-engine", () => {
       ...retrying,
       steps: [{ ...retrying.steps[0], retry: { max_attempts: 0 } }],
     })).toThrow("step[0].retry.max_attempts must be an integer between 1 and 10");
+  });
+});
+
+describe("contract content hashing", () => {
+  it("hashes structured content with RFC 8785 canonical JSON", () => {
+    const a = definitionHash({ b: 1, a: { d: [2, 3], c: "x" } });
+    const b = definitionHash({ a: { c: "x", d: [2, 3] }, b: 1 });
+    expect(a).toBe(b);
+    expect(a).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("hashes prompt templates from raw bytes without normalization", () => {
+    const compact = promptHash("line1\nline2");
+    const spaced = promptHash("line1\nline2 ");
+    expect(compact).not.toBe(spaced);
+  });
+
+  it("produces a stable definition hash independent of key order", () => {
+    const defA = {
+      schema_version: 1, workflow_id: "diagnose", name: "Diagnose",
+      kind: "runbook", status: "draft",
+      steps: [{ id: "check", capability: "svc.check" }],
+    };
+    const defB = {
+      steps: [{ capability: "svc.check", id: "check" }],
+      status: "draft", kind: "runbook", name: "Diagnose",
+      workflow_id: "diagnose", schema_version: 1,
+    };
+    expect(definitionHash(defA)).toBe(definitionHash(defB));
   });
 });

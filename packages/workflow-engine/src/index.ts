@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 
 export type WorkflowKind = "guide" | "runbook";
@@ -462,6 +462,38 @@ function enumField<T extends string>(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * RFC 8785-style (JCS) canonical JSON: keys sorted recursively, no
+ * insignificant whitespace, UTF-8. Deterministic across key insertion order.
+ * Scope note: number serialization uses JSON.stringify semantics (adequate
+ * for flow definitions/schemas); strict RFC 8785 number/I-JSON edge cases
+ * are intentionally out of scope for this contract content.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  throw new Error(`canonicalJson: unsupported value type ${typeof value}`);
+}
+
+/** sha256 of RFC 8785-style canonical JSON — for structured content (schemas, flow definitions, PlanIR). */
+export function definitionHash(value: unknown): string {
+  return `sha256:${createHash("sha256").update(canonicalJson(value), "utf8").digest("hex")}`;
+}
+
+/** sha256 of raw bytes — for prompt templates where whitespace is semantically meaningful. */
+export function promptHash(text: string): string {
+  return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
 }
 
 function messageOf(error: unknown): string {
