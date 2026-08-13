@@ -33,12 +33,13 @@ interface ProviderDraft {
   passthrough: Record<string, unknown>;
 }
 
-export function SettingsPage({ density, reading, onDensity, onReading, onNotify }: {
+export function SettingsPage({ density, reading, onDensity, onReading, onNotify, onProvidersChanged }: {
   density: Density;
   reading: boolean;
   onDensity: (density: Density) => void;
   onReading: (reading: boolean) => void;
   onNotify: (message: string, kind?: "info" | "error") => void;
+  onProvidersChanged: () => void;
 }) {
   const [providers, setProviders] = useState<Record<string, PiProvider> | null>(null);
   const [presets, setPresets] = useState<PiProviderPreset[]>([]);
@@ -109,6 +110,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
       await api.saveProviders(next);
       setProviders(next.providers);
       setEditing(null);
+      onProvidersChanged();
       onNotify("Provider 已保存");
     } catch (caught) {
       setSaveError(caught instanceof Error ? caught.message : String(caught));

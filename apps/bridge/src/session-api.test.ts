@@ -889,7 +889,7 @@ describe("session API", () => {
     workItems.close();
   });
 
-  it("reuses config options for Sessions sharing an Agent workspace", async () => {
+  it("refreshes config options after a completed request", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     let calls = 0;
@@ -908,7 +908,7 @@ describe("session API", () => {
       });
       expect(response.status).toBe(200);
     }
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     catalog.close();
     workItems.close();
   });
