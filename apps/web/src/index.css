@@ -101,7 +101,10 @@
 }
 
 @theme inline {
-  --font-brand: "Departure Mono", ui-monospace, monospace;
+  /* Brand/display font: Latin glyphs come from Departure Mono; CJK glyphs
+     fall straight through to the system sans (not a monospace fallback) so
+     Chinese titles stay visually consistent with the hierarchy. */
+  --font-brand: "Departure Mono", -apple-system, "PingFang SC", "Microsoft YaHei", ui-monospace, monospace;
   --animate-march: march 1.2s linear infinite;
   --animate-breathe: breathe 2.2s ease-in-out infinite;
   --animate-chip-pop: chip-pop 0.3s cubic-bezier(0.2, 1.6, 0.4, 1) backwards;

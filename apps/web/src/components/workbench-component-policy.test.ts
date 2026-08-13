@@ -111,6 +111,7 @@ describe("Workbench component policy", () => {
   });
 
   it("uses the open pixel typography and AGNET product mark", () => {
+    // FE-TYPE-001
     const source = readSource();
     const mark = readFileSync(new URL("./pixel-mark.tsx", import.meta.url), "utf8");
     const styles = readFileSync(new URL("../index.css", import.meta.url), "utf8");
@@ -132,6 +133,16 @@ describe("Workbench component policy", () => {
     expect(html).toContain('rel="icon"');
     expect(html).toContain("/workbench/brand/agnet-mark.svg");
     expect(html).toContain("AGNET · CodeBridge Workbench");
+  });
+
+  it("keeps page-level titles on the brand display font", () => {
+    // FE-TYPE-001: settings page title matches the panel title role
+    const settings = readFileSync(new URL("./settings-page.tsx", import.meta.url), "utf8");
+
+    expect(settings).toContain('font-brand text-lg font-normal tracking-[-0.035em]');
+    const styles = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+
+    expect(styles).toContain('"PingFang SC"');
   });
 
   it("locks the document viewport so the Agent Rail cannot scroll out of view", () => {
