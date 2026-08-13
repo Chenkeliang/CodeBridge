@@ -10,11 +10,11 @@ import { Button } from "@/components/ui/button";
 import { describeTool, type ApprovalProjection, type ConversationProjection, type ToolProjection, type WorkProjection } from "@/lib/events";
 import type { ApprovalRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { formatElapsed, formatValue, type Theme } from "@/components/workbench-shared";
+import { formatElapsed, formatValue } from "@/components/workbench-shared";
 
-export function ProjectionItem({ approvals, cwd, item, onApproval, theme }: { approvals: ApprovalRecord[]; cwd: string | null; item: ConversationProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void>; theme: Theme }) {
+export function ProjectionItem({ approvals, cwd, item, onApproval }: { approvals: ApprovalRecord[]; cwd: string | null; item: ConversationProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void> }) {
   if (item.kind === "user") return <article className="grid justify-items-end gap-2"><span className={cn("text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>你</span><div className={cn("max-w-[72%] rounded-xl px-3.5 py-3 text-sm leading-6", "text-ink", "bg-accent-soft")}>{item.content}</div></article>;
-  if (item.kind === "assistant") return <article className="grid max-w-[780px] gap-2"><span className={cn("text-xs font-medium tracking-[0.08em]", "text-muted")}>Agent</span><Markdown content={item.content} theme={theme} /></article>;
+  if (item.kind === "assistant") return <article className="grid max-w-[780px] gap-2"><span className={cn("text-xs font-medium tracking-[0.08em]", "text-muted")}>Agent</span><Markdown content={item.content} /></article>;
   if (item.kind === "work") return <WorkActivity cwd={cwd} item={item} />;
   if (item.kind === "plan") return <section className={cn("max-w-[760px] rounded-lg border", "bg-surface", "border-line", "shadow-card")}><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", "border-line")}><span className={cn("flex items-center gap-2 text-xs font-semibold", "text-ink")}><Check className={cn("size-3.5", "text-muted")} />计划</span><span className={cn("font-mono text-xs", "text-muted")}>{item.entries.filter((entry) => entry.status === "completed").length} / {item.entries.length}</span></div><ol className="grid gap-2 px-3.5 py-3.5">{item.entries.map((entry, index) => <li className={cn("flex items-start gap-2 text-xs", entry.status === "completed" ? "text-muted" : "text-ink-soft")} key={`${entry.content}-${index}`}>{entry.status === "completed" ? <Check className={cn("mt-0.5 size-3.5 shrink-0", "text-success")} /> : <Circle className={cn("mt-0.5 size-3.5 shrink-0", entry.status === "in_progress" ? "text-warning" : "text-faint")} />}<span>{entry.content}</span></li>)}</ol></section>;
   if (item.kind === "approval") {
@@ -119,12 +119,12 @@ function ApprovalCard({ approval, item, onApproval }: { approval: ApprovalRecord
   return <section className={cn("relative max-w-[760px] overflow-hidden rounded-lg border", "bg-surface", "border-line-strong", "shadow-card")}><svg aria-hidden="true" className={cn("pointer-events-none absolute inset-0 size-full", "text-warning")}><rect className={cn("h-[calc(100%-2px)] w-[calc(100%-2px)]", "motion-safe:animate-march")} fill="none" rx="7" stroke="currentColor" strokeDasharray="4 4" strokeWidth="1.5" x="1" y="1" /></svg><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", "border-line")}><span className={cn("flex items-center gap-2 text-xs font-semibold", "text-ink")}><ShieldAlert className={cn("size-3.5", "text-warning")} />需要审批</span><span className={cn("font-mono text-xs", "text-muted")}>仅本次 Run 有效</span></div><div className={cn("px-3.5 pb-1 pt-3 text-xs leading-5", "text-ink-soft")}>{item.title}</div><div className="flex gap-2 px-3.5 pb-3.5 pt-2"><Button className={cn("h-8 text-xs", "bg-accent", "text-accent-ink")} disabled={!approval} onClick={() => void onApproval(item, true)} size="sm">允许一次</Button><Button className={cn("h-8 border text-xs", "bg-surface", "text-ink", "border-line-strong")} disabled={!approval} onClick={() => void onApproval(item, false)} size="sm" variant="outline">拒绝</Button></div></section>;
 }
 
-const Markdown = memo(function Markdown({ content, theme }: { content: string; theme: Theme }) {
+const Markdown = memo(function Markdown({ content }: { content: string }) {
   return <div className={cn("conversation-body max-w-[780px] text-sm font-normal leading-7 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-2", "text-ink-soft")}><ReactMarkdown components={{
     a: ({ children, href }) => <a className={cn("underline underline-offset-4", "text-ink")} href={href} rel="noreferrer" target="_blank">{children}</a>,
     blockquote: ({ children }) => <blockquote className={cn("my-3 border-l-2 pl-3", "border-line-strong", "text-muted")}>{children}</blockquote>,
     code: ({ children, className }) => {
-      if (className?.includes("language-mermaid")) return <MermaidDiagram source={String(children).trimEnd()} theme={theme} />;
+      if (className?.includes("language-mermaid")) return <MermaidDiagram source={String(children).trimEnd()} />;
       if (className && /language-\w+/.test(className)) {
         return <code className={cn("font-mono text-[0.92em]", "text-ink")}>{highlightCode(String(children))}</code>;
       }

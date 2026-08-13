@@ -183,9 +183,9 @@ const approvals: ApprovalRecord[] = [{
 
 const stateShowcase: Array<{ title: string; node: React.ReactNode }> = [
   { title: "加载中（像素 skeleton）", node: <LoadingConversation /> },
-  { title: "进行中的 Work（实时计时 + 呼吸节点）", node: <ProjectionItem approvals={[]} cwd="/Users/demo/projects/codebridge" item={runningWork} onApproval={async () => undefined} theme="paper" /> },
-  { title: "错误", node: <ProjectionItem approvals={[]} cwd={null} item={{ kind: "error", content: "会话流中断：SSE 连接超时", fatal: false, runId: "r2" }} onApproval={async () => undefined} theme="paper" /> },
-  { title: "已解决的审批", node: <ProjectionItem approvals={[{ ...approvals[0]!, status: "granted" }]} cwd={null} item={{ kind: "approval", requestId: "ap1", title: "允许写入文件", runId: "r1" }} onApproval={async () => undefined} theme="paper" /> },
+  { title: "进行中的 Work（实时计时 + 呼吸节点）", node: <ProjectionItem approvals={[]} cwd="/Users/demo/projects/codebridge" item={runningWork} onApproval={async () => undefined} /> },
+  { title: "错误", node: <ProjectionItem approvals={[]} cwd={null} item={{ kind: "error", content: "会话流中断：SSE 连接超时", fatal: false, runId: "r2" }} onApproval={async () => undefined} /> },
+  { title: "已解决的审批", node: <ProjectionItem approvals={[{ ...approvals[0]!, status: "granted" }]} cwd={null} item={{ kind: "approval", requestId: "ap1", title: "允许写入文件", runId: "r1" }} onApproval={async () => undefined} /> },
 ];
 
 
@@ -265,7 +265,7 @@ export function DesignPreview() {
           </div>
         ) : (
           <div className="mx-auto grid w-full max-w-[880px] gap-6 pb-7">
-            {projections.map((item, index) => <ProjectionItem approvals={approvals} cwd={session?.cwd ?? null} item={item} key={index} onApproval={noopAsync} theme={theme} />)}
+            {projections.map((item, index) => <ProjectionItem approvals={approvals} cwd={session?.cwd ?? null} item={item} key={index} onApproval={noopAsync} />)}
           </div>
         )}
       </section>
