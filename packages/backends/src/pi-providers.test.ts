@@ -31,6 +31,7 @@ function validFile(): PiProvidersFile {
   };
 }
 
+// Enforces spec rules PROTO-CAP-001 (preset naming/shape) and PROTO-PROV-001 (docs/spec/RULES.md).
 describe("pi providers", () => {
   let dir: string;
   let modelsPath: string;
