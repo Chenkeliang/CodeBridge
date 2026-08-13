@@ -103,7 +103,7 @@ export const PI_PROVIDER_PRESETS: PiProviderPreset[] = [
   },
 ];
 
-const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
 export function piModelsPath(): string {
   return path.join(getAgentDir(), "models.json");
@@ -117,7 +117,7 @@ export function validateProviders(input: unknown): string[] {
     return ["缺少 providers 对象"];
   }
   for (const [id, raw] of Object.entries(file.providers as Record<string, unknown>)) {
-    if (!PROVIDER_ID_RE.test(id)) issues.push(`provider id 不合法: ${id}(小写字母/数字/连字符)`);
+    if (!PROVIDER_ID_RE.test(id)) issues.push(`provider id 不合法: ${id}(小写字母/数字/连字符/下划线,且以字母或数字开头)`);
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) { issues.push(`${id}: 必须是对象`); continue; }
     const provider = raw as Record<string, unknown>;
     if (typeof provider.baseUrl !== "string" || !/^https?:\/\//.test(provider.baseUrl)) {

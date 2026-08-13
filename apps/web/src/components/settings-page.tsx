@@ -48,6 +48,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -93,7 +94,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
   async function save() {
     if (!editing || !providers) return;
     setSaving(true);
-    setError(null);
+    setSaveError(null);
     try {
       const next: ProvidersFile = { providers: { ...providers } };
       if (editingOriginalId && editingOriginalId !== editing.id) delete next.providers[editingOriginalId];
@@ -110,7 +111,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
       setEditing(null);
       onNotify("Provider 已保存");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setSaveError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setSaving(false);
     }
@@ -217,9 +218,10 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
     {editing && <ProviderEditor
       draft={editing}
       originalId={editingOriginalId}
+      saveError={saveError}
       saving={saving}
       testing={testing}
-      onChange={setEditing}
+      onChange={(next) => { setEditing(next); setSaveError(null); }}
       onClose={() => setEditing(null)}
       onSave={() => void save()}
       onTest={() => void test()}
@@ -227,9 +229,12 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify 
   </div>;
 }
 
-function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose, onSave, onTest }: {
+const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+function ProviderEditor({ draft, originalId, saveError, saving, testing, onChange, onClose, onSave, onTest }: {
   draft: ProviderDraft;
   originalId: string | null;
+  saveError: string | null;
   saving: boolean;
   testing: boolean;
   onChange: (draft: ProviderDraft) => void;
@@ -237,6 +242,9 @@ function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose,
   onSave: () => void;
   onTest: () => void;
 }) {
+  const idIssue = draft.id && !PROVIDER_ID_RE.test(draft.id)
+    ? "ID 只能含小写字母/数字/连字符/下划线,且以字母或数字开头"
+    : null;
   function patch(update: Partial<ProviderDraft>) {
     onChange({ ...draft, ...update });
   }
@@ -244,7 +252,7 @@ function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose,
     const models = draft.models.map((model, i) => i === index ? { ...model, ...update } : model);
     patch({ models });
   }
-  const canSave = draft.id.trim() && /^https?:\/\//.test(draft.baseUrl) && draft.apiKey.trim();
+  const canSave = draft.id.trim() && !idIssue && /^https?:\/\//.test(draft.baseUrl) && draft.apiKey.trim();
 
   return <div className="fixed inset-0 z-50 bg-canvas/80" onClick={onClose} role="dialog" aria-modal="true">
     <div className={cn("mx-auto mt-[6vh] max-h-[86vh] w-full max-w-[560px] overflow-y-auto rounded-xl border p-5", "bg-surface", "border-line-strong", "shadow-panel")} onClick={(event) => event.stopPropagation()}>
@@ -254,8 +262,9 @@ function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose,
       </div>
 
       <div className="mt-4 grid gap-3">
-        <Field label="ID(小写字母/数字/连字符)">
-          <input className={inputCls()} disabled={Boolean(originalId)} onChange={(e) => patch({ id: e.target.value.trim() })} placeholder="deepseek" value={draft.id} />
+        <Field label="ID(小写字母/数字/连字符/下划线)">
+          <input aria-invalid={Boolean(idIssue)} className={cn(inputCls(), idIssue && "border-danger")} disabled={Boolean(originalId)} onChange={(e) => patch({ id: e.target.value.trim() })} placeholder="deepseek" value={draft.id} />
+          {idIssue && <span className={cn("text-[11px]", "text-danger")}>{idIssue}</span>}
         </Field>
         <Field label="Base URL">
           <input className={inputCls()} onChange={(e) => patch({ baseUrl: e.target.value.trim() })} placeholder="https://api.deepseek.com/v1" value={draft.baseUrl} />
@@ -300,6 +309,8 @@ function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose,
           </div>
         ))}
       </div>
+
+      {saveError && <div className={cn("mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1 break-words">{saveError}</span></div>}
 
       <div className="mt-5 flex items-center gap-2">
         <button className={cn("flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs", "bg-accent", "text-accent-ink", "border-line-strong", (!canSave || saving) && "opacity-40")} disabled={!canSave || saving} onClick={onSave} type="button">
