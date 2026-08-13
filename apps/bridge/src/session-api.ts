@@ -179,6 +179,20 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiAgent(agent));
   });
 
+  app.post("/v1/agents/detect", async (c) => {
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    try {
+      const setup = await options.runner.detectAllAgents();
+      for (const agent of setup.agents) {
+        const profile = currentProfiles().get(agent.agentId);
+        if (profile) applySetupToAgent(profile, agent);
+      }
+      return c.json(agentListPayload());
+    } catch (error) {
+      return c.json({ error: "agent_setup_failed", message: error instanceof Error ? error.message : String(error) }, 503);
+    }
+  });
+
   app.post("/v1/agents/:agent_id/detect", async (c) => {
     const agentId = c.req.param("agent_id");
     const agent = currentProfiles().get(agentId);
@@ -283,9 +297,15 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
 
   app.post("/v1/providers/test", async (c) => {
     if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
-    const body = (await c.req.json().catch(() => null)) as { baseUrl?: string; apiKey?: string; authHeader?: boolean } | null;
+    const body = (await c.req.json().catch(() => null)) as { baseUrl?: string; apiKey?: string; authHeader?: boolean; api?: string; model?: string } | null;
     if (!body || typeof body.baseUrl !== "string") return c.json({ error: "baseUrl is required" }, 400);
-    return c.json(await options.runner.testPiProvider({ baseUrl: body.baseUrl, apiKey: body.apiKey, authHeader: body.authHeader }));
+    return c.json(await options.runner.testPiProvider({
+      baseUrl: body.baseUrl,
+      apiKey: body.apiKey,
+      authHeader: body.authHeader,
+      api: typeof body.api === "string" ? body.api : undefined,
+      model: typeof body.model === "string" ? body.model : undefined,
+    }));
   });
 
   app.get("/v1/sessions", async (c) => {

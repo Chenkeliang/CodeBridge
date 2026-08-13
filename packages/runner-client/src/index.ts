@@ -153,6 +153,10 @@ export class RunnerClient {
     });
   }
 
+  async detectAllAgents(): Promise<AgentSetupListResponse> {
+    return this.requestSetup<AgentSetupListResponse>("/agents/detect", { method: "POST" });
+  }
+
   async installAgent(agentId: string, strategyId: string): Promise<AgentSetupInstallResult> {
     return this.requestSetup<AgentSetupInstallResult>(`/agents/${encodeURIComponent(agentId)}/install`, {
       method: "POST",
@@ -178,14 +182,14 @@ export class RunnerClient {
     return { ok: true };
   }
 
-  async testPiProvider(provider: { baseUrl: string; apiKey?: string; authHeader?: boolean }): Promise<{ ok: boolean; detail: string }> {
+  async testPiProvider(provider: { baseUrl: string; apiKey?: string; authHeader?: boolean; api?: string; model?: string }): Promise<{ ok: boolean; detail: string; compatSuggestion?: Record<string, unknown> }> {
     const res = await this.fetch("/pi/providers/test", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(provider),
     });
     if (!res.ok) throw new Error(`Runner error: ${res.status} ${await res.text()}`);
-    return res.json() as Promise<{ ok: boolean; detail: string }>;
+    return res.json() as Promise<{ ok: boolean; detail: string; compatSuggestion?: Record<string, unknown> }>;
   }
 
   async listCommands(
