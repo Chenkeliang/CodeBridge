@@ -47,6 +47,8 @@ export const api = {
     request<AgentProfile>(`/v1/agents/${encodeURIComponent(agentId)}/detect`, {
       method: "POST",
     }),
+  detectAllAgents: () =>
+    request<AgentListResponse>("/v1/agents/detect", { method: "POST" }),
   installAgent: (agentId: string, strategyId: string) =>
     request<AgentProfile>(`/v1/agents/${encodeURIComponent(agentId)}/install`, {
       method: "POST",
@@ -96,8 +98,8 @@ export const api = {
     request<{ ok: boolean }>("/v1/providers", { method: "PUT", body: JSON.stringify(file) }),
   providerPresets: async () =>
     (await request<{ presets?: PiProviderPreset[] }>("/v1/providers/presets")).presets ?? [],
-  testProvider: (provider: { baseUrl: string; apiKey?: string; authHeader?: boolean }) =>
-    request<{ ok: boolean; detail: string }>("/v1/providers/test", { method: "POST", body: JSON.stringify(provider) }),
+  testProvider: (provider: { baseUrl: string; apiKey?: string; authHeader?: boolean; api?: string; model?: string }) =>
+    request<{ ok: boolean; detail: string; compatSuggestion?: Record<string, unknown> }>("/v1/providers/test", { method: "POST", body: JSON.stringify(provider) }),
   commands: async (id: string) =>
     (await request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodeURIComponent(id)}/commands`)).commands ?? [],
   pickDirectory: (id: string) =>

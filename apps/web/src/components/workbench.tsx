@@ -54,6 +54,13 @@ export function Workbench() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; kind: "info" | "error" } | null>(null);
   const pendingEvents = useRef<Record<string, SessionEvent[]>>({});
+  const sessionCache = useRef<Record<string, {
+    session: AgentSession;
+    events: SessionEvent[];
+    commands: AgentCommand[];
+    options: ConfigOption[];
+    approvals: ApprovalRecord[];
+  }>>({});
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<MenuView>("actions");
   const [renameDraft, setRenameDraft] = useState("");
@@ -161,8 +168,20 @@ export function Workbench() {
     streamAbort.current?.abort();
     const controller = new AbortController();
     streamAbort.current = controller;
-    setLoadingSession(true);
-    setEvents(pendingEvents.current[sessionId] ?? []);
+    // Stale-while-revalidate: paint the cached snapshot instantly, refresh below.
+    const cached = sessionCache.current[sessionId];
+    setLoadingSession(!cached);
+    setEvents(cached ? mergeConversationEvents(cached.events, pendingEvents.current[sessionId] ?? []) : (pendingEvents.current[sessionId] ?? []));
+    if (cached) {
+      setCommands(cached.commands);
+      setConfigOptions(cached.options);
+      setApprovals(cached.approvals);
+      setModel(cached.session.model ?? "");
+      setEffort(cached.session.effort ?? "");
+      setConfigOverrides(cached.session.config_overrides ?? {});
+      setPermissionMode(cached.session.permission_mode ?? "");
+      setFlowId(cached.session.flow_id ?? "");
+    }
     setError(null);
     setMenuOpen(false);
     setMenuView("actions");
@@ -184,7 +203,10 @@ export function Workbench() {
         setPermissionMode(session.permission_mode ?? "");
         setFlowId(session.flow_id ?? "");
         const latestRun = runs.at(-1);
-        setApprovals(latestRun ? await api.approvals(latestRun.run_id).catch(() => []) : []);
+        const nextApprovals = latestRun ? await api.approvals(latestRun.run_id).catch(() => []) : [];
+        if (!active) return;
+        setApprovals(nextApprovals);
+        sessionCache.current[sessionId] = { session, events: history, commands: nextCommands, options, approvals: nextApprovals };
         setLoadingSession(false);
         const after = history.reduce((max, event) => Math.max(max, event.sequence), 0);
         await streamSessionEvents(sessionId, after, controller.signal, (event) => {
@@ -281,6 +303,17 @@ export function Workbench() {
     const remembered = window.localStorage.getItem(`codebridge:last-session:${agentId}`);
     const nextSessionId = restoreSessionSelection(sessions, selectedSessionRef.current, agentId, remembered);
     selectedSessionRef.current = nextSessionId;
+    // Composer config (model/effort/options) is per-Agent: if the session id
+    // doesn't change (both null), the load effect won't rerun and the previous
+    // Agent's options would leak into this one's selector.
+    if (nextSessionId === selectedSessionId && agentId !== selectedAgentId) {
+      setCommands([]);
+      setConfigOptions([]);
+      setModel("");
+      setEffort("");
+      setConfigOverrides({});
+      setPermissionMode("");
+    }
     setSelectedSessionId(nextSessionId);
   }
 
@@ -317,11 +350,20 @@ export function Workbench() {
 
   async function submit() {
     const message = draft.trim();
-    if (!message || sending || !selectedAgent || selectedAgent.status !== "healthy") return;
+    if (!message || sending) return;
     setSending(true);
     setError(null);
     let sessionId = selectedSessionId;
-    if (!sessionId) sessionId = (await createSession(selectedAgent.agent_id))?.session_id ?? null;
+    if (!sessionId) {
+      if (!selectedAgent || selectedAgent.status !== "healthy") {
+        setError(selectedAgent
+          ? `${selectedAgent.display_name} 当前不可用（${statusLabel[selectedAgent.status] ?? selectedAgent.status}），请先在设置中完成安装/配置`
+          : "请选择一个可用的 Agent");
+        setSending(false);
+        return;
+      }
+      sessionId = (await createSession(selectedAgent.agent_id))?.session_id ?? null;
+    }
     if (!sessionId) {
       setSending(false);
       return;
@@ -358,6 +400,7 @@ export function Workbench() {
     setError(null);
     try {
       const updated = await api.updateSession(sessionId, update);
+      if (sessionCache.current[sessionId]) sessionCache.current[sessionId].session = updated;
       setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
       if (selectedSessionId === sessionId) {
         setModel(updated.model ?? "");
@@ -408,6 +451,7 @@ export function Workbench() {
   async function deleteSessionById(sessionId: string) {
     try {
       await api.deleteSession(sessionId);
+      delete sessionCache.current[sessionId];
       setSessions((current) => current.filter((session) => session.session_id !== sessionId));
       if (selectedSessionId === sessionId) {
         if (selectedSession) window.localStorage.removeItem(`codebridge:last-session:${selectedSession.agent_id}`);
