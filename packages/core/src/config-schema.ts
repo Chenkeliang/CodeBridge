@@ -107,6 +107,7 @@ export const ConfigSchema = z.object({
       staticDirectory: z.string().min(1).optional(),
     })
     .default({ enabled: false }),
+  defaultAgent: z.string().min(1).optional(),
   defaultBackend: z.enum(["cursor", "claude", "codex", "pi"]).default("cursor"),
   backends: z.record(BackendProfileSchema),
   access: AccessConfigSchema.optional(),
@@ -193,6 +194,7 @@ export function defaultConfig(): AppConfig {
     web: {
       enabled: false,
     },
+    defaultAgent: undefined,
     defaultBackend: "cursor",
     backends: {
       cursor: {

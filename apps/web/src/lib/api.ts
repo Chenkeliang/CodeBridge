@@ -1,6 +1,7 @@
 import { parseSseFrames } from "./sse";
 import type {
   AgentCommand,
+  AgentListResponse,
   AgentProfile,
   AgentSession,
   ApprovalRecord,
@@ -30,15 +31,32 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { error?: string; detail?: string; message?: string; issues?: string[] } | null;
-    throw new Error(payload?.detail ?? payload?.message ?? (payload?.issues?.length ? payload.issues.join(";") : undefined) ?? payload?.error ?? `HTTP ${response.status}`);
+    const payload = await response.json().catch(() => null) as { error?: string; detail?: string; details?: string; message?: string; issues?: string[] } | null;
+    const issueText = payload?.issues?.length ? payload.issues.join("; ") : undefined;
+    const parts = [payload?.error, payload?.message, payload?.detail ?? payload?.details ?? issueText]
+      .filter((part): part is string => Boolean(part));
+    throw new Error(parts.length ? [...new Set(parts)].join(" · ") : `HTTP ${response.status}`);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
 export const api = {
-  agents: async () => (await request<{ agents: AgentProfile[] }>("/v1/agents")).agents,
+  agents: () => request<AgentListResponse>("/v1/agents"),
+  detectAgent: (agentId: string) =>
+    request<AgentProfile>(`/v1/agents/${encodeURIComponent(agentId)}/detect`, {
+      method: "POST",
+    }),
+  installAgent: (agentId: string, strategyId: string) =>
+    request<AgentProfile>(`/v1/agents/${encodeURIComponent(agentId)}/install`, {
+      method: "POST",
+      body: JSON.stringify({ strategy_id: strategyId }),
+    }),
+  setDefaultAgent: (agentId: string) =>
+    request<AgentListResponse>("/v1/settings/default-agent", {
+      method: "PATCH",
+      body: JSON.stringify({ agent_id: agentId }),
+    }),
   sessions: async (importProvider = false, includeArchived = false) => {
     const params = new URLSearchParams();
     if (importProvider) params.set("import", "true");

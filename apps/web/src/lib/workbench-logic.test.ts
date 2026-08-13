@@ -1,11 +1,38 @@
 import { describe, expect, it } from "vitest";
 import * as workbenchLogic from "./workbench-logic";
-import type { AgentSession } from "./types";
+import type { AgentProfile, AgentSession } from "./types";
 import type { ConversationEvent } from "./events";
 
-const { isModelOption, orderSessions } = workbenchLogic;
+const { isModelOption, orderSessions, selectInitialAgent } = workbenchLogic;
+
+function agent(agent_id: string, can_select_default: boolean): AgentProfile {
+  return {
+    agent_id,
+    display_name: agent_id,
+    adapter: "acp",
+    status: can_select_default ? "healthy" : "needs_setup",
+    capabilities: [],
+    models: [],
+    session_features: [],
+    setup: {
+      installation: can_select_default ? "installed" : "missing",
+      configuration: can_select_default ? "configured" : "unknown",
+      runtime: can_select_default ? "healthy" : "not_started",
+      can_select_default,
+      can_create_session: can_select_default,
+    },
+  };
+}
 
 describe("workbench logic", () => {
+  it("selects the effective default Agent on initial load", () => {
+    const agents = [agent("codex", true), agent("pi", true), agent("cursor", false)];
+
+    expect(selectInitialAgent(agents, "pi")).toBe("pi");
+    expect(selectInitialAgent(agents, "missing-default")).toBe("codex");
+    expect(selectInitialAgent([agent("cursor", false)], null)).toBeNull();
+  });
+
   it("keeps non-model Agent configuration out of the model selector", () => {
     expect(isModelOption({ id: "permission", name: "Permission", type: "select", category: "mode", values: [] })).toBe(false);
     expect(isModelOption({ id: "model", name: "Model", type: "select", category: "model", values: [] })).toBe(true);

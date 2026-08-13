@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveSession, ActiveSessionMessage } from "@agentclientprotocol/sdk";
-import type { AgentEvent } from "@codebridge/core";
-import { runActivePromptTurn } from "./acp/acp-session-runner.js";
+import type { AgentEvent, RunContext } from "@codebridge/core";
+import { runAcpSession, runActivePromptTurn } from "./acp/acp-session-runner.js";
+import type { AcpSessionResources } from "./acp/acp-session-pool.js";
 
 /** 复刻 SDK AsyncQueue 语义：enqueue 交给最早注册的 waiter（FIFO） */
 class FakeUpdateQueue {
@@ -105,6 +106,88 @@ async function collect(
   for await (const event of gen) events.push(event);
   return events;
 }
+
+async function captureAcpPromptPayload(
+  overrides: Record<string, unknown> = {},
+): Promise<string> {
+  const queue = new FakeUpdateQueue();
+  const payloads: string[] = [];
+  const active = {
+    prompt: async (blocks: unknown[]) => {
+      payloads.push(JSON.stringify(blocks));
+      queue.enqueue(stopMessage);
+    },
+    nextUpdate: () => queue.next(),
+    dispose: () => {},
+  } as unknown as ActiveSession;
+  const resources = {
+    sessionId: "acp-session-1",
+    child: { exitCode: null, signalCode: null },
+    connection: {
+      close: () => {},
+      agent: {
+        request: async () => ({ configOptions: [] }),
+        notify: async () => {},
+      },
+    },
+    active,
+    cwd: "/workspace",
+    spawnKey: "spawn-key",
+    envKey: "env-key",
+    additionalDirectoriesKey: "dirs-key",
+    supportsSteering: false,
+    supportsClose: false,
+    configOptions: [],
+    readStderr: () => "",
+    carrier: { pending: null },
+    runtime: {},
+  } as unknown as AcpSessionResources;
+  const pool = {
+    enabled: true,
+    acquire: () => resources,
+    release: () => {},
+  };
+
+  await collect(
+    runAcpSession(
+      {
+        runId: "run-acp-stability",
+        cwd: "/workspace",
+        prompt: "inspect the project",
+        backendConfig: { type: "generic-spawn" },
+        resumeSessionId: "session-1",
+        ...overrides,
+      } as RunContext,
+      {
+        permissionPolicy: "auto_allow",
+        isAborted: () => false,
+        sessionPool: pool as never,
+      },
+      {},
+    ),
+  );
+
+  expect(payloads).toHaveLength(1);
+  return payloads[0]!;
+}
+
+describe("ACP prompt stability", () => {
+  it("keeps ACP content blocks byte-for-byte stable when setup/default metadata changes", async () => {
+    const baseline = await captureAcpPromptPayload();
+    const withMetadata = await captureAcpPromptPayload({
+      defaultAgent: "pi",
+      setupMetadata: {
+        installation: "installed",
+        configuration: "configured",
+        runtime: "healthy",
+      },
+      setupMarker: "LEAK-ACP-SETUP",
+    });
+
+    expect(withMetadata).toBe(baseline);
+    expect(withMetadata).not.toContain("LEAK-ACP-SETUP");
+  });
+});
 
 describe("runActivePromptTurn", () => {
   it("delivers updates that arrive after quiet gaps longer than the poll tick", async () => {

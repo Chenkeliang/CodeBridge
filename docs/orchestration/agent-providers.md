@@ -80,6 +80,14 @@ Rail 底部加设置入口,打开设置视图(主区整页,非弹层):
 - **显示**:现有密度/阅读模式设置迁入
 - 删除 provider 需二次确认;被 Session 引用的模型所属 provider 删除时给出警告(该 Session 下次运行会报模型不可用)
 
+### 2.8 默认路由与安装职责
+
+- `defaultAgent` 只保存在 Bridge 的 configStore 中; Runner/Web 只消费 `default_agent_id` / `effective_default_agent_id`,不把 setup/default 元数据塞进 prompt、system prompt 或 ACP content blocks。
+- 只有 `setup.canSelectDefault === true` 的 Agent 才能设为默认; `missing` / `needs_configuration` / `unavailable` 必须在服务端拒绝。
+- 读取默认值时先返回持久化的 `defaultAgent`; 若它当前不可用,前端只回退到其它可选 Agent,**不覆盖**已保存的默认值。
+- Runner Host 负责 host-local 探测与安全安装; Web 只提交 `strategy_id`,安装命令/参数由 Runner 端 allowlist 决定,且一律使用 `spawn(..., { shell: false })`。
+- OpenCode 继续使用自己的配置边界(`~/.config/opencode/opencode.json`、项目 `opencode.json`、`/connect`); CodeBridge 只提供探测与安全的 `npm install -g opencode-ai` 方案。Cursor 的官方安装器是 shell pipeline,因此这里只展示文档入口,不由 CodeBridge 执行。
+
 ## 3. 非目标
 
 - 不做 provider 用量统计/计费展示

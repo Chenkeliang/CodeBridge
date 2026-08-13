@@ -7,6 +7,9 @@ import { promisify } from "node:util";
 import {
   AcpSessionPool,
   BackendRegistry,
+  AgentSetupService,
+  type AgentSetupInstallResult,
+  type AgentSetupRecord,
   deleteAcpSession,
   loadAcpSessionHistory,
   listAcpConfigOptions,
@@ -35,6 +38,7 @@ import {
   type CliSessionSummary,
   type ProviderSessionHistoryEvent,
 } from "@codebridge/backends";
+import { supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import type {
   AgentEvent,
   AgentAvailableCommand,
@@ -60,6 +64,7 @@ export interface RunnerHostOptions {
   config: AppConfig;
   maxConcurrentRuns?: number;
   dataDir?: string;
+  agentSetupService?: AgentSetupService;
   /** Test/embedding hook; production uses the native Pi Node SDK factory. */
   piSessionFactory?: (ctx: RunContext) => Promise<PiSession>;
   /** Test/embedding hook for provider-native session fork. */
@@ -191,6 +196,7 @@ export class RunnerHost {
   >;
   /** 长驻 ACP 会话池：同会话消息复用适配器进程（kill switch: runnerHost.acpSessionPool） */
   private readonly sessionPool: AcpSessionPool;
+  private readonly agentSetup: AgentSetupService;
   /**
    * prompt_feishu：每个 run 的挂起权限请求队列（FIFO）。claude 通常一次只挂一个，
    * 但并行工具可能并发请求——用队列而非单槽，避免互相覆盖、/approve 只回给最早的那个。
@@ -219,6 +225,9 @@ export class RunnerHost {
       enabled: rh?.acpSessionPool ?? true,
       idleMs: rh?.acpSessionIdleMs ?? 10 * 60_000,
       maxPooled: rh?.acpSessionPoolMax ?? 4,
+    });
+    this.agentSetup = options.agentSetupService ?? new AgentSetupService({
+      manifests: supportedAgentSetupManifests,
     });
     this.sessionLeases = new SessionLeaseStore(this.dataDir);
     this.inspectSessionOwners =
@@ -260,6 +269,22 @@ export class RunnerHost {
       backends: this.registry.ids(),
       ...backend,
     };
+  }
+
+  async listAgentSetup(): Promise<AgentSetupRecord[]> {
+    return this.agentSetup.list();
+  }
+
+  async detectAgent(agentId: string): Promise<AgentSetupRecord> {
+    const setup = await this.agentSetup.detect(agentId);
+    return { agentId, ...setup };
+  }
+
+  async installAgent(
+    agentId: string,
+    strategyId: string,
+  ): Promise<AgentSetupInstallResult> {
+    return this.agentSetup.install(agentId, strategyId);
   }
 
   cancel(runId: string): boolean {
@@ -994,6 +1019,30 @@ export function createRunnerApp(host: RunnerHost, token: string) {
 
   app.get("/doctor", async (c) => c.json(await host.doctor()));
 
+  app.get("/agents/setup", async (c) => {
+    return c.json({ agents: await host.listAgentSetup() });
+  });
+
+  app.post("/agents/:agentId/detect", async (c) => {
+    try {
+      return c.json(await host.detectAgent(c.req.param("agentId")));
+    } catch (error) {
+      return agentSetupErrorResponse(c, error, 404);
+    }
+  });
+
+  app.post("/agents/:agentId/install", async (c) => {
+    const body = await c.req.json().catch(() => null) as { strategy_id?: unknown } | null;
+    if (!body || typeof body.strategy_id !== "string" || !body.strategy_id.trim()) {
+      return c.json({ error: "install_strategy_not_found" }, 400);
+    }
+    try {
+      return c.json(await host.installAgent(c.req.param("agentId"), body.strategy_id.trim()));
+    } catch (error) {
+      return agentSetupErrorResponse(c, error, 404, 400);
+    }
+  });
+
   // Pi provider management (docs/orchestration/agent-providers.md).
   // models.json lives on this host; bridge proxies and never persists it.
   app.get("/pi/providers/presets", (c) => c.json({ presets: PI_PROVIDER_PRESETS }));
@@ -1226,4 +1275,20 @@ export function createRunnerApp(host: RunnerHost, token: string) {
   });
 
   return app;
+}
+
+function agentSetupErrorResponse(
+  c: { json: (body: unknown, status?: number) => Response },
+  error: unknown,
+  agentStatus = 404,
+  strategyStatus = 400,
+) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("Unknown agent:")) {
+    return c.json({ error: "agent_not_found" }, agentStatus);
+  }
+  if (message.startsWith("Unknown install strategy:")) {
+    return c.json({ error: "install_strategy_not_found" }, strategyStatus);
+  }
+  return c.json({ error: "agent_setup_failed", message }, 500);
 }

@@ -1,5 +1,44 @@
 import type { ConversationEvent } from "./events";
 
+export interface AgentDiagnostic {
+  stage: "detect" | "install" | "configure" | "health";
+  code: string;
+  message: string;
+  details?: string;
+  exit_code?: number;
+}
+
+export interface AgentInstallStrategy {
+  id: string;
+  label: string;
+  command: string;
+  args: string[];
+  available: boolean;
+  requires_confirmation: true;
+}
+
+export interface AgentSetupManifest {
+  agent_id: string;
+  display_name: string;
+  adapter: "sdk" | "acp" | "cli";
+  install_strategies: AgentInstallStrategy[];
+  configuration_owner: "codebridge" | "agent";
+  configuration_path?: string;
+  documentation_url?: string;
+  supports_managed_configuration: boolean;
+}
+
+export interface AgentSetupState {
+  installation: "installed" | "missing" | "unknown";
+  configuration: "configured" | "needs_configuration" | "unknown";
+  runtime: "healthy" | "unavailable" | "not_started";
+  version?: string;
+  executable_path?: string;
+  diagnostic?: AgentDiagnostic;
+  can_select_default: boolean;
+  can_create_session: boolean;
+}
+
 export interface AgentProfile {
   agent_id: string;
   display_name: string;
@@ -8,6 +47,14 @@ export interface AgentProfile {
   capabilities: string[];
   models: string[];
   session_features: string[];
+  setup?: AgentSetupState;
+  setup_manifest?: AgentSetupManifest;
+}
+
+export interface AgentListResponse {
+  agents: AgentProfile[];
+  default_agent_id: string | null;
+  effective_default_agent_id: string | null;
 }
 
 export interface AgentSession {

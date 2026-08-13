@@ -7,6 +7,8 @@ import type {
   SessionCatalogStore,
   UpdateSessionInput,
 } from "@codebridge/session-catalog";
+import { AgentRegistry, cloneSetupManifest, projectAgentStatus, projectSetupState } from "@codebridge/agent-registry";
+import type { ConfigStore } from "@codebridge/core";
 import type { SqliteEventStore } from "@codebridge/work-items";
 import type { RunExecutor } from "@codebridge/run-executor";
 import type { RunnerClient } from "@codebridge/runner-client";
@@ -18,6 +20,8 @@ import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
   agents: AgentProfile[] | (() => AgentProfile[]);
+  agentRegistry?: AgentRegistry;
+  configStore?: ConfigStore;
   workItems: SqliteEventStore;
   executor?: RunExecutor;
   runner?: RunnerClient;
@@ -30,11 +34,29 @@ export interface SessionApiOptions {
 
 export function createSessionApp(options: SessionApiOptions, token: string) {
   const app = new Hono();
-  const currentAgents = () => typeof options.agents === "function" ? options.agents() : options.agents;
+  const currentAgents = () => options.agentRegistry?.list()
+    ?? (typeof options.agents === "function" ? options.agents() : options.agents);
   const currentProfiles = () => new Map(currentAgents().map((agent) => [agent.agentId, agent]));
   const historyHydrations = new Map<string, Promise<void>>();
   const historyRetryAfter = new Map<string, number>();
   const configOptionRequests = new Map<string, Promise<Awaited<ReturnType<RunnerClient["listConfigOptions"]>>>>();
+
+  function agentListPayload() {
+    const agents = currentAgents();
+    const defaultAgentId = options.configStore?.get().defaultAgent ?? null;
+    return {
+      agents: agents.map(toApiAgent),
+      default_agent_id: defaultAgentId,
+      effective_default_agent_id: resolveEffectiveDefaultAgentId(agents, defaultAgentId),
+    };
+  }
+
+  function applySetupToAgent(
+    agent: AgentProfile,
+    setup: Parameters<typeof projectSetupState>[0],
+  ): AgentProfile {
+    return options.agentRegistry?.updateSetup(agent.agentId, setup) ?? mergeAgentSetup(agent, setup);
+  }
 
   async function hydrateProviderHistory(session: AgentSession): Promise<AgentSession> {
     if (!options.runner || !session.providerSessionId) return session;
@@ -149,12 +171,84 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     await next();
   });
 
-  app.get("/v1/agents", (c) => c.json({ agents: currentAgents().map(toApiAgent) }));
+  app.get("/v1/agents", (c) => c.json(agentListPayload()));
 
   app.get("/v1/agents/:agent_id", (c) => {
     const agent = currentProfiles().get(c.req.param("agent_id"));
     if (!agent) return c.json({ error: "agent_not_found" }, 404);
     return c.json(toApiAgent(agent));
+  });
+
+  app.post("/v1/agents/:agent_id/detect", async (c) => {
+    const agentId = c.req.param("agent_id");
+    const agent = currentProfiles().get(agentId);
+    if (!agent) return c.json({ error: "agent_not_found" }, 404);
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    try {
+      const setup = await options.runner.detectAgent(agentId);
+      const nextAgent = applySetupToAgent(agent, setup);
+      return c.json(toApiAgent(nextAgent));
+    } catch (error) {
+      const status = errorStatus(error, 500) as 400 | 401 | 403 | 404 | 409 | 500 | 503;
+      return c.json(formatAgentSetupError(error, agent), status);
+    }
+  });
+
+  app.post("/v1/agents/:agent_id/install", async (c) => {
+    const agentId = c.req.param("agent_id");
+    const agent = currentProfiles().get(agentId);
+    if (!agent) return c.json({ error: "agent_not_found" }, 404);
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    const body = await c.req.json().catch(() => null) as { strategy_id?: unknown } | null;
+    if (!body || typeof body.strategy_id !== "string" || !body.strategy_id.trim()) {
+      return c.json({ error: "install_strategy_not_found" }, 400);
+    }
+    try {
+      const result = await options.runner.installAgent(agentId, body.strategy_id.trim());
+      const nextAgent = applySetupToAgent(agent, result);
+      if (!result.ok) {
+        return c.json({
+          error: result.diagnostic?.code ?? "install_failed",
+          message: result.diagnostic?.message ?? "Agent installation failed.",
+          details: result.diagnostic?.details,
+          agent: toApiAgent(nextAgent),
+        }, result.diagnostic?.code === "install_not_supported" ? 400 : 409);
+      }
+      return c.json(toApiAgent(nextAgent));
+    } catch (error) {
+      const status = errorStatus(error, 500) as 400 | 401 | 403 | 404 | 409 | 500 | 503;
+      return c.json(formatAgentSetupError(error, agent), status);
+    }
+  });
+
+  app.patch("/v1/settings/default-agent", async (c) => {
+    const body = await c.req.json().catch(() => null) as { agent_id?: unknown } | null;
+    const agentId = typeof body?.agent_id === "string" ? body.agent_id.trim() : "";
+    if (!agentId) return c.json({ error: "agent_not_found" }, 404);
+    const agent = currentProfiles().get(agentId);
+    if (!agent) return c.json({ error: "agent_not_found" }, 404);
+    const setup = agent.setup;
+    if (!setup || setup.installation !== "installed") {
+      return c.json({ error: "agent_not_installed", message: `${agent.displayName ?? agent.agentId} is not installed.` }, 409);
+    }
+    if (setup.configuration !== "configured") {
+      return c.json({ error: "agent_not_configured", message: `${agent.displayName ?? agent.agentId} is not configured.` }, 409);
+    }
+    if (!options.configStore) {
+      return c.json({ error: "config_store_unavailable" }, 503);
+    }
+    try {
+      options.configStore.update((current) => ({
+        ...current,
+        defaultAgent: agentId,
+      }));
+      return c.json(agentListPayload());
+    } catch (error) {
+      return c.json({
+        error: "default_agent_persist_failed",
+        message: error instanceof Error ? error.message : String(error),
+      }, 500);
+    }
   });
 
   app.get("/v1/attachments/:attachment_id", (c) => {
@@ -978,6 +1072,59 @@ async function syncProviderSessions(
   return { errors };
 }
 
+function resolveEffectiveDefaultAgentId(
+  agents: AgentProfile[],
+  defaultAgentId: string | null,
+): string | null {
+  if (defaultAgentId) {
+    const saved = agents.find((agent) => agent.agentId === defaultAgentId && agent.setup?.canSelectDefault);
+    if (saved) return saved.agentId;
+  }
+  return agents.find((agent) => agent.setup?.canSelectDefault)?.agentId ?? null;
+}
+
+function mergeAgentSetup(
+  agent: AgentProfile,
+  setup: Parameters<typeof projectSetupState>[0],
+): AgentProfile {
+  const nextSetup = projectSetupState(setup);
+  return {
+    ...agent,
+    status: projectAgentStatus(nextSetup),
+    setup: nextSetup,
+    setupManifest: cloneSetupManifest(agent.setupManifest),
+    capabilities: [...agent.capabilities],
+    models: [...agent.models],
+    sessionFeatures: [...agent.sessionFeatures],
+  };
+}
+
+function formatAgentSetupError(
+  error: unknown,
+  agent?: AgentProfile,
+): Record<string, unknown> {
+  const message = error instanceof Error ? error.message : String(error);
+  const details = error && typeof error === "object" && "details" in error && typeof (error as { details?: unknown }).details === "string"
+    ? (error as { details: string }).details
+    : undefined;
+  const code = error && typeof error === "object" && "code" in error && typeof (error as { code?: unknown }).code === "string"
+    ? (error as { code: string }).code
+    : "agent_setup_failed";
+  return {
+    error: code,
+    message,
+    details,
+    ...(agent ? { agent: toApiAgent(agent) } : {}),
+  };
+}
+
+function errorStatus(error: unknown, fallback: number): number {
+  if (error && typeof error === "object" && "status" in error && typeof (error as { status?: unknown }).status === "number") {
+    return (error as { status: number }).status;
+  }
+  return fallback;
+}
+
 function toApiAgent(agent: AgentProfile): Record<string, unknown> {
   return {
     agent_id: agent.agentId,
@@ -987,6 +1134,39 @@ function toApiAgent(agent: AgentProfile): Record<string, unknown> {
     capabilities: agent.capabilities,
     models: agent.models,
     session_features: agent.sessionFeatures,
+    setup: agent.setup ? {
+      installation: agent.setup.installation,
+      configuration: agent.setup.configuration,
+      runtime: agent.setup.runtime,
+      version: agent.setup.version,
+      executable_path: agent.setup.executablePath,
+      diagnostic: agent.setup.diagnostic ? {
+        stage: agent.setup.diagnostic.stage,
+        code: agent.setup.diagnostic.code,
+        message: agent.setup.diagnostic.message,
+        details: agent.setup.diagnostic.details,
+        exit_code: agent.setup.diagnostic.exitCode,
+      } : undefined,
+      can_select_default: agent.setup.canSelectDefault,
+      can_create_session: agent.setup.canCreateSession,
+    } : undefined,
+    setup_manifest: agent.setupManifest ? {
+      agent_id: agent.setupManifest.agentId,
+      display_name: agent.setupManifest.displayName,
+      adapter: agent.setupManifest.adapter,
+      install_strategies: agent.setupManifest.installStrategies.map((strategy) => ({
+        id: strategy.id,
+        label: strategy.label,
+        command: strategy.command,
+        args: [...strategy.args],
+        available: strategy.available,
+        requires_confirmation: strategy.requiresConfirmation,
+      })),
+      configuration_owner: agent.setupManifest.configurationOwner,
+      configuration_path: agent.setupManifest.configurationPath,
+      documentation_url: agent.setupManifest.documentationUrl,
+      supports_managed_configuration: agent.setupManifest.supportsManagedConfiguration,
+    } : undefined,
   };
 }
 

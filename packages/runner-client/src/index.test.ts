@@ -364,3 +364,88 @@ describe("RunnerClient Agent commands", () => {
     );
   });
 });
+
+describe("RunnerClient Agent setup", () => {
+  it("lists host setup states", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        agents: [
+          {
+            agentId: "opencode",
+            installation: "installed",
+            configuration: "configured",
+            runtime: "healthy",
+            canSelectDefault: true,
+            canCreateSession: true,
+          },
+        ],
+      })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.listAgentSetup()).resolves.toMatchObject({
+      agents: [
+        expect.objectContaining({
+          agentId: "opencode",
+          canCreateSession: true,
+        }),
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/agents/setup",
+      expect.any(Object),
+    );
+  });
+
+  it("detects a single Agent through the Runner host", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        agentId: "opencode",
+        installation: "installed",
+        configuration: "configured",
+        runtime: "healthy",
+        canSelectDefault: true,
+        canCreateSession: true,
+      })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.detectAgent("opencode")).resolves.toMatchObject({
+      agentId: "opencode",
+      canSelectDefault: true,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/agents/opencode/detect",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("installs a supported Agent strategy and surfaces structured errors", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        error: "install_failed",
+        message: "OpenCode installation failed.",
+        details: "Authorization: ******",
+        code: "install_failed",
+      }), { status: 400 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.installAgent("opencode", "npm-global")).rejects.toMatchObject({
+      name: "RunnerApiError",
+      message: expect.stringContaining("OpenCode installation failed."),
+      details: "Authorization: ******",
+      status: 400,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://runner/agents/opencode/install",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ strategy_id: "npm-global" }),
+      }),
+    );
+  });
+});

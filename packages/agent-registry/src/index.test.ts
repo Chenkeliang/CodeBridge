@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentRegistry } from "./index.js";
+import { projectSetupState } from "./setup.js";
 
 const tempDirectories: string[] = [];
 
@@ -34,6 +35,89 @@ describe("agent registry", () => {
     expect(reopened.get("pi")?.status).toBe("unavailable");
     expect(reopened.getHealth("pi")).toMatchObject({ agentId: "pi", status: "unavailable" });
     reopened.close();
+  });
+
+  it("projects setup state into status and default eligibility", () => {
+    const registry = new AgentRegistry();
+    const profile = registry.register({
+      agentId: "opencode",
+      displayName: "OpenCode",
+      adapter: "acp",
+      status: "needs_setup",
+      capabilities: [],
+      models: [],
+      sessionFeatures: [],
+      setup: projectSetupState({
+        installation: "missing",
+        configuration: "unknown",
+        runtime: "not_started",
+      }),
+    });
+
+    expect(profile.status).toBe("needs_setup");
+    expect(profile.setup?.canSelectDefault).toBe(false);
+    expect(profile.setup?.canCreateSession).toBe(false);
+    registry.close();
+  });
+
+  it("updates setup state and derives a healthy status", () => {
+    const registry = new AgentRegistry();
+    registry.register({
+      agentId: "pi",
+      displayName: "Pi",
+      adapter: "sdk",
+      status: "needs_setup",
+      capabilities: [],
+      models: [],
+      sessionFeatures: [],
+      setup: projectSetupState({
+        installation: "installed",
+        configuration: "configured",
+        runtime: "unavailable",
+      }),
+    });
+
+    const updated = registry.updateSetup("pi", {
+      installation: "installed",
+      configuration: "configured",
+      runtime: "healthy",
+    });
+
+    expect(updated?.status).toBe("healthy");
+    expect(updated?.setup?.canSelectDefault).toBe(true);
+    expect(updated?.setup?.canCreateSession).toBe(true);
+    registry.close();
+  });
+
+  it("preserves the saved setup state when a profile is re-registered", () => {
+    const registry = new AgentRegistry();
+    registry.register({
+      agentId: "codex",
+      displayName: "Codex",
+      adapter: "acp",
+      status: "needs_setup",
+      capabilities: [],
+      models: [],
+      sessionFeatures: [],
+      setup: projectSetupState({
+        installation: "installed",
+        configuration: "configured",
+        runtime: "unavailable",
+      }),
+    });
+    registry.register({
+      agentId: "codex",
+      displayName: "Codex",
+      adapter: "acp",
+      status: "healthy",
+      capabilities: [],
+      models: [],
+      sessionFeatures: [],
+    });
+
+    expect(registry.get("codex")?.setup?.installation).toBe("installed");
+    expect(registry.get("codex")?.status).toBe("unavailable");
+    registry.close();
   });
 
   it("can run periodic adapter health refreshes and stop them", async () => {

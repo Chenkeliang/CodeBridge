@@ -10,6 +10,50 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
 export type SessionStatus = "active" | "idle" | "closed" | "unavailable";
 export type SessionConfigOverrides = Record<string, string | boolean>;
 
+export type AgentSetupInstallation = "installed" | "missing" | "unknown";
+export type AgentSetupConfiguration = "configured" | "needs_configuration" | "unknown";
+export type AgentSetupRuntime = "healthy" | "unavailable" | "not_started";
+export type AgentSetupStage = "detect" | "install" | "configure" | "health";
+
+export interface AgentDiagnostic {
+  stage: AgentSetupStage;
+  code: string;
+  message: string;
+  details?: string;
+  exitCode?: number;
+}
+
+export interface AgentInstallStrategy {
+  id: string;
+  label: string;
+  command: string;
+  args: string[];
+  available: boolean;
+  requiresConfirmation: true;
+}
+
+export interface AgentSetupManifest {
+  agentId: string;
+  displayName: string;
+  adapter: "sdk" | "acp" | "cli";
+  installStrategies: AgentInstallStrategy[];
+  configurationOwner: "codebridge" | "agent";
+  configurationPath?: string;
+  documentationUrl?: string;
+  supportsManagedConfiguration: boolean;
+}
+
+export interface AgentSetupState {
+  installation: AgentSetupInstallation;
+  configuration: AgentSetupConfiguration;
+  runtime: AgentSetupRuntime;
+  version?: string;
+  executablePath?: string;
+  diagnostic?: AgentDiagnostic;
+  canSelectDefault: boolean;
+  canCreateSession: boolean;
+}
+
 export interface AgentProfile {
   agentId: string;
   displayName: string;
@@ -18,6 +62,8 @@ export interface AgentProfile {
   capabilities: string[];
   models: string[];
   sessionFeatures: string[];
+  setup?: AgentSetupState;
+  setupManifest?: AgentSetupManifest;
 }
 
 export interface AgentSession {

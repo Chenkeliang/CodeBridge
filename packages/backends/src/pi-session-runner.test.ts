@@ -44,12 +44,33 @@ function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   })();
 }
 
+async function capturePiPromptPayload(
+  overrides: Record<string, unknown> = {},
+): Promise<string> {
+  const session = new FakePiSession();
+
+  await collect(runPiSession({
+    runId: "run-pi-stability",
+    cwd: "/workspace",
+    prompt: "inspect the project",
+    backendConfig: { type: "pi-sdk" },
+    ...overrides,
+  } as RunContext, {
+    createSession: async () => session,
+    isAborted: () => false,
+  }));
+
+  expect(session.promptCalls).toHaveLength(1);
+  return JSON.stringify(session.promptCalls[0]);
+}
+
 class FakePiSession implements PiSession {
   readonly sessionId = "pi-session-1";
   private listener?: (event: unknown) => void;
   aborted = false;
   disposed = false;
   prompts: string[] = [];
+  promptCalls: Array<{ text: string; options?: { images?: unknown[] } }> = [];
 
   subscribe(listener: (event: unknown) => void): () => void {
     this.listener = listener;
@@ -58,8 +79,12 @@ class FakePiSession implements PiSession {
     };
   }
 
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string, options?: { images?: unknown[] }): Promise<void> {
     this.prompts.push(text);
+    this.promptCalls.push({
+      text,
+      options: options ? JSON.parse(JSON.stringify(options)) : undefined,
+    });
     this.listener?.({
       type: "message_update",
       assistantMessageEvent: { type: "text_delta", delta: "ready" },
@@ -295,6 +320,22 @@ describe("Pi session runner", () => {
     expect(session.prompts).toEqual(["inspect the project"]);
     expect(session.disposed).toBe(true);
     expect(handle.current).toBeUndefined();
+  });
+
+  it("keeps Pi prompt payload byte-for-byte stable when setup/default metadata changes", async () => {
+    const baseline = await capturePiPromptPayload();
+    const withMetadata = await capturePiPromptPayload({
+      defaultAgent: "codex",
+      setupMetadata: {
+        installation: "installed",
+        configuration: "configured",
+        runtime: "healthy",
+      },
+      setupMarker: "LEAK-PI-SETUP",
+    });
+
+    expect(withMetadata).toBe(baseline);
+    expect(withMetadata).not.toContain("LEAK-PI-SETUP");
   });
 
   it("does not bind a provider Session when the first prompt fails", async () => {

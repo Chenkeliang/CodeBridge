@@ -27,6 +27,7 @@ import {
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { AgentRegistry } from "@codebridge/agent-registry";
+import { projectSetupState, supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import {
   McpRuntime,
   McpServerRegistry,
@@ -214,21 +215,38 @@ program
           })
         : undefined,
     );
-    const knownAgents = ["codex", "pi", "cursor", "claude", "opencode"];
-    const agentIds = [...new Set([...knownAgents, ...Object.keys(config.backends)])];
+    const supportedSetupManifests = new Map(
+      supportedAgentSetupManifests.map((manifest) => [manifest.agentId, manifest] as const),
+    );
+    const knownAgents = [...supportedSetupManifests.keys(), ...Object.keys(config.backends)];
+    const agentIds = [...new Set(knownAgents)];
     const registry = new AgentRegistry({ databasePath: path.join(dataDir, "agents.sqlite") });
     agentIds.forEach((agentId) => {
       const profile = config.backends[agentId];
-      const displayNames: Record<string, string> = {
-        codex: "Codex",
-        pi: "Pi",
-        cursor: "Cursor",
-        claude: "Claude Code",
-        opencode: "OpenCode",
-      };
+      const manifest = supportedSetupManifests.get(agentId);
+      if (manifest) {
+        registry.register({
+          agentId,
+          displayName: manifest.displayName,
+          adapter: manifest.adapter,
+          status: "needs_setup",
+          capabilities: profile ? ["session", "workspace", "run"] : [],
+          models: profile?.model ? [profile.model] : [],
+          sessionFeatures: profile
+            ? ["resume", "close", "delete", ...(profile.type === "pi-sdk" ? ["fork"] : [])]
+            : [],
+          setup: projectSetupState({
+            installation: "unknown",
+            configuration: "unknown",
+            runtime: "not_started",
+          }),
+          setupManifest: manifest,
+        });
+        return;
+      }
       registry.register({
         agentId,
-        displayName: displayNames[agentId] ?? agentId,
+        displayName: agentId,
         adapter: agentId === "pi" ? "sdk" : profile?.type === "generic-spawn" ? "cli" : "acp",
         status: profile ? "healthy" : "needs_setup",
         capabilities: profile ? ["session", "workspace", "run"] : [],
@@ -238,6 +256,21 @@ program
           : [],
       });
     });
+    try {
+      const setup = await runnerClient.listAgentSetup();
+      for (const agent of setup.agents) {
+        registry.updateSetup(agent.agentId, {
+          installation: agent.installation,
+          configuration: agent.configuration,
+          runtime: agent.runtime,
+          version: agent.version,
+          executablePath: agent.executablePath,
+          diagnostic: agent.diagnostic,
+        });
+      }
+    } catch (error) {
+      console.warn("Agent setup detection failed:", error instanceof Error ? error.message : String(error));
+    }
     const agentHealthAdapters = agentIds
       .filter((agentId) => Boolean(config.backends[agentId]))
       .map((agentId) => ({
@@ -259,6 +292,8 @@ program
       {
         catalog: sessionCatalog,
         agents: () => registry.list(),
+        agentRegistry: registry,
+        configStore: store,
         workItems: workItemStore,
         executor: runExecutor,
         runner: runnerClient,

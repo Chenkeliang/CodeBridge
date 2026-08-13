@@ -21,13 +21,15 @@ import type {
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, composerTrigger, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, mergeConversationEvents, orderSessions, restoreSessionSelection, serializeConfigOverride, workspacePaths } from "@/lib/workbench-logic";
-import { messageOf, projectionKey, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
+import { applyComposerSuggestion, composerTrigger, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, mergeConversationEvents, orderSessions, restoreSessionSelection, selectInitialAgent, serializeConfigOverride, workspacePaths } from "@/lib/workbench-logic";
+import { messageOf, projectionKey, statusLabel, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
 
 export function Workbench() {
   const [theme, setTheme] = useState<Theme>(() => readTheme());
   const [area, setArea] = useState<PanelArea>("agents");
   const [agents, setAgents] = useState<AgentProfile[]>([]);
+  const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
+  const [effectiveDefaultAgentId, setEffectiveDefaultAgentId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [flows, setFlows] = useState<FlowRecord[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -67,6 +69,10 @@ export function Workbench() {
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
+  const selectedAgentSetup = selectedAgent?.setup ?? null;
+  const selectedAgentManifest = selectedAgent?.setup_manifest ?? null;
+  const selectedAgentNeedsSetup = Boolean(selectedAgent && selectedAgent.status === "needs_setup" && !selectedSession);
+  const selectedAgentUnavailable = Boolean(selectedAgent && selectedAgent.status === "unavailable" && !selectedSession);
   const agentSessions = useMemo(
     () => orderSessions(sessions.filter((session) => session.agent_id === selectedAgentId))
       .filter((session) => showArchived ? Boolean(session.archived_at) : !session.archived_at)
@@ -91,17 +97,20 @@ export function Workbench() {
     if (!silent) setLoading(true);
     if (!silent) setError(null);
     try {
-      const [nextAgents, nextSessions, nextFlows] = await Promise.all([
+      const [agentList, nextSessions, nextFlows] = await Promise.all([
         api.agents(),
         api.sessions(importProvider, true),
         api.flows(),
       ]);
+      const nextAgents = agentList.agents;
       setAgents(nextAgents);
+      setDefaultAgentId(agentList.default_agent_id);
+      setEffectiveDefaultAgentId(agentList.effective_default_agent_id);
       setSessions(nextSessions);
       setFlows(nextFlows.filter((flow) => flow.status !== "deprecated"));
       const nextAgentId = selectedAgentRef.current && nextAgents.some((agent) => agent.agent_id === selectedAgentRef.current)
         ? selectedAgentRef.current
-        : nextAgents[0]?.agent_id ?? null;
+        : selectInitialAgent(nextAgents, agentList.effective_default_agent_id);
       setSelectedAgentId(nextAgentId);
       setSelectedSessionId(nextAgentId
         ? restoreSessionSelection(
@@ -416,6 +425,28 @@ export function Workbench() {
     if (selectedSessionId) await deleteSessionById(selectedSessionId);
   }
 
+  async function detectSelectedAgent() {
+    if (!selectedAgent) return;
+    try {
+      await api.detectAgent(selectedAgent.agent_id);
+      await reload(false, true);
+      notify(`${selectedAgent.display_name} 已重新检测`);
+    } catch (caught) {
+      notify(messageOf(caught), "error");
+    }
+  }
+
+  async function setSelectedAgentDefault() {
+    if (!selectedAgent || !selectedAgentSetup?.can_select_default) return;
+    try {
+      await api.setDefaultAgent(selectedAgent.agent_id);
+      await reload(false, true);
+      notify(`${selectedAgent.display_name} 已设为默认`);
+    } catch (caught) {
+      notify(messageOf(caught), "error");
+    }
+  }
+
   async function pickDirectory() {
     if (!selectedSessionId || pickingDirectory) return;
     setPickingDirectory(true);
@@ -548,6 +579,10 @@ export function Workbench() {
           <section aria-label="设置" className="min-h-0 flex-1 overflow-y-auto">
             <SettingsPage
               density={density}
+              agents={agents}
+              defaultAgentId={defaultAgentId}
+              effectiveDefaultAgentId={effectiveDefaultAgentId}
+              onAgentsChanged={() => reload(false, true)}
               reading={reading}
               onDensity={setDensity}
               onNotify={notify}
@@ -560,7 +595,50 @@ export function Workbench() {
               onReading={setReading}
             />
           </section>
-        ) : !selectedSession ? (
+        ) : !selectedSession ? selectedAgentNeedsSetup || selectedAgentUnavailable ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">
+            <div className="w-full max-w-[760px]">
+              <div className="mb-7 text-center">
+                <div className={cn("mx-auto mb-4 grid size-10 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")}>{selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id} className="size-[18px]" /> : <PixelMark className="size-5" />}</div>
+                <h1 className={cn("font-brand text-2xl font-normal leading-none tracking-normal", "text-ink")}>{selectedAgent ? selectedAgent.display_name : "CodeBridge"}</h1>
+                <p className={cn("mt-2 text-xs", "text-muted")}>
+                  {selectedAgentNeedsSetup
+                    ? "先完成安装或配置后再创建 Session"
+                    : "Agent 当前运行不可用，先排查诊断"}
+                </p>
+              </div>
+              <div className={cn("grid gap-3 rounded-xl border px-5 py-5", "bg-surface", "border-line-strong")}>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className={cn("rounded-full border px-2 py-0.5", "bg-surface-soft", "text-ink-soft", "border-line")}>{statusLabel[selectedAgent?.status ?? "needs_setup"] ?? selectedAgent?.status ?? "未知"}</span>
+                  {selectedAgentSetup?.version && <span className="text-muted">版本 {selectedAgentSetup.version}</span>}
+                </div>
+                <div className="grid gap-1 text-xs leading-5 text-muted">
+                  <div>安装：{selectedAgentSetup ? (selectedAgentSetup.installation === "installed" ? "已安装" : selectedAgentSetup.installation === "missing" ? "未安装" : "状态未知") : "未知"}</div>
+                  <div>配置：{selectedAgentSetup ? (selectedAgentSetup.configuration === "configured" ? "已配置" : selectedAgentSetup.configuration === "needs_configuration" ? "待配置" : "状态未知") : "未知"}</div>
+                  <div>运行：{selectedAgentSetup ? (selectedAgentSetup.runtime === "healthy" ? "健康" : selectedAgentSetup.runtime === "unavailable" ? "不可用" : "未启动") : "未知"}</div>
+                  {selectedAgentSetup?.diagnostic && <div className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-danger">
+                    <div>{selectedAgentSetup.diagnostic.stage} · {selectedAgentSetup.diagnostic.code}</div>
+                    <div>{selectedAgentSetup.diagnostic.message}</div>
+                    {selectedAgentSetup.diagnostic.details && <div className="mt-1 font-mono text-[11px]">{selectedAgentSetup.diagnostic.details}</div>}
+                    {selectedAgentSetup.diagnostic.exit_code !== undefined && <div className="mt-1 font-mono text-[11px]">exit code: {selectedAgentSetup.diagnostic.exit_code}</div>}
+                  </div>}
+                  {selectedAgentManifest?.install_strategies[0] && selectedAgentNeedsSetup && (
+                    <div className="rounded-lg border border-line px-3 py-2 font-mono text-xs text-ink-soft">
+                      {selectedAgentManifest.install_strategies[0].command} {selectedAgentManifest.install_strategies[0].args.join(" ")}
+                    </div>
+                  )}
+                  {selectedAgentManifest?.configuration_path && <div className="font-mono">{selectedAgentManifest.configuration_path}</div>}
+                  {selectedAgentManifest?.documentation_url && <a className="text-accent hover:underline" href={selectedAgentManifest.documentation_url} rel="noreferrer" target="_blank">打开文档</a>}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className={cn("rounded-md border px-3 py-1.5 text-xs", "bg-surface", "text-ink", "border-line-strong")} onClick={() => setArea("settings")} type="button">打开设置</button>
+                  <button className={cn("rounded-md border px-3 py-1.5 text-xs", "bg-surface", "text-ink", "border-line-strong")} onClick={() => void detectSelectedAgent()} type="button">重新检测</button>
+                  <button className={cn("rounded-md border px-3 py-1.5 text-xs", "bg-accent", "text-accent-ink", "border-line-strong", !selectedAgentSetup?.can_select_default && "opacity-50")} disabled={!selectedAgentSetup?.can_select_default} onClick={() => void setSelectedAgentDefault()} type="button">设为默认</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">
             <div className="w-full max-w-[760px]">
               <div className="mb-7 text-center">
