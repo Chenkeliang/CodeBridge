@@ -26,6 +26,11 @@ function contrast(fg: string, bg: string): number {
   return (high + 0.05) / (low + 0.05);
 }
 
+function channelSpread(hex: string): number {
+  const channels = [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16));
+  return Math.max(...channels) - Math.min(...channels);
+}
+
 const TEXT_ON = ["--agnet-canvas", "--agnet-surface", "--agnet-surface-soft", "--agnet-surface-tint"] as const;
 
 // Enforces spec rules FE-TOKEN-001, FE-TOKEN-002, FE-TOKEN-003, FE-TOKEN-004 (docs/spec/RULES.md).
@@ -55,6 +60,12 @@ describe("design tokens", () => {
 
   it("defines the same token set in both themes", () => {
     expect(Object.keys(paper).sort()).toEqual(Object.keys(carbon).sort());
+  });
+
+  it("keeps carbon structural surfaces neutral instead of green-tinted", () => {
+    for (const token of ["--agnet-canvas", "--agnet-sidebar", "--agnet-surface", "--agnet-surface-soft", "--agnet-surface-tint", "--agnet-line"]) {
+      expect(channelSpread(carbon[token]!), token).toBeLessThanOrEqual(1);
+    }
   });
 
   it("matches the hex values documented in DESIGN.md", () => {
