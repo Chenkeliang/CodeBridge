@@ -27,7 +27,7 @@
 /* Semantic design tokens — values defined in docs/orchestration/DESIGN.md §3.
    Themes switch via data-theme on the app root; components only consume the
    semantic utilities generated from the @theme inline block below. */
-:root {
+:root, [data-theme="paper"] {
   color-scheme: light;
   --agnet-canvas: #F6F7F4;
   --agnet-sidebar: #FBFCFA;

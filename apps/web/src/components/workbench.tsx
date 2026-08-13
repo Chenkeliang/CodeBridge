@@ -125,6 +125,9 @@ export function Workbench() {
 
   useEffect(() => {
     window.localStorage.setItem("codebridge:web-theme", theme);
+    // The boot script in index.html primes <html data-theme> before first paint;
+    // it must follow runtime switches too or <body>/scrollbars keep the old theme.
+    document.documentElement.dataset.theme = theme;
   }, [theme]);
 
   useEffect(() => {
