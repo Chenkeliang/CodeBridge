@@ -30,8 +30,8 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { error?: string; detail?: string } | null;
-    throw new Error(payload?.detail ?? payload?.error ?? `HTTP ${response.status}`);
+    const payload = await response.json().catch(() => null) as { error?: string; detail?: string; message?: string; issues?: string[] } | null;
+    throw new Error(payload?.detail ?? payload?.message ?? (payload?.issues?.length ? payload.issues.join(";") : undefined) ?? payload?.error ?? `HTTP ${response.status}`);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
