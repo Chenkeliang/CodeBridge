@@ -173,7 +173,7 @@ describe("Workbench component policy", () => {
   it("clears the previous Session projection before hydrating the next one", () => {
     const source = readSource();
 
-    expect(source).toContain("setEvents(pendingEvents.current[sessionId] ?? [])");
+    expect(source).toContain("setEvents(cached ? mergeConversationEvents(cached.events, pendingEvents.current[sessionId] ?? []) : (pendingEvents.current[sessionId] ?? []))");
   });
 
   it("does not block the first paint on provider Session import", () => {
@@ -210,6 +210,36 @@ describe("Workbench component policy", () => {
     expect(source).toContain('"grid size-4 shrink-0 place-items-center"');
     expect(source).toContain("<PixelMark");
     expect(source).toContain("<BrandAgentIcon");
+  });
+
+  it("never silently swallows a send: existing sessions submit regardless of stale Agent status, blocked sends explain why", () => {
+    const source = readSource();
+
+    // The old guard `selectedAgent.status !== "healthy"` dropped the click
+    // with no feedback when the cached agent profile was stale.
+    expect(source).not.toContain('if (!message || sending || !selectedAgent || selectedAgent.status !== "healthy") return;');
+    expect(source).toContain("请先在设置中完成安装/配置");
+  });
+
+  it("paints a cached Session snapshot instantly and revalidates in the background", () => {
+    const source = readSource();
+
+    expect(source).toContain("sessionCache.current[sessionId]");
+    expect(source).toContain("setLoadingSession(!cached)");
+  });
+
+  it("resets composer config when switching Agents without a session change", () => {
+    const source = readSource();
+
+    expect(source).toContain("if (nextSessionId === selectedSessionId && agentId !== selectedAgentId)");
+    expect(source).toContain("setConfigOptions([])");
+  });
+
+  it("checks the resolved default model instead of a duplicate Agent-default item", () => {
+    const source = readFileSync(new URL("./composer.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain('const effective = value || option.currentValue || "";');
+    expect(source).toContain("{!selected && <SelectItem");
   });
 
   it("projects the accepted user message before the run starts", () => {

@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import type { AgentProfile, AgentSetupManifest, PiProvider, PiProviderModel, PiProviderPreset } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { type Density } from "@/components/workbench-shared";
+import { Badge } from "@/components/ui/badge";
 
 /** Settings surface (docs/orchestration/agent-providers.md §2.7): Pi provider
  *  management with vendor presets, plus display preferences. */
@@ -93,6 +94,21 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
       setAgentError(agent.agent_id, message);
       await refreshAgents();
       onNotify(message, "error");
+    } finally {
+      setAgentAction(null);
+    }
+  }
+
+  async function detectAllAgents() {
+    setAgentAction({ id: "*", kind: "detect" });
+    setAgentErrors({});
+    try {
+      await api.detectAllAgents();
+      await refreshAgents();
+      onNotify("全部 Agent 已重新检测");
+    } catch (caught) {
+      onNotify(caught instanceof Error ? caught.message : String(caught), "error");
+      await refreshAgents();
     } finally {
       setAgentAction(null);
     }
@@ -212,8 +228,25 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
     if (!editing) return;
     setTesting(true);
     try {
-      const result = await api.testProvider({ baseUrl: editing.baseUrl, apiKey: editing.apiKey, authHeader: editing.authHeader });
-      onNotify(result.detail, result.ok ? "info" : "error");
+      const result = await api.testProvider({
+        baseUrl: editing.baseUrl,
+        apiKey: editing.apiKey,
+        authHeader: editing.authHeader,
+        api: editing.api,
+        model: editing.models.find((m) => m.id.trim())?.id.trim(),
+      });
+      if (result.compatSuggestion) {
+        setEditing({
+          ...editing,
+          models: editing.models.map((m) => ({
+            ...m,
+            compat: { ...(m.compat as Record<string, unknown> | undefined), ...result.compatSuggestion },
+          })),
+        });
+        onNotify(`${result.detail}，点击保存生效`, "info");
+      } else {
+        onNotify(result.detail, result.ok ? "info" : "error");
+      }
     } catch (caught) {
       onNotify(caught instanceof Error ? caught.message : String(caught), "error");
     } finally {
@@ -229,11 +262,16 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
     <section className="mt-8">
       <div className="flex items-center justify-between gap-3">
         <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>AGENTS</h2>
-        {savedDefaultUnavailable && (
-          <span className={cn("rounded-full border px-2 py-1 text-[11px]", "bg-warning-soft", "text-warning", "border-warning/30")}>
-            默认 Agent 当前不可用{effectiveDefaultAgent ? ` · 正在使用 ${effectiveDefaultAgent.display_name}` : ""}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {savedDefaultUnavailable && (
+            <span className={cn("rounded-full border px-2 py-1 text-[11px]", "bg-warning-soft", "text-warning", "border-warning/30")}>
+              默认 Agent 当前不可用{effectiveDefaultAgent ? ` · 正在使用 ${effectiveDefaultAgent.display_name}` : ""}
+            </span>
+          )}
+          <button className={cn("rounded-full border px-2.5 py-1 text-[11px]", "border-line-strong", "text-ink-soft", agentAction?.id === "*" && "opacity-50")} disabled={agentAction !== null} onClick={() => void detectAllAgents()} type="button">
+            {agentAction?.id === "*" ? "检测中…" : "检测全部"}
+          </button>
+        </div>
       </div>
       <div className="mt-4 grid gap-2">
         {agentCards.map((agent) => {
@@ -249,8 +287,8 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
               <div className="min-w-0">
                 <div className={cn("flex flex-wrap items-center gap-2", "text-ink")}>
                   <span className="font-brand text-sm font-normal tracking-[-0.02em]">{manifest.display_name}</span>
-                  {isSavedDefault && <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", "bg-accent-soft", "text-accent", "border-line-strong")}>已保存默认</span>}
-                  {!isSavedDefault && isEffectiveDefault && <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", "bg-success-soft", "text-success", "border-line-strong")}>当前生效默认</span>}
+                  {isSavedDefault && <Badge>已保存默认</Badge>}
+                  {!isSavedDefault && isEffectiveDefault && <Badge>当前生效默认</Badge>}
                 </div>
                 <div className={cn("mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs", "text-muted")}>
                   <span>{setupInstallationLabel(setup)}</span>
@@ -268,15 +306,15 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
               </div>
             </div>
 
-            <div className={cn("grid gap-2 rounded-lg border px-3 py-3", "bg-surface-soft", "border-line")}>
+            <div className={cn("grid gap-2 rounded-lg border px-3 py-3", "bg-surface-tint", "border-line")}>
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className={cn("rounded-full px-2 py-0.5", setup?.installation === "installed" ? "bg-success-soft text-success" : setup?.installation === "missing" ? "bg-danger-soft text-danger" : "bg-surface text-muted")}>
+                <span className={cn("rounded-full border px-2 py-0.5", setup?.installation === "installed" ? "border-line bg-surface text-success" : setup?.installation === "missing" ? "border-danger/25 bg-danger-soft text-danger" : "border-line bg-surface text-muted")}>
                   {setupInstallationLabel(setup)}
                 </span>
-                <span className={cn("rounded-full px-2 py-0.5", setup?.configuration === "configured" ? "bg-success-soft text-success" : setup?.configuration === "needs_configuration" ? "bg-warning-soft text-warning" : "bg-surface text-muted")}>
+                <span className={cn("rounded-full border px-2 py-0.5", setup?.configuration === "configured" ? "border-line bg-surface text-success" : setup?.configuration === "needs_configuration" ? "border-warning/25 bg-warning/10 text-warning" : "border-line bg-surface text-muted")}>
                   {setupConfigurationLabel(setup)}
                 </span>
-                <span className={cn("rounded-full px-2 py-0.5", setup?.runtime === "healthy" ? "bg-success-soft text-success" : setup?.runtime === "unavailable" ? "bg-danger-soft text-danger" : "bg-surface text-muted")}>
+                <span className={cn("rounded-full border px-2 py-0.5", setup?.runtime === "healthy" ? "border-line bg-surface text-success" : setup?.runtime === "unavailable" ? "border-danger/25 bg-danger-soft text-danger" : "border-line bg-surface text-muted")}>
                   {setupRuntimeLabel(setup)}
                 </span>
                 {setup?.version && <span className="text-muted">版本 {setup.version}</span>}

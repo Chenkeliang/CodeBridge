@@ -185,12 +185,15 @@ function SpeedControl({ onValue, option, overridden, value }: { onValue: (value:
 }
 
 function SessionConfigSelect({ label, onValue, option, value }: { label: string; onValue: (value: string) => void; option: ConfigOption; value: string }) {
-  const selected = option.values.find((candidate) => candidate.value === value);
+  // No separate "Agent 默认" pseudo-item: the check goes on the resolved
+  // effective value (explicit selection, else the Agent-reported default).
+  const effective = value || option.currentValue || "";
+  const selected = option.values.find((candidate) => candidate.value === effective);
   const triggerLabel = selected ? selected.name || selected.value : label;
-  return <Select onValueChange={(next) => onValue(next === DEFAULT_SELECT_VALUE ? "" : next)} value={value || DEFAULT_SELECT_VALUE}>
+  return <Select onValueChange={(next) => onValue(next === DEFAULT_SELECT_VALUE ? "" : next)} value={effective || DEFAULT_SELECT_VALUE}>
     <SelectTrigger aria-label={option.name} className={cn("h-7 max-w-52 shrink-0 gap-1 border px-2 py-0 text-xs shadow-none focus-visible:ring-1", "bg-surface-soft", value ? "text-ink-soft" : "text-muted", "border-line", "focus:border-muted focus-visible:ring-line-strong")} title={selected?.description}><SelectValue>{triggerLabel}</SelectValue></SelectTrigger>
     <SelectContent className={cn("max-w-80", "bg-surface", "text-ink-soft", "border-line-strong", "shadow-panel")}>
-      <SelectItem className={"data-[highlighted]:bg-surface-soft"} value={DEFAULT_SELECT_VALUE}>{label}</SelectItem>
+      {!selected && <SelectItem className={"data-[highlighted]:bg-surface-soft"} value={DEFAULT_SELECT_VALUE}>{label}</SelectItem>}
       {option.values.map((candidate) => <SelectItem className={"data-[highlighted]:bg-surface-soft"} key={candidate.value} textValue={candidate.name || candidate.value} value={candidate.value}><span className="grid gap-0.5 py-0.5"><span>{candidate.name || candidate.value}</span>{candidate.description && <span className={cn("max-w-72 text-xs font-normal leading-4", "text-muted")}>{candidate.description}</span>}</span></SelectItem>)}
     </SelectContent>
   </Select>;
