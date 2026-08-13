@@ -175,6 +175,7 @@ describe("flow API", () => {
     catalog.close();
   });
 
+  // Enforces spec rule PROTO-FLOW-REVISION-001 (server-owned content-hash revisions) — docs/spec/RULES.md.
   it("computes content-hash revisions server-side and stores the compile tuple", async () => {
     const catalog = new FlowCatalogStore(":memory:");
     const sessions = new SessionCatalogStore(":memory:");

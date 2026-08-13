@@ -181,6 +181,8 @@ describe("contract content hashing", () => {
   });
 });
 
+// Enforces spec rules PROTO-FLOW-INPUT-001 (typed input contract) and
+// PROTO-FLOW-HASH-001 (canonical hashing rules) — docs/spec/RULES.md.
 describe("typed inputs", () => {
   it("parses typed inputs with source and validation fields", () => {
     const def = parseWorkflow(`

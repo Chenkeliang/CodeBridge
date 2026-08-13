@@ -9,6 +9,7 @@ import {
   type VerificationFailedPayload,
 } from "./index.js";
 
+// Enforces spec rule PROTO-FLOW-SIGNAL-001 (learning-signal payload contracts) — docs/spec/RULES.md.
 describe("learning-signal events", () => {
   it("accepts the five learning-signal event types", () => {
     const store = new SqliteEventStore(":memory:");
