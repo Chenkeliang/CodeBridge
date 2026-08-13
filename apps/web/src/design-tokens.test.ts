@@ -9,7 +9,7 @@ function themeVars(selector: string): Record<string, string> {
   return Object.fromEntries([...block.matchAll(/(--agnet-[\w-]+):\s*(#[0-9A-Fa-f]{6})/g)].map((match) => [match[1]!, match[2]!]));
 }
 
-const paper = themeVars(":root");
+const paper = themeVars(':root, [data-theme="paper"]');
 const carbon = themeVars('[data-theme="carbon"]');
 
 function luminance(hex: string): number {
