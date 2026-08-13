@@ -111,6 +111,15 @@ export function mapPiEvent(event: unknown): AgentEvent[] {
     ];
   }
 
+  // Provider/transport failures must surface as real error events instead of
+  // silently ending the run (auto-retry exhaustion carries the final error).
+  if (value.type === "auto_retry_end") {
+    const retry = value as { success?: boolean; finalError?: string };
+    if (retry.success === false && retry.finalError) {
+      return [{ type: "error", message: retry.finalError, fatal: true }];
+    }
+  }
+
   return [];
 }
 
