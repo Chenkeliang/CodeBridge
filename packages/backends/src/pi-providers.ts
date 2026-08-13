@@ -132,10 +132,12 @@ export function validateProviders(input: unknown): string[] {
       if (typeof model?.id !== "string" || !model.id.trim()) { issues.push(`${label}: 缺少 id`); continue; }
       if (modelIds.has(model.id)) issues.push(`${label}: 模型 id 重复: ${model.id}`);
       modelIds.add(model.id);
-      if (model.reasoning === true) {
-        const map = model.thinkingLevelMap as Record<string, unknown> | undefined;
-        const usable = map && Object.values(map).some((value) => typeof value === "string" && value);
-        if (!usable) issues.push(`${label}: reasoning 为 true 时 thinkingLevelMap 至少需要一个有效档位`);
+      // reasoning without a map is legal: Pi falls back to its default levels.
+      // Only a *present but empty* map is a configuration mistake.
+      if (model.reasoning === true && model.thinkingLevelMap !== undefined) {
+        const map = model.thinkingLevelMap as Record<string, unknown>;
+        const usable = Object.values(map).some((value) => typeof value === "string" && value);
+        if (!usable) issues.push(`${label}: thinkingLevelMap 存在但没有任何有效档位`);
       }
     }
   }

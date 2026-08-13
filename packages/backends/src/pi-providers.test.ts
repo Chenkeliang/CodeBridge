@@ -66,10 +66,14 @@ describe("pi providers", () => {
     expect(fs.existsSync(modelsPath)).toBe(false);
   });
 
-  it("requires a usable thinkingLevelMap when reasoning is true", () => {
+  it("rejects a present-but-empty thinkingLevelMap, allows reasoning without a map", () => {
     const bad = validFile();
     bad.providers.deepseek!.models[1]!.thinkingLevelMap = { off: null, low: null };
     expect(validateProviders(bad).some((issue) => issue.includes("thinkingLevelMap"))).toBe(true);
+    // reasoning without any map is legal (Pi default levels apply)
+    const ok = validFile();
+    delete ok.providers.deepseek!.models[1]!.thinkingLevelMap;
+    expect(validateProviders(ok)).toEqual([]);
   });
 
   it("ships presets without credentials and with valid templates", () => {
