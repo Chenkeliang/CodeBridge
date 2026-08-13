@@ -54,6 +54,11 @@
 | PROTO-PROMPT-002 | MUST | review | 可变内容只追加不重排;厚重不变内容(Flow 定义、能力 manifest)走工具懒加载,不内联进提示词 |
 | PROTO-PROMPT-003 | MUST | review | prompt 由版本化模板确定性渲染;模板 revision 记入事件;禁止散落字符串拼接 |
 | PROTO-PROMPT-004 | MUST | review | 改注入逻辑前必须调研官方文档+高星参考实现并记录依据;改动须附前后缓存命中率对比(prompt-stability.md §3/§4) |
+| PROTO-FLOW-INPUT-001 | MUST | test:workflow-engine | Flow inputs 为 typed 对象(id/type/source 必填;pattern/values/confirmation/from 按类型);旧 `string[]` 简写归一为 `{type: string, source: user}` |
+| PROTO-FLOW-REVISION-001 | MUST | test:flow-api | definitionRevision = RFC 8785 规范化定义的 sha256;plan_ir_hash = 规范化 PlanIR 的 sha256;编译时双双落库;运行时永不重解析 YAML;`/v1/flows/candidates` 忽略调用方 definition_revision |
+| PROTO-FLOW-ATTR-001 | MUST | review | RUN_SNAPSHOT 携带归因块(flow_revision=plan_ir_hash、prompt_revision、tool_schema_revision、capability_revisions、resolver_revision、authorization_revision);capability_version 由注册方自报(区别于 CapabilitySource.version 的 adapter 端点版本) |
+| PROTO-FLOW-SIGNAL-001 | MUST | test:work-items | 学习信号事件(PARAM_RESOLVED/FLOW_RECOMMENDED/FLOW_REJECTED/VERIFICATION_FAILED/RUN_SNAPSHOT)payload 定强类型;FLOW_REJECTED.reason 为枚举;VERIFICATION_FAILED.actual ≤4KB 截断带 truncated 标志;RUN_SNAPSHOT.output_ref 必须是 artifact:// 引用 |
+| PROTO-FLOW-HASH-001 | MUST | test:workflow-engine | 规范化规则写死:结构化内容走 RFC 8785 风格 JCS,sha256;prompt 模板走原文字节 sha256;禁止其他规范化方式 |
 
 ## SEC — 安全
 
