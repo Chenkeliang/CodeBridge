@@ -156,6 +156,7 @@ export function readPiProviders(modelsPath = piModelsPath()): PiProvidersFile {
 export function writePiProviders(file: PiProvidersFile, modelsPath = piModelsPath()): void {
   const issues = validateProviders(file);
   if (issues.length) throw new Error(issues.join("; "));
+  normalizeProviderCompat(file);
   fs.mkdirSync(path.dirname(modelsPath), { recursive: true });
   if (fs.existsSync(modelsPath)) {
     fs.copyFileSync(modelsPath, `${modelsPath}.bak`);
@@ -165,22 +166,17 @@ export function writePiProviders(file: PiProvidersFile, modelsPath = piModelsPat
   fs.renameSync(tmp, modelsPath);
 }
 
-export async function testPiProviderConnection(provider: Pick<PiProvider, "baseUrl" | "apiKey" | "authHeader">): Promise<{ ok: boolean; detail: string }> {
-  const url = `${provider.baseUrl.replace(/\/+$/, "")}/models`;
-  try {
-    const headers: Record<string, string> = {};
-    if (provider.apiKey) {
-      if (provider.authHeader) headers["authorization"] = `Bearer ${provider.apiKey}`;
-      else headers["x-api-key"] = provider.apiKey;
+/** Default custom endpoints to the most conservative wire shape: `system`
+ *  works everywhere (OpenAI included), `developer` does not. Explicitly set
+ *  compat values are never overridden. */
+function normalizeProviderCompat(file: PiProvidersFile): void {
+  for (const provider of Object.values(file.providers)) {
+    const api = provider.api;
+    if (api !== "openai-completions" && api !== "openai-responses") continue;
+    for (const model of provider.models) {
+      const compat = (model.compat ??= {}) as Record<string, unknown>;
+      compat.supportsDeveloperRole ??= false;
     }
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(5_000) });
-    if (response.ok) return { ok: true, detail: `连接成功(HTTP ${response.status})` };
-    const hint = response.status === 401 || response.status === 403 ? "API key 无效或无权限" : `HTTP ${response.status}`;
-    return { ok: false, detail: hint };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("ENOTFOUND")) return { ok: false, detail: "域名无法解析,检查 baseUrl" };
-    if (message.includes("TimeoutError") || message.includes("timed out")) return { ok: false, detail: "连接超时(5s)" };
-    return { ok: false, detail: message };
   }
 }
+
