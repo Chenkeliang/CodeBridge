@@ -336,3 +336,16 @@ describe("Pi session runner", () => {
     expect(session.disposed).toBe(true);
   });
 });
+
+describe("Pi event error surfacing", () => {
+  it("maps exhausted auto-retry to a fatal error event", async () => {
+    const { mapPiEvent } = await import("./pi-session-runner.js");
+    const events = mapPiEvent({ type: "auto_retry_end", success: false, attempt: 3, finalError: "No available channel for model deepseek-v4-pro" });
+    expect(events).toEqual([{ type: "error", message: "No available channel for model deepseek-v4-pro", fatal: true }]);
+  });
+
+  it("ignores successful retry completion", async () => {
+    const { mapPiEvent } = await import("./pi-session-runner.js");
+    expect(mapPiEvent({ type: "auto_retry_end", success: true, attempt: 2 })).toEqual([]);
+  });
+});
