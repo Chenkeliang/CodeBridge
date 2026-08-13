@@ -305,7 +305,9 @@ type PiModelLike = {
   thinkingLevelMap?: Record<string, string | null | undefined>;
 };
 
-type PiConfigRuntime = Pick<ModelRuntime, "getModels" | "hasConfiguredAuth"> & {
+type PiConfigRuntime = {
+  getModels: () => PiModelLike[];
+  hasConfiguredAuth: (provider: string) => boolean;
   getModel?: (provider: string, modelId: string) => PiModelLike | undefined;
 };
 
