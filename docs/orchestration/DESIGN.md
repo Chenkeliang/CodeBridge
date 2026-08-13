@@ -174,7 +174,9 @@ Agent 标识色 Carbon 取值见 §3.2 末。
 | Session title | `12px / 18px`, `500` | `text-xs font-medium` | Session 列表与对话标题 |
 | Conversation | `14px / 28px`, `400` | `text-sm font-normal leading-7` | 用户消息与 Agent 最终回答 |
 | UI body | `14px / 22px`, `400` | `text-sm font-normal leading-5` | 菜单描述、普通界面文本 |
-| Metadata | `12px / 16px`, `500` | `text-xs font-medium` | 状态、时间、数量；英文状态可使用 `tracking-[0.08em] uppercase` |
+| Metadata | `12px / 16px`, `500` | `text-xs font-medium` | 状态、时间、数量 |
+| Eyebrow | `12px / 16px`, `400` pixel mono | `font-brand text-xs font-normal uppercase tracking-[0.1em]` | 分组/区块小标题(PROVIDERS、AGENT PROFILE、会话);拉丁像素、中文落黑体 |
+| Card title | `12px / 16px`, `600` | `text-xs font-semibold` | Plan/审批/工具等卡片头 |
 | Machine label | `11–12px / 18px`, `400` mono | `font-mono text-[11px]` | `/command`、工具名、模型 ID |
 | Path and code | `12px / 20px`, `400` mono | `font-mono text-xs leading-5` | 文件路径、命令、代码和 Diff |
 | Brand wordmark | `14–24px / 1`, `400` pixel mono | `font-brand` | AGNET 品牌字标和少量产品识别位 |

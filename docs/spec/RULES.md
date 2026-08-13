@@ -25,6 +25,7 @@
 | FE-I18N-001 | SHOULD | review | 界面文案统一中文;技术名词(Session/Flow/Run/Agent)保留英文 |
 | FE-TYPE-001 | MUST | test:workbench-component-policy | 字体只经 `--font-brand` / `--font-mono` token;页面级标题(面板头、设置页等)统一 `font-brand text-lg tracking-[-0.035em]` |
 | FE-TYPE-002 | MUST | review | `font-brand` 的 CJK 回退直接到系统黑体,不经等宽字体(token 内已内建);拉丁像素字形只用于品牌字标与标题,不用于正文 |
+| FE-TYPE-003 | MUST | test:workbench-component-policy | 眉标统一 `font-brand text-xs font-normal uppercase tracking-[0.1em]`;卡片头统一 `text-xs font-semibold`;禁止第三套变体 |
 
 ## ARCH — 后端架构
 

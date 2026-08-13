@@ -71,7 +71,7 @@ export function CommandPalette({ agents, sessions, canCreate, onClose, onSelectA
       </div>
       <div className="max-h-80 overflow-y-auto p-1.5">
         {items.map((item, itemIndex) => {
-          const header = item.group !== lastGroup ? (lastGroup = item.group, <div className={cn("px-2.5 pb-1 pt-2 text-xs font-semibold uppercase tracking-[0.1em]", "text-faint")} key={`group-${item.group}`}>{item.group}</div>) : null;
+          const header = item.group !== lastGroup ? (lastGroup = item.group, <div className={cn("px-2.5 pb-1 pt-2 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")} key={`group-${item.group}`}>{item.group}</div>) : null;
           return <Fragment key={item.id}>{header}<button aria-selected={itemIndex === index} className={cn("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm", "text-ink", itemIndex === index ? "bg-surface-soft" : "")} onClick={() => { onClose(); item.run(); }} onMouseEnter={() => setIndex(itemIndex)} ref={itemIndex === index ? (node) => node?.scrollIntoView({ block: "nearest" }) : undefined} type="button">
             {item.id.startsWith("agent:") ? <BrandAgentIcon agentId={item.id.slice(6)} className="size-3.5 shrink-0" /> : item.id.startsWith("session:") ? <Terminal className={cn("size-3.5 shrink-0", "text-muted")} /> : <Zap className={cn("size-3.5 shrink-0", "text-muted")} />}
             <span className="min-w-0 flex-1 truncate">{item.title}</span>

@@ -145,6 +145,15 @@ describe("Workbench component policy", () => {
     expect(styles).toContain('"PingFang SC"');
   });
 
+  it("keeps eyebrow labels and card titles on the canonical type roles", () => {
+    // FE-TYPE-003
+    const source = readSource();
+
+    expect(source).not.toMatch(/text-xs font-semibold uppercase/);
+    expect(source).not.toMatch(/text-xs font-medium uppercase/);
+    expect(source).toContain("font-brand text-xs font-normal uppercase tracking-[0.1em]");
+  });
+
   it("locks the document viewport so the Agent Rail cannot scroll out of view", () => {
     const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
 

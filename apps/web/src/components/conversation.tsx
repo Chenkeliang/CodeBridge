@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { formatElapsed, formatValue } from "@/components/workbench-shared";
 
 export function ProjectionItem({ approvals, cwd, item, onApproval }: { approvals: ApprovalRecord[]; cwd: string | null; item: ConversationProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void> }) {
-  if (item.kind === "user") return <article className="grid justify-items-end gap-2"><span className={cn("text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>你</span><div className={cn("max-w-[72%] rounded-xl px-3.5 py-3 text-sm leading-6", "text-ink", "bg-accent-soft")}>{item.content}</div></article>;
+  if (item.kind === "user") return <article className="grid justify-items-end gap-2"><span className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>你</span><div className={cn("max-w-[72%] rounded-xl px-3.5 py-3 text-sm leading-6", "text-ink", "bg-accent-soft")}>{item.content}</div></article>;
   if (item.kind === "assistant") return <article className="grid max-w-[780px] gap-2"><span className={cn("text-xs font-medium tracking-[0.08em]", "text-muted")}>Agent</span><Markdown content={item.content} /></article>;
   if (item.kind === "work") return <WorkActivity cwd={cwd} item={item} />;
   if (item.kind === "plan") return <section className={cn("max-w-[760px] rounded-lg border", "bg-surface", "border-line", "shadow-card")}><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", "border-line")}><span className={cn("flex items-center gap-2 text-xs font-semibold", "text-ink")}><Check className={cn("size-3.5", "text-muted")} />计划</span><span className={cn("font-mono text-xs", "text-muted")}>{item.entries.filter((entry) => entry.status === "completed").length} / {item.entries.length}</span></div><ol className="grid gap-2 px-3.5 py-3.5">{item.entries.map((entry, index) => <li className={cn("flex items-start gap-2 text-xs", entry.status === "completed" ? "text-muted" : "text-ink-soft")} key={`${entry.content}-${index}`}>{entry.status === "completed" ? <Check className={cn("mt-0.5 size-3.5 shrink-0", "text-success")} /> : <Circle className={cn("mt-0.5 size-3.5 shrink-0", entry.status === "in_progress" ? "text-warning" : "text-faint")} />}<span>{entry.content}</span></li>)}</ol></section>;
@@ -55,7 +55,7 @@ function WorkActivity({ cwd, item }: { cwd: string | null; item: WorkProjection 
           <span className={cn("relative z-10 ml-[3px] mt-1.5 size-2 rounded-full border-2", "border-canvas", dot)} />
           <div className="min-w-0">{entry.kind === "tool"
             ? <ToolActivity cwd={cwd} tool={entry} />
-            : <><p className={cn("mb-1 text-xs font-medium uppercase tracking-[0.08em]", entry.kind === "thought" ? "text-warning" : "text-muted")}>{entry.kind === "thought" ? "推理" : "进度"}</p><WorkMarkdown content={entry.content} /></>}
+            : <><p className={cn("mb-1 font-brand text-xs font-normal uppercase tracking-[0.1em]", entry.kind === "thought" ? "text-warning" : "text-muted")}>{entry.kind === "thought" ? "推理" : "进度"}</p><WorkMarkdown content={entry.content} /></>}
           </div>
         </div>;
       })}
@@ -107,9 +107,9 @@ function ToolActivity({ cwd, tool }: { cwd: string | null; tool: ToolProjection 
     </summary>
     <div className={cn("grid gap-3 border-t px-3 py-3", "border-line")}>
       {presentation.target && presentation.category === "file" && <div className={cn("flex items-start gap-2 font-mono text-xs leading-5", "text-ink-soft")}><FileText className="mt-0.5 size-3.5 shrink-0" /><span className="break-all">{presentation.target}</span></div>}
-      {diff && <div><p className={cn("mb-1.5 text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>变更</p><EditDiff newText={diff.newText} oldText={diff.oldText} /></div>}
-      {tool.input !== undefined && !diff && <div><p className={cn("mb-1.5 text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>输入</p><pre className={cn("max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5", "text-ink-soft")}>{formatValue(tool.input)}</pre></div>}
-      {tool.output !== undefined && <div><p className={cn("mb-1.5 text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>输出</p><pre className={cn("max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5", "text-ink-soft")}>{formatValue(tool.output)}</pre></div>}
+      {diff && <div><p className={cn("mb-1.5 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>变更</p><EditDiff newText={diff.newText} oldText={diff.oldText} /></div>}
+      {tool.input !== undefined && !diff && <div><p className={cn("mb-1.5 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>输入</p><pre className={cn("max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5", "text-ink-soft")}>{formatValue(tool.input)}</pre></div>}
+      {tool.output !== undefined && <div><p className={cn("mb-1.5 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>输出</p><pre className={cn("max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5", "text-ink-soft")}>{formatValue(tool.output)}</pre></div>}
     </div>
   </details>;
 }
