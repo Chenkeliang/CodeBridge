@@ -546,7 +546,19 @@ export function Workbench() {
 
         {area === "settings" ? (
           <section aria-label="设置" className="min-h-0 flex-1 overflow-y-auto">
-            <SettingsPage density={density} reading={reading} onDensity={setDensity} onNotify={notify} onReading={setReading} />
+            <SettingsPage
+              density={density}
+              reading={reading}
+              onDensity={setDensity}
+              onNotify={notify}
+              onProvidersChanged={() => {
+                if (selectedSession?.agent_id !== "pi") return;
+                void api.configOptions(selectedSession.session_id)
+                  .then(setConfigOptions)
+                  .catch((caught) => setError(messageOf(caught)));
+              }}
+              onReading={setReading}
+            />
           </section>
         ) : !selectedSession ? (
           <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">

@@ -40,7 +40,7 @@ Web 设置页 → Bridge /v1/providers → Runner Host /pi/providers → ~/.pi/a
 - **凭据不出本机**:models.json 只由 Runner Host 读写;Bridge 纯代理,不落库。
 - **明文展示**:自托管单用户场景,API key 明文显示/编辑(用户明确决策);但 Bridge 日志不得打印 key 字段。
 - **写入保护**:read-modify-write;写入前留 `.bak`;JSON 解析失败时不写,返回错误。
-- **字段校验(服务端)**:baseUrl 必须是 http(s) URL;provider id 小写字母数字连字符;model id 在同 provider 内唯一;`reasoning: true` 时 `thinkingLevelMap` 至少要有一个非 null 档。
+- **字段校验(服务端)**:baseUrl 必须是 http(s) URL;provider id 允许小写字母、数字、连字符和下划线;model id 在同 provider 内唯一;显式提供 `thinkingLevelMap` 时至少要有一个非 null 档。
 
 ### 2.4 厂商预设
 
@@ -69,6 +69,7 @@ Web 设置页 → Bridge /v1/providers → Runner Host /pi/providers → ~/.pi/a
 - 模型有 `thinkingLevelMap` → 选项值只取 map 中非 null 的档,按 off→max 序排列
 - 无 `thinkingLevelMap` 但 `reasoning: true` → 回退默认七档
 - Session 切换模型(`PATCH /v1/sessions/:id` 或 run 参数)后,Bridge 重新计算该 Session 的 config options,经 SSE 推送,Composer 即时增减控件
+- config options 只合并同一 Agent/workspace/model 的并发请求,请求完成后立即失效;保存 Provider 后主动清空在途快照,避免新模型被旧列表永久遮蔽
 - Speed 控件沿用现有 `model_config` 语义,无上报即不显示
 
 ### 2.7 设置页
@@ -84,5 +85,6 @@ Rail 底部加设置入口,打开设置视图(主区整页,非弹层):
 - 不做 provider 用量统计/计费展示
 - 不做多 Runner 的 provider 同步(单 Runner 假设)
 - 不动 ACP 三家的认证配置
+- OpenCode 使用独立配置边界:CodeBridge backend 只声明 `opencode acp` 的启动方式;模型、Provider、MCP 与认证仍由 OpenCode 的 `~/.config/opencode/opencode.json`、项目 `opencode.json` 或 `/connect` 管理,不写入 Pi 的 `models.json`
 - 不做 key 的加密存储(本机文件即边界)
 - models.json 的 `samplingParams`、cost 等高级字段保留原样,UI 不暴露

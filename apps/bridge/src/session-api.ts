@@ -174,7 +174,9 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const body = await c.req.json().catch(() => null);
     if (!body) return c.json({ error: "invalid_json" }, 400);
     try {
-      return c.json(await options.runner.savePiProviders(body));
+      const result = await options.runner.savePiProviders(body);
+      configOptionRequests.clear();
+      return c.json(result);
     } catch (error) {
       return c.json({ error: "invalid_providers", message: error instanceof Error ? error.message : String(error) }, 400);
     }
@@ -463,7 +465,9 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!request) {
       request = options.runner.listConfigOptions(session.agentId, cwd, session.model);
       configOptionRequests.set(cacheKey, request);
-      request.catch(() => {
+      void request.then(() => {
+        if (configOptionRequests.get(cacheKey) === request) configOptionRequests.delete(cacheKey);
+      }, () => {
         if (configOptionRequests.get(cacheKey) === request) configOptionRequests.delete(cacheKey);
       });
     }
