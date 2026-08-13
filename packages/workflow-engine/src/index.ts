@@ -20,6 +20,35 @@ export interface WorkflowRetryPolicy {
   delayMs: number;
 }
 
+export type WorkflowInputType = "string" | "integer" | "enum" | "directory" | "secret_ref";
+
+export type WorkflowInputSource =
+  | "user"
+  | "context"
+  | "agent"
+  | "step_output"
+  | "default";
+
+export interface WorkflowInput {
+  id: string;
+  type: WorkflowInputType;
+  required?: boolean;
+  /** Regex for type=string. */
+  pattern?: string;
+  /** Config- or run-time origin. `context` covers `context.*` paths via `from`. */
+  source: WorkflowInputSource;
+  /** Allowed values for type=enum. */
+  values?: string[];
+  /** Static default (config-time). */
+  default?: string;
+  /** Value guard: e.g. `when: "value == 'production'"` forbids agent prefill. */
+  confirmation?: { when: string };
+  /** Reference path for source=step_output / context: `steps.<id>.outputs.<key>` or `context.<name>`. */
+  from?: string;
+  /** directory inputs must resolve within authorized folders. */
+  scope?: "authorized_folders";
+}
+
 export interface WorkflowStep {
   id: string;
   capability?: string;
@@ -38,7 +67,7 @@ export interface WorkflowDefinition {
   kind: WorkflowKind;
   status: WorkflowStatus;
   description?: string;
-  inputs: string[];
+  inputs: WorkflowInput[];
   steps: WorkflowStep[];
 }
 
@@ -59,6 +88,7 @@ export interface PlanIR {
   source: "workflow" | "agent_generated";
   workflowId: string;
   definitionRevision: string | null;
+  inputs: WorkflowInput[];
   steps: PlanStep[];
 }
 
@@ -99,6 +129,7 @@ export function compileWorkflow(
     source: options.source ?? "workflow",
     workflowId: definition.workflowId,
     definitionRevision: options.definitionRevision ?? null,
+    inputs: definition.inputs.map((input) => ({ ...input })),
     steps: definition.steps.map((step) => ({
       id: step.id,
       capabilityId: step.capability ?? null,
@@ -140,7 +171,7 @@ function normalizeDefinition(input: unknown): WorkflowDefinition {
     input.description === undefined
       ? undefined
       : stringField(input.description, "description", issues);
-  const inputs = stringArrayField(input.inputs ?? [], "inputs", issues);
+  const inputs = normalizeInputs(input.inputs ?? [], issues);
 
   if (!Array.isArray(input.steps) || input.steps.length === 0) {
     issues.push("steps must contain at least one step");
@@ -181,7 +212,7 @@ function normalizeCanonicalDefinition(
     input.description === undefined
       ? undefined
       : stringField(input.description, "description", issues);
-  const inputs = stringArrayField(input.inputs ?? [], "inputs", issues);
+  const inputs = normalizeInputs(input.inputs ?? [], issues);
 
   if (!Array.isArray(input.steps) || input.steps.length === 0) {
     issues.push("steps must contain at least one step");
@@ -371,6 +402,73 @@ function normalizeBranches(
         "invalid",
     };
   });
+}
+
+const INPUT_TYPES: readonly WorkflowInputType[] = ["string", "integer", "enum", "directory", "secret_ref"];
+const INPUT_SOURCES: readonly WorkflowInputSource[] = ["user", "context", "agent", "step_output", "default"];
+
+function normalizeInputs(value: unknown, issues: string[]): WorkflowInput[] {
+  if (!Array.isArray(value)) {
+    issues.push("inputs must be an array");
+    return [];
+  }
+  return value.map((item, index) => normalizeInput(item, index, issues));
+}
+
+function normalizeInput(item: unknown, index: number, issues: string[]): WorkflowInput {
+  const prefix = `inputs[${index}]`;
+  // Legacy shorthand: a bare string is a user-supplied string input.
+  if (typeof item === "string") {
+    if (!item.trim()) issues.push(`${prefix} must be a non-empty string`);
+    return { id: item, type: "string", source: "user" };
+  }
+  if (!isRecord(item)) {
+    issues.push(`${prefix} must be an object or a string`);
+    return { id: `invalid_${index}`, type: "string", source: "user" };
+  }
+  const id = stringField(item.id, `${prefix}.id`, issues) ?? `invalid_${index}`;
+  const type = enumField(item.type ?? "string", INPUT_TYPES, `${prefix}.type`, issues) ?? "string";
+  const source = enumField(item.source ?? "user", INPUT_SOURCES, `${prefix}.source`, issues) ?? "user";
+  const input: WorkflowInput = { id, type, source };
+  if (item.required !== undefined) {
+    if (typeof item.required !== "boolean") issues.push(`${prefix}.required must be a boolean`);
+    else input.required = item.required;
+  }
+  if (item.pattern !== undefined) {
+    const pattern = stringField(item.pattern, `${prefix}.pattern`, issues);
+    if (pattern !== undefined) {
+      try { new RegExp(pattern); input.pattern = pattern; }
+      catch { issues.push(`${prefix}.pattern is not a valid regex: ${pattern}`); }
+    }
+  }
+  if (type === "enum") {
+    if (!Array.isArray(item.values) || !item.values.length || !item.values.every((v) => typeof v === "string" && v)) {
+      issues.push(`${prefix}.values must be a non-empty string array for enum inputs`);
+    } else {
+      input.values = [...item.values];
+    }
+  }
+  if (item.default !== undefined) {
+    const def = stringField(item.default, `${prefix}.default`, issues);
+    if (def !== undefined) input.default = def;
+  }
+  if (item.confirmation !== undefined) {
+    if (!isRecord(item.confirmation) || typeof item.confirmation.when !== "string" || !item.confirmation.when.trim()) {
+      issues.push(`${prefix}.confirmation.when must be a non-empty string`);
+    } else {
+      input.confirmation = { when: item.confirmation.when };
+    }
+  }
+  if (source === "step_output" || source === "context") {
+    const from = item.from === undefined ? undefined : stringField(item.from, `${prefix}.from`, issues);
+    if (source === "step_output" && !from) issues.push(`${prefix}.from is required for step_output inputs`);
+    if (from) input.from = from;
+  }
+  if (item.scope !== undefined) {
+    if (item.scope !== "authorized_folders") issues.push(`${prefix}.scope must be "authorized_folders"`);
+    else input.scope = "authorized_folders";
+  }
+  return input;
 }
 
 function validateDefinition(definition: WorkflowDefinition): string[] {

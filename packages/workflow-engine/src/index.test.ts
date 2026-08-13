@@ -180,3 +180,97 @@ describe("contract content hashing", () => {
     expect(definitionHash(defA)).toBe(definitionHash(defB));
   });
 });
+
+describe("typed inputs", () => {
+  it("parses typed inputs with source and validation fields", () => {
+    const def = parseWorkflow(`
+schema_version: 1
+workflow_id: equity-deliver
+name: 权益交付
+kind: runbook
+status: draft
+inputs:
+  - id: company_id
+    type: string
+    required: true
+    pattern: "^\\\\d{4,}$"
+    source: user
+  - id: env
+    type: enum
+    values: [test, production]
+    default: test
+    confirmation:
+      when: "value == 'production'"
+  - id: package_id
+    type: string
+    source: step_output
+    from: steps.check.outputs.package_id
+steps:
+  - id: check
+    capability: equity.check
+`);
+    expect(def.inputs).toHaveLength(3);
+    expect(def.inputs[0]).toMatchObject({
+      id: "company_id", type: "string", required: true,
+      pattern: "^\\d{4,}$", source: "user",
+    });
+    expect(def.inputs[1]).toMatchObject({
+      id: "env", type: "enum", values: ["test", "production"],
+      default: "test", confirmation: { when: "value == 'production'" },
+    });
+    expect(def.inputs[2]).toMatchObject({
+      id: "package_id", type: "string", source: "step_output",
+      from: "steps.check.outputs.package_id",
+    });
+  });
+
+  it("rejects an input with an unknown type", () => {
+    expect(() => compileWorkflow({
+      schema_version: 1, workflow_id: "w", name: "W", kind: "runbook", status: "draft",
+      inputs: [{ id: "x", type: "float", source: "user" }],
+      steps: [{ id: "s", capability: "c.d" }],
+    })).toThrow(/type must be one of/);
+  });
+
+  it("rejects an enum input without values", () => {
+    expect(() => compileWorkflow({
+      schema_version: 1, workflow_id: "w", name: "W", kind: "runbook", status: "draft",
+      inputs: [{ id: "env", type: "enum", source: "user" }],
+      steps: [{ id: "s", capability: "c.d" }],
+    })).toThrow(/values/);
+  });
+
+  it("rejects a step_output input without from", () => {
+    expect(() => compileWorkflow({
+      schema_version: 1, workflow_id: "w", name: "W", kind: "runbook", status: "draft",
+      inputs: [{ id: "pkg", type: "string", source: "step_output" }],
+      steps: [{ id: "s", capability: "c.d" }],
+    })).toThrow(/from/);
+  });
+
+  it("rejects a pattern that does not compile as a regex", () => {
+    expect(() => compileWorkflow({
+      schema_version: 1, workflow_id: "w", name: "W", kind: "runbook", status: "draft",
+      inputs: [{ id: "x", type: "string", source: "user", pattern: "([" }],
+      steps: [{ id: "s", capability: "c.d" }],
+    })).toThrow(/pattern/);
+  });
+
+  it("still accepts the legacy string[] inputs form", () => {
+    const def = parseWorkflow(`
+schema_version: 1
+workflow_id: legacy
+name: Legacy
+kind: runbook
+status: draft
+inputs: [company_id, package_id]
+steps:
+  - id: s
+    capability: c.d
+`);
+    expect(def.inputs).toEqual([
+      { id: "company_id", type: "string", source: "user" },
+      { id: "package_id", type: "string", source: "user" },
+    ]);
+  });
+});
