@@ -62,8 +62,8 @@ export const PI_PROVIDER_PRESETS: PiProviderPreset[] = [
     baseUrl: "https://api.deepseek.com/v1",
     api: "openai-completions",
     models: [
-      { id: "deepseek-chat", name: "DeepSeek Chat", reasoning: false, contextWindow: 128000, maxTokens: 8192, input: ["text"] },
-      { id: "deepseek-reasoner", name: "DeepSeek Reasoner", reasoning: true, contextWindow: 128000, maxTokens: 65536, input: ["text"], thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" } },
+      { id: "deepseek-chat", name: "DeepSeek Chat", reasoning: false, contextWindow: 1000000, maxTokens: 8192, input: ["text"] },
+      { id: "deepseek-reasoner", name: "DeepSeek Reasoner", reasoning: true, contextWindow: 1000000, maxTokens: 65536, input: ["text"], thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" } },
     ],
   },
   {

@@ -9,6 +9,15 @@ import { type Density } from "@/components/workbench-shared";
  *  management with vendor presets, plus display preferences. */
 
 const API_PROTOCOLS = ["openai-completions", "openai-responses", "anthropic-messages"];
+
+/** Context window presets; 1M entries reflect 2026 flagship models. The value
+ *  is a declaration — actual availability is enforced by the provider/gateway. */
+const CONTEXT_PRESETS: Array<[string, number]> = [
+  ["128K", 128000],
+  ["200K", 200000],
+  ["272K", 272000],
+  ["1M", 1000000],
+];
 const DEFAULT_LEVEL_MAP = { off: "none", minimal: "minimal", low: "low", medium: "medium", high: "high" };
 
 type ProvidersFile = { providers: Record<string, PiProvider> };
@@ -282,7 +291,10 @@ function ProviderEditor({ draft, originalId, saving, testing, onChange, onClose,
               </label>
               <label className={cn("flex items-center gap-1.5", "text-ink-soft")}>
                 上下文
-                <input className={cn(inputCls(), "w-24")} inputMode="numeric" onChange={(e) => patchModel(index, { contextWindow: Number(e.target.value) || undefined })} placeholder="200000" value={model.contextWindow ?? ""} />
+                <select className={cn(inputCls(), "w-28")} onChange={(e) => patchModel(index, { contextWindow: e.target.value === "custom" ? (model.contextWindow ?? 128000) : Number(e.target.value) || undefined })} value={CONTEXT_PRESETS.some(([, v]) => v === model.contextWindow) ? String(model.contextWindow) : model.contextWindow ? "custom" : "128000"}>
+                  {CONTEXT_PRESETS.map(([label, value]) => <option key={value} value={value}>{label}</option>)}
+                  {model.contextWindow && !CONTEXT_PRESETS.some(([, v]) => v === model.contextWindow) && <option value="custom">{Math.round(model.contextWindow / 1000)}K(自定义)</option>}
+                </select>
               </label>
             </div>
           </div>
