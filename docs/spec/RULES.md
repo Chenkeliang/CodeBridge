@@ -47,6 +47,10 @@
 | PROTO-FLOW-002 | MUST | review | Run 保存 resolved inputs 快照(值 + 来源 + resolver 版本);审批 token 绑定参数 hash |
 | PROTO-PROV-001 | MUST | test:pi-providers | models.json 写入前校验(id 格式、URL、模型 id 唯一、reasoning 必有档位),留 `.bak`,原子替换 |
 | PROTO-PROV-002 | MUST | review | Pi 控件按所选模型能力生成:reasoning=false 不上报思考等级;有 thinkingLevelMap 只报映射档 |
+| PROTO-PROMPT-001 | MUST | review | 提示词前缀只含不可变内容;时间戳/统计/相对时间等易变内容禁止进前缀(prompt-stability.md §2.1) |
+| PROTO-PROMPT-002 | MUST | review | 可变内容只追加不重排;厚重不变内容(Flow 定义、能力 manifest)走工具懒加载,不内联进提示词 |
+| PROTO-PROMPT-003 | MUST | review | prompt 由版本化模板确定性渲染;模板 revision 记入事件;禁止散落字符串拼接 |
+| PROTO-PROMPT-004 | MUST | review | 改注入逻辑前必须调研官方文档+高星参考实现并记录依据;改动须附前后缓存命中率对比(prompt-stability.md §3/§4) |
 
 ## SEC — 安全
 
