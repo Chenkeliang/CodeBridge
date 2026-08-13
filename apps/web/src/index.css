@@ -92,8 +92,8 @@
 /* Display preferences (user-controlled): density and reading mode.
    These are preference dimensions, not page-level styling. */
 [data-density="comfortable"] .conversation-body {
-  font-size: 15px;
-  line-height: 2rem;
+  font-size: 16px;
+  line-height: 2.1rem;
 }
 
 [data-reading="serif"] .conversation-body {

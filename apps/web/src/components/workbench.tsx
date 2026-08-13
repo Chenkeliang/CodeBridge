@@ -491,7 +491,7 @@ export function Workbench() {
   }
 
   return (
-    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", panelOpen && area !== "settings" ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
+    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && area !== "settings" ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
       <AgentRail
         agents={agents}
         area={area}
@@ -620,7 +620,7 @@ export function Workbench() {
                 </div>}
               </div>
             </section>
-            {!stuckToBottom && <button aria-label="回到底部" className={cn("absolute bottom-32 left-1/2 z-20 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 text-[11px] shadow-panel transition-opacity", "bg-surface", "text-ink-soft", "border-line-strong")} onClick={() => { const viewport = conversationViewport.current; if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" }); }} type="button"><ChevronDown className="size-3.5" />回到最新</button>}
+            {!stuckToBottom && <button aria-label="回到底部" className={cn("absolute bottom-32 left-1/2 z-20 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 text-xs shadow-panel transition-opacity", "bg-surface", "text-ink-soft", "border-line-strong")} onClick={() => { const viewport = conversationViewport.current; if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" }); }} type="button"><ChevronDown className="size-3.5" />回到最新</button>}
             <footer className="px-8 pb-5 pt-3">
               <div className="mx-auto w-full max-w-[880px]">
                 <Composer

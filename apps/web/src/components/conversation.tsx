@@ -13,10 +13,10 @@ import { cn } from "@/lib/utils";
 import { formatElapsed, formatValue, type Theme } from "@/components/workbench-shared";
 
 export function ProjectionItem({ approvals, cwd, item, onApproval, theme }: { approvals: ApprovalRecord[]; cwd: string | null; item: ConversationProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void>; theme: Theme }) {
-  if (item.kind === "user") return <article className="grid justify-items-end gap-2"><span className={cn("text-[11px] font-medium uppercase tracking-[0.08em]", "text-muted")}>你</span><div className={cn("max-w-[72%] rounded-xl px-3.5 py-3 text-sm leading-6", "text-ink", "bg-accent-soft")}>{item.content}</div></article>;
-  if (item.kind === "assistant") return <article className="grid max-w-[780px] gap-2"><span className={cn("text-[11px] font-medium tracking-[0.08em]", "text-muted")}>Agent</span><Markdown content={item.content} theme={theme} /></article>;
+  if (item.kind === "user") return <article className="grid justify-items-end gap-2"><span className={cn("text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>你</span><div className={cn("max-w-[72%] rounded-xl px-3.5 py-3 text-sm leading-6", "text-ink", "bg-accent-soft")}>{item.content}</div></article>;
+  if (item.kind === "assistant") return <article className="grid max-w-[780px] gap-2"><span className={cn("text-xs font-medium tracking-[0.08em]", "text-muted")}>Agent</span><Markdown content={item.content} theme={theme} /></article>;
   if (item.kind === "work") return <WorkActivity cwd={cwd} item={item} />;
-  if (item.kind === "plan") return <section className={cn("max-w-[760px] rounded-lg border", "bg-surface", "border-line", "shadow-card")}><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", "border-line")}><span className={cn("flex items-center gap-2 text-[11px] font-semibold", "text-ink")}><Check className={cn("size-3.5", "text-muted")} />计划</span><span className={cn("font-mono text-[11px]", "text-muted")}>{item.entries.filter((entry) => entry.status === "completed").length} / {item.entries.length}</span></div><ol className="grid gap-2 px-3.5 py-3.5">{item.entries.map((entry, index) => <li className={cn("flex items-start gap-2 text-xs", entry.status === "completed" ? "text-muted" : "text-ink-soft")} key={`${entry.content}-${index}`}>{entry.status === "completed" ? <Check className={cn("mt-0.5 size-3.5 shrink-0", "text-success")} /> : <Circle className={cn("mt-0.5 size-3.5 shrink-0", entry.status === "in_progress" ? "text-warning" : "text-faint")} />}<span>{entry.content}</span></li>)}</ol></section>;
+  if (item.kind === "plan") return <section className={cn("max-w-[760px] rounded-lg border", "bg-surface", "border-line", "shadow-card")}><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", "border-line")}><span className={cn("flex items-center gap-2 text-xs font-semibold", "text-ink")}><Check className={cn("size-3.5", "text-muted")} />计划</span><span className={cn("font-mono text-xs", "text-muted")}>{item.entries.filter((entry) => entry.status === "completed").length} / {item.entries.length}</span></div><ol className="grid gap-2 px-3.5 py-3.5">{item.entries.map((entry, index) => <li className={cn("flex items-start gap-2 text-xs", entry.status === "completed" ? "text-muted" : "text-ink-soft")} key={`${entry.content}-${index}`}>{entry.status === "completed" ? <Check className={cn("mt-0.5 size-3.5 shrink-0", "text-success")} /> : <Circle className={cn("mt-0.5 size-3.5 shrink-0", entry.status === "in_progress" ? "text-warning" : "text-faint")} />}<span>{entry.content}</span></li>)}</ol></section>;
   if (item.kind === "approval") {
     const approval = approvals.find((record) => record.id === item.requestId) ?? approvals.find((record) => record.run_id === item.runId);
     return <ApprovalCard approval={approval} item={item} onApproval={onApproval} />;
@@ -38,7 +38,7 @@ function WorkActivity({ cwd, item }: { cwd: string | null; item: WorkProjection 
   const tools = item.entries.filter((entry): entry is ToolProjection => entry.kind === "tool");
   const running = item.running;
   return <details open={running || undefined} className={cn("group w-full max-w-[780px] border-t", "border-line")}>
-    <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 text-[11px]", "text-muted")}>
+    <summary className={cn("flex cursor-pointer list-none items-center gap-2 py-3 text-xs", "text-muted")}>
       {running && <LoaderCircle className={cn("size-3.5 animate-spin", "text-control-accent")} />}
       <span className={cn("font-medium", "text-ink-soft")}>{running ? "工作中" : `耗时 ${formatElapsed(item.startedAt, item.endedAt)}`}</span>
       {running && <LiveElapsed startedAt={item.startedAt} />}
@@ -55,7 +55,7 @@ function WorkActivity({ cwd, item }: { cwd: string | null; item: WorkProjection 
           <span className={cn("relative z-10 ml-[3px] mt-1.5 size-2 rounded-full border-2", "border-canvas", dot)} />
           <div className="min-w-0">{entry.kind === "tool"
             ? <ToolActivity cwd={cwd} tool={entry} />
-            : <><p className={cn("mb-1 text-[11px] font-medium uppercase tracking-[0.08em]", entry.kind === "thought" ? "text-warning" : "text-muted")}>{entry.kind === "thought" ? "推理" : "进度"}</p><WorkMarkdown content={entry.content} /></>}
+            : <><p className={cn("mb-1 text-xs font-medium uppercase tracking-[0.08em]", entry.kind === "thought" ? "text-warning" : "text-muted")}>{entry.kind === "thought" ? "推理" : "进度"}</p><WorkMarkdown content={entry.content} /></>}
           </div>
         </div>;
       })}
@@ -86,7 +86,7 @@ function editPair(input: unknown): { oldText: string; newText: string } | null {
 function EditDiff({ oldText, newText }: { oldText: string; newText: string }) {
   const removed = oldText.split("\n");
   const added = newText.split("\n");
-  return <div className={cn("overflow-hidden rounded-md border font-mono text-[11px] leading-5", "border-line")}>
+  return <div className={cn("overflow-hidden rounded-md border font-mono text-xs leading-5", "border-line")}>
     {removed.map((line, index) => <div className={cn("flex gap-2 px-2.5", "bg-danger-soft", "text-danger")} key={`r-${index}`}><span aria-hidden="true" className="shrink-0 select-none">−</span><span className="min-w-0 whitespace-pre-wrap break-all">{line || " "}</span></div>)}
     {added.map((line, index) => <div className={cn("flex gap-2 px-2.5", "bg-success-soft", "text-success")} key={`a-${index}`}><span aria-hidden="true" className="shrink-0 select-none">+</span><span className="min-w-0 whitespace-pre-wrap break-all">{line || " "}</span></div>)}
   </div>;
@@ -101,22 +101,22 @@ function ToolActivity({ cwd, tool }: { cwd: string | null; tool: ToolProjection 
     <summary className={cn("flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-xs", "text-muted")}>
       <span className="grid size-4 shrink-0 place-items-center"><ToolIcon className="size-3.5" /></span>
       <span className={cn("shrink-0 font-medium", "text-ink-soft")}>{presentation.label}</span>
-      {presentation.target && <span className={cn("min-w-0 flex-1 truncate font-mono text-[11px]", "text-muted")} title={presentation.target}>{presentation.target}</span>}
-      <span className={cn("text-[11px]", tool.status === "failed" ? "text-danger" : tool.status === "completed" ? "text-success" : "text-warning")}>{status}</span>
+      {presentation.target && <span className={cn("min-w-0 flex-1 truncate font-mono text-xs", "text-muted")} title={presentation.target}>{presentation.target}</span>}
+      <span className={cn("text-xs", tool.status === "failed" ? "text-danger" : tool.status === "completed" ? "text-success" : "text-warning")}>{status}</span>
       <ChevronDown className="size-3.5 shrink-0 transition-transform group-open/tool:rotate-180" />
     </summary>
     <div className={cn("grid gap-3 border-t px-3 py-3", "border-line")}>
-      {presentation.target && presentation.category === "file" && <div className={cn("flex items-start gap-2 font-mono text-[11px] leading-5", "text-ink-soft")}><FileText className="mt-0.5 size-3.5 shrink-0" /><span className="break-all">{presentation.target}</span></div>}
-      {diff && <div><p className={cn("mb-1.5 text-[11px] font-medium uppercase tracking-[0.08em]", "text-muted")}>变更</p><EditDiff newText={diff.newText} oldText={diff.oldText} /></div>}
-      {tool.input !== undefined && !diff && <div><p className={cn("mb-1.5 text-[11px] font-medium uppercase tracking-[0.08em]", "text-muted")}>输入</p><pre className={cn("max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-5", "text-ink-soft")}>{formatValue(tool.input)}</pre></div>}
-      {tool.output !== undefined && <div><p className={cn("mb-1.5 text-[11px] font-medium uppercase tracking-[0.08em]", "text-muted")}>输出</p><pre className={cn("max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-5", "text-ink-soft")}>{formatValue(tool.output)}</pre></div>}
+      {presentation.target && presentation.category === "file" && <div className={cn("flex items-start gap-2 font-mono text-xs leading-5", "text-ink-soft")}><FileText className="mt-0.5 size-3.5 shrink-0" /><span className="break-all">{presentation.target}</span></div>}
+      {diff && <div><p className={cn("mb-1.5 text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>变更</p><EditDiff newText={diff.newText} oldText={diff.oldText} /></div>}
+      {tool.input !== undefined && !diff && <div><p className={cn("mb-1.5 text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>输入</p><pre className={cn("max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5", "text-ink-soft")}>{formatValue(tool.input)}</pre></div>}
+      {tool.output !== undefined && <div><p className={cn("mb-1.5 text-xs font-medium uppercase tracking-[0.08em]", "text-muted")}>输出</p><pre className={cn("max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5", "text-ink-soft")}>{formatValue(tool.output)}</pre></div>}
     </div>
   </details>;
 }
 
 function ApprovalCard({ approval, item, onApproval }: { approval: ApprovalRecord | undefined; item: ApprovalProjection; onApproval: (item: ApprovalProjection, approve: boolean) => Promise<void> }) {
-  if (approval && approval.status !== "requested") return <section className={cn("max-w-[760px] rounded-lg border p-3.5", "bg-surface", "border-line", "shadow-card")}><div className={cn("flex items-center gap-2 text-xs font-semibold", approval.status === "granted" ? "text-success" : "text-danger")}>{approval.status === "granted" ? <Check className="size-3.5" /> : <X className="size-3.5" />}{approval.status === "granted" ? "已授权" : "已暂停 Run"}<span className={cn("ml-auto font-mono text-[11px] font-normal", "text-muted")}>{approval.status}</span></div></section>;
-  return <section className={cn("relative max-w-[760px] overflow-hidden rounded-lg border", "bg-surface", "border-line-strong", "shadow-card")}><svg aria-hidden="true" className={cn("pointer-events-none absolute inset-0 size-full", "text-warning")}><rect className={cn("h-[calc(100%-2px)] w-[calc(100%-2px)]", "motion-safe:animate-march")} fill="none" rx="7" stroke="currentColor" strokeDasharray="4 4" strokeWidth="1.5" x="1" y="1" /></svg><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", "border-line")}><span className={cn("flex items-center gap-2 text-[11px] font-semibold", "text-ink")}><ShieldAlert className={cn("size-3.5", "text-warning")} />需要审批</span><span className={cn("font-mono text-[11px]", "text-muted")}>仅本次 Run 有效</span></div><div className={cn("px-3.5 pb-1 pt-3 text-xs leading-5", "text-ink-soft")}>{item.title}</div><div className="flex gap-2 px-3.5 pb-3.5 pt-2"><Button className={cn("h-8 text-xs", "bg-accent", "text-accent-ink")} disabled={!approval} onClick={() => void onApproval(item, true)} size="sm">允许一次</Button><Button className={cn("h-8 border text-xs", "bg-surface", "text-ink", "border-line-strong")} disabled={!approval} onClick={() => void onApproval(item, false)} size="sm" variant="outline">拒绝</Button></div></section>;
+  if (approval && approval.status !== "requested") return <section className={cn("max-w-[760px] rounded-lg border p-3.5", "bg-surface", "border-line", "shadow-card")}><div className={cn("flex items-center gap-2 text-xs font-semibold", approval.status === "granted" ? "text-success" : "text-danger")}>{approval.status === "granted" ? <Check className="size-3.5" /> : <X className="size-3.5" />}{approval.status === "granted" ? "已授权" : "已暂停 Run"}<span className={cn("ml-auto font-mono text-xs font-normal", "text-muted")}>{approval.status}</span></div></section>;
+  return <section className={cn("relative max-w-[760px] overflow-hidden rounded-lg border", "bg-surface", "border-line-strong", "shadow-card")}><svg aria-hidden="true" className={cn("pointer-events-none absolute inset-0 size-full", "text-warning")}><rect className={cn("h-[calc(100%-2px)] w-[calc(100%-2px)]", "motion-safe:animate-march")} fill="none" rx="7" stroke="currentColor" strokeDasharray="4 4" strokeWidth="1.5" x="1" y="1" /></svg><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", "border-line")}><span className={cn("flex items-center gap-2 text-xs font-semibold", "text-ink")}><ShieldAlert className={cn("size-3.5", "text-warning")} />需要审批</span><span className={cn("font-mono text-xs", "text-muted")}>仅本次 Run 有效</span></div><div className={cn("px-3.5 pb-1 pt-3 text-xs leading-5", "text-ink-soft")}>{item.title}</div><div className="flex gap-2 px-3.5 pb-3.5 pt-2"><Button className={cn("h-8 text-xs", "bg-accent", "text-accent-ink")} disabled={!approval} onClick={() => void onApproval(item, true)} size="sm">允许一次</Button><Button className={cn("h-8 border text-xs", "bg-surface", "text-ink", "border-line-strong")} disabled={!approval} onClick={() => void onApproval(item, false)} size="sm" variant="outline">拒绝</Button></div></section>;
 }
 
 const Markdown = memo(function Markdown({ content, theme }: { content: string; theme: Theme }) {
