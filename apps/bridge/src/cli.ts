@@ -256,7 +256,10 @@ program
           : [],
       });
     });
-    try {
+    // Runner may still be booting when the Bridge starts (launchd starts both
+    // concurrently), so retry in the background instead of a one-shot attempt
+    // that leaves every Agent stuck in needs_setup until restart.
+    const applyAgentSetup = async (): Promise<boolean> => {
       const setup = await runnerClient.listAgentSetup();
       for (const agent of setup.agents) {
         registry.updateSetup(agent.agentId, {
@@ -268,9 +271,23 @@ program
           diagnostic: agent.diagnostic,
         });
       }
-    } catch (error) {
-      console.warn("Agent setup detection failed:", error instanceof Error ? error.message : String(error));
-    }
+      return true;
+    };
+    void (async () => {
+      for (let attempt = 0; attempt < 150; attempt++) {
+        try {
+          await applyAgentSetup();
+          if (attempt > 0) console.log(`Agent setup detection succeeded after ${attempt + 1} attempts`);
+          return;
+        } catch (error) {
+          if (attempt === 149) {
+            console.warn("Agent setup detection failed:", error instanceof Error ? error.message : String(error));
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, attempt < 30 ? 1_000 : 15_000));
+        }
+      }
+    })();
     const agentHealthAdapters = agentIds
       .filter((agentId) => Boolean(config.backends[agentId]))
       .map((agentId) => ({

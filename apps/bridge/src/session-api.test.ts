@@ -252,6 +252,30 @@ describe("session API agent setup routing", () => {
     fixture.catalog.close();
     fixture.workItems.close();
   });
+
+  it("detects all Agents in one call and updates the registry", async () => {
+    const runner = {
+      detectAllAgents: async () => ({
+        agents: [
+          { agentId: "pi", installation: "installed", configuration: "configured", runtime: "healthy", version: "1.0", executablePath: "pi", canSelectDefault: true, canCreateSession: true },
+          { agentId: "opencode", installation: "missing", configuration: "unknown", runtime: "not_started", canSelectDefault: false, canCreateSession: false },
+        ],
+      }),
+    } as unknown as RunnerClient;
+    const fixture = createSetupFixture({ runner });
+
+    const response = await fixture.app.request("/v1/agents/detect", {
+      method: "POST",
+      headers: { authorization: "Bearer " + TOKEN },
+    });
+    expect(response.status).toBe(200);
+    expect(fixture.registry.get("pi")?.setup).toMatchObject({ installation: "installed", runtime: "healthy" });
+    expect(fixture.registry.get("opencode")?.setup?.installation).toBe("missing");
+
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
 });
 
 describe("session API", () => {

@@ -28,7 +28,7 @@ import {
   runPiSession,
   PI_PROVIDER_PRESETS,
   readPiProviders,
-  testPiProviderConnection,
+  testProviderConnection,
   writePiProviders,
   validateProviders,
   type PiProvidersFile,
@@ -1023,6 +1023,28 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     return c.json({ agents: await host.listAgentSetup() });
   });
 
+  app.post("/agents/detect", async (c) => {
+    const agents = await host.listAgentSetup();
+    const results = await Promise.all(
+      agents.map(async (agent) => {
+        try {
+          return await host.detectAgent(agent.agentId);
+        } catch (error) {
+          return {
+            ...agent,
+            runtime: "unavailable" as const,
+            diagnostic: {
+              stage: "detect" as const,
+              code: "detect_failed",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+      }),
+    );
+    return c.json({ agents: results });
+  });
+
   app.post("/agents/:agentId/detect", async (c) => {
     try {
       return c.json(await host.detectAgent(c.req.param("agentId")));
@@ -1069,11 +1091,17 @@ export function createRunnerApp(host: RunnerHost, token: string) {
   });
 
   app.post("/pi/providers/test", async (c) => {
-    const body = (await c.req.json().catch(() => null)) as { baseUrl?: string; apiKey?: string; authHeader?: boolean } | null;
+    const body = (await c.req.json().catch(() => null)) as { baseUrl?: string; apiKey?: string; authHeader?: boolean; api?: string; model?: string } | null;
     if (!body || typeof body.baseUrl !== "string" || !/^https?:\/\//.test(body.baseUrl)) {
       return c.json({ error: "baseUrl (http/https) is required" }, 400);
     }
-    return c.json(await testPiProviderConnection({ baseUrl: body.baseUrl, apiKey: body.apiKey, authHeader: body.authHeader }));
+    return c.json(await testProviderConnection({
+      baseUrl: body.baseUrl,
+      apiKey: body.apiKey,
+      authHeader: body.authHeader,
+      api: typeof body.api === "string" ? body.api : undefined,
+      model: typeof body.model === "string" ? body.model : undefined,
+    }));
   });
 
   app.post("/runs/:id/permission", async (c) => {
