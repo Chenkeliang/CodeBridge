@@ -91,9 +91,11 @@ Append near the bottom (before `messageOf`):
 
 ```ts
 /**
- * RFC 8785 (JCS) canonical JSON: keys sorted recursively, no insignificant
- * whitespace, UTF-8. Deterministic across key insertion order — this is the
- * only canonicalization allowed for structured contract content.
+ * RFC 8785-style (JCS) canonical JSON: keys sorted recursively, no
+ * insignificant whitespace, UTF-8. Deterministic across key insertion order.
+ * Scope note: number serialization uses JSON.stringify semantics (adequate
+ * for flow definitions/schemas); strict RFC 8785 number/I-JSON edge cases
+ * are intentionally out of scope for this contract content.
  */
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "number" || typeof value === "boolean") {
@@ -281,6 +283,8 @@ export interface WorkflowInput {
 
 Change `WorkflowDefinition.inputs` from `string[]` to `WorkflowInput[]`.
 
+**Terminology (deliberate, do not unify):** declaration-time `WorkflowInput.source: "agent"` means "this input is *expected* to be agent-extracted"; resolution-time `ParamResolvedPayload.source: "agent_extracted"` means "this value *was* agent-extracted". The bridge maps declaration `"agent"` → resolution `"agent_extracted"` when recording `PARAM_RESOLVED`. Same for `source: "context"` (declaration) → `context.*` template strings (resolution).
+
 - [ ] **Step 4: Normalize + validate typed inputs**
 
 Replace `stringArrayField(input.inputs ?? [], "inputs", issues)` in BOTH `normalizeDefinition` and `normalizeCanonicalDefinition` with:
@@ -399,8 +403,9 @@ import { describe, expect, it } from "vitest";
 import {
   SqliteEventStore,
   type Attribution,
-  type ParamResolvedPayload,
+  type FlowRecommendedPayload,
   type FlowRejectedPayload,
+  type ParamResolvedPayload,
   type RunSnapshotPayload,
   type VerificationFailedPayload,
 } from "./index.js";
@@ -447,8 +452,13 @@ describe("learning-signal events", () => {
       outcome: "succeeded",
       attribution,
     };
+    const recommended: FlowRecommendedPayload = {
+      flow_id: "f", flow_revision: "sha256:plan",
+      match_reason: "repeated task shape", confidence: 0.82,
+    };
     for (const [type, payload] of [
       ["PARAM_RESOLVED", paramResolved],
+      ["FLOW_RECOMMENDED", recommended],
       ["FLOW_REJECTED", rejected],
       ["VERIFICATION_FAILED", failed],
       ["RUN_SNAPSHOT", snapshot],
@@ -483,10 +493,11 @@ In `packages/work-items/src/index.ts`, extend `DomainEventType` (after `"WORK_IT
   | "PARAM_RESOLVED"
   | "FLOW_RECOMMENDED"
   | "FLOW_REJECTED"
+  | "VERIFICATION_FAILED"
   | "RUN_SNAPSHOT"
 ```
 
-(`VERIFICATION_FAILED` is not in the current union — check: the current union has `VERIFICATION_COMPLETED`. Add `"VERIFICATION_FAILED"` too.)
+(Note: the current union already has `VERIFICATION_COMPLETED`; `VERIFICATION_FAILED` is a new distinct type — add all five.)
 
 Then append the payload contracts at the end of the file:
 
@@ -700,107 +711,141 @@ git commit -m "feat(flow-catalog): persist typed inputs and plan_ir_hash compile
 
 ---
 
-### Task 5: Bridge compiles with deterministic revision and stores the tuple
+### Task 5: Bridge computes content-hash revisions in `/v1/flows/candidates`
 
 **Files:**
 - Modify: `apps/bridge/src/flow-api.ts`
 - Test: `apps/bridge/src/flow-api.test.ts`
 
+**Design decision (spec §6.2):** the server owns revision computation. `POST /v1/flows/candidates` currently requires caller-supplied `definition_revision`; after this task the server computes `definitionRevision = definitionHash(definition)` and `planIrHash = definitionHash(plan)` itself. The request body's `definition_revision` field becomes **optional and ignored when present** (backward compatible: old callers keep working, their value is discarded).
+
 - [ ] **Step 1: Write the failing test**
 
-In `apps/bridge/src/flow-api.test.ts`, append inside the main describe:
+Append inside the main describe in `apps/bridge/src/flow-api.test.ts`:
 
 ```ts
-  it("stores definitionRevision as a deterministic content hash and records plan_ir_hash", async () => {
+  it("computes content-hash revisions server-side and stores the compile tuple", async () => {
     const catalog = new FlowCatalogStore(":memory:");
     const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
     const app = createFlowApp(catalog, "token", { sessions });
-    const definition = {
-      schema_version: 1,
-      workflow_id: "equity-deliver",
-      name: "权益交付",
-      kind: "runbook",
-      status: "candidate",
-      inputs: [{ id: "company_id", type: "string", source: "user" }],
-      steps: [{ id: "deliver", capability: "equity.deliver" }],
+    const body = {
+      session_id: session.id,
+      definition_revision: "agent:caller-supplied-will-be-ignored",
+      flow: {
+        flow_id: "flow-hashed",
+        name: "Hashed",
+        kind: "runbook",
+        steps: [{ id: "deliver", capability: "equity.deliver", mode: "read_only" }],
+      },
     };
-    const headers = { authorization: `****** "content-type": "application/json" };
-    const response = await app.request("/v1/flows", {
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
+    const response = await app.request("/v1/flows/candidates", {
       method: "POST",
       headers,
-      body: JSON.stringify(definition),
+      body: JSON.stringify(body),
     });
     expect(response.status).toBe(201);
-    const flow = catalog.get("equity-deliver");
+    const flow = catalog.get("flow-hashed");
     expect(flow?.definitionRevision).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(flow?.planIrHash).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(flow?.definitionRevision).not.toBe(flow?.planIrHash);
-    // Re-saving the byte-identical definition keeps both hashes stable.
-    await app.request("/v1/flows", { method: "POST", headers, body: JSON.stringify(definition) });
-    expect(catalog.get("equity-deliver")?.definitionRevision).toBe(flow?.definitionRevision);
+    // Re-posting the identical definition yields identical hashes (deterministic).
+    await app.request("/v1/flows/candidates", { method: "POST", headers, body: JSON.stringify(body) });
+    expect(catalog.get("flow-hashed")?.definitionRevision).toBe(flow?.definitionRevision);
+    expect(catalog.get("flow-hashed")?.planIrHash).toBe(flow?.planIrHash);
     sessions.close();
     catalog.close();
   });
 ```
 
-First check the existing `POST /v1/flows` route signature in `flow-api.ts` (the test above assumes it accepts a raw definition body; if it expects `{ definition: ... }` or a different envelope, adjust the test to match the existing route's actual request shape).
-
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pnpm vitest run apps/bridge/src/flow-api.test.ts`
-Expected: FAIL — `definitionRevision` is currently caller-supplied or absent, and `planIrHash` is not stored.
+Expected: FAIL — `definitionRevision` is the caller-supplied string, `planIrHash` is null.
 
-- [ ] **Step 3: Implement deterministic compile tuple**
+- [ ] **Step 3: Implement server-side revision computation**
 
-In `apps/bridge/src/flow-api.ts`:
-
-1. Import the hash helpers:
+In `apps/bridge/src/flow-api.ts`, change the import line:
 
 ```ts
 import { compileWorkflow, definitionHash, WorkflowValidationError } from "@codebridge/workflow-engine";
 ```
 
-2. In the create/save handler, replace whatever sets `definitionRevision` with:
+In the `POST /v1/flows/candidates` handler, replace the block from `const definition = {` through the `catalog.save({...})` call with:
 
 ```ts
-      const definitionRevision = definitionHash(definition);
-      let plan;
-      try {
-        plan = compileWorkflow(definition, { source: "workflow", definitionRevision });
-      } catch (error) {
-        if (error instanceof WorkflowValidationError) {
-          return c.json({ error: "invalid_flow", issues: error.issues }, 409);
-        }
-        throw error;
-      }
-      const planIrHash = definitionHash(plan);
-      catalog.save({
-        flowId: definition.workflow_id,
-        name: definition.name,
-        kind: definition.kind,
-        status: definition.status,
-        source: "user_selected",
+    const definition = {
+      schema_version: 1,
+      workflow_id: flowId,
+      name: typeof input.name === "string" && input.name.trim() ? input.name : flowId,
+      kind: input.kind === "runbook" ? ("runbook" as const) : ("guide" as const),
+      status: "draft",
+      steps: rawSteps,
+    };
+    // The server owns revision computation (spec §6.2): a caller-supplied
+    // definition_revision is accepted for backward compatibility but ignored.
+    const definitionRevision = definitionHash(definition);
+    let plan;
+    try {
+      plan = compileWorkflow(definition, {
+        source: "agent_generated",
         definitionRevision,
-        planIrHash,
-        inputs: plan.inputs,
-        steps: definition.steps,
       });
+    } catch (error) {
+      if (error instanceof WorkflowValidationError) {
+        return c.json({ error: "invalid_flow", issues: error.issues }, 400);
+      }
+      throw error;
+    }
+    const planIrHash = definitionHash(plan);
+    const steps = plan.steps.map((step) => ({
+      id: step.id,
+      capability: step.capabilityId ?? undefined,
+      purpose: step.purpose ?? undefined,
+      dependsOn: step.dependsOn,
+      mode: step.risk,
+      approval: step.approval,
+      branches: step.branches,
+      retry: step.retry ?? undefined,
+    }));
+    const flow = catalog.save({
+      flowId,
+      name: definition.name,
+      kind: definition.kind,
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision,
+      planIrHash,
+      inputs: plan.inputs,
+      reviewStatus: "pending",
+      validationIssues: [],
+      steps,
+    });
 ```
 
-(Adapt field names to the existing save call in the route; the essentials: `definitionRevision` = `definitionHash(definition)` BEFORE compile, `planIrHash` = `definitionHash(plan)` AFTER compile, `inputs` from the compiled plan.)
+Also drop `definition_revision` from the request validation (it is now optional): change the guard to only require `session_id`:
 
-3. In `apps/bridge/src/session-api.ts` where `compileWorkflow` is called for runs (search `compileWorkflow(`), ensure it passes the flow's stored `definitionRevision` (it already does via `flow.definitionRevision` — verify) and that after this change the stored revision is the content hash. No other change needed there in phase 0.
+```ts
+    if (!body || typeof body.session_id !== "string") {
+      return c.json({ error: "session_id is required" }, 400);
+    }
+```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Update the existing candidate test**
 
-Run: `pnpm vitest run apps/bridge/src/flow-api.test.ts`
-Expected: PASS. Then `pnpm build` for type-check across packages.
+The pre-existing test `"records Flow selection and candidate persistence on the Session event stream"` passes `definition_revision: "agent:one"` and asserts nothing about the revision value — it still passes unchanged (field now ignored). Verify by running the full file; if any existing test asserts a caller-supplied revision round-trips, update that assertion to expect the server-computed `sha256:` hash.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run tests**
+
+Run: `pnpm vitest run apps/bridge/src/flow-api.test.ts && pnpm vitest run apps/bridge/src/session-api.test.ts`
+Expected: PASS for both. Then `pnpm build` — the whole workspace must type-check.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/bridge/src/flow-api.ts apps/bridge/src/flow-api.test.ts
-git commit -m "feat(bridge): freeze flow compile tuple with content-hash revisions"
+git commit -m "feat(bridge): compute flow content-hash revisions server-side at compile time"
 ```
 
 ---
@@ -821,7 +866,7 @@ Add entries covering:
 ```markdown
 | PROTO-FLOW-INPUT-001 | Flow inputs are typed objects (id/type/source required; pattern/values/confirmation/from by type); legacy `string[]` shorthand normalizes to `{type: string, source: user}`. | packages/workflow-engine/src/index.ts |
 | PROTO-FLOW-REVISION-001 | definitionRevision = sha256 of RFC 8785 canonical definition; plan_ir_hash = sha256 of canonical PlanIR; both stored at compile time; runtime never reparses YAML. | packages/workflow-engine/src/index.ts, apps/bridge/src/flow-api.ts |
-| PROTO-FLOW-ATTR-001 | RUN_SNAPSHOT carries the attribution block (flow_revision=plan_ir_hash, prompt_revision, tool_schema_revision, capability_revisions, resolver_revision, authorization_revision). capability_version is self-reported in the manifest. | packages/work-items/src/index.ts |
+| PROTO-FLOW-ATTR-001 | RUN_SNAPSHOT carries the attribution block (flow_revision=plan_ir_hash, prompt_revision, tool_schema_revision, capability_revisions, resolver_revision, authorization_revision). capability_version is self-reported in the manifest. Distinct from CapabilitySource.version (adapter endpoint version): capability_version versions the capability contract itself and is what attribution records. | packages/work-items/src/index.ts |
 | PROTO-FLOW-SIGNAL-001 | Learning-signal events (PARAM_RESOLVED, FLOW_RECOMMENDED, FLOW_REJECTED, VERIFICATION_FAILED, RUN_SNAPSHOT) have strong payload types; FLOW_REJECTED.reason is an enum; VERIFICATION_FAILED.actual is capped at 4KB with truncated flag. | packages/work-items/src/index.ts |
 | PROTO-FLOW-HASH-001 | Canonical form is RFC 8785 for structured content and raw bytes for prompt templates; no other canonicalization is allowed. | packages/workflow-engine/src/index.ts |
 ```
@@ -837,7 +882,7 @@ git commit -m "docs(spec): register flow phase-0 contract rules"
 
 ## Self-review checklist (already run)
 
-- **Spec coverage:** §5.1 events → Task 3; §5.2 hashing/attribution → Tasks 1+3; §5.3 typed inputs → Task 2; compile tuple §6.2 → Tasks 4+5; capability_version self-report → existing `CapabilitySource.version` (RULES.md entry only). Phase-1 items (success_when runtime, dry-run, idempotency, replay) intentionally absent — that's plan B.
-- **No placeholders:** every code step contains complete code; Task 5 Step 1 has one conditional note about matching the existing route envelope — the engineer must read `flow-api.ts` first (by design, since the route's exact current body shape must be preserved).
+- **Spec coverage:** §5.1 events → Task 3; §5.2 hashing/attribution → Tasks 1+3; §5.3 typed inputs → Task 2; compile tuple §6.2 → Tasks 4+5 (Task 5 changes the `/v1/flows/candidates` contract: `definition_revision` becomes optional/ignored, server computes it — deliberate, documented in the task); capability_version self-report → existing `CapabilitySource.version` (RULES.md entry only). Phase-1 items (success_when runtime, dry-run, idempotency, replay) intentionally absent — that's plan B.
+- **No placeholders:** every code step contains complete code against the real routes (`POST /v1/flows/candidates` envelope verified against `flow-api.ts`).
 - **Type consistency:** `WorkflowInput` (engine) vs `FlowInput` (catalog) are deliberately separate structural types with identical fields — the mapping happens at the bridge boundary; both names are used consistently throughout.
 - **Known follow-up for plan B:** `appendEvent` does not yet validate learning-signal payloads at runtime; producers introduced in phase 1 should validate before append.
