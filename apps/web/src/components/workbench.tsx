@@ -491,7 +491,7 @@ export function Workbench() {
   }
 
   return (
-    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", panelOpen ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
+    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-[13px] tracking-[-0.01em]", panelOpen && area !== "settings" ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
       <AgentRail
         agents={agents}
         area={area}
@@ -526,7 +526,7 @@ export function Workbench() {
 
       <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", "bg-canvas text-ink")}>
         {pixelWipe > 0 && <PixelWipe key={pixelWipe} seed={pixelWipe} />}
-        <SessionHeader
+        {area !== "settings" && <SessionHeader
           agent={selectedAgent}
           session={selectedSession}
           menuOpen={menuOpen}
@@ -539,7 +539,7 @@ export function Workbench() {
           onMenuView={setMenuView}
           onRenameDraft={setRenameDraft}
           onUpdate={(update) => void updateSession(update)}
-        />
+        />}
 
         {error && <div className={cn("mx-8 mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span><button aria-label="关闭错误" onClick={() => setError(null)} type="button"><X className="size-3.5" /></button></div>}
 
