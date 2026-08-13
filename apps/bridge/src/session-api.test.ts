@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConfigStore } from "@codebridge/core";
+import { AgentRegistry, projectSetupState, supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
@@ -28,6 +33,226 @@ const agents: AgentProfile[] = [
     sessionFeatures: ["resume"],
   },
 ];
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const directory of tempDirs.splice(0)) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function setupAgent(agentId: string, setup: AgentProfile["setup"]): AgentProfile {
+  const manifest = supportedAgentSetupManifests.find((candidate) => candidate.agentId === agentId);
+  return {
+    agentId,
+    displayName: manifest?.displayName ?? agentId,
+    adapter: manifest?.adapter ?? "acp",
+    status: setup?.installation === "installed" && setup.configuration === "configured"
+      ? setup.runtime === "healthy" ? "healthy" : "unavailable"
+      : "needs_setup",
+    capabilities: [],
+    models: [],
+    sessionFeatures: [],
+    setup,
+    setupManifest: manifest,
+  };
+}
+
+function createSetupFixture(
+  options: {
+    defaultAgentId?: string | null;
+    runner?: RunnerClient;
+  } = {},
+) {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-session-api-"));
+  tempDirs.push(dataDir);
+  const configStore = new ConfigStore({ dataDir });
+  configStore.update((current) => ({
+    ...current,
+    defaultAgent: options.defaultAgentId ?? "pi",
+  }));
+  const catalog = new SessionCatalogStore(":memory:");
+  const workItems = new SqliteEventStore(":memory:");
+  const registry = new AgentRegistry({ databasePath: path.join(dataDir, "agents.sqlite") });
+  registry.register(setupAgent("codex", projectSetupState({
+    installation: "installed",
+    configuration: "configured",
+    runtime: "healthy",
+  })));
+  registry.register(setupAgent("pi", projectSetupState({
+    installation: "installed",
+    configuration: "configured",
+    runtime: "healthy",
+  })));
+  registry.register(setupAgent("opencode", projectSetupState({
+    installation: "missing",
+    configuration: "unknown",
+    runtime: "not_started",
+  })));
+  registry.register(setupAgent("claude", projectSetupState({
+    installation: "installed",
+    configuration: "needs_configuration",
+    runtime: "not_started",
+  })));
+  const app = createSessionApp({
+    catalog,
+    agents: () => registry.list(),
+    agentRegistry: registry,
+    configStore,
+    workItems,
+    runner: options.runner,
+  }, TOKEN);
+  return {
+    app,
+    catalog,
+    workItems,
+    registry,
+    configStore,
+  };
+}
+
+describe("session API agent setup routing", () => {
+  it("returns the saved and effective default agent ids", async () => {
+    const fixture = createSetupFixture({ defaultAgentId: "pi" });
+    const response = await fixture.app.request("/v1/agents", {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      default_agent_id: "pi",
+      effective_default_agent_id: "pi",
+    });
+
+    const updated = await fixture.app.request("/v1/settings/default-agent", {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "codex" }),
+    });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toMatchObject({
+      default_agent_id: "codex",
+      effective_default_agent_id: "codex",
+    });
+
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("retains an invalid saved default while falling back to an eligible Agent", async () => {
+    const fixture = createSetupFixture({ defaultAgentId: "missing-default" });
+    const response = await fixture.app.request("/v1/agents", {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      default_agent_id: "missing-default",
+      effective_default_agent_id: "codex",
+    });
+
+    const missing = await fixture.app.request("/v1/settings/default-agent", {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "opencode" }),
+    });
+    expect(missing.status).toBe(409);
+    expect(await missing.json()).toMatchObject({ error: "agent_not_installed" });
+
+    const unconfigured = await fixture.app.request("/v1/settings/default-agent", {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "claude" }),
+    });
+    expect(unconfigured.status).toBe(409);
+    expect(await unconfigured.json()).toMatchObject({ error: "agent_not_configured" });
+
+    const unknown = await fixture.app.request("/v1/settings/default-agent", {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "missing" }),
+    });
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toMatchObject({ error: "agent_not_found" });
+
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("relays detection and installation updates through the registry", async () => {
+    const runner = {
+      detectAgent: async () => ({
+        agentId: "opencode",
+        installation: "installed",
+        configuration: "configured",
+        runtime: "healthy",
+        version: "1.2.3",
+        executablePath: "opencode",
+        canSelectDefault: true,
+        canCreateSession: true,
+      }),
+      installAgent: async () => ({
+        agentId: "opencode",
+        ok: false,
+        installation: "installed",
+        configuration: "configured",
+        runtime: "unavailable",
+        diagnostic: {
+          stage: "install",
+          code: "install_failed",
+          message: "install failed",
+          details: "Authorization: ******",
+          exitCode: 1,
+        },
+        canSelectDefault: true,
+        canCreateSession: false,
+      }),
+    } as unknown as RunnerClient;
+    const fixture = createSetupFixture({ runner });
+
+    const detected = await fixture.app.request("/v1/agents/opencode/detect", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(detected.status).toBe(200);
+    expect(await detected.json()).toMatchObject({
+      agent_id: "opencode",
+      status: "healthy",
+      setup: {
+        installation: "installed",
+        configuration: "configured",
+        runtime: "healthy",
+        can_select_default: true,
+        can_create_session: true,
+      },
+    });
+    expect(fixture.registry.get("opencode")?.status).toBe("healthy");
+
+    const install = await fixture.app.request("/v1/agents/opencode/install", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ strategy_id: "npm-global" }),
+    });
+    expect(install.status).toBe(409);
+    expect(await install.json()).toMatchObject({
+      error: "install_failed",
+      message: "install failed",
+      details: "Authorization: ******",
+      agent: expect.objectContaining({
+        agent_id: "opencode",
+      }),
+    });
+    expect(fixture.registry.get("opencode")?.setup?.runtime).toBe("unavailable");
+
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+});
 
 describe("session API", () => {
   it("creates a session fixed to an Agent and maps messages to a TaskRecord", async () => {

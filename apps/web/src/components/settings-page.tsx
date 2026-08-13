@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, ChevronLeft, LoaderCircle, Pencil, Plug, Plus, Trash2, X, Zap } from "lucide-react";
 import { api } from "@/lib/api";
-import type { PiProvider, PiProviderModel, PiProviderPreset } from "@/lib/types";
+import type { AgentProfile, AgentSetupManifest, PiProvider, PiProviderModel, PiProviderPreset } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { type Density } from "@/components/workbench-shared";
 
@@ -33,12 +33,16 @@ interface ProviderDraft {
   passthrough: Record<string, unknown>;
 }
 
-export function SettingsPage({ density, reading, onDensity, onReading, onNotify, onProvidersChanged }: {
+export function SettingsPage({ density, reading, onDensity, onReading, onNotify, agents, defaultAgentId, effectiveDefaultAgentId, onAgentsChanged, onProvidersChanged }: {
   density: Density;
   reading: boolean;
   onDensity: (density: Density) => void;
   onReading: (reading: boolean) => void;
   onNotify: (message: string, kind?: "info" | "error") => void;
+  agents: AgentProfile[];
+  defaultAgentId: string | null;
+  effectiveDefaultAgentId: string | null;
+  onAgentsChanged: () => Promise<void>;
   onProvidersChanged: () => void;
 }) {
   const [providers, setProviders] = useState<Record<string, PiProvider> | null>(null);
@@ -50,6 +54,8 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [agentAction, setAgentAction] = useState<{ id: string; kind: "detect" | "install" | "default" } | null>(null);
+  const [agentErrors, setAgentErrors] = useState<Record<string, string | null>>({});
 
   const load = useCallback(async () => {
     try {
@@ -62,6 +68,75 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  const agentCards = agents.filter((agent) => agent.setup_manifest);
+  const effectiveDefaultAgent = agents.find((agent) => agent.agent_id === effectiveDefaultAgentId) ?? null;
+  const savedDefaultUnavailable = Boolean(defaultAgentId && defaultAgentId !== effectiveDefaultAgentId);
+
+  async function refreshAgents() {
+    await onAgentsChanged();
+  }
+
+  function setAgentError(agentId: string, message: string | null) {
+    setAgentErrors((current) => ({ ...current, [agentId]: message }));
+  }
+
+  async function detectAgent(agent: AgentProfile) {
+    setAgentAction({ id: agent.agent_id, kind: "detect" });
+    setAgentError(agent.agent_id, null);
+    try {
+      await api.detectAgent(agent.agent_id);
+      await refreshAgents();
+      onNotify(`${agent.display_name} 已重新检测`);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setAgentError(agent.agent_id, message);
+      await refreshAgents();
+      onNotify(message, "error");
+    } finally {
+      setAgentAction(null);
+    }
+  }
+
+  async function installAgent(agent: AgentProfile, manifest: AgentSetupManifest) {
+    const strategy = manifest.install_strategies.find((candidate) => candidate.available) ?? manifest.install_strategies[0];
+    if (!strategy) {
+      onNotify(`${manifest.display_name} 没有可用的安装策略`, "error");
+      return;
+    }
+    const command = [strategy.command, ...strategy.args].join(" ");
+    if (!window.confirm(`将执行以下安装命令：\n\n${command}\n\n继续吗？`)) return;
+    setAgentAction({ id: agent.agent_id, kind: "install" });
+    setAgentError(agent.agent_id, null);
+    try {
+      await api.installAgent(agent.agent_id, strategy.id);
+      await refreshAgents();
+      onNotify(`${manifest.display_name} 安装已完成`);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setAgentError(agent.agent_id, message);
+      await refreshAgents();
+      onNotify(message, "error");
+    } finally {
+      setAgentAction(null);
+    }
+  }
+
+  async function setDefault(agent: AgentProfile) {
+    setAgentAction({ id: agent.agent_id, kind: "default" });
+    setAgentError(agent.agent_id, null);
+    try {
+      await api.setDefaultAgent(agent.agent_id);
+      await refreshAgents();
+      onNotify(`${agent.display_name} 已设为默认`);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setAgentError(agent.agent_id, message);
+      onNotify(message, "error");
+    } finally {
+      setAgentAction(null);
+    }
+  }
 
   function startAdd(preset: PiProviderPreset | null) {
     setEditingOriginalId(null);
@@ -152,8 +227,108 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
     {error && <div className={cn("mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span></div>}
 
     <section className="mt-8">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>AGENTS</h2>
+        {savedDefaultUnavailable && (
+          <span className={cn("rounded-full border px-2 py-1 text-[11px]", "bg-warning-soft", "text-warning", "border-warning/30")}>
+            默认 Agent 当前不可用{effectiveDefaultAgent ? ` · 正在使用 ${effectiveDefaultAgent.display_name}` : ""}
+          </span>
+        )}
+      </div>
+      <div className="mt-4 grid gap-2">
+        {agentCards.map((agent) => {
+          const setup = agent.setup;
+          const manifest = agent.setup_manifest as AgentSetupManifest;
+          const isSavedDefault = defaultAgentId === agent.agent_id;
+          const isEffectiveDefault = effectiveDefaultAgentId === agent.agent_id;
+          const busy = agentAction?.id === agent.agent_id;
+          const diagnostic = setup?.diagnostic;
+          const primaryStrategy = manifest.install_strategies.find((strategy) => strategy.available) ?? manifest.install_strategies[0] ?? null;
+          return <div className={cn("grid gap-3 rounded-xl border px-4 py-4", "bg-surface", "border-line-strong")} key={agent.agent_id}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className={cn("flex flex-wrap items-center gap-2", "text-ink")}>
+                  <span className="font-brand text-sm font-normal tracking-[-0.02em]">{manifest.display_name}</span>
+                  {isSavedDefault && <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", "bg-accent-soft", "text-accent", "border-line-strong")}>已保存默认</span>}
+                  {!isSavedDefault && isEffectiveDefault && <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", "bg-success-soft", "text-success", "border-line-strong")}>当前生效默认</span>}
+                </div>
+                <div className={cn("mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs", "text-muted")}>
+                  <span>{setupInstallationLabel(setup)}</span>
+                  <span>{setupConfigurationLabel(setup)}</span>
+                  <span>{setupRuntimeLabel(setup)}</span>
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <button className={cn("rounded-full border px-2 py-1 text-[11px]", "border-line-strong", "text-muted", busy && "opacity-50")} disabled={busy} onClick={() => void detectAgent(agent)} type="button">
+                  {agentAction?.id === agent.agent_id && agentAction.kind === "detect" ? "检测中…" : "重新检测"}
+                </button>
+                <button className={cn("rounded-full border px-2 py-1 text-[11px]", "border-line-strong", "text-muted", !setup?.can_select_default && "opacity-40", busy && "opacity-50")} disabled={!setup?.can_select_default || busy} onClick={() => void setDefault(agent)} type="button">
+                  {isSavedDefault ? "当前默认" : "设为默认"}
+                </button>
+              </div>
+            </div>
+
+            <div className={cn("grid gap-2 rounded-lg border px-3 py-3", "bg-surface-soft", "border-line")}>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className={cn("rounded-full px-2 py-0.5", setup?.installation === "installed" ? "bg-success-soft text-success" : setup?.installation === "missing" ? "bg-danger-soft text-danger" : "bg-surface text-muted")}>
+                  {setupInstallationLabel(setup)}
+                </span>
+                <span className={cn("rounded-full px-2 py-0.5", setup?.configuration === "configured" ? "bg-success-soft text-success" : setup?.configuration === "needs_configuration" ? "bg-warning-soft text-warning" : "bg-surface text-muted")}>
+                  {setupConfigurationLabel(setup)}
+                </span>
+                <span className={cn("rounded-full px-2 py-0.5", setup?.runtime === "healthy" ? "bg-success-soft text-success" : setup?.runtime === "unavailable" ? "bg-danger-soft text-danger" : "bg-surface text-muted")}>
+                  {setupRuntimeLabel(setup)}
+                </span>
+                {setup?.version && <span className="text-muted">版本 {setup.version}</span>}
+              </div>
+              <div className="text-xs leading-5 text-muted">
+                <div>{manifest.configuration_owner === "codebridge" ? "CodeBridge 管理该 Agent 的配置入口。" : manifest.documentation_url ? "打开官方文档完成配置。" : "该 Agent 由自身配置入口管理。"}</div>
+                {manifest.configuration_path && <div className="font-mono">{manifest.configuration_path}</div>}
+                {primaryStrategy && setup?.installation === "missing" && (
+                  <div className="mt-1 text-[11px]">
+                    安装命令: <span className="font-mono">{[primaryStrategy.command, ...primaryStrategy.args].join(" ")}</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {setup?.installation === "missing" && primaryStrategy ? (
+                  <button className={cn("rounded-md border px-3 py-1.5 text-xs", "bg-accent", "text-accent-ink", "border-line-strong", busy && "opacity-50")} disabled={busy} onClick={() => void installAgent(agent, manifest)} type="button">
+                    {agentAction?.id === agent.agent_id && agentAction.kind === "install" ? "安装中…" : `安装 ${manifest.display_name}`}
+                  </button>
+                ) : null}
+                {manifest.configuration_owner === "codebridge" ? (
+                  <button className={cn("rounded-md border px-3 py-1.5 text-xs", "bg-surface", "text-ink", "border-line-strong")} onClick={() => {
+                    document.getElementById("providers-pi")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }} type="button">
+                    前往 Providers(Pi)
+                  </button>
+                ) : manifest.documentation_url ? (
+                  <button className={cn("rounded-md border px-3 py-1.5 text-xs", "bg-surface", "text-ink", "border-line-strong")} onClick={() => window.open(manifest.documentation_url, "_blank", "noopener")} type="button">
+                    {setup?.configuration === "needs_configuration" ? "查看配置方法" : "打开文档"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {(diagnostic || agentErrors[agent.agent_id]) && (
+              <div className={cn("rounded-lg border px-3 py-2 text-xs", "bg-danger-soft", "text-danger", "border-danger/30")}>
+                {diagnostic && <>
+                  <div className="font-medium">{diagnostic.stage} · {diagnostic.code}</div>
+                  <div className="mt-1 leading-5">{diagnostic.message}</div>
+                  {diagnostic.details && <div className="mt-1 font-mono leading-5 text-[11px]">{diagnostic.details}</div>}
+                  {diagnostic.exit_code !== undefined && <div className="mt-1 font-mono text-[11px]">exit code: {diagnostic.exit_code}</div>}
+                </>}
+                {agentErrors[agent.agent_id] && <div className={diagnostic ? "mt-1" : ""}>{agentErrors[agent.agent_id]}</div>}
+              </div>
+            )}
+          </div>;
+        })}
+      </div>
+    </section>
+
+    <section className="mt-8">
       <div className="flex items-center justify-between">
-        <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>Providers(Pi)</h2>
+        <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")} id="providers-pi">Providers(Pi)</h2>
       </div>
       <p className={cn("mt-1.5 text-xs leading-5", "text-muted")}>管理 Pi 的模型供应商,写入本机 ~/.pi/agent/models.json。密钥仅保存在本机。</p>
 
@@ -337,4 +512,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function inputCls(): string {
   return cn("h-8 w-full rounded-md border bg-transparent px-2.5 text-xs outline-none", "text-ink", "border-line-strong", "placeholder:text-faint", "focus:border-muted focus-visible:ring-line-strong");
+}
+
+function setupInstallationLabel(setup: AgentProfile["setup"] | undefined): string {
+  if (!setup) return "安装状态未知";
+  if (setup.installation === "installed") return setup.version ? `已安装 · ${setup.version}` : "已安装";
+  if (setup.installation === "missing") return "未安装";
+  return "安装状态未知";
+}
+
+function setupConfigurationLabel(setup: AgentProfile["setup"] | undefined): string {
+  if (!setup) return "配置状态未知";
+  if (setup.configuration === "configured") return "已配置";
+  if (setup.configuration === "needs_configuration") return "待配置";
+  return "配置状态未知";
+}
+
+function setupRuntimeLabel(setup: AgentProfile["setup"] | undefined): string {
+  if (!setup) return "运行状态未知";
+  if (setup.runtime === "healthy") return "运行正常";
+  if (setup.runtime === "unavailable") return "运行不可用";
+  return "未启动";
 }

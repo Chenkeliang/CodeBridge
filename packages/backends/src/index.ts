@@ -72,6 +72,15 @@ export {
 } from "./pi-session-runner.js";
 
 export {
+  AgentSetupService,
+  redactSetupOutput,
+  type AgentCommandResult,
+  type AgentSetupInstallResult,
+  type AgentSetupRecord,
+  type AgentSetupServiceOptions,
+} from "./agent-setup.js";
+
+export {
   PI_PROVIDER_PRESETS,
   piModelsPath,
   readPiProviders,

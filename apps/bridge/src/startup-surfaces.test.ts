@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import { defaultConfig } from "@codebridge/core";
 import { resolveStartupSurfaces } from "./startup-surfaces.js";
 
@@ -33,10 +34,14 @@ describe("startup surfaces", () => {
   });
 
   it("keeps OpenCode in the configurable Agent registry and forwards Session config", () => {
+    expect(
+      supportedAgentSetupManifests.some((manifest) => manifest.agentId === "opencode"),
+    ).toBe(true);
+
     const source = readFileSync(new URL("./cli.ts", import.meta.url), "utf8");
 
-    expect(source).toContain('"opencode"');
-    expect(source).toContain('opencode: "OpenCode"');
+    expect(source).toContain("supportedAgentSetupManifests");
+    expect(source).toContain("projectSetupState({");
     expect(source).toContain("effort: linkedSession?.effort ?? undefined");
     expect(source).toContain("acpConfig: linkedSession?.configOverrides");
   });

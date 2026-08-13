@@ -1,5 +1,5 @@
 import type { ConversationEvent } from "./events";
-import type { AgentCommand, AgentSession, ConfigOption, MessageAttachmentInput } from "./types";
+import type { AgentCommand, AgentProfile, AgentSession, ConfigOption, MessageAttachmentInput } from "./types";
 
 export function mergeConversationEvents(current: ConversationEvent[], incoming: ConversationEvent[]): ConversationEvent[] {
   const events = new Map(current.map((event) => [event.event_id, event]));
@@ -50,6 +50,17 @@ export function restoreSessionSelection(
   if (current?.agent_id === agentId && !current.archived_at) return current.session_id;
   const remembered = sessions.find((session) => session.session_id === rememberedSessionId);
   return remembered?.agent_id === agentId && !remembered.archived_at ? remembered.session_id : null;
+}
+
+export function selectInitialAgent(
+  agents: AgentProfile[],
+  defaultAgentId: string | null,
+): string | null {
+  const defaultAgent = defaultAgentId
+    ? agents.find((agent) => agent.agent_id === defaultAgentId && agent.setup?.can_select_default)
+    : undefined;
+  if (defaultAgent) return defaultAgent.agent_id;
+  return agents.find((agent) => agent.setup?.can_select_default)?.agent_id ?? null;
 }
 
 export function workspacePaths(session: AgentSession | null): string[] {

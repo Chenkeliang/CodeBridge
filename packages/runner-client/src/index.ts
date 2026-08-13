@@ -4,8 +4,12 @@ import type {
   BackendConfigOption,
   RunRequest,
 } from "@codebridge/core";
-import type { CliSessionSummary } from "@codebridge/backends";
-import type { ProviderSessionHistoryEvent } from "@codebridge/backends";
+import type {
+  AgentSetupInstallResult,
+  AgentSetupRecord,
+  CliSessionSummary,
+  ProviderSessionHistoryEvent,
+} from "@codebridge/backends";
 
 export interface RunnerClientOptions {
   baseUrl: string;
@@ -32,8 +36,28 @@ export interface WorkspaceDirectoryListing {
   error?: string;
 }
 
+export interface AgentSetupListResponse {
+  agents: AgentSetupRecord[];
+  error?: string;
+  message?: string;
+  details?: string;
+}
+
 export class RunnerCancellationError extends Error {
   override readonly name = "RunnerCancellationError";
+}
+
+export class RunnerApiError extends Error {
+  override readonly name = "RunnerApiError";
+
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly details?: string,
+    public readonly code?: string,
+  ) {
+    super(message);
+  }
 }
 
 export class RunnerClient {
@@ -117,6 +141,24 @@ export class RunnerClient {
     const res = await this.fetch("/pi/providers/presets");
     if (!res.ok) throw new Error(`Runner error: ${res.status} ${await res.text()}`);
     return res.json();
+  }
+
+  async listAgentSetup(): Promise<AgentSetupListResponse> {
+    return this.requestSetup<AgentSetupListResponse>("/agents/setup");
+  }
+
+  async detectAgent(agentId: string): Promise<AgentSetupRecord> {
+    return this.requestSetup<AgentSetupRecord>(`/agents/${encodeURIComponent(agentId)}/detect`, {
+      method: "POST",
+    });
+  }
+
+  async installAgent(agentId: string, strategyId: string): Promise<AgentSetupInstallResult> {
+    return this.requestSetup<AgentSetupInstallResult>(`/agents/${encodeURIComponent(agentId)}/install`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ strategy_id: strategyId }),
+    });
   }
 
   async listPiProviders(): Promise<unknown> {
@@ -436,6 +478,15 @@ export class RunnerClient {
     };
   }
 
+  private async requestSetup<T>(path: string, init?: RequestInit): Promise<T> {
+    const res = await this.fetch(path, init);
+    const body = await res.json().catch(() => null) as SetupErrorPayload | T | null;
+    if (!res.ok) {
+      throw setupErrorFromResponse(res.status, body);
+    }
+    return (body ?? {}) as T;
+  }
+
   private fetch(path: string, init?: RequestInit): Promise<Response> {
     const url = `${this.options.baseUrl.replace(/\/$/, "")}${path}`;
     return fetch(url, {
@@ -446,4 +497,18 @@ export class RunnerClient {
       },
     });
   }
+}
+
+interface SetupErrorPayload {
+  error?: string;
+  message?: string;
+  details?: string;
+  code?: string;
+}
+
+function setupErrorFromResponse(status: number, body: unknown): RunnerApiError {
+  const payload = body && typeof body === "object" ? body as SetupErrorPayload : null;
+  const message = payload?.message ?? payload?.error ?? `Runner error: ${status}`;
+  const details = payload?.details;
+  return new RunnerApiError(message, status, details, payload?.code);
 }

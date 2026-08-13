@@ -40,6 +40,128 @@ function request(cwd: string): RunRequest {
   };
 }
 
+function setupAgentSetupService(overrides: Partial<{
+  list: () => Promise<unknown>;
+  detect: (agentId: string) => Promise<unknown>;
+  install: (agentId: string, strategyId: string) => Promise<unknown>;
+}> = {}) {
+  return {
+    list: overrides.list ?? vi.fn().mockResolvedValue([
+      {
+        agentId: "opencode",
+        installation: "installed",
+        configuration: "configured",
+        runtime: "healthy",
+        canSelectDefault: true,
+        canCreateSession: true,
+      },
+    ]),
+    detect: overrides.detect ?? vi.fn().mockResolvedValue({
+      agentId: "opencode",
+      installation: "installed",
+      configuration: "configured",
+      runtime: "healthy",
+      canSelectDefault: true,
+      canCreateSession: true,
+    }),
+    install: overrides.install ?? vi.fn().mockResolvedValue({
+      agentId: "opencode",
+      ok: true,
+      installation: "installed",
+      configuration: "configured",
+      runtime: "healthy",
+      canSelectDefault: true,
+      canCreateSession: true,
+    }),
+  };
+}
+
+describe("RunnerHost Agent setup", () => {
+  it("lists setup states and relays detect/install results", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-setup-"));
+    tmpDirs.push(dataDir);
+    const service = setupAgentSetupService();
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      agentSetupService: service as never,
+    });
+    const app = createRunnerApp(host, "token");
+
+    const list = await app.request("/agents/setup", {
+      headers: { authorization: "Bearer token" },
+    });
+    expect(await list.json()).toMatchObject({
+      agents: [
+        expect.objectContaining({
+          agentId: "opencode",
+          canSelectDefault: true,
+        }),
+      ],
+    });
+
+    const detect = await app.request("/agents/opencode/detect", {
+      method: "POST",
+      headers: { authorization: "Bearer token" },
+    });
+    expect(await detect.json()).toMatchObject({
+      agentId: "opencode",
+      installation: "installed",
+    });
+
+    const install = await app.request("/agents/opencode/install", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ strategy_id: "npm-global", command: "rm -rf /" }),
+    });
+    expect(await install.json()).toMatchObject({
+      agentId: "opencode",
+      ok: true,
+    });
+    expect((service.install as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("opencode", "npm-global");
+    host.shutdown();
+  });
+
+  it("returns structured setup errors for missing agents and strategies", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-setup-"));
+    tmpDirs.push(dataDir);
+    const service = setupAgentSetupService({
+      detect: async () => {
+        throw new Error("Unknown agent: missing");
+      },
+      install: async () => {
+        throw new Error("Unknown install strategy: opencode/missing");
+      },
+    });
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      agentSetupService: service as never,
+    });
+    const app = createRunnerApp(host, "token");
+
+    const detect = await app.request("/agents/missing/detect", {
+      method: "POST",
+      headers: { authorization: "Bearer token" },
+    });
+    expect(detect.status).toBe(404);
+    expect(await detect.json()).toMatchObject({ error: "agent_not_found" });
+
+    const missingStrategy = await app.request("/agents/opencode/install", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(missingStrategy.status).toBe(400);
+    expect(await missingStrategy.json()).toMatchObject({
+      error: "install_strategy_not_found",
+    });
+    host.shutdown();
+  });
+});
+
 describe("RunnerHost cwd validation", () => {
   it("returns Codex ACP built-in commands without opening the provider Session", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));

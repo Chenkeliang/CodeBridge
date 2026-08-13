@@ -1,7 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import type { AgentProfile } from "@codebridge/session-catalog";
+import type {
+  AgentDiagnostic,
+  AgentProfile,
+  AgentSetupState,
+} from "@codebridge/session-catalog";
+import {
+  cloneSetupManifest,
+  cloneSetupState,
+  projectAgentStatus,
+  projectSetupState,
+} from "./setup.js";
 
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 
@@ -11,7 +21,7 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
 export type AgentAdapter = {
   agentId: string;
   kind: AgentProfile["adapter"];
-  health(): Promise<AgentProfile["status"]> | AgentProfile["status"];
+  health(): Promise<AgentSetupState["runtime"]> | AgentSetupState["runtime"];
 };
 
 export interface AgentHealthRecord {
@@ -45,9 +55,16 @@ export class AgentRegistry {
 
   register(profile: AgentProfile): AgentProfile {
     const persisted = this.getHealth(profile.agentId);
+    const existing = this.profiles.get(profile.agentId);
+    const setup = cloneSetupState(profile.setup ?? existing?.setup);
+    const setupManifest = cloneSetupManifest(profile.setupManifest ?? existing?.setupManifest);
+    const nextSetup = setup ? mergeSetupWithHealth(setup, persisted) : undefined;
+    const status = nextSetup ? projectAgentStatus(nextSetup) : persisted?.status ?? profile.status;
     this.profiles.set(profile.agentId, {
       ...profile,
-      status: persisted?.status ?? profile.status,
+      status,
+      setup: nextSetup,
+      setupManifest,
       capabilities: [...profile.capabilities],
       models: [...profile.models],
       sessionFeatures: [...profile.sessionFeatures],
@@ -58,24 +75,57 @@ export class AgentRegistry {
   async refresh(adapter: AgentAdapter): Promise<AgentProfile | undefined> {
     const profile = this.get(adapter.agentId);
     if (!profile) return undefined;
-    let status: AgentProfile["status"];
+    let runtime: AgentSetupState["runtime"];
     let error: string | null = null;
     try {
-      status = await adapter.health();
+      runtime = await adapter.health();
     } catch (cause) {
-      status = "unavailable";
+      runtime = "unavailable";
       error = cause instanceof Error ? cause.message : String(cause);
     }
+    if (profile.setup) {
+      const diagnostic = runtime === "healthy"
+        ? undefined
+        : {
+            stage: "health" as const,
+            code: error ? "health_check_failed" : "runtime_unavailable",
+            message: error ?? "Agent runtime unavailable",
+            details: error ?? undefined,
+          };
+      return this.updateSetup(profile.agentId, {
+        installation: profile.setup.installation,
+        configuration: profile.setup.configuration,
+        runtime,
+        version: profile.setup.version,
+        executablePath: profile.setup.executablePath,
+        diagnostic,
+      });
+    }
+    const status = runtime === "healthy" ? "healthy" : "unavailable";
+    this.persistHealth(profile.agentId, status, error);
     profile.status = status;
-    this.database
-      .prepare(
-        `INSERT INTO agent_health (agent_id, status, checked_at, error)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(agent_id) DO UPDATE SET status = excluded.status,
-           checked_at = excluded.checked_at, error = excluded.error`,
-      )
-      .run(profile.agentId, status, new Date().toISOString(), error);
     return this.register(profile);
+  }
+
+  updateSetup(
+    agentId: string,
+    setup: Omit<AgentSetupState, "canSelectDefault" | "canCreateSession">,
+  ): AgentProfile | undefined {
+    const existing = this.profiles.get(agentId);
+    if (!existing) return undefined;
+    const nextSetup = projectSetupState(setup);
+    const next: AgentProfile = {
+      ...existing,
+      status: projectAgentStatus(nextSetup),
+      setup: nextSetup,
+      setupManifest: cloneSetupManifest(existing.setupManifest),
+      capabilities: [...existing.capabilities],
+      models: [...existing.models],
+      sessionFeatures: [...existing.sessionFeatures],
+    };
+    this.profiles.set(agentId, next);
+    this.persistHealth(agentId, next.status, nextSetup.diagnostic?.message ?? null);
+    return this.get(agentId);
   }
 
   getHealth(agentId: string): AgentHealthRecord | undefined {
@@ -109,6 +159,21 @@ export class AgentRegistry {
   close(): void {
     if (this.database.isOpen) this.database.close();
   }
+
+  private persistHealth(
+    agentId: string,
+    status: AgentProfile["status"],
+    error: string | null,
+  ): void {
+    this.database
+      .prepare(
+        `INSERT INTO agent_health (agent_id, status, checked_at, error)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(agent_id) DO UPDATE SET status = excluded.status,
+           checked_at = excluded.checked_at, error = excluded.error`,
+      )
+      .run(agentId, status, new Date().toISOString(), error);
+  }
 }
 
 function clone(profile: AgentProfile): AgentProfile {
@@ -117,5 +182,65 @@ function clone(profile: AgentProfile): AgentProfile {
     capabilities: [...profile.capabilities],
     models: [...profile.models],
     sessionFeatures: [...profile.sessionFeatures],
+    setup: cloneSetupState(profile.setup),
+    setupManifest: cloneSetupManifest(profile.setupManifest),
   };
 }
+
+function mergeSetupWithHealth(
+  setup: AgentSetupState,
+  persisted: AgentHealthRecord | undefined,
+): AgentSetupState {
+  if (!persisted) return projectSetupState({
+    installation: setup.installation,
+    configuration: setup.configuration,
+    runtime: setup.runtime,
+    version: setup.version,
+    executablePath: setup.executablePath,
+    diagnostic: cloneDiagnostic(setup.diagnostic),
+  });
+  const runtime = persisted.status === "healthy" || persisted.status === "unavailable"
+    ? persisted.status
+    : setup.runtime;
+  return projectSetupState({
+    installation: setup.installation,
+    configuration: setup.configuration,
+    runtime,
+    version: setup.version,
+    executablePath: setup.executablePath,
+    diagnostic: persisted.error
+      ? {
+          stage: "health",
+          code: persisted.status === "healthy" ? "healthy" : "runtime_unavailable",
+          message: persisted.error,
+          details: persisted.error,
+        }
+      : cloneDiagnostic(setup.diagnostic),
+  });
+}
+
+function cloneDiagnostic(
+  diagnostic: AgentDiagnostic | undefined,
+): AgentDiagnostic | undefined {
+  return diagnostic ? { ...diagnostic } : undefined;
+}
+
+export {
+  cloneSetupManifest,
+  cloneSetupState,
+  getSupportedAgentSetupManifest,
+  projectAgentStatus,
+  projectSetupState,
+  supportedAgentSetupManifestMap,
+  supportedAgentSetupManifests,
+} from "./setup.js";
+export type {
+  AgentDiagnostic,
+  AgentInstallStrategy,
+  AgentSetupConfiguration,
+  AgentSetupInstallation,
+  AgentSetupManifest,
+  AgentSetupRuntime,
+  AgentSetupStage,
+  AgentSetupState,
+} from "@codebridge/session-catalog";
