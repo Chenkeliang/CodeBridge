@@ -74,7 +74,8 @@ examples/orchestration/     非业务的配置形状参考（保持通用）
 8. [交互建议](interaction.md)
 9. [AGNET Design System](DESIGN.md)
 10. [扩展性与移植性](extensibility-portability.md)
-11. [多 Agent 运行时调研](agent-runtime-research.md)
+11. [Prompt 稳定性与缓存命中](prompt-stability.md)
+12. [多 Agent 运行时调研](agent-runtime-research.md)
 
 ## 已落地切片
 
