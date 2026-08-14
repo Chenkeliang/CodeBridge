@@ -17,33 +17,45 @@ export function SessionTimeline(props: {
   loadingBlockId: string | null;
   onLoadSegments: (blockId: string, after: number) => void;
 }) {
-  const currentSegmentIds = props.turns.flatMap((turn) =>
-    turn.blocks.flatMap((block) => block.segments.map((segment) => segment.segment_id)),
-  );
+  const timelineRoot = useRef<HTMLDivElement | null>(null);
   const seenSegmentIds = useRef<Set<string> | null>(null);
-  if (seenSegmentIds.current === null) seenSegmentIds.current = new Set(currentSegmentIds);
 
-  const newlyLiveAssistantSegments = new Set<string>();
   let activeAssistantSegmentId: string | null = null;
   for (const turn of props.turns) {
     for (const block of turn.blocks) {
       if (block.kind !== "assistant") continue;
       for (const segment of block.segments) {
-        if (!segment.sealed) {
-          activeAssistantSegmentId = segment.segment_id;
-          if (!seenSegmentIds.current.has(segment.segment_id)) {
-            newlyLiveAssistantSegments.add(segment.segment_id);
-          }
-        }
+        if (!segment.sealed) activeAssistantSegmentId = segment.segment_id;
       }
     }
   }
 
   useEffect(() => {
-    for (const segmentId of currentSegmentIds) seenSegmentIds.current?.add(segmentId);
-  }, [currentSegmentIds]);
+    const currentSegmentIds = props.turns.flatMap((turn) =>
+      turn.blocks.flatMap((block) => block.segments.map((segment) => segment.segment_id)),
+    );
+    if (seenSegmentIds.current === null) {
+      seenSegmentIds.current = new Set(currentSegmentIds);
+      return;
+    }
+    const newlyLiveAssistantSegments = new Set(
+      props.turns.flatMap((turn) => turn.blocks.flatMap((block) =>
+        block.kind === "assistant"
+          ? block.segments
+            .filter((segment) => !segment.sealed && !seenSegmentIds.current?.has(segment.segment_id))
+            .map((segment) => segment.segment_id)
+          : [],
+      )),
+    );
+    timelineRoot.current?.querySelectorAll<HTMLElement>("[data-segment-id]").forEach((node) => {
+      if (node.dataset.segmentId && newlyLiveAssistantSegments.has(node.dataset.segmentId)) {
+        node.classList.add("assistant-reveal");
+      }
+    });
+    for (const segmentId of currentSegmentIds) seenSegmentIds.current.add(segmentId);
+  }, [props.turns]);
 
-  return <div className="grid gap-6">
+  return <div className="grid gap-6" ref={timelineRoot}>
     {props.hasEarlier && <Button className="mx-auto" data-load-earlier disabled={props.loadingEarlier} onClick={props.onLoadEarlier} size="sm" variant="ghost">
       {props.loadingEarlier ? "正在加载…" : "加载更早对话"}
     </Button>}
@@ -54,22 +66,16 @@ export function SessionTimeline(props: {
         key={block.block_id}
         loading={props.loadingBlockId === block.block_id}
         onLoadSegments={props.onLoadSegments}
-        revealSegmentIds={block.kind === "assistant" && newlyLiveAssistantSegments.size > 0
-          ? newlyLiveAssistantSegments
-          : emptySegmentIds}
       />)}
     </article>)}
   </div>;
 }
-
-const emptySegmentIds = new Set<string>();
 
 const TimelineBlock = memo(function TimelineBlock(props: {
   activeAssistantSegmentId: string | null;
   block: TimelineBlockView;
   loading: boolean;
   onLoadSegments: (blockId: string, after: number) => void;
-  revealSegmentIds: ReadonlySet<string>;
 }) {
   const { block } = props;
   const more = block.next_segment_cursor !== null && <Button disabled={props.loading} onClick={() => props.onLoadSegments(block.block_id, block.next_segment_cursor!)} size="sm" variant="ghost">
@@ -81,7 +87,6 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   if (block.kind === "assistant") {
     return <div className="grid max-w-[780px] gap-2"><span className="text-xs font-medium tracking-[0.08em] text-muted">Agent</span>{block.segments.map((segment) => <TimelineSegment
       key={segment.segment_id}
-      reveal={props.revealSegmentIds.has(segment.segment_id)}
       segment={segment}
       streamingCaret={segment.segment_id === props.activeAssistantSegmentId}
     />)}{more}</div>;
@@ -90,13 +95,11 @@ const TimelineBlock = memo(function TimelineBlock(props: {
 });
 
 export const TimelineSegment = memo(
-  function TimelineSegment({ reveal = false, segment, streamingCaret = false }: {
-    reveal?: boolean;
+  function TimelineSegment({ segment, streamingCaret = false }: {
     segment: TimelineSegmentView;
     streamingCaret?: boolean;
   }) {
     return <div
-      className={cn(reveal && "assistant-reveal")}
       data-active-segment={segment.sealed ? undefined : true}
       data-segment-id={segment.segment_id}
       data-streaming-caret={streamingCaret ? true : undefined}
@@ -105,8 +108,7 @@ export const TimelineSegment = memo(
     </div>;
   },
   (previous, next) =>
-    previous.reveal === next.reveal
-    && previous.streamingCaret === next.streamingCaret
+    previous.streamingCaret === next.streamingCaret
     && previous.segment.segment_id === next.segment.segment_id
     && previous.segment.content === next.segment.content
     && previous.segment.sealed === next.segment.sealed,

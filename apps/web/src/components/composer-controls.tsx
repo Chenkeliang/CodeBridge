@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronDown, FolderOpen, Gauge, Paperclip, Plus, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -126,8 +126,22 @@ function ReasoningLevelControl({ onValue, option, value }: {
   if (!levels.length) return null;
   const effectiveValue = value || option.currentValue || levels[0]!.value;
   const committedIndex = Math.max(0, levels.findIndex((candidate) => candidate.value === effectiveValue));
+  return <ReasoningLevelSlider
+    committedIndex={committedIndex}
+    key={effectiveValue}
+    levels={levels}
+    onValue={onValue}
+    value={value}
+  />;
+}
+
+function ReasoningLevelSlider({ committedIndex, levels, onValue, value }: {
+  committedIndex: number;
+  levels: ConfigOption["values"];
+  onValue: (value: string) => void;
+  value: string;
+}) {
   const [previewIndex, setPreviewIndex] = useState(committedIndex);
-  useEffect(() => setPreviewIndex(committedIndex), [committedIndex]);
   const active = levels[previewIndex] ?? levels[0]!;
   return <div className="grid gap-3">
     <div className="flex items-center justify-between gap-3">
