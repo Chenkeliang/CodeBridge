@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import type { TimelineSegmentView, TimelineTurnView } from "@/lib/types";
+import type { TimelineBlockView, TimelineSegmentView, TimelineTurnView } from "@/lib/types";
 
 const markdownRender = vi.hoisted(() => vi.fn());
 vi.mock("@/components/conversation", () => ({
@@ -34,6 +34,33 @@ function turns(count: number): TimelineTurnView[] {
     status: "succeeded",
     blocks: [],
   }));
+}
+
+const timelineProps = {
+  hasEarlier: false,
+  loadingBlockId: null,
+  loadingEarlier: false,
+  onLoadEarlier: vi.fn(),
+  onLoadSegments: vi.fn(),
+};
+
+function timelineTurn(kind: TimelineBlockView["kind"], segments: TimelineSegmentView[]): TimelineTurnView[] {
+  const running = segments.some((value) => !value.sealed);
+  return [{
+    timeline_index: 0,
+    turn_id: "turn-1",
+    run_id: "run-1",
+    status: running ? "running" : "succeeded",
+    blocks: [{
+      block_id: `${kind}-1`,
+      block_index: 0,
+      kind,
+      status: running ? "running" : "succeeded",
+      metadata: {},
+      segments,
+      next_segment_cursor: null,
+    }],
+  }];
 }
 
 describe("SessionTimeline", () => {
@@ -71,6 +98,97 @@ describe("SessionTimeline", () => {
     const root = createRoot(host);
     act(() => root.render(<TimelineSegment segment={active} />));
     expect(host.querySelector("[data-active-segment]")?.textContent).toHaveLength(16_384);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("does not replay reveal motion for initially hydrated Assistant segments", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={timelineTurn("assistant", [segment("already-present", "已有内容", false)])}
+    />));
+
+    const hydrated = host.querySelector('[data-segment-id="already-present"]');
+    expect(hydrated?.classList.contains("assistant-reveal")).toBe(false);
+    expect(hydrated?.hasAttribute("data-streaming-caret")).toBe(true);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("reveals only a newly appended unsealed Assistant segment", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={timelineTurn("assistant", [segment("stable", "第一段")])}
+    />));
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={timelineTurn("assistant", [
+        segment("stable", "第一段"),
+        segment("live", "第二段", false),
+      ])}
+    />));
+
+    expect(host.querySelector('[data-segment-id="stable"]')?.classList.contains("assistant-reveal")).toBe(false);
+    expect(host.querySelector('[data-segment-id="live"]')?.classList.contains("assistant-reveal")).toBe(true);
+    expect(host.querySelectorAll("[data-streaming-caret]")).toHaveLength(1);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("does not reveal sealed segments introduced by earlier-page loading", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={timelineTurn("assistant", [segment("recent", "最近内容")])}
+    />));
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={timelineTurn("assistant", [
+        segment("earlier", "更早内容"),
+        segment("recent", "最近内容"),
+      ])}
+    />));
+
+    expect(host.querySelector('[data-segment-id="earlier"]')?.classList.contains("assistant-reveal")).toBe(false);
+    expect(host.querySelector('[data-segment-id="recent"]')?.classList.contains("assistant-reveal")).toBe(false);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("treats a remounted Session snapshot as hydrated history", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      key="session-a"
+      turns={timelineTurn("assistant", [segment("session-a-live", "A", false)])}
+    />));
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      key="session-b"
+      turns={timelineTurn("assistant", [segment("session-b-live", "B", false)])}
+    />));
+
+    expect(host.querySelector('[data-segment-id="session-b-live"]')?.classList.contains("assistant-reveal")).toBe(false);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("does not add the Assistant caret to active work blocks", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={timelineTurn("work", [segment("work-live", "执行中", false)])}
+    />));
+
+    expect(host.querySelector('[data-segment-id="work-live"]')?.hasAttribute("data-active-segment")).toBe(true);
+    expect(host.querySelector("[data-streaming-caret]")).toBeNull();
     act(() => root.unmount());
     host.remove();
   });
