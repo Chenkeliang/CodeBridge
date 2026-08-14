@@ -7,11 +7,14 @@ import type {
 
 interface AcceptedChannelMessage {
   session_id: string;
+  turn_id: string;
+  run_id: string | null;
   event_sequence: number;
 }
 
 interface SessionEvent {
   type?: string;
+  target?: string | null;
   run_id?: string | null;
   payload?: { event?: AgentEvent } & Record<string, unknown>;
 }
@@ -48,6 +51,7 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
       ? AbortSignal.any([message.signal, controller.signal])
       : controller.signal;
     const fatalAgentErrorRuns = new Set<string>();
+    let submittedRunId = result.run_id;
     try {
       const response = await app.request(
         `/v1/sessions/${encodeURIComponent(result.session_id)}/events?live=true&after_sequence=${result.event_sequence}`,
@@ -60,6 +64,14 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
         throw new Error(`Channel event stream failed (${response.status})`);
       }
       for await (const event of readSessionEvents(response.body)) {
+        if (
+          event.type === "TURN_DISPATCHED"
+          && event.target === result.turn_id
+          && event.run_id
+        ) {
+          submittedRunId = event.run_id;
+        }
+        if (!submittedRunId || event.run_id !== submittedRunId) continue;
         if (event.type === "AGENT_EVENT" && event.payload?.event) {
           const agentEvent = event.payload.event;
           if (agentEvent.type === "error" && agentEvent.fatal && event.run_id) {

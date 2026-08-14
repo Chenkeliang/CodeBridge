@@ -789,6 +789,43 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("submits channel messages atomically when the Session Coordinator is enabled", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(workItems, {
+      maxQueuedTurns: 8,
+    });
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      coordinator,
+    }, TOKEN);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat/messages",
+      {
+        method: "POST",
+        headers: {
+          authorization: ["Bearer", TOKEN].join(" "),
+          "content-type": "application/json",
+          "idempotency-key": "feishu-message-1",
+        },
+        body: JSON.stringify({ message: "继续", agent_id: "pi" }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({
+      acceptance: "dispatched",
+      session_id: expect.stringMatching(/^sess_/),
+      run_id: expect.stringMatching(/^run_/),
+      turn_id: expect.stringMatching(/^turn_/),
+    });
+    catalog.close();
+    workItems.close();
+  });
+
   it("cancels a channel-bound Run and resolves its approval through the same ingress", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
