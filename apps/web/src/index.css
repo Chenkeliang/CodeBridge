@@ -211,3 +211,73 @@
   background-image: repeating-conic-gradient(var(--agnet-line) 0% 25%, transparent 0% 50%);
   background-size: 4px 4px;
 }
+
+.markdown-composer .tiptap {
+  min-height: 76px;
+  padding: 12px 14px;
+  color: var(--agnet-ink);
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+  outline: none;
+}
+
+.markdown-composer .tiptap > * + * {
+  margin-top: 0.5rem;
+}
+
+.markdown-composer .tiptap h1 {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+}
+
+.markdown-composer .tiptap h2 {
+  font-size: 1.125rem;
+  line-height: 1.625rem;
+}
+
+.markdown-composer .tiptap ul,
+.markdown-composer .tiptap ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-composer .tiptap ul[data-type="taskList"] {
+  padding-left: 0;
+  list-style: none;
+}
+
+.markdown-composer .tiptap li[data-type="taskItem"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.markdown-composer .tiptap blockquote {
+  border-left: 2px solid var(--agnet-line-strong);
+  padding-left: 0.75rem;
+  color: var(--agnet-ink-soft);
+}
+
+.markdown-composer .tiptap code {
+  border-radius: 0.25rem;
+  background: var(--agnet-surface-soft);
+  padding: 0.1rem 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.markdown-composer [data-markdown-source] {
+  overflow-x: auto;
+  border: 1px solid var(--agnet-line);
+  border-radius: 0.5rem;
+  background: var(--agnet-surface-tint);
+  padding: 0.75rem;
+  white-space: pre-wrap;
+}
+
+.markdown-composer .is-editor-empty:first-child::before {
+  float: left;
+  height: 0;
+  color: var(--agnet-faint);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
