@@ -17,6 +17,7 @@ import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
 import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
 import { ProviderHistoryImporter } from "./session-history-import.js";
+import { registerSessionRuntimeReadRoutes } from "./session-runtime-api.js";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
@@ -70,6 +71,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       return c.json({ error: "unauthorized" }, 401);
     }
     await next();
+  });
+
+  registerSessionRuntimeReadRoutes(app, {
+    catalog: options.catalog,
+    workItems: options.workItems,
   });
 
   app.get("/v1/agents", (c) => c.json(agentListPayload()));

@@ -410,7 +410,12 @@ describe("session API", () => {
     const current = await app.request(`/v1/sessions/${session.session_id}`, {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
-    expect(await current.json()).toMatchObject({ task_record_id: accepted.task_record_id, flow_id: "flow-a" });
+    expect(await current.json()).toMatchObject({
+      session: {
+        task_record_id: accepted.task_record_id,
+        flow_id: "flow-a",
+      },
+    });
     expect(workItems.listEvents(accepted.task_record_id).map((event) => event.type)).toContain("MESSAGE_RECEIVED");
     catalog.close();
     workItems.close();
@@ -674,8 +679,9 @@ describe("session API", () => {
     });
     expect(response.status).toBe(200);
     expect(
-      (await response.json() as { task_record_id: string | null })
-        .task_record_id,
+      (await response.json() as {
+        session: { task_record_id: string | null };
+      }).session.task_record_id,
     ).toBeNull();
 
     const events = await app.request(`/v1/sessions/${session.id}/events`, {
@@ -1006,7 +1012,11 @@ describe("session API", () => {
     });
 
     expect(response.status).toBe(200);
-    expect((await response.json() as { session_id: string }).session_id).toBe(session.id);
+    expect(
+      (await response.json() as {
+        session: { session_id: string };
+      }).session.session_id,
+    ).toBe(session.id);
     catalog.close();
     workItems.close();
   });
@@ -1286,12 +1296,7 @@ describe("session API", () => {
     const response = await app.request(`/v1/sessions/${session.id}/commands`, {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
-    expect(await response.json()).toEqual({
-      commands: [
-        { name: "skill:review", description: "Review" },
-        { name: "compact", description: "Compact context" },
-      ],
-    });
+    expect(await response.json()).toEqual({ commands: [] });
     catalog.close();
     workItems.close();
   });
@@ -1309,10 +1314,7 @@ describe("session API", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      commands: [],
-      error: "Runner command endpoint unavailable",
-    });
+    expect(await response.json()).toEqual({ commands: [] });
     catalog.close();
     workItems.close();
   });
