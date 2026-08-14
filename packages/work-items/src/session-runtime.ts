@@ -366,6 +366,55 @@ export function createSqliteSessionRuntimeTransaction(
       }
 
       const now = new Date().toISOString();
+      const frozenPlan = turn.message.plan;
+      if (frozenPlan) {
+        if (input.planId !== frozenPlan.planId) {
+          throw new Error("Turn Plan does not match Run Plan");
+        }
+        const existingPlan = database
+          .prepare("SELECT run_id FROM plans WHERE plan_id = ?")
+          .get(frozenPlan.planId) as { run_id?: string | null } | undefined;
+        if (
+          existingPlan?.run_id
+          && existingPlan.run_id !== input.id
+        ) {
+          throw new Error(
+            `Plan ${frozenPlan.planId} is bound to another Run`,
+          );
+        }
+        database
+          .prepare(
+            `INSERT INTO plans (
+              plan_id, schema_version, source, workflow_id,
+              definition_revision, plan_ir_hash, session_id, run_id, steps,
+              created_at
+            ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(plan_id) DO UPDATE SET
+              source = excluded.source,
+              workflow_id = excluded.workflow_id,
+              definition_revision = excluded.definition_revision,
+              plan_ir_hash = excluded.plan_ir_hash,
+              session_id = excluded.session_id,
+              run_id = excluded.run_id,
+              steps = excluded.steps`,
+          )
+          .run(
+            frozenPlan.planId,
+            frozenPlan.source,
+            frozenPlan.workflowId,
+            frozenPlan.definitionRevision,
+            frozenPlan.planIrHash,
+            input.sessionId,
+            input.id,
+            JSON.stringify(frozenPlan.steps),
+            now,
+          );
+      } else if (input.planId) {
+        const existingPlan = database
+          .prepare("SELECT plan_id FROM plans WHERE plan_id = ?")
+          .get(input.planId);
+        if (!existingPlan) throw new Error(`Plan not found: ${input.planId}`);
+      }
       database
         .prepare(
           `INSERT INTO runs (
