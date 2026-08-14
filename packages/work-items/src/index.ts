@@ -8,7 +8,7 @@ import { projectSessionEvent } from "./session-projector.js";
 import {
   appendSessionEventInTransaction,
   createSqliteSessionRuntimeTransaction,
-  importProviderHistoryInTransaction,
+  importProviderHistory,
 } from "./session-runtime.js";
 import type {
   QueuePauseReason,
@@ -355,6 +355,7 @@ const STATUS_BY_EVENT: Partial<Record<DomainEventType, WorkItemStatus>> = {
 
 export class SqliteEventStore {
   private readonly database: DatabaseSyncType;
+  private transactionDepth = 0;
 
   constructor(databasePath: string) {
     if (databasePath !== ":memory:") {
@@ -521,8 +522,7 @@ export class SqliteEventStore {
       updatedAt: now,
     };
 
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    this.withTransaction(() => {
       this.database
         .prepare(
           `INSERT INTO work_items (
@@ -564,11 +564,7 @@ export class SqliteEventStore {
         type: "WORK_ITEM_CREATED",
         actor: "system",
       });
-      this.database.exec("COMMIT;");
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
 
     return workItem;
   }
@@ -807,34 +803,40 @@ export class SqliteEventStore {
   importProviderHistory(
     input: ProviderHistoryImportInput,
   ): ProviderHistoryImportResult {
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
-      const result = importProviderHistoryInTransaction(
-        this.database,
-        input,
-      );
-      this.database.exec("COMMIT;");
-      return result;
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    return this.withSessionTransaction((tx) =>
+      importProviderHistory(tx, this.database, input),
+    );
   }
 
   withSessionTransaction<T>(
     operation: (transaction: SessionRuntimeTransaction) => T,
   ): T {
+    return this.withTransaction(() => {
+      const { transaction, deactivate } =
+        createSqliteSessionRuntimeTransaction(this.database);
+      try {
+        return operation(transaction);
+      } finally {
+        deactivate();
+      }
+    });
+  }
+
+  private withTransaction<T>(operation: () => T): T {
+    if (this.transactionDepth > 0) {
+      throw new Error("nested transaction is not supported");
+    }
     this.database.exec("BEGIN IMMEDIATE;");
+    this.transactionDepth = 1;
     try {
-      const transaction = createSqliteSessionRuntimeTransaction(
-        this.database,
-      );
-      const result = operation(transaction);
+      const result = operation();
       this.database.exec("COMMIT;");
       return result;
     } catch (error) {
       this.database.exec("ROLLBACK;");
       throw error;
+    } finally {
+      this.transactionDepth = 0;
     }
   }
 
@@ -866,8 +868,7 @@ export class SqliteEventStore {
   }
 
   bindWorkItemToSession(sessionId: string, workItemId: string): void {
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    this.withTransaction(() => {
       const workItem = this.database
         .prepare("SELECT session_id FROM work_items WHERE id = ?")
         .get(workItemId) as { session_id?: unknown } | undefined;
@@ -904,16 +905,11 @@ export class SqliteEventStore {
           ON CONFLICT(session_id) DO NOTHING`,
         )
         .run(sessionId, now);
-      this.database.exec("COMMIT;");
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
   }
 
   backfillRunTurns(sessionId: string, workItemId: string): number {
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    return this.withTransaction(() => {
       const runs = this.database
         .prepare(
           `SELECT *
@@ -969,7 +965,6 @@ export class SqliteEventStore {
           syntheticCount += 1;
           activeGroup = true;
         }
-        this.database.exec("COMMIT;");
         return syntheticCount;
       }
 
@@ -1037,17 +1032,12 @@ export class SqliteEventStore {
         boundCount += 1;
       }
 
-      this.database.exec("COMMIT;");
       return boundCount;
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
   }
 
   ensureRuntimeFromRuns(sessionId: string): SessionRuntime {
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    return this.withTransaction(() => {
       const current = this.getSessionRuntime(sessionId);
       const runs = this.database
         .prepare(
@@ -1128,12 +1118,8 @@ export class SqliteEventStore {
             now,
           );
       }
-      this.database.exec("COMMIT;");
       return this.getSessionRuntime(sessionId)!;
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
   }
 
   getProjectionCursor(sessionId: string): number {
@@ -1150,8 +1136,7 @@ export class SqliteEventStore {
     workItemId: string,
     batchSize: number,
   ): number {
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    return this.withTransaction(() => {
       const cursor = this.getProjectionCursor(sessionId);
       const boundedBatchSize = Math.max(1, Math.min(1_000, Math.floor(batchSize)));
       const projectionBindings = this.database
@@ -1210,7 +1195,6 @@ export class SqliteEventStore {
         )
         .all(workItemId, cursor, boundedBatchSize) as SqliteRow[];
       if (!rows.length) {
-        this.database.exec("COMMIT;");
         return 0;
       }
 
@@ -1263,12 +1247,8 @@ export class SqliteEventStore {
         projected += 1;
       }
 
-      this.database.exec("COMMIT;");
       return projected;
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
   }
 
   updateWorkflowBinding(
@@ -1299,23 +1279,17 @@ export class SqliteEventStore {
       throw new Error(`WorkItem not found: ${input.workItemId}`);
     }
 
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    return this.withTransaction(() => {
       const event = this.appendEventInTransaction(input);
-      this.database.exec("COMMIT;");
       return event;
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
   }
 
   appendLeasedRunEvent(
     owner: string,
     input: SessionEventInput & { runId: string },
   ): DomainEvent {
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    return this.withTransaction(() => {
       const lease = this.database
         .prepare(
           `SELECT 1 FROM runs
@@ -1333,12 +1307,8 @@ export class SqliteEventStore {
         this.database,
         input,
       );
-      this.database.exec("COMMIT;");
       return event;
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
   }
 
   appendEventOnce(input: AppendEventInput & { inputHash: string }): DomainEvent {
@@ -1346,18 +1316,13 @@ export class SqliteEventStore {
       throw new Error(`WorkItem not found: ${input.workItemId}`);
     }
 
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    return this.withTransaction(() => {
       const existing = this.database
         .prepare("SELECT * FROM domain_events WHERE work_item_id = ? AND input_hash = ? LIMIT 1")
         .get(input.workItemId, input.inputHash) as SqliteRow | undefined;
       const event = existing ? toDomainEvent(existing) : this.appendEventInTransaction(input);
-      this.database.exec("COMMIT;");
       return event;
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
   }
 
   listEvents(workItemId: string, afterSequence = 0): DomainEvent[] {
@@ -1509,8 +1474,7 @@ export class SqliteEventStore {
       updatedAt: now,
     };
 
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    this.withTransaction(() => {
       this.database
         .prepare(
           `INSERT INTO runs (
@@ -1569,11 +1533,7 @@ export class SqliteEventStore {
           },
         });
       }
-      this.database.exec("COMMIT;");
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
 
     return run;
   }
@@ -1694,18 +1654,17 @@ export class SqliteEventStore {
 
   listExpiredRunningRuns(now: string, limit: number): Run[] {
     return createSqliteSessionRuntimeTransaction(this.database)
-      .listExpiredRunningRuns(now, limit);
+      .transaction.listExpiredRunningRuns(now, limit);
   }
 
   listCancellationDeadlineRuns(now: string, limit: number): Run[] {
     return createSqliteSessionRuntimeTransaction(this.database)
-      .listCancellationDeadlineRuns(now, limit);
+      .transaction.listCancellationDeadlineRuns(now, limit);
   }
 
   startRunAttempt(runId: string): RunAttempt {
     if (!this.getRun(runId)) throw new Error(`Run not found: ${runId}`);
-    this.database.exec("BEGIN IMMEDIATE;");
-    try {
+    return this.withTransaction(() => {
       const row = this.database
         .prepare(
           `SELECT COALESCE(MAX(attempt_number), 0) + 1 AS next_attempt
@@ -1730,12 +1689,8 @@ export class SqliteEventStore {
       const attempt = this.database
         .prepare("SELECT * FROM run_attempts WHERE attempt_id = ?")
         .get(attemptId) as SqliteRow;
-      this.database.exec("COMMIT;");
       return toRunAttempt(attempt);
-    } catch (error) {
-      this.database.exec("ROLLBACK;");
-      throw error;
-    }
+    });
   }
 
   finishRunAttempt(
