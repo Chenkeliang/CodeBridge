@@ -81,14 +81,21 @@ export type AgentEvent =
   | {
       type: "text_delta";
       text: string;
+      blockId?: string;
       messageId?: string;
       phase?: AgentMessagePhase;
     }
-  | { type: "thought_delta"; text: string; messageId?: string }
+  | {
+      type: "thought_delta";
+      text: string;
+      blockId?: string;
+      messageId?: string;
+    }
   | {
       type: "tool_start";
       toolCallId?: string;
       name: string;
+      sideEffects?: boolean;
       kind?: string;
       status?: string;
       input?: unknown;
@@ -99,6 +106,7 @@ export type AgentEvent =
       type: "tool_update";
       toolCallId: string;
       name?: string;
+      sideEffects?: boolean;
       status?: string;
       content?: unknown[];
       locations?: AgentToolLocation[];
@@ -108,6 +116,7 @@ export type AgentEvent =
       type: "tool_end";
       toolCallId?: string;
       name?: string;
+      sideEffects?: boolean;
       status?: string;
       content?: unknown[];
       locations?: AgentToolLocation[];

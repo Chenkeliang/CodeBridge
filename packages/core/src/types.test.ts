@@ -3,6 +3,7 @@ import {
   DEFAULT_DATA_DIR,
   parseSessionKey,
   serializeSessionKey,
+  type AgentEvent,
 } from "./types.js";
 import {
   ConfigSchema,
@@ -20,6 +21,28 @@ describe("session key", () => {
     };
     const raw = serializeSessionKey(key);
     expect(parseSessionKey(raw)).toEqual(key);
+  });
+
+  describe("AgentEvent transport", () => {
+    it("preserves block identity and side-effect metadata", () => {
+      const events: AgentEvent[] = [
+        {
+          type: "text_delta",
+          blockId: "answer_1",
+          messageId: "message_1",
+          phase: "final_answer",
+          text: "done",
+        },
+        {
+          type: "tool_start",
+          toolCallId: "tool_1",
+          name: "deploy",
+          sideEffects: true,
+        },
+      ];
+
+      expect(JSON.parse(JSON.stringify(events))).toEqual(events);
+    });
   });
 });
 

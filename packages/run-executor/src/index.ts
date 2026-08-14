@@ -14,6 +14,7 @@ import {
   type PersistedPlanStep,
 } from "@codebridge/work-items";
 import { evaluatePostcondition } from "@codebridge/workflow-engine";
+import { AgentEventAggregator } from "./agent-event-aggregator.js";
 
 export interface RunnerStream {
   run(
@@ -502,8 +503,7 @@ export class RunExecutor {
     } else if (capabilityResult) {
       return;
     }
-    for await (const event of this.runner.run(request, { signal })) {
-      this.options.onEvent?.(run, event);
+    const persistAgentEvent = (event: AgentEvent): void => {
       this.store.appendEvent({
         workItemId: workItem.id,
         runId: run.id,
@@ -512,6 +512,7 @@ export class RunExecutor {
         target: event.type,
         payload: step ? { event, step_id: step.id } : { event },
       });
+      this.options.onEvent?.(run, event);
       if (event.type === "plan" && event.entries.length) {
         const flowId = `flow_ephemeral_${run.id}`;
         const flowSteps = event.entries.map((entry, index) => ({
@@ -544,6 +545,17 @@ export class RunExecutor {
       if (event.type === "done" && event.exitCode !== 0) {
         throw new Error(`Runner exited with code ${event.exitCode}`);
       }
+    };
+    const aggregator = new AgentEventAggregator({
+      runId: run.id,
+      emit: persistAgentEvent,
+    });
+    try {
+      for await (const event of this.runner.run(request, { signal })) {
+        aggregator.accept(event);
+      }
+    } finally {
+      aggregator.close();
     }
   }
 
