@@ -710,4 +710,48 @@ describe("RunExecutor", () => {
     await expect(executor.execute(run.id)).rejects.toThrow(/drift/);
     store.close();
   });
+
+  it("dedupes write steps by idempotency key across runs", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "deliver", mode: "change", conversationId: "web:deliver",
+      riskLevel: "workspace_write",
+      identifiers: { company_id: "8821" },
+    });
+    store.savePlan({
+      planId: "plan_deliver", source: "workflow", workflowId: "deliver-flow",
+      definitionRevision: "git:deliver",
+      steps: [{
+        id: "deliver", capabilityId: "equity.deliver", risk: "workspace_write",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: null,
+      }],
+    });
+    const registry = new CapabilityRegistry([{
+      id: "equity.deliver", risk: "workspace_write", adapter: "local.deliver",
+      idempotency: { key: ["company_id"], validity_window: "24h" },
+    }]);
+    let invocations = 0;
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.deliver", () => {
+        invocations += 1;
+        return { output: { order_id: "o1" } };
+      }),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: (_w, run) => ({
+        runId: run.id, sessionKey: { chatId: "web:deliver", backendId: "pi", cwd: "/tmp" }, prompt: "unused",
+      }),
+    });
+
+    const run1 = store.createRun({ workItemId: item.id, mode: item.mode, planId: "plan_deliver" });
+    await executor.execute(run1.id);
+    const run2 = store.createRun({ workItemId: item.id, mode: item.mode, planId: "plan_deliver" });
+    await executor.execute(run2.id);
+
+    expect(invocations).toBe(1);
+    registry.close();
+    store.close();
+  });
 });
