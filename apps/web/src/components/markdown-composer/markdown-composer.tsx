@@ -6,7 +6,7 @@ import { Markdown } from "@tiptap/markdown";
 import { Plugin } from "@tiptap/pm/state";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createMarkdownCodec } from "./markdown-codec";
 import { SourceBlock } from "./source-block";
 
@@ -31,51 +31,126 @@ type MarkdownComposerProps = {
   onTrigger: (trigger: ComposerTrigger) => void;
 };
 
-export function MarkdownComposer(props: MarkdownComposerProps) {
-  const codec = useMemo(() => createMarkdownCodec(), []);
-  const callbacks = useRef(props);
-  callbacks.current = props;
-  const lastEmitted = useRef(props.value);
-  const initialContent = useRef(codec.parseSafely(props.value));
+type MarkdownComposerCallbacks = Omit<MarkdownComposerProps, "disabled" | "value">;
+type MarkdownCodec = ReturnType<typeof createMarkdownCodec>;
+type ComposerEventsStorage = {
+  callbacks: MarkdownComposerCallbacks | null;
+  codec: MarkdownCodec | null;
+  initialized: boolean;
+  lastEmitted: string;
+};
 
-  const composerEvents = useMemo(() => Extension.create({
-    name: "composerEvents",
+type ComposerRuntime = {
+  callbacks: MarkdownComposerCallbacks;
+  codec: MarkdownCodec;
+  value: string;
+};
 
-    addProseMirrorPlugins() {
-      return [new Plugin({
-        props: {
-          handleKeyDown: (_view, event) => {
-            if (event.isComposing || this.editor.view.composing) return false;
-            if (event.key === "Enter" && event.shiftKey) {
-              return this.editor.commands.setHardBreak();
-            }
-            if (isPickerKey(event.key)) {
-              if (callbacks.current.onPickerKey({ key: event.key, shiftKey: event.shiftKey })) return true;
-              if (event.key !== "Enter") return false;
-            }
-            if (event.key === "Enter") {
-              callbacks.current.onSubmit();
-              return true;
-            }
-            return false;
-          },
-          handlePaste: (_view, event) => {
-            const files = Array.from(event.clipboardData?.files ?? []);
-            if (files.length) void callbacks.current.onFiles(files);
-            const text = event.clipboardData?.getData("text/plain") ?? "";
-            if (!text) return files.length > 0;
-            const parsed = codec.parseSafely(text);
-            this.editor.commands.insertContent(parsed.document.content ?? []);
+declare module "@tiptap/core" {
+  interface Commands<ReturnType> {
+    composerEvents: {
+      syncComposerRuntime: (runtime: ComposerRuntime) => ReturnType;
+    };
+  }
+
+  interface Storage {
+    composerEvents: ComposerEventsStorage;
+  }
+}
+
+const ComposerEvents = Extension.create<Record<string, never>, ComposerEventsStorage>({
+  name: "composerEvents",
+
+  addStorage() {
+    return {
+      callbacks: null,
+      codec: null,
+      initialized: false,
+      lastEmitted: "",
+    };
+  },
+
+  addCommands() {
+    return {
+      syncComposerRuntime: (runtime) => ({ commands }) => {
+        this.storage.callbacks = runtime.callbacks;
+        this.storage.codec = runtime.codec;
+        if (!this.storage.initialized) {
+          this.storage.initialized = true;
+          this.storage.lastEmitted = runtime.value;
+          return true;
+        }
+        if (runtime.value === this.storage.lastEmitted) return true;
+        const parsed = runtime.codec.parseSafely(runtime.value);
+        commands.setContent(parsed.document, { emitUpdate: false });
+        this.storage.lastEmitted = runtime.value;
+        runtime.callbacks.onTrigger(triggerAtEnd(runtime.value));
+        runtime.callbacks.onSerializationError(null);
+        return true;
+      },
+    };
+  },
+
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      props: {
+        handleKeyDown: (_view, event) => {
+          const callbacks = this.storage.callbacks;
+          if (!callbacks || event.isComposing || this.editor.view.composing) return false;
+          if (event.key === "Enter" && event.shiftKey) {
+            return this.editor.commands.setHardBreak();
+          }
+          if (isPickerKey(event.key)) {
+            if (callbacks.onPickerKey({ key: event.key, shiftKey: event.shiftKey })) return true;
+            if (event.key !== "Enter") return false;
+          }
+          if (event.key === "Enter") {
+            callbacks.onSubmit();
             return true;
-          },
+          }
+          return false;
         },
-      })];
-    },
-  }), [codec]);
+        handlePaste: (_view, event) => {
+          const { callbacks, codec } = this.storage;
+          if (!callbacks || !codec) return false;
+          const files = Array.from(event.clipboardData?.files ?? []);
+          if (files.length) void callbacks.onFiles(files);
+          const text = event.clipboardData?.getData("text/plain") ?? "";
+          if (!text) return files.length > 0;
+          const parsed = codec.parseSafely(text);
+          this.editor.commands.insertContent(parsed.document.content ?? []);
+          return true;
+        },
+      },
+    })];
+  },
+});
+
+export function MarkdownComposer({
+  disabled,
+  value,
+  onChange,
+  onFiles,
+  onPickerKey,
+  onSerializationError,
+  onSubmit,
+  onTrigger,
+}: MarkdownComposerProps) {
+  const codec = useMemo(() => createMarkdownCodec(), []);
+  const [initialContent] = useState(() => codec.parseSafely(value).document);
+  const extensions = useMemo(() => [
+    StarterKit,
+    TaskList,
+    TaskItem.configure({ nested: true }),
+    SourceBlock,
+    Markdown,
+    Placeholder.configure({ placeholder: "输入目标，或继续当前工作…" }),
+    ComposerEvents,
+  ], []);
 
   const editor = useEditor({
-    content: initialContent.current.document,
-    editable: !props.disabled,
+    content: initialContent,
+    editable: !disabled,
     editorProps: {
       attributes: {
         "aria-label": "消息",
@@ -83,43 +158,54 @@ export function MarkdownComposer(props: MarkdownComposerProps) {
         role: "textbox",
       },
     },
-    extensions: [
-      StarterKit,
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      SourceBlock,
-      Markdown,
-      Placeholder.configure({ placeholder: "输入目标，或继续当前工作…" }),
-      composerEvents,
-    ],
+    extensions,
     immediatelyRender: false,
     onUpdate: ({ editor: current }) => {
+      const storage = current.storage.composerEvents as ComposerEventsStorage;
+      if (!storage.callbacks || !storage.codec) return;
       try {
-        const markdown = codec.serialize(current.getJSON());
-        lastEmitted.current = markdown;
-        callbacks.current.onSerializationError(null);
-        callbacks.current.onChange(markdown);
-        callbacks.current.onTrigger(triggerAtEnd(markdown));
+        const markdown = storage.codec.serialize(current.getJSON());
+        storage.lastEmitted = markdown;
+        storage.callbacks.onSerializationError(null);
+        storage.callbacks.onChange(markdown);
+        storage.callbacks.onTrigger(triggerAtEnd(markdown));
       } catch (error) {
-        callbacks.current.onSerializationError(
+        storage.callbacks.onSerializationError(
           error instanceof Error ? error.message : "Markdown 序列化失败",
         );
       }
     },
-  }, [composerEvents]);
+  }, [extensions, initialContent]);
 
   useEffect(() => {
-    editor?.setEditable(!props.disabled);
-  }, [editor, props.disabled]);
+    editor?.setEditable(!disabled);
+  }, [disabled, editor]);
 
   useEffect(() => {
-    if (!editor || props.value === lastEmitted.current) return;
-    const parsed = codec.parseSafely(props.value);
-    editor.commands.setContent(parsed.document, { emitUpdate: false });
-    lastEmitted.current = props.value;
-    props.onTrigger(triggerAtEnd(props.value));
-    props.onSerializationError(null);
-  }, [codec, editor, props.onSerializationError, props.onTrigger, props.value]);
+    if (!editor) return;
+    editor.commands.syncComposerRuntime({
+      callbacks: {
+        onChange,
+        onFiles,
+        onPickerKey,
+        onSerializationError,
+        onSubmit,
+        onTrigger,
+      },
+      codec,
+      value,
+    });
+  }, [
+    codec,
+    editor,
+    onChange,
+    onFiles,
+    onPickerKey,
+    onSerializationError,
+    onSubmit,
+    onTrigger,
+    value,
+  ]);
 
   return <EditorContent className="markdown-composer" data-composer-editor editor={editor} />;
 }

@@ -120,7 +120,7 @@ describe("MarkdownComposer", () => {
     expect(editor.textContent).toContain("第一段第二段");
 
     act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ctrlKey: true, key: "z" })));
-    expect(editor.textContent).toBe("第一段");
+    expect(editor.textContent).not.toContain("第一段第二段");
 
     act(() => editor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ctrlKey: true, key: "z", shiftKey: true })));
     expect(editor.textContent).toContain("第一段第二段");

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ChevronDown, ChevronRight, FileText, FolderOpen, LoaderCircle, Send, Square } from "lucide-react";
 import { ComposerAttachments } from "@/components/composer-attachments";
 import { ComposerActions, ModelControls, PermissionControl } from "@/components/composer-controls";
@@ -111,13 +111,38 @@ export function Composer({
     (entry) => !contextQuery || `${entry.name} ${entry.path}`.toLowerCase().includes(contextQuery),
   );
   const hasWorkspace = workspacePaths(session).length > 0;
-  const [commandIndex, setCommandIndex] = useState(0);
-  const [contextIndex, setContextIndex] = useState(0);
+  const commandSelectionKey = `${commandOpen}:${commandQuery}`;
+  const contextSelectionKey = `${contextOpen}:${contextQuery}:${workspaceListing?.path ?? ""}`;
+  const [commandSelection, setCommandSelection] = useState({ key: commandSelectionKey, index: 0 });
+  const [contextSelection, setContextSelection] = useState({ key: contextSelectionKey, index: 0 });
+  const commandIndex = commandSelection.key === commandSelectionKey
+    ? Math.min(commandSelection.index, Math.max(visibleCommands.length - 1, 0))
+    : 0;
+  const contextIndex = contextSelection.key === contextSelectionKey
+    ? Math.min(contextSelection.index, Math.max(visibleEntries.length - 1, 0))
+    : 0;
   const [serializationError, setSerializationError] = useState<string | null>(null);
   const [sweepKey, setSweepKey] = useState(0);
 
-  useEffect(() => setCommandIndex(0), [commandOpen, commandQuery]);
-  useEffect(() => setContextIndex(0), [contextOpen, contextQuery, workspaceListing?.path]);
+  function setCommandIndex(next: number | ((index: number) => number)) {
+    setCommandSelection((current) => {
+      const index = current.key === commandSelectionKey ? current.index : 0;
+      return {
+        key: commandSelectionKey,
+        index: typeof next === "function" ? next(index) : next,
+      };
+    });
+  }
+
+  function setContextIndex(next: number | ((index: number) => number)) {
+    setContextSelection((current) => {
+      const index = current.key === contextSelectionKey ? current.index : 0;
+      return {
+        key: contextSelectionKey,
+        index: typeof next === "function" ? next(index) : next,
+      };
+    });
+  }
 
   function pickCommand(index: number) {
     const command = visibleCommands[index];
