@@ -12,16 +12,21 @@ describe("channel session ingress", () => {
         agent_id: "pi",
         attachments: [{ name: "context.txt", mime_type: "text/plain", data_base64: "aGVsbG8=" }],
       });
-      return c.json({ session_id: "sess_1", run_id: "run_1", event_sequence: 3 }, 202);
+      return c.json({
+        session_id: "sess_1",
+        turn_id: "turn_1",
+        run_id: "run_1",
+        event_sequence: 3,
+      }, 202);
     });
     app.get("/v1/sessions/:session/events", (c) => {
       expect(c.req.query("after_sequence")).toBe("3");
       return new Response([
       "event: AGENT_EVENT",
-      'data: {"type":"AGENT_EVENT","payload":{"event":{"type":"text_delta","text":"ok"}}}',
+      'data: {"type":"AGENT_EVENT","run_id":"run_1","payload":{"event":{"type":"text_delta","text":"ok"}}}',
       "",
       "event: RUN_SUCCEEDED",
-      'data: {"type":"RUN_SUCCEEDED","payload":{}}',
+      'data: {"type":"RUN_SUCCEEDED","run_id":"run_1","payload":{}}',
       "",
       "",
       ].join("\n"), { headers: { "content-type": "text/event-stream" } });
@@ -44,7 +49,12 @@ describe("channel session ingress", () => {
   it("does not repeat a fatal Agent error as a generic step failure", async () => {
     const app = new Hono();
     app.post("/v1/channels/:channel/conversations/:conversation/messages", (c) =>
-      c.json({ session_id: "sess_1", run_id: "run_1", event_sequence: 3 }, 202),
+      c.json({
+        session_id: "sess_1",
+        turn_id: "turn_1",
+        run_id: "run_1",
+        event_sequence: 3,
+      }, 202),
     );
     app.get("/v1/sessions/:session/events", () =>
       new Response([
@@ -75,6 +85,51 @@ describe("channel session ingress", () => {
     expect(events).toEqual([
       { type: "error", message: "ACP session is occupied", fatal: true },
       { type: "done", exitCode: 1 },
+    ]);
+  });
+
+  it("waits for a queued channel Turn and ignores the active Run", async () => {
+    const app = new Hono();
+    app.post("/v1/channels/:channel/conversations/:conversation/messages", (c) =>
+      c.json({
+        session_id: "sess_1",
+        turn_id: "turn_2",
+        run_id: null,
+        event_sequence: 3,
+      }, 202),
+    );
+    app.get("/v1/sessions/:session/events", () =>
+      new Response([
+        "event: AGENT_EVENT",
+        'data: {"type":"AGENT_EVENT","run_id":"run_1","payload":{"event":{"type":"text_delta","text":"previous"}}}',
+        "",
+        "event: RUN_SUCCEEDED",
+        'data: {"type":"RUN_SUCCEEDED","run_id":"run_1","payload":{}}',
+        "",
+        "event: TURN_DISPATCHED",
+        'data: {"type":"TURN_DISPATCHED","target":"turn_2","run_id":"run_2","payload":{"turn_id":"turn_2"}}',
+        "",
+        "event: AGENT_EVENT",
+        'data: {"type":"AGENT_EVENT","run_id":"run_2","payload":{"event":{"type":"text_delta","text":"current"}}}',
+        "",
+        "event: RUN_SUCCEEDED",
+        'data: {"type":"RUN_SUCCEEDED","run_id":"run_2","payload":{}}',
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } }),
+    );
+    const ingress = createChannelSessionIngress(app, "token");
+    const events = [];
+
+    for await (const event of ingress({
+      channel: "feishu",
+      conversationId: "chat|topic",
+      message: "queued",
+    })) events.push(event);
+
+    expect(events).toEqual([
+      { type: "text_delta", text: "current" },
+      { type: "done", exitCode: 0 },
     ]);
   });
 });

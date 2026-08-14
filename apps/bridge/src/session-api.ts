@@ -363,6 +363,29 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       }),
     });
     if (!messageResponse.ok) return c.json(await messageResponse.json(), messageResponse.status as 400 | 404 | 409 | 503);
+    if (options.coordinator) {
+      const result = await messageResponse.json() as {
+        acceptance: "queued" | "dispatched";
+        turn: { turn_id: string };
+        runtime: {
+          active_run: { run_id: string } | null;
+          last_event_sequence: number;
+        };
+      };
+      const updatedSession = options.catalog.getSession(session.id);
+      return c.json({
+        channel,
+        conversation_id: conversationId,
+        session_id: session.id,
+        task_record_id: updatedSession?.taskRecordId ?? null,
+        event_sequence: result.runtime.last_event_sequence,
+        acceptance: result.acceptance,
+        turn_id: result.turn.turn_id,
+        run_id: result.acceptance === "dispatched"
+          ? result.runtime.active_run?.run_id ?? null
+          : null,
+      }, 202);
+    }
     const messageResult = await messageResponse.json() as { task_record_id: string; sequence: number };
     const runResponse = await app.request(`/v1/sessions/${session.id}/runs`, {
       method: "POST",
