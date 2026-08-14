@@ -10,6 +10,7 @@ import type {
 import { cn } from "@/lib/utils";
 
 export function SessionTimeline(props: {
+  activeRunId: string | null;
   turns: TimelineTurnView[];
   hasEarlier: boolean;
   loadingEarlier: boolean;
@@ -22,6 +23,7 @@ export function SessionTimeline(props: {
 
   let activeAssistantSegmentId: string | null = null;
   for (const turn of props.turns) {
+    if (turn.run_id !== props.activeRunId) continue;
     for (const block of turn.blocks) {
       if (block.kind !== "assistant") continue;
       for (const segment of block.segments) {
@@ -39,13 +41,17 @@ export function SessionTimeline(props: {
       return;
     }
     const newlyLiveAssistantSegments = new Set(
-      props.turns.flatMap((turn) => turn.blocks.flatMap((block) =>
-        block.kind === "assistant"
-          ? block.segments
-            .filter((segment) => !segment.sealed && !seenSegmentIds.current?.has(segment.segment_id))
-            .map((segment) => segment.segment_id)
+      props.turns.flatMap((turn) =>
+        turn.run_id === props.activeRunId
+          ? turn.blocks.flatMap((block) =>
+            block.kind === "assistant"
+              ? block.segments
+                .filter((segment) => !segment.sealed && !seenSegmentIds.current?.has(segment.segment_id))
+                .map((segment) => segment.segment_id)
+              : [],
+          )
           : [],
-      )),
+      ),
     );
     timelineRoot.current?.querySelectorAll<HTMLElement>("[data-segment-id]").forEach((node) => {
       if (node.dataset.segmentId && newlyLiveAssistantSegments.has(node.dataset.segmentId)) {
@@ -53,7 +59,7 @@ export function SessionTimeline(props: {
       }
     });
     for (const segmentId of currentSegmentIds) seenSegmentIds.current.add(segmentId);
-  }, [props.turns]);
+  }, [props.activeRunId, props.turns]);
 
   return <div className="grid gap-6" ref={timelineRoot}>
     {props.hasEarlier && <Button className="mx-auto" data-load-earlier disabled={props.loadingEarlier} onClick={props.onLoadEarlier} size="sm" variant="ghost">
@@ -63,6 +69,7 @@ export function SessionTimeline(props: {
       {turn.blocks.map((block) => <TimelineBlock
         activeAssistantSegmentId={block.kind === "assistant" ? activeAssistantSegmentId : null}
         block={block}
+        isLive={turn.run_id === props.activeRunId && block.status === "running"}
         key={block.block_id}
         loading={props.loadingBlockId === block.block_id}
         onLoadSegments={props.onLoadSegments}
@@ -74,6 +81,7 @@ export function SessionTimeline(props: {
 const TimelineBlock = memo(function TimelineBlock(props: {
   activeAssistantSegmentId: string | null;
   block: TimelineBlockView;
+  isLive: boolean;
   loading: boolean;
   onLoadSegments: (blockId: string, after: number) => void;
 }) {
@@ -91,7 +99,16 @@ const TimelineBlock = memo(function TimelineBlock(props: {
       streamingCaret={segment.segment_id === props.activeAssistantSegmentId}
     />)}{more}</div>;
   }
-  return <details open={block.status === "running" || undefined} className="max-w-[780px] border-t border-line"><summary className="flex cursor-pointer items-center gap-2 py-3 text-xs text-muted">{block.status === "running" && <LoaderCircle className="size-3.5 animate-spin" />}<span>{blockLabel(block.kind)}</span></summary><div className={cn("grid gap-2 pb-4 text-xs leading-5", block.kind === "error" ? "text-danger" : "text-ink-soft")}>{block.segments.map((segment) => <TimelineSegment key={segment.segment_id} segment={segment} />)}</div>{more}</details>;
+  return <details open={props.isLive || undefined} className="max-w-[780px] border-t border-line">
+    <summary className="flex cursor-pointer items-center gap-2 py-3 text-xs text-muted">
+      {props.isLive && <LoaderCircle className="size-3.5 animate-spin" />}
+      <span>{blockLabel(block.kind)}</span>
+    </summary>
+    <div className={cn("grid gap-2 pb-4 text-xs leading-5", block.kind === "error" ? "text-danger" : "text-ink-soft")}>
+      {block.segments.map((segment) => <TimelineSegment key={segment.segment_id} segment={segment} />)}
+    </div>
+    {more}
+  </details>;
 });
 
 export const TimelineSegment = memo(
