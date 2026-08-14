@@ -305,17 +305,6 @@ export function registerSessionRuntimeReadRoutes(
     });
   });
 
-  app.get("/v1/sessions/:session_id/commands", (c) => {
-    if (!options.catalog.getSession(c.req.param("session_id"))) {
-      return c.json({ error: "session_not_found" }, 404);
-    }
-    return c.json({
-      commands: options.workItems.listSessionCommands(
-        c.req.param("session_id"),
-      ),
-    });
-  });
-
   app.get("/v1/sessions/:session_id/events", (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
