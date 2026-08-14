@@ -55,4 +55,21 @@ describe("capability runtime", () => {
     ]);
     await expect(runtime.execute("cli.node", { input: { ok: true }, context: {} })).resolves.toMatchObject({ output: { ok: true } });
   });
+
+  it("passes dry_run to adapters and surfaces dry_run_report", async () => {
+    let sawDryRun: boolean | undefined;
+    const adapter = new FunctionCapabilityAdapter("a", async (inv) => {
+      sawDryRun = inv.context.dry_run;
+      if (inv.context.dry_run) {
+        return {
+          dry_run_report: { would_do: "write X", checks: [{ name: "idempotency", passed: true }] },
+        };
+      }
+      return { output: { done: true } };
+    });
+    const runtime = new CapabilityRuntime([adapter]);
+    const result = await runtime.execute("a", { input: {}, context: { dry_run: true } });
+    expect(sawDryRun).toBe(true);
+    expect(result.dry_run_report?.would_do).toBe("write X");
+  });
 });
