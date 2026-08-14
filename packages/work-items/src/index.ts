@@ -13,6 +13,7 @@ import type {
   QueueState,
   ReplaySafety,
   SessionRuntime,
+  SessionEventInput,
   SessionTimelineBlock,
   SessionTimelineSegment,
   SessionTimelineTurn,
@@ -820,6 +821,37 @@ export class SqliteEventStore {
     this.database.exec("BEGIN IMMEDIATE;");
     try {
       const event = this.appendEventInTransaction(input);
+      this.database.exec("COMMIT;");
+      return event;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
+  appendLeasedRunEvent(
+    owner: string,
+    input: SessionEventInput & { runId: string },
+  ): DomainEvent {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const lease = this.database
+        .prepare(
+          `SELECT 1 FROM runs
+           WHERE id = ? AND session_id = ? AND status = 'running'
+             AND lease_owner = ? AND lease_expires_at >= ?`,
+        )
+        .get(
+          input.runId,
+          input.sessionId,
+          owner,
+          new Date().toISOString(),
+        );
+      if (!lease) throw new Error("run_lease_lost");
+      const event = appendSessionEventInTransaction(
+        this.database,
+        input,
+      );
       this.database.exec("COMMIT;");
       return event;
     } catch (error) {

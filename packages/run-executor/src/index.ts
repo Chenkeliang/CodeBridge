@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
 import type {
+  SessionCoordinator,
+  SessionLeaseService,
+} from "@codebridge/session-coordinator";
+import type {
   ApprovalService,
   CapabilityRuntime,
   PolicyEngine,
@@ -8,6 +12,7 @@ import type {
 } from "@codebridge/policy";
 import {
   SqliteEventStore,
+  type AppendEventInput,
   type Run,
   type WorkItem,
   type PersistedPlan,
@@ -15,6 +20,7 @@ import {
 } from "@codebridge/work-items";
 import { evaluatePostcondition } from "@codebridge/workflow-engine";
 import { AgentEventAggregator } from "./agent-event-aggregator.js";
+import { RunHeartbeat } from "./run-heartbeat.js";
 
 export interface RunnerStream {
   run(
@@ -29,6 +35,9 @@ export interface RunExecutorOptions {
   approvals?: ApprovalService;
   policy?: PolicyEngine;
   capabilities?: CapabilityRuntime;
+  sessionCoordinator?: SessionCoordinator;
+  sessionLeaseService?: SessionLeaseService;
+  executorOwner?: string;
 }
 
 export interface DecisionTraceStep {
@@ -48,6 +57,7 @@ export interface ReplayDiff {
 export class RunExecutor {
   private readonly activeControllers = new Map<string, AbortController>();
   private readonly activeCompletions = new Map<string, Promise<void>>();
+  private readonly activeAsyncErrors = new Map<string, unknown>();
   private currentForce = false;
 
   constructor(
@@ -59,9 +69,9 @@ export class RunExecutor {
   cancelRun(runId: string): Run {
     const run = this.store.getRun(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);
-    if (["succeeded", "failed", "cancelled"].includes(run.status)) return run;
+    if (["succeeded", "failed", "cancelled", "interrupted"].includes(run.status)) return run;
     this.activeControllers.get(runId)?.abort();
-    return this.cancel(run.id, run.workItemId);
+    return run.sessionId ? run : this.cancel(run);
   }
 
   async cancelRunAndWait(runId: string): Promise<Run> {
@@ -131,8 +141,17 @@ export class RunExecutor {
     if (plan && runHasIr(initial) && plan.planIrHash && initial.planIrHash !== plan.planIrHash) {
       throw new Error(`Plan IR drift: run ${runId} bound ${initial.planIrHash} but plan resolves to ${plan.planIrHash}`);
     }
+    if (initial.sessionId) {
+      this.requireSessionExecutionOptions();
+      const claimed = this.options.sessionLeaseService!.claim(
+        runId,
+        this.options.executorOwner!,
+      );
+      if (!claimed) return this.store.getRun(runId)!;
+    }
 
     if (!plan && workItem.riskLevel === "production_write") {
+      this.throwIfCancellationRequested(runId);
       if (!this.options.approvals) {
         throw new Error("Approval service is required for production_write runs");
       }
@@ -153,18 +172,19 @@ export class RunExecutor {
             requestedBy: "system",
           });
         }
-        this.store.updateRunStatus(runId, "waiting");
-        return this.store.getRun(runId)!;
+        this.throwIfCancellationRequested(runId);
+        return this.markWaiting(initial);
       }
       if (!this.options.approvals.consume(existing.id, runId, "run", inputHash)) {
-        this.store.updateRunStatus(runId, "waiting");
-        return this.store.getRun(runId)!;
+        this.throwIfCancellationRequested(runId);
+        return this.markWaiting(initial);
       }
+      this.throwIfCancellationRequested(runId);
     }
 
-    this.store.updateRunStatus(runId, "running");
+    if (!initial.sessionId) this.store.updateRunStatus(runId, "running");
     if (!this.hasRunEvent(workItem.id, runId, "RUN_STARTED")) {
-      this.store.appendEvent({
+      this.appendRunEvent(initial, {
         workItemId: workItem.id,
         runId,
         type: "RUN_STARTED",
@@ -175,18 +195,33 @@ export class RunExecutor {
 
     const controller = new AbortController();
     const activeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    let leaseLost = false;
+    const heartbeat = initial.sessionId
+      ? new RunHeartbeat({
+          runId,
+          owner: this.options.executorOwner!,
+          renew: (id, owner) =>
+            this.options.sessionLeaseService!.renew(id, owner),
+          onLeaseLost: () => {
+            leaseLost = true;
+            controller.abort();
+          },
+        })
+      : null;
     let completeExecution!: () => void;
     const completion = new Promise<void>((resolve) => {
       completeExecution = resolve;
     });
     this.activeControllers.set(runId, controller);
     this.activeCompletions.set(runId, completion);
+    heartbeat?.start();
     try {
+      this.throwIfCancellationRequested(runId);
       if (plan) {
         const waiting = await this.executePlan(workItem, initial, plan, activeSignal);
         if (waiting) return this.store.getRun(runId)!;
       } else {
-        this.store.appendEvent({
+        this.appendRunEvent(initial, {
           workItemId: workItem.id,
           runId,
           type: "STEP_STARTED",
@@ -194,8 +229,12 @@ export class RunExecutor {
           target: runId,
         });
         await this.executeStep(workItem, initial, null, activeSignal);
-        if (activeSignal.aborted) return this.cancel(runId, workItem.id);
-        this.store.appendEvent({
+        if (activeSignal.aborted) {
+          if (leaseLost) return this.store.getRun(runId)!;
+          return this.cancel(initial);
+        }
+        this.throwIfCancellationRequested(runId);
+        this.appendRunEvent(initial, {
           workItemId: workItem.id,
           runId,
           type: "STEP_SUCCEEDED",
@@ -203,46 +242,48 @@ export class RunExecutor {
           target: runId,
         });
       }
-      if (activeSignal.aborted) return this.cancel(runId, workItem.id);
-      this.store.updateRunStatus(runId, "succeeded");
-      this.store.appendEvent({
-        workItemId: workItem.id,
-        runId,
-        type: "RUN_SUCCEEDED",
-        actor: "system",
-        target: runId,
-      });
-      this.store.appendEvent({
-        workItemId: workItem.id,
-        runId,
-        type: "WORK_ITEM_COMPLETED",
-        actor: "system",
-        target: runId,
-      });
-      return this.store.getRun(runId)!;
-    } catch (error) {
-      if (activeSignal.aborted && !isRunnerCancellationError(error)) {
-        return this.cancel(runId, workItem.id);
+      if (activeSignal.aborted) {
+        if (leaseLost) return this.store.getRun(runId)!;
+        return this.cancel(initial);
       }
-      this.store.updateRunStatus(runId, "failed");
-      this.store.appendEvent({
+      this.throwIfCancellationRequested(runId);
+      return this.succeed(initial);
+    } catch (error) {
+      const failure = this.activeAsyncErrors.get(runId) ?? error;
+      if (leaseLost || isRunLeaseLost(failure)) {
+        return this.store.getRun(runId)!;
+      }
+      if (
+        initial.sessionId
+        && activeSignal.aborted
+        && isRunnerCancellationError(failure)
+      ) {
+        throw failure;
+      }
+      if (
+        failure instanceof RunCancellationRequested
+        || (activeSignal.aborted && !isRunnerCancellationError(failure))
+      ) {
+        controller.abort();
+        return this.cancel(initial);
+      }
+      this.appendRunEvent(initial, {
         workItemId: workItem.id,
         runId,
         type: "STEP_FAILED",
         actor: "system",
         target: plan ? this.failedStepId(workItem.id, runId) : runId,
-        payload: { error: error instanceof Error ? error.message : String(error) },
+        payload: {
+          error: failure instanceof Error
+            ? failure.message
+            : String(failure),
+        },
       });
-      this.store.appendEvent({
-        workItemId: workItem.id,
-        runId,
-        type: "RUN_FAILED",
-        actor: "system",
-        target: runId,
-        payload: { error: error instanceof Error ? error.message : String(error) },
-      });
-      throw error;
+      this.fail(initial, failure);
+      throw failure;
     } finally {
+      heartbeat?.close();
+      this.activeAsyncErrors.delete(runId);
       if (this.activeControllers.get(runId) === controller) this.activeControllers.delete(runId);
       completeExecution();
       if (this.activeCompletions.get(runId) === completion) {
@@ -251,18 +292,85 @@ export class RunExecutor {
     }
   }
 
-  private cancel(runId: string, workItemId: string): Run {
-    const current = this.store.getRun(runId);
-    if (current?.status === "cancelled") return current;
-    this.store.updateRunStatus(runId, "cancelled");
+  private succeed(run: Run): Run {
+    if (run.sessionId) {
+      return this.options.sessionCoordinator!.finishRun({
+        sessionId: run.sessionId,
+        runId: run.id,
+        status: "succeeded",
+      }).run;
+    }
+    this.store.updateRunStatus(run.id, "succeeded");
+    this.appendRunEvent(run, {
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "RUN_SUCCEEDED",
+      actor: "system",
+      target: run.id,
+    });
+    this.appendRunEvent(run, {
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "WORK_ITEM_COMPLETED",
+      actor: "system",
+      target: run.id,
+    });
+    return this.store.getRun(run.id)!;
+  }
+
+  private fail(run: Run, error: unknown): Run {
+    if (run.sessionId) {
+      return this.options.sessionCoordinator!.finishRun({
+        sessionId: run.sessionId,
+        runId: run.id,
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+      }).run;
+    }
+    this.store.updateRunStatus(run.id, "failed");
     this.store.appendEvent({
-      workItemId,
-      runId,
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "RUN_FAILED",
+      actor: "system",
+      target: run.id,
+      payload: {
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+    return this.store.getRun(run.id)!;
+  }
+
+  private markWaiting(run: Run): Run {
+    return run.sessionId
+      ? this.store.updateRunControl(run.id, {
+          status: "waiting",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+        })
+      : this.store.updateRunStatus(run.id, "waiting");
+  }
+
+  private cancel(run: Run): Run {
+    const current = this.store.getRun(run.id);
+    if (current?.status === "cancelled") return current;
+    if (run.sessionId) {
+      return this.options.sessionCoordinator!.finishRun({
+        sessionId: run.sessionId,
+        runId: run.id,
+        status: "cancelled",
+        reason: "cancel_requested",
+      }).run;
+    }
+    this.store.updateRunStatus(run.id, "cancelled");
+    this.store.appendEvent({
+      workItemId: run.workItemId,
+      runId: run.id,
       type: "RUN_CANCELLED",
       actor: "system",
-      target: runId,
+      target: run.id,
     });
-    return this.store.getRun(runId)!;
+    return this.store.getRun(run.id)!;
   }
 
   private async executePlan(
@@ -292,7 +400,7 @@ export class RunExecutor {
         throw new Error(`Plan dependency is not complete for step ${step.id}`);
       }
       if (dependencies.length && dependencies.every((dependency) => skipped.has(dependency))) {
-        this.skipStep(workItem.id, run.id, step.id, { reason: "dependency_skipped" });
+        this.skipStep(run, step.id, { reason: "dependency_skipped" });
         skipped.add(step.id);
         continue;
       }
@@ -300,7 +408,7 @@ export class RunExecutor {
         if (signal?.aborted) return false;
         const selected = selectBranch(step, workItem.identifiers);
         if (!selected) throw new Error(`No branch matched for step ${step.id}`);
-        this.store.appendEvent({
+        this.appendRunEvent(run, {
           workItemId: workItem.id,
           runId: run.id,
           type: "STEP_STARTED",
@@ -308,7 +416,7 @@ export class RunExecutor {
           target: step.id,
           payload: { capability_id: null, risk: step.risk },
         });
-        this.store.appendEvent({
+        this.appendRunEvent(run, {
           workItemId: workItem.id,
           runId: run.id,
           type: "BRANCH_SELECTED",
@@ -318,7 +426,7 @@ export class RunExecutor {
         });
         for (const branch of step.branches) {
           if (branch.next === selected.next || skipped.has(branch.next)) continue;
-          this.skipStep(workItem.id, run.id, branch.next, {
+          this.skipStep(run, branch.next, {
             reason: "branch_not_selected",
             branch_step_id: step.id,
             selected: selected.next,
@@ -326,7 +434,7 @@ export class RunExecutor {
           skipped.add(branch.next);
         }
         if (signal?.aborted) return false;
-        this.store.appendEvent({
+        this.appendRunEvent(run, {
           workItemId: workItem.id,
           runId: run.id,
           type: "STEP_SUCCEEDED",
@@ -352,6 +460,7 @@ export class RunExecutor {
         step.risk === "production_write" ||
         (policyDecision && !policyDecision.allowed && policyDecision.requiresApproval)
       ) {
+        this.throwIfCancellationRequested(run.id);
         const environment = step.risk === "production_write" ? "production" : "local";
         const approvalScope = approvalScopeFor(workItem, run.id, step, environment);
         const inputHash = `sha256:${hashInput(approvalScope)}`;
@@ -371,15 +480,18 @@ export class RunExecutor {
               requestedBy: "system",
             });
           }
-          this.store.updateRunStatus(run.id, "waiting");
+          this.throwIfCancellationRequested(run.id);
+          this.markWaiting(run);
           return true;
         }
         if (!this.options.approvals!.consume(existing.id, run.id, step.id, inputHash)) {
-          this.store.updateRunStatus(run.id, "waiting");
+          this.throwIfCancellationRequested(run.id);
+          this.markWaiting(run);
           return true;
         }
+        this.throwIfCancellationRequested(run.id);
       }
-      this.store.appendEvent({
+      this.appendRunEvent(run, {
         workItemId: workItem.id,
         runId: run.id,
         type: "STEP_STARTED",
@@ -389,7 +501,7 @@ export class RunExecutor {
       });
       await this.executeStep(workItem, run, step, signal);
       if (signal?.aborted) return false;
-      this.store.appendEvent({
+      this.appendRunEvent(run, {
         workItemId: workItem.id,
         runId: run.id,
         type: "STEP_SUCCEEDED",
@@ -402,14 +514,13 @@ export class RunExecutor {
   }
 
   private skipStep(
-    workItemId: string,
-    runId: string,
+    run: Run,
     stepId: string,
     payload: Record<string, unknown>,
   ): void {
-    this.store.appendEvent({
-      workItemId,
-      runId,
+    this.appendRunEvent(run, {
+      workItemId: run.workItemId,
+      runId: run.id,
       type: "STEP_SKIPPED",
       actor: "system",
       target: stepId,
@@ -456,11 +567,13 @@ export class RunExecutor {
     step: PersistedPlanStep | null,
     signal?: AbortSignal,
   ): Promise<void> {
+    this.throwIfCancellationRequested(run.id);
     const capabilityResult = await this.executeCapability(workItem, run, step, signal);
+    this.throwIfCancellationRequested(run.id);
     if (step?.successWhen && capabilityResult && !capabilityResult.forwardToAgent) {
       const passed = evaluatePostcondition(step.successWhen, capabilityResult.output);
       if (!passed) {
-        this.store.appendEvent({
+        this.appendRunEvent(run, {
           workItemId: workItem.id,
           runId: run.id,
           type: "VERIFICATION_FAILED",
@@ -503,8 +616,10 @@ export class RunExecutor {
     } else if (capabilityResult) {
       return;
     }
+    this.throwIfCancellationRequested(run.id);
     const persistAgentEvent = (event: AgentEvent): void => {
-      this.store.appendEvent({
+      this.throwIfCancellationRequested(run.id);
+      this.appendRunEvent(run, {
         workItemId: workItem.id,
         runId: run.id,
         type: "AGENT_EVENT",
@@ -513,6 +628,7 @@ export class RunExecutor {
         payload: step ? { event, step_id: step.id } : { event },
       });
       this.options.onEvent?.(run, event);
+      this.throwIfCancellationRequested(run.id);
       if (event.type === "plan" && event.entries.length) {
         const flowId = `flow_ephemeral_${run.id}`;
         const flowSteps = event.entries.map((entry, index) => ({
@@ -522,7 +638,7 @@ export class RunExecutor {
           depends_on: index ? [`step_${index}`] : [],
           approval: "none",
         }));
-        this.store.appendEvent({
+        this.appendRunEvent(run, {
           workItemId: workItem.id,
           runId: run.id,
           type: "FLOW_PROPOSED",
@@ -549,11 +665,17 @@ export class RunExecutor {
     const aggregator = new AgentEventAggregator({
       runId: run.id,
       emit: persistAgentEvent,
+      onError: (error) => {
+        this.activeAsyncErrors.set(run.id, error);
+        this.activeControllers.get(run.id)?.abort();
+      },
     });
     try {
       for await (const event of this.runner.run(request, { signal })) {
         aggregator.accept(event);
       }
+      const asynchronousError = this.activeAsyncErrors.get(run.id);
+      if (asynchronousError) throw asynchronousError;
     } finally {
       aggregator.close();
     }
@@ -565,6 +687,7 @@ export class RunExecutor {
     step: PersistedPlanStep | null,
     signal?: AbortSignal,
   ): Promise<CapabilityExecutionResult | undefined> {
+    this.throwIfCancellationRequested(run.id);
     if (!step?.capabilityId || !this.options.capabilities || !this.options.policy) return undefined;
     const definition = this.options.policy.getCapability(step.capabilityId);
     if (!definition || !this.options.capabilities.has(definition.adapter)) return undefined;
@@ -594,6 +717,7 @@ export class RunExecutor {
         signal,
       },
     });
+    this.throwIfCancellationRequested(run.id);
     if (idem && idemKey && step.risk !== "read_only") {
       this.store.putIdempotencyResponse("flow-step", idemKey, result);
     }
@@ -619,7 +743,7 @@ export class RunExecutor {
           artifactIds,
         })
       : undefined;
-    this.store.appendEvent({
+    this.appendRunEvent(run, {
       workItemId: workItem.id,
       runId: run.id,
       type: "AGENT_EVENT",
@@ -636,6 +760,36 @@ export class RunExecutor {
       },
     });
     return result;
+  }
+
+  private appendRunEvent(run: Run, input: AppendEventInput): void {
+    if (run.sessionId) {
+      this.store.appendLeasedRunEvent(this.options.executorOwner!, {
+        ...input,
+        runId: run.id,
+        sessionId: run.sessionId,
+      });
+      return;
+    }
+    this.store.appendEvent(input);
+  }
+
+  private requireSessionExecutionOptions(): void {
+    if (
+      !this.options.sessionCoordinator
+      || !this.options.sessionLeaseService
+      || !this.options.executorOwner
+    ) {
+      throw new Error(
+        "Session-bound Runs require a Coordinator, lease service, and executor owner",
+      );
+    }
+  }
+
+  private throwIfCancellationRequested(runId: string): void {
+    if (this.store.getRun(runId)?.cancelRequestedAt) {
+      throw new RunCancellationRequested();
+    }
   }
 
   private hasRunEvent(workItemId: string, runId: string, type: string): boolean {
@@ -655,6 +809,16 @@ interface ApprovalScope {
   environment: string;
   targetResource: string;
   input: Record<string, unknown>;
+}
+
+class RunCancellationRequested extends Error {
+  constructor() {
+    super("run_cancellation_requested");
+  }
+}
+
+function isRunLeaseLost(error: unknown): boolean {
+  return error instanceof Error && error.message === "run_lease_lost";
 }
 
 function isRunnerCancellationError(error: unknown): boolean {

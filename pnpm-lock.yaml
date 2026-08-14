@@ -350,6 +350,9 @@ importers:
       '@codebridge/policy':
         specifier: workspace:*
         version: link:../policy
+      '@codebridge/session-coordinator':
+        specifier: workspace:*
+        version: link:../session-coordinator
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../work-items
