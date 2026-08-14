@@ -108,6 +108,21 @@ describe("ACP-only backend configuration", () => {
     });
   });
 
+  it("bounds the Session queue configuration", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      orchestration: {
+        session: { maxQueuedTurns: 250 },
+      },
+    });
+
+    expect(config.orchestration?.session?.maxQueuedTurns).toBe(250);
+    expect(() => ConfigSchema.parse({
+      ...defaultConfig(),
+      orchestration: { session: { maxQueuedTurns: 1_001 } },
+    })).toThrow();
+  });
+
   it("accepts MCP server configuration without storing credential values", () => {
     const config = ConfigSchema.parse({
       ...defaultConfig(),

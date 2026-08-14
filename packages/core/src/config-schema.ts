@@ -75,9 +75,14 @@ export const McpServerConfigSchema = z.discriminatedUnion("transport", [
   }),
 ]);
 
+export const SessionRuntimeConfigSchema = z.object({
+  maxQueuedTurns: z.number().int().min(1).max(1_000).default(100),
+});
+
 export const OrchestrationConfigSchema = z.object({
   projectCatalog: ProjectCatalogConfigSchema.optional(),
   mcpServers: z.record(McpServerConfigSchema).optional(),
+  session: SessionRuntimeConfigSchema.optional(),
 });
 
 export const ConfigSchema = z.object({
