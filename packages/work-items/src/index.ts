@@ -937,6 +937,23 @@ export class SqliteEventStore {
     return rows.map(toDomainEvent);
   }
 
+  listEventsPage(
+    workItemId: string,
+    afterSequence: number,
+    limit: number,
+  ): DomainEvent[] {
+    const boundedLimit = Math.max(1, Math.min(501, Math.floor(limit)));
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM domain_events
+         WHERE work_item_id = ? AND sequence > ?
+         ORDER BY sequence ASC
+         LIMIT ?`,
+      )
+      .all(workItemId, afterSequence, boundedLimit) as SqliteRow[];
+    return rows.map(toDomainEvent);
+  }
+
   listRecentEvents(workItemId: string, limit: number): DomainEvent[] {
     const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
     const rows = this.database
