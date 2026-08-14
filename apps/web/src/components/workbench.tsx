@@ -3,26 +3,28 @@ import { ChevronDown, X } from "lucide-react";
 import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { CommandPalette } from "@/components/command-palette";
 import { Composer } from "@/components/composer";
-import { LoadingConversation, ProjectionItem } from "@/components/conversation";
+import { LoadingConversation } from "@/components/conversation";
+import { SessionQueue } from "@/components/session-queue";
+import { SessionTimeline } from "@/components/session-timeline";
 import { SettingsPage } from "@/components/settings-page";
 import { PixelMark } from "@/components/pixel-mark";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
-import { api, streamSessionEvents } from "@/lib/api";
-import { reduceConversationEvents, type ApprovalProjection } from "@/lib/events";
+import { api } from "@/lib/api";
+import { SessionConnection } from "@/lib/session-connection";
+import { sessionViewStore, useSessionView } from "@/lib/session-store";
+import { submitSessionMessage } from "@/lib/submit-session-message";
 import type {
   AgentCommand,
   AgentProfile,
   AgentSession,
-  ApprovalRecord,
   ConfigOption,
   FlowRecord,
   MessageAttachmentInput,
-  SessionEvent,
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, composerTrigger, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, mergeConversationEvents, orderSessions, restoreSessionSelection, selectInitialAgent, serializeConfigOverride, workspacePaths } from "@/lib/workbench-logic";
-import { messageOf, projectionKey, statusLabel, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
+import { applyComposerSuggestion, composerTrigger, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, orderSessions, restoreSessionSelection, selectInitialAgent, serializeConfigOverride, workspacePaths } from "@/lib/workbench-logic";
+import { messageOf, statusLabel, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
 
 export function Workbench() {
   const [theme, setTheme] = useState<Theme>(() => readTheme());
@@ -35,10 +37,8 @@ export function Workbench() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
-  const [events, setEvents] = useState<SessionEvent[]>([]);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [configOptions, setConfigOptions] = useState<ConfigOption[]>([]);
-  const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [configOverrides, setConfigOverrides] = useState<Record<string, string | boolean>>({});
@@ -48,19 +48,16 @@ export function Workbench() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
   const [sending, setSending] = useState(false);
+  const pendingSubmissionKey = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState(false);
   const [pickingDirectory, setPickingDirectory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; kind: "info" | "error" } | null>(null);
-  const pendingEvents = useRef<Record<string, SessionEvent[]>>({});
-  const sessionCache = useRef<Record<string, {
-    session: AgentSession;
-    events: SessionEvent[];
-    commands: AgentCommand[];
-    options: ConfigOption[];
-    approvals: ApprovalRecord[];
-  }>>({});
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [loadingBlockId, setLoadingBlockId] = useState<string | null>(null);
+  const [loadingQueue, setLoadingQueue] = useState(false);
+  const [cancellingTurnId, setCancellingTurnId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<MenuView>("actions");
   const [renameDraft, setRenameDraft] = useState("");
@@ -70,9 +67,13 @@ export function Workbench() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const conversationViewport = useRef<HTMLElement | null>(null);
-  const streamAbort = useRef<AbortController | null>(null);
   const selectedAgentRef = useRef<string | null>(null);
   const selectedSessionRef = useRef<string | null>(null);
+  const sessionConnection = useMemo(() => new SessionConnection({
+    store: sessionViewStore,
+    openSession: api.openSession,
+  }), []);
+  const sessionView = useSessionView(selectedSessionId);
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
@@ -88,8 +89,7 @@ export function Workbench() {
   );
   const activeSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && !session.archived_at).length;
   const archivedSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && session.archived_at).length;
-  const projection = useMemo(() => reduceConversationEvents(events), [events]);
-  const sessionRunning = useMemo(() => projection.some((item) => item.kind === "work" && item.running), [projection]);
+  const sessionRunning = Boolean(sessionView?.snapshot.runtime.active_run);
   const modelOption = useMemo(() => configOptions.find(isModelOption), [configOptions]);
   const thoughtLevelOption = useMemo(() => configOptions.find(isThoughtLevelOption), [configOptions]);
   const speedOption = useMemo(() => configOptions.find(isSpeedOption), [configOptions]);
@@ -104,9 +104,10 @@ export function Workbench() {
     if (!silent) setLoading(true);
     if (!silent) setError(null);
     try {
+      if (importProvider) await api.importSessions();
       const [agentList, nextSessions, nextFlows] = await Promise.all([
         api.agents(),
-        api.sessions(importProvider, true),
+        api.sessions(false, true),
         api.flows(),
       ]);
       const nextAgents = agentList.agents;
@@ -148,11 +149,9 @@ export function Workbench() {
 
   useEffect(() => {
     if (!selectedSessionId) {
-      streamAbort.current?.abort();
-      setEvents([]);
+      sessionConnection.close();
       setCommands([]);
       setConfigOptions([]);
-      setApprovals([]);
       setModel("");
       setEffort("");
       setConfigOverrides({});
@@ -165,23 +164,7 @@ export function Workbench() {
 
     const sessionId = selectedSessionId;
     let active = true;
-    streamAbort.current?.abort();
-    const controller = new AbortController();
-    streamAbort.current = controller;
-    // Stale-while-revalidate: paint the cached snapshot instantly, refresh below.
-    const cached = sessionCache.current[sessionId];
-    setLoadingSession(!cached);
-    setEvents(cached ? mergeConversationEvents(cached.events, pendingEvents.current[sessionId] ?? []) : (pendingEvents.current[sessionId] ?? []));
-    if (cached) {
-      setCommands(cached.commands);
-      setConfigOptions(cached.options);
-      setApprovals(cached.approvals);
-      setModel(cached.session.model ?? "");
-      setEffort(cached.session.effort ?? "");
-      setConfigOverrides(cached.session.config_overrides ?? {});
-      setPermissionMode(cached.session.permission_mode ?? "");
-      setFlowId(cached.session.flow_id ?? "");
-    }
+    setLoadingSession(!sessionViewStore.get(sessionId));
     setError(null);
     setMenuOpen(false);
     setMenuView("actions");
@@ -191,39 +174,31 @@ export function Workbench() {
 
     void (async () => {
       try {
-        const { session, events: history, commands: nextCommands, options, runs } = await api.openSession(sessionId);
-      if (!active) return;
+        const snapshot = await api.openSession(sessionId);
+        if (!active) return;
+        sessionViewStore.hydrate(snapshot);
+        const { session } = snapshot;
         setSessions((current) => current.map((value) => value.session_id === session.session_id ? session : value));
-        setEvents((current) => mergeConversationEvents(pendingEvents.current[sessionId] ?? current, history));
-        setCommands(nextCommands);
-        setConfigOptions(options);
+        setCommands(snapshot.commands);
+        setConfigOptions(await api.configOptions(sessionId));
         setModel(session.model ?? "");
         setEffort(session.effort ?? "");
         setConfigOverrides(session.config_overrides ?? {});
         setPermissionMode(session.permission_mode ?? "");
         setFlowId(session.flow_id ?? "");
-        const latestRun = runs.at(-1);
-        const nextApprovals = latestRun ? await api.approvals(latestRun.run_id).catch(() => []) : [];
-        if (!active) return;
-        setApprovals(nextApprovals);
-        sessionCache.current[sessionId] = { session, events: history, commands: nextCommands, options, approvals: nextApprovals };
         setLoadingSession(false);
-        const after = history.reduce((max, event) => Math.max(max, event.sequence), 0);
-        await streamSessionEvents(sessionId, after, controller.signal, (event) => {
-          if (!active) return;
-          setEvents((current) => current.some((item) => item.event_id === event.event_id) ? current : [...current, event]);
-        });
+        await sessionConnection.open(sessionId);
       } catch (caught) {
-        if (active && !controller.signal.aborted) setError(messageOf(caught));
+        if (active) setError(messageOf(caught));
         if (active) setLoadingSession(false);
       }
     })();
 
     return () => {
       active = false;
-      controller.abort();
+      sessionConnection.close();
     };
-  }, [selectedSessionId]);
+  }, [selectedSessionId, sessionConnection]);
 
   const [stuckToBottom, setStuckToBottom] = useState(true);
   const sessionSwitch = useRef(true);
@@ -245,7 +220,7 @@ export function Workbench() {
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [events, selectedSessionId, loadingSession, sending, stuckToBottom]);
+  }, [sessionView, selectedSessionId, loadingSession, sending, stuckToBottom]);
 
   function handleConversationScroll() {
     const viewport = conversationViewport.current;
@@ -339,10 +314,13 @@ export function Workbench() {
   }
 
   async function stopRun() {
-    if (!selectedSessionId) return;
+    const runtime = sessionView?.snapshot.runtime;
+    const activeRun = runtime?.active_run;
+    if (!activeRun) return;
     try {
-      const result = await api.cancelRun(selectedSessionId);
-      notify(result.stopped ? "已请求停止当前 Run" : "当前没有正在运行的 Run", result.stopped ? "info" : "error");
+      const result = await api.cancelRun(activeRun.run_id, runtime.version, crypto.randomUUID());
+      notify(result.disposition === "already_terminal" ? "当前 Run 已结束" : "已请求停止当前 Run");
+      if (selectedSessionId) await sessionConnection.refresh(selectedSessionId);
     } catch (caught) {
       notify(messageOf(caught), "error");
     }
@@ -371,23 +349,30 @@ export function Workbench() {
     const pendingAttachments = attachments;
     setDraft("");
     setAttachments([]);
+    const idempotencyKey = pendingSubmissionKey.current ?? crypto.randomUUID();
+    pendingSubmissionKey.current = idempotencyKey;
+    const result = await submitSessionMessage({
+      send: api.sendMessage,
+      lookup: api.submission,
+      sessionId,
+      idempotencyKey,
+      input: { message, flowId: flowId || null, model: model || null, attachments: pendingAttachments, permissionMode: permissionMode || null, effort: effort || null },
+    });
     try {
-      const receipt = await api.sendMessage(sessionId, message, flowId || null, model || null, pendingAttachments, permissionMode || null, effort || null);
-      const messageEvent: SessionEvent = {
-        event_id: receipt.event_id,
-        sequence: receipt.sequence,
-        run_id: null,
-        type: "MESSAGE_RECEIVED",
-        occurred_at: new Date().toISOString(),
-        payload: { message, attachment_ids: [] },
-      };
-      pendingEvents.current[sessionId] = [...(pendingEvents.current[sessionId] ?? []), messageEvent];
-      setEvents((current) => mergeConversationEvents(current, [messageEvent]));
-      await api.startRun(sessionId, flowId || null, model || null, permissionMode || null, effort || null);
+      if (result.kind === "rejected") throw result.error;
+      if (result.kind === "unknown") {
+        setDraft(message);
+        setAttachments(pendingAttachments);
+        setError(`发送结果未知。重试时将使用请求 ${result.idempotencyKey}`);
+        return;
+      }
+      pendingSubmissionKey.current = null;
+      await sessionConnection.refresh(sessionId);
       setSessions((current) => current.map((session) => session.session_id === sessionId
         ? { ...session, status: "active", title: session.title ?? message.slice(0, 60), updated_at: new Date().toISOString() }
         : session));
     } catch (caught) {
+      pendingSubmissionKey.current = null;
       setDraft(message);
       setAttachments(pendingAttachments);
       setError(messageOf(caught));
@@ -400,7 +385,6 @@ export function Workbench() {
     setError(null);
     try {
       const updated = await api.updateSession(sessionId, update);
-      if (sessionCache.current[sessionId]) sessionCache.current[sessionId].session = updated;
       setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
       if (selectedSessionId === sessionId) {
         setModel(updated.model ?? "");
@@ -451,7 +435,6 @@ export function Workbench() {
   async function deleteSessionById(sessionId: string) {
     try {
       await api.deleteSession(sessionId);
-      delete sessionCache.current[sessionId];
       setSessions((current) => current.filter((session) => session.session_id !== sessionId));
       if (selectedSessionId === sessionId) {
         if (selectedSession) window.localStorage.removeItem(`codebridge:last-session:${selectedSession.agent_id}`);
@@ -508,26 +491,6 @@ export function Workbench() {
     }
   }
 
-  async function resolveApproval(item: ApprovalProjection, approve: boolean) {
-    if (!item.runId) return;
-    const approval = approvals.find((record) => record.id === item.requestId)
-      ?? approvals.find((record) => record.run_id === item.runId && record.status === "requested");
-    if (!approval) {
-      setError("审批记录尚未同步，请稍后重试");
-      return;
-    }
-    try {
-      if (approve) await api.approve(item.runId, approval.id);
-      else await api.reject(item.runId, approval.id);
-      setApprovals((current) => current.map((record) => record.id === approval.id
-        ? { ...record, status: approve ? "granted" : "revoked" }
-        : record));
-      notify(approve ? "已授权本次操作" : "已拒绝并暂停 Run");
-    } catch (caught) {
-      setError(messageOf(caught));
-    }
-  }
-
   async function addFiles(files: FileList | File[]) {
     try {
       const next = await Promise.all(Array.from(files).map(readAttachment));
@@ -564,6 +527,69 @@ export function Workbench() {
     setContextOpen(openContext);
     if (openContext && !workspaceListing && selectedSessionId) void browseWorkspace();
     setDraft(value);
+  }
+
+  async function loadEarlierTimeline() {
+    if (!selectedSessionId || loadingEarlier) return;
+    const before = sessionView?.snapshot.timeline.previous_cursor;
+    if (before === null || before === undefined) return;
+    setLoadingEarlier(true);
+    try {
+      sessionViewStore.mergeTimelinePage(selectedSessionId, await api.timeline(selectedSessionId, before));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }
+
+  async function loadBlockSegments(blockId: string, after: number) {
+    if (!selectedSessionId || loadingBlockId) return;
+    setLoadingBlockId(blockId);
+    try {
+      sessionViewStore.mergeSegmentPage(selectedSessionId, blockId, await api.segments(selectedSessionId, blockId, after));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setLoadingBlockId(null);
+    }
+  }
+
+  async function cancelQueuedTurn(turnId: string, version: number) {
+    if (!selectedSessionId || cancellingTurnId) return;
+    setCancellingTurnId(turnId);
+    try {
+      await api.cancelQueuedTurn(selectedSessionId, turnId, version, crypto.randomUUID());
+      await sessionConnection.refresh(selectedSessionId);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setCancellingTurnId(null);
+    }
+  }
+
+  async function resumeQueue(version: number) {
+    if (!selectedSessionId) return;
+    try {
+      await api.resumeQueue(selectedSessionId, version, crypto.randomUUID());
+      await sessionConnection.refresh(selectedSessionId);
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  async function loadMoreQueue() {
+    if (!selectedSessionId || loadingQueue) return;
+    const cursor = sessionView?.snapshot.runtime.queue.next_cursor;
+    if (cursor === null || cursor === undefined) return;
+    setLoadingQueue(true);
+    try {
+      sessionViewStore.mergeQueuePage(selectedSessionId, await api.queue(selectedSessionId, cursor));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setLoadingQueue(false);
+    }
   }
 
   return (
@@ -735,18 +761,15 @@ export function Workbench() {
           <div className="flex min-h-0 flex-1 flex-col">
             <section aria-label="Session conversation" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7" onScroll={handleConversationScroll} ref={conversationViewport}>
               <div className="mx-auto w-full max-w-[880px] pb-7">
-                {loadingSession ? <LoadingConversation /> : projection.length ? (
-                  <div className="grid gap-6">
-                    {projection.map((item, index) => (
-                      <ProjectionItem
-                        approvals={approvals}
-                        cwd={selectedSession.cwd}
-                        item={item}
-                        key={projectionKey(item, index)}
-                        onApproval={resolveApproval}
-                      />
-                    ))}
-                  </div>
+                {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
+                  <SessionTimeline
+                    hasEarlier={sessionView.snapshot.timeline.previous_cursor !== null}
+                    loadingBlockId={loadingBlockId}
+                    loadingEarlier={loadingEarlier}
+                    onLoadEarlier={() => void loadEarlierTimeline()}
+                    onLoadSegments={(blockId, after) => void loadBlockSegments(blockId, after)}
+                    turns={sessionView.snapshot.timeline.turns}
+                  />
                 ) : <div aria-label="Empty Session" className="flex min-h-[42vh] flex-col items-center justify-center text-center">
                   <div className={cn("mb-4 grid size-10 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")}>{selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id} className="size-[18px]" /> : <PixelMark className="size-5" />}</div>
                   <h2 className={cn("font-brand text-xl font-normal tracking-[-0.02em]", "text-ink")}>{selectedSession.title || (selectedAgent ? `${selectedAgent.display_name} Session` : "Session")}</h2>
@@ -756,7 +779,16 @@ export function Workbench() {
             </section>
             {!stuckToBottom && <button aria-label="回到底部" className={cn("absolute bottom-32 left-1/2 z-20 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 text-xs shadow-panel transition-opacity", "bg-surface", "text-ink-soft", "border-line-strong")} onClick={() => { const viewport = conversationViewport.current; if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" }); }} type="button"><ChevronDown className="size-3.5" />回到最新</button>}
             <footer className="px-8 pb-5 pt-3">
-              <div className="mx-auto w-full max-w-[880px]">
+              <div className="mx-auto grid w-full max-w-[880px] gap-3">
+                {sessionView && <SessionQueue
+                  cancellingTurnId={cancellingTurnId}
+                  loadingMore={loadingQueue}
+                  onCancel={(turnId, version) => void cancelQueuedTurn(turnId, version)}
+                  onLoadMore={() => void loadMoreQueue()}
+                  onResume={(version) => void resumeQueue(version)}
+                  runtime={sessionView.snapshot.runtime}
+                  turns={sessionView.snapshot.runtime.queue.turns}
+                />}
                 <Composer
                   attachments={attachments}
                   commands={commands}

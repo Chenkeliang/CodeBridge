@@ -11,7 +11,16 @@ import type {
   PiProvider,
   PiProviderPreset,
   RunRecord,
+  SessionCancelRunResult,
+  SessionCompositeSnapshot,
   SessionEvent,
+  SessionMessageReceipt,
+  SessionRuntimeView,
+  SessionSnapshot,
+  SessionTimelinePage,
+  SessionTurnView,
+  SendMessageInput,
+  TimelineSegmentPage,
   WorkspaceListing,
 } from "./types";
 
@@ -21,24 +30,183 @@ export function setRuntimeToken(token: string): void {
   runtimeToken = token;
 }
 
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+type ErrorPayload = {
+  error?: string;
+  detail?: string;
+  details?: string;
+  message?: string;
+  issues?: string[];
+} | null;
+
+type SessionEventsPage = {
+  events: SessionEvent[];
+  next_sequence: number | null;
+  has_more: boolean;
+};
+
+function mergeHeaders(init: RequestInit): Headers {
+  const headers = new Headers(init.headers);
+  if (runtimeToken && !headers.has("authorization")) {
+    headers.set("authorization", `Bearer ${runtimeToken}`);
+  }
+  if (init.body != null && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  return headers;
+}
+
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
     ...init,
-    headers: {
-      authorization: `Bearer ${runtimeToken}`,
-      "content-type": "application/json",
-      ...init.headers,
-    },
+    headers: mergeHeaders(init),
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { error?: string; detail?: string; details?: string; message?: string; issues?: string[] } | null;
+    const payload = await response.json().catch(() => null) as ErrorPayload;
     const issueText = payload?.issues?.length ? payload.issues.join("; ") : undefined;
-    const parts = [payload?.error, payload?.message, payload?.detail ?? payload?.details ?? issueText]
-      .filter((part): part is string => Boolean(part));
-    throw new Error(parts.length ? [...new Set(parts)].join(" · ") : `HTTP ${response.status}`);
+    const message = [payload?.message, payload?.detail ?? payload?.details ?? issueText]
+      .filter((part): part is string => Boolean(part))
+      .join(" · ") || `HTTP ${response.status}`;
+    throw new ApiError(response.status, payload?.error ?? "http_error", message);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function openSession(id: string): Promise<SessionCompositeSnapshot> {
+  const snapshot = await request<SessionSnapshot>('/v1/sessions/' + encodeURIComponent(id));
+  const composite = snapshot as SessionCompositeSnapshot;
+  return {
+    ...composite,
+    events: composite.events ?? [],
+    options: composite.options ?? [],
+    runs: composite.runs ?? [],
+  };
+}
+
+async function importSessions(input: { cwd?: string; agentId?: string } = {}): Promise<{ sessions: AgentSession[]; provider_errors: unknown[] }> {
+  return request<{ sessions: AgentSession[]; provider_errors: unknown[] }>("/v1/sessions/import", {
+    method: "POST",
+    body: JSON.stringify({ cwd: input.cwd, agent_id: input.agentId }),
+  });
+}
+
+function sendMessage(id: string, message: string, flowId: string | null, model: string | null, attachments: MessageAttachmentInput[], permissionMode: string | null, effort: string | null): Promise<SessionMessageReceipt>;
+function sendMessage(id: string, input: SendMessageInput): Promise<SessionMessageReceipt>;
+function sendMessage(
+  id: string,
+  messageOrInput: string | SendMessageInput,
+  flowId?: string | null,
+  model?: string | null,
+  attachments: MessageAttachmentInput[] = [],
+  permissionMode?: string | null,
+  effort?: string | null,
+): Promise<SessionMessageReceipt> {
+  const input = typeof messageOrInput === "string"
+    ? {
+      message: messageOrInput,
+      flowId,
+      model,
+      attachments,
+      permissionMode,
+      effort,
+      idempotencyKey: "",
+    }
+    : messageOrInput;
+
+  const headers = input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined;
+  return request<SessionMessageReceipt>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
+    method: "POST",
+    ...(headers ? { headers } : {}),
+    body: JSON.stringify({
+      message: input.message,
+      flow_id: input.flowId,
+      model: input.model,
+      permission_mode: input.permissionMode,
+      effort: input.effort,
+      attachments: input.attachments,
+    }),
+  });
+}
+
+function cancelRun(id: string): Promise<{ stopped: boolean; run_id?: string }>;
+function cancelRun(runId: string, runtimeVersion: number, key: string): Promise<{ stopped?: boolean; run_id?: string } & SessionCancelRunResult>;
+function cancelRun(id: string, runtimeVersion?: number, key?: string): Promise<any> {
+  if (typeof runtimeVersion === "number" && typeof key === "string") {
+    return request<{ stopped?: boolean; run_id?: string } & SessionCancelRunResult>(`/v1/runs/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+      headers: {
+        "Idempotency-Key": key,
+        "If-Match": String(runtimeVersion),
+      },
+    });
+  }
+  return request<{ stopped: boolean; run_id?: string }>(`/v1/sessions/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+async function events(id: string, afterSequence = 0): Promise<SessionEventsPage> {
+  const params = new URLSearchParams({ after_sequence: String(afterSequence) });
+  return request<SessionEventsPage>(`/v1/sessions/${encodeURIComponent(id)}/events?${params}`);
+}
+
+async function queue(sessionId: string, afterPosition: number | null): Promise<SessionRuntimeView["queue"]> {
+  const params = new URLSearchParams({ limit: "100" });
+  if (afterPosition !== null) params.set("after_position", String(afterPosition));
+  return request<SessionRuntimeView["queue"]>(`/v1/sessions/${encodeURIComponent(sessionId)}/queue?${params}`);
+}
+
+async function timeline(sessionId: string, before: number): Promise<SessionTimelinePage> {
+  const params = new URLSearchParams({ before: String(before), limit: "50" });
+  return request<SessionTimelinePage>(`/v1/sessions/${encodeURIComponent(sessionId)}/timeline?${params}`);
+}
+
+async function segments(sessionId: string, blockId: string, after: number): Promise<TimelineSegmentPage> {
+  const params = new URLSearchParams({ after: String(after), limit: "100" });
+  return request<TimelineSegmentPage>(`/v1/sessions/${encodeURIComponent(sessionId)}/blocks/${encodeURIComponent(blockId)}/segments?${params}`);
+}
+
+async function resumeQueue(sessionId: string, version: number, key: string): Promise<{ runtime: SessionRuntimeView }> {
+  return request<{ runtime: SessionRuntimeView }>(`/v1/sessions/${encodeURIComponent(sessionId)}/queue/resume`, {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": key,
+      "If-Match": String(version),
+    },
+  });
+}
+
+async function cancelQueuedTurn(sessionId: string, turnId: string, version: number, key: string): Promise<{ turn: SessionTurnView; runtime: SessionRuntimeView }> {
+  return request<{ turn: SessionTurnView; runtime: SessionRuntimeView }>(`/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(turnId)}`, {
+    method: "DELETE",
+    headers: {
+      "Idempotency-Key": key,
+      "If-Match": String(version),
+    },
+  });
+}
+
+async function submission(id: string, key: string): Promise<SessionMessageReceipt> {
+  return request<SessionMessageReceipt>(`/v1/sessions/${encodeURIComponent(id)}/submissions/${encodeURIComponent(key)}`);
+}
+
+async function startRun(id: string, flowId: string | null, model: string | null, permissionMode: string | null = null, effort: string | null = null): Promise<RunRecord> {
+  return request<RunRecord>(`/v1/sessions/${encodeURIComponent(id)}/runs`, {
+    method: "POST",
+    body: JSON.stringify({ flow_id: flowId, model, permission_mode: permissionMode, effort }),
+  });
 }
 
 export const api = {
@@ -66,24 +234,9 @@ export const api = {
     const query = params.toString();
     return (await request<{ sessions: AgentSession[] }>(`/v1/sessions${query ? `?${query}` : ""}`)).sessions;
   },
+  importSessions,
   session: (id: string) => request<AgentSession>(`/v1/sessions/${encodeURIComponent(id)}`),
-  openSession: async (id: string) => {
-    const encodedId = encodeURIComponent(id);
-    const session = await request<AgentSession>(`/v1/sessions/${encodedId}`);
-    const [events, commands, options, runs] = await Promise.all([
-      fetchSessionEvents(id, 0, 2_000),
-      request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodedId}/commands`),
-      request<{ options?: ConfigOption[] }>(`/v1/sessions/${encodedId}/config-options`),
-      request<{ runs: RunRecord[] }>(`/v1/sessions/${encodedId}/runs`),
-    ]);
-    return {
-      session,
-      events,
-      commands: commands.commands ?? [],
-      options: options.options ?? [],
-      runs: runs.runs,
-    };
-  },
+  openSession,
   createSession: (agentId: string) =>
     request<AgentSession>("/v1/sessions", { method: "POST", body: JSON.stringify({ agent_id: agentId }) }),
   updateSession: (id: string, update: Record<string, unknown>) =>
@@ -109,40 +262,25 @@ export const api = {
     if (root) params.set("root", root);
     return request<WorkspaceListing>(`/v1/sessions/${encodeURIComponent(id)}/files?${params}`);
   },
-  sendMessage: (id: string, message: string, flowId: string | null, model: string | null, attachments: MessageAttachmentInput[] = [], permissionMode: string | null = null, effort: string | null = null) =>
-    request<{ event_id: string; sequence: number }>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ message, flow_id: flowId, model, permission_mode: permissionMode, effort, attachments }),
-    }),
+  sendMessage,
   runs: async (id: string) =>
     (await request<{ runs: RunRecord[] }>(`/v1/sessions/${encodeURIComponent(id)}/runs`)).runs,
-  cancelRun: (id: string) =>
-    request<{ stopped: boolean; run_id?: string }>(`/v1/sessions/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" }),
-  startRun: (id: string, flowId: string | null, model: string | null, permissionMode: string | null = null, effort: string | null = null) =>
-    request<RunRecord>(`/v1/sessions/${encodeURIComponent(id)}/runs`, {
-      method: "POST",
-      body: JSON.stringify({ flow_id: flowId, model, permission_mode: permissionMode, effort }),
-    }),
-  events: async (id: string, afterSequence = 0) => fetchSessionEvents(id, afterSequence, afterSequence === 0 ? 2_000 : undefined),
+  cancelRun,
+  startRun,
+  events,
   approvals: async (runId: string) =>
     (await request<{ approvals: ApprovalRecord[] }>(`/v1/runs/${encodeURIComponent(runId)}/approvals`)).approvals,
   approve: (runId: string, approvalId: string) =>
     request(`/v1/runs/${encodeURIComponent(runId)}/approve`, { method: "POST", body: JSON.stringify({ approval_id: approvalId }) }),
   reject: (runId: string, approvalId: string) =>
     request(`/v1/runs/${encodeURIComponent(runId)}/reject`, { method: "POST", body: JSON.stringify({ approval_id: approvalId }) }),
+  queue,
+  timeline,
+  segments,
+  resumeQueue,
+  cancelQueuedTurn,
+  submission,
 };
-
-async function fetchSessionEvents(id: string, afterSequence: number, tail?: number): Promise<SessionEvent[]> {
-  const params = new URLSearchParams({ after_sequence: String(afterSequence) });
-  if (tail) params.set("tail", String(tail));
-  const response = await fetch(
-    `/v1/sessions/${encodeURIComponent(id)}/events?${params}`,
-    { headers: { authorization: `Bearer ${runtimeToken}` } },
-  );
-  if (!response.ok) throw new Error(`无法读取会话事件（HTTP ${response.status}）`);
-  const parsed = parseSseFrames<SessionEvent>(await response.text());
-  return parsed.events;
-}
 
 export async function streamSessionEvents(
   sessionId: string,
@@ -152,7 +290,7 @@ export async function streamSessionEvents(
 ): Promise<void> {
   const response = await fetch(
     `/v1/sessions/${encodeURIComponent(sessionId)}/events?live=true&after_sequence=${afterSequence}`,
-    { headers: { authorization: `Bearer ${runtimeToken}` }, signal },
+    { headers: mergeHeaders({}), signal },
   );
   if (!response.ok || !response.body) throw new Error("无法连接事件流");
   const reader = response.body.getReader();

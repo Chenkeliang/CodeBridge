@@ -152,6 +152,116 @@ export type SessionEvent = ConversationEvent & {
   target?: string | null;
 };
 
+export type SessionRunStatus =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export interface SessionRuntimeView {
+  active_run: RunRecord | null;
+  queue_state: "ready" | "paused";
+  queue_pause_reason: "failed" | "cancelled" | "interrupted" | null;
+  queue: {
+    turns: SessionTurnView[];
+    total: number;
+    next_cursor: number | null;
+  };
+  version: number;
+  last_event_sequence: number;
+}
+
+export interface SessionTurnView {
+  turn_id: string;
+  queue_position: number;
+  status: "queued" | "dispatched" | "cancelled";
+  version: number;
+  message: {
+    text: string;
+    attachment_ids: string[];
+  };
+  created_at: string;
+}
+
+export interface TimelineSegmentView {
+  segment_id: string;
+  segment_index: number;
+  content: string;
+  byte_length: number;
+  sealed: boolean;
+}
+
+export interface TimelineBlockView {
+  block_id: string;
+  block_index: number;
+  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error";
+  status: string;
+  metadata: Record<string, unknown>;
+  segments: TimelineSegmentView[];
+  next_segment_cursor: number | null;
+}
+
+export interface TimelineTurnView {
+  timeline_index: number;
+  turn_id: string;
+  run_id: string;
+  status: SessionRunStatus;
+  blocks: TimelineBlockView[];
+}
+
+export interface SessionTimelinePage {
+  turns: TimelineTurnView[];
+  previous_cursor: number | null;
+  truncated_block_ids: string[];
+}
+
+export interface TimelineSegmentPage {
+  segments: TimelineSegmentView[];
+  next_cursor: number | null;
+}
+
+export interface SessionSnapshot {
+  session: AgentSession;
+  runtime: SessionRuntimeView;
+  timeline: SessionTimelinePage;
+  commands: AgentCommand[];
+}
+
+export interface SessionCompositeSnapshot extends SessionSnapshot {
+  events: SessionEvent[];
+  options: ConfigOption[];
+  runs: RunRecord[];
+}
+
+export interface SubmitTurnReceipt {
+  acceptance: "queued" | "dispatched";
+  turn: SessionTurnView;
+  runtime: SessionRuntimeView;
+}
+
+export interface SessionMessageReceipt extends SubmitTurnReceipt {
+  event_id: string;
+  sequence: number;
+}
+
+export interface SessionCancelRunResult {
+  disposition: "cancelled" | "interrupting" | "already_terminal";
+  run: RunRecord;
+}
+
+export interface SendMessageInput {
+  message: string;
+  flowId: string | null;
+  model: string | null;
+  attachments: MessageAttachmentInput[];
+  permissionMode: string | null;
+  effort: string | null;
+  idempotencyKey: string;
+}
+
 export interface PiProviderModel {
   id: string;
   name?: string;
