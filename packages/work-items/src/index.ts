@@ -3,6 +3,36 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { initializeSessionRuntimeSchema } from "./session-schema.js";
+import type {
+  QueuePauseReason,
+  QueueState,
+  ReplaySafety,
+  SessionRuntime,
+  SessionTurn,
+  SessionTurnMessage,
+  SessionTurnStatus,
+} from "./session-runtime.js";
+
+export type {
+  ImportedHistoryEntry,
+  QueuePauseReason,
+  QueueState,
+  ReplaySafety,
+  RunAttempt,
+  SessionEventInput,
+  SessionRuntime,
+  SessionRuntimeTransaction,
+  SessionRuntimeWorkItemInput,
+  SessionRunSpec,
+  SessionTimelineBlock,
+  SessionTimelineSegment,
+  SessionTimelineTurn,
+  SessionTurn,
+  SessionTurnMessage,
+  SessionTurnStatus,
+  TimelineTurnStatus,
+} from "./session-runtime.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
   typeof import("node:sqlite");
@@ -44,6 +74,11 @@ export type DomainEventType =
   | "RUN_SUCCEEDED"
   | "RUN_FAILED"
   | "RUN_CANCELLED"
+  | "RUN_CANCEL_REQUESTED"
+  | "RUN_INTERRUPTED"
+  | "TURN_QUEUED"
+  | "TURN_DISPATCHED"
+  | "TURN_CANCELLED"
   | "DISCOVERY_STARTED"
   | "PROJECT_CANDIDATE_FOUND"
   | "FLOW_PROPOSED"
@@ -83,6 +118,7 @@ export interface WorkItem {
   status: WorkItemStatus;
   mode: WorkItemMode;
   conversationId: string;
+  sessionId: string | null;
   agentId: string | null;
   workflowId: string | null;
   workflowRevision: string | null;
@@ -99,6 +135,7 @@ export interface CreateWorkItemInput {
   title: string;
   mode: WorkItemMode;
   conversationId: string;
+  sessionId?: string | null;
   agentId?: string | null;
   workflowId?: string | null;
   workflowRevision?: string | null;
@@ -140,18 +177,27 @@ export type RunStatus =
   | "waiting"
   | "succeeded"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "interrupted";
 
 export interface Run {
   schemaVersion: 1;
   id: string;
   workItemId: string;
+  sessionId: string | null;
+  turnId: string | null;
   mode: WorkItemMode;
   status: RunStatus;
   agentId: string | null;
   planId: string | null;
   planIrHash: string | null;
   workflowRevision: string | null;
+  terminalReason: string | null;
+  replaySafety: ReplaySafety;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+  cancelRequestedAt: string | null;
+  cancelDeadlineAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -159,6 +205,8 @@ export interface Run {
 export interface CreateRunInput {
   id?: string;
   workItemId: string;
+  sessionId?: string | null;
+  turnId?: string | null;
   mode: WorkItemMode;
   agentId?: string | null;
   planId?: string | null;
@@ -297,6 +345,7 @@ export class SqliteEventStore {
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     }
     this.database = new DatabaseSync(databasePath);
+    this.database.exec("PRAGMA busy_timeout = 5000;");
     if (databasePath !== ":memory:") {
       this.database.exec("PRAGMA journal_mode = WAL;");
     }
@@ -432,6 +481,7 @@ export class SqliteEventStore {
     ]) {
       try { this.database.exec(statement); } catch { /* Existing databases already contain the column. */ }
     }
+    initializeSessionRuntimeSchema(this.database);
   }
 
   createWorkItem(input: CreateWorkItemInput): WorkItem {
@@ -443,6 +493,7 @@ export class SqliteEventStore {
       status: "created",
       mode: input.mode,
       conversationId: input.conversationId,
+      sessionId: input.sessionId ?? null,
       agentId: input.agentId ?? null,
       workflowId: input.workflowId ?? null,
       workflowRevision: input.workflowRevision ?? null,
@@ -460,9 +511,9 @@ export class SqliteEventStore {
         .prepare(
           `INSERT INTO work_items (
             id, schema_version, title, status, mode, conversation_id,
-            agent_id, workflow_id, workflow_revision, workspace_scope, identifiers,
-            context_revision, risk_level, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            session_id, agent_id, workflow_id, workflow_revision, workspace_scope,
+            identifiers, context_revision, risk_level, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           workItem.id,
@@ -471,6 +522,7 @@ export class SqliteEventStore {
           workItem.status,
           workItem.mode,
           workItem.conversationId,
+          workItem.sessionId,
           workItem.agentId,
           workItem.workflowId,
           workItem.workflowRevision,
@@ -481,6 +533,16 @@ export class SqliteEventStore {
           workItem.createdAt,
           workItem.updatedAt,
         );
+      if (workItem.sessionId) {
+        this.database
+          .prepare(
+            `INSERT INTO session_runtime (
+              session_id, active_run_id, queue_state, queue_pause_reason,
+              last_event_sequence, version, updated_at
+            ) VALUES (?, NULL, 'ready', NULL, 0, 1, ?)`,
+          )
+          .run(workItem.sessionId, workItem.createdAt);
+      }
       this.appendEventInTransaction({
         workItemId: workItem.id,
         type: "WORK_ITEM_CREATED",
@@ -500,6 +562,69 @@ export class SqliteEventStore {
       .prepare("SELECT * FROM work_items WHERE id = ?")
       .get(workItemId);
     return row ? toWorkItem(row) : undefined;
+  }
+
+  getWorkItemBySessionId(sessionId: string): WorkItem | undefined {
+    const row = this.database
+      .prepare("SELECT * FROM work_items WHERE session_id = ?")
+      .get(sessionId);
+    return row ? toWorkItem(row) : undefined;
+  }
+
+  getSessionRuntime(sessionId: string): SessionRuntime | undefined {
+    const row = this.database
+      .prepare("SELECT * FROM session_runtime WHERE session_id = ?")
+      .get(sessionId);
+    return row ? toSessionRuntime(row) : undefined;
+  }
+
+  getTurn(turnId: string): SessionTurn | undefined {
+    const row = this.database
+      .prepare("SELECT * FROM session_turns WHERE turn_id = ?")
+      .get(turnId);
+    return row ? toSessionTurn(row) : undefined;
+  }
+
+  listQueuedTurns(
+    sessionId: string,
+    options: { afterPosition?: number; limit: number },
+  ): {
+    turns: SessionTurn[];
+    total: number;
+    nextCursor: number | null;
+  } {
+    const afterPosition = Math.max(0, Math.floor(options.afterPosition ?? 0));
+    const limit = Math.max(1, Math.min(100, Math.floor(options.limit)));
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM session_turns
+         WHERE session_id = ? AND status = 'queued' AND queue_position > ?
+         ORDER BY queue_position ASC
+         LIMIT ?`,
+      )
+      .all(sessionId, afterPosition, limit + 1) as SqliteRow[];
+    const totalRow = this.database
+      .prepare(
+        `SELECT COUNT(*) AS total FROM session_turns
+         WHERE session_id = ? AND status = 'queued'`,
+      )
+      .get(sessionId) as { total?: number } | undefined;
+    const hasMore = rows.length > limit;
+    const turns = rows.slice(0, limit).map(toSessionTurn);
+    return {
+      turns,
+      total: Number(totalRow?.total ?? 0),
+      nextCursor: hasMore
+        ? turns.at(-1)?.queuePosition ?? null
+        : null,
+    };
+  }
+
+  countAllChanges(): number {
+    const row = this.database
+      .prepare("SELECT total_changes() AS value")
+      .get() as { value?: number } | undefined;
+    return Number(row?.value ?? 0);
   }
 
   updateWorkflowBinding(
@@ -673,6 +798,8 @@ export class SqliteEventStore {
       schemaVersion: 1,
       id: input.id ?? createId("run"),
       workItemId: input.workItemId,
+      sessionId: input.sessionId ?? workItem.sessionId,
+      turnId: input.turnId ?? null,
       mode: input.mode,
       status: "queued",
       agentId: input.agentId ?? workItem.agentId,
@@ -680,6 +807,12 @@ export class SqliteEventStore {
       planIrHash: input.planIrHash ?? plan?.planIrHash ?? null,
       workflowRevision:
         input.workflowRevision ?? plan?.definitionRevision ?? workItem.workflowRevision,
+      terminalReason: null,
+      replaySafety: "safe",
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      cancelRequestedAt: null,
+      cancelDeadlineAt: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -689,20 +822,30 @@ export class SqliteEventStore {
       this.database
         .prepare(
           `INSERT INTO runs (
-            id, schema_version, work_item_id, mode, status, agent_id,
-            plan_id, plan_ir_hash, workflow_revision, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            id, schema_version, work_item_id, session_id, turn_id, mode, status,
+            agent_id, plan_id, plan_ir_hash, workflow_revision, terminal_reason,
+            replay_safety, lease_owner, lease_expires_at, cancel_requested_at,
+            cancel_deadline_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           run.id,
           run.schemaVersion,
           run.workItemId,
+          run.sessionId,
+          run.turnId,
           run.mode,
           run.status,
           run.agentId,
           run.planId,
           run.planIrHash,
           run.workflowRevision,
+          run.terminalReason,
+          run.replaySafety,
+          run.leaseOwner,
+          run.leaseExpiresAt,
+          run.cancelRequestedAt,
+          run.cancelDeadlineAt,
           run.createdAt,
           run.updatedAt,
         );
@@ -772,6 +915,47 @@ export class SqliteEventStore {
       .prepare("UPDATE runs SET status = ?, updated_at = ? WHERE id = ?")
       .run(status, now, runId);
     if (Number(result.changes) !== 1) throw new Error(`Run not found: ${runId}`);
+    return this.getRun(runId)!;
+  }
+
+  updateRunControl(
+    runId: string,
+    patch: {
+      status?: RunStatus;
+      terminalReason?: string | null;
+      replaySafety?: ReplaySafety;
+      leaseOwner?: string | null;
+      leaseExpiresAt?: string | null;
+      cancelRequestedAt?: string | null;
+      cancelDeadlineAt?: string | null;
+    },
+  ): Run {
+    const current = this.getRun(runId);
+    if (!current) throw new Error(`Run not found: ${runId}`);
+    const next = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `UPDATE runs
+         SET status = ?, terminal_reason = ?, replay_safety = ?,
+           lease_owner = ?, lease_expires_at = ?, cancel_requested_at = ?,
+           cancel_deadline_at = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        next.status,
+        next.terminalReason,
+        next.replaySafety,
+        next.leaseOwner,
+        next.leaseExpiresAt,
+        next.cancelRequestedAt,
+        next.cancelDeadlineAt,
+        next.updatedAt,
+        runId,
+      );
     return this.getRun(runId)!;
   }
 
@@ -1021,6 +1205,16 @@ export class SqliteEventStore {
         JSON.stringify(event.payload),
       );
 
+    this.database
+      .prepare(
+        `UPDATE session_runtime
+         SET last_event_sequence = ?, updated_at = ?
+         WHERE session_id = (
+           SELECT session_id FROM work_items WHERE id = ?
+         )`,
+      )
+      .run(event.sequence, event.occurredAt, event.workItemId);
+
     const nextStatus = STATUS_BY_EVENT[event.type];
     if (nextStatus) {
       this.database
@@ -1045,6 +1239,9 @@ function toWorkItem(row: SqliteRow): WorkItem {
     status: String(row.status) as WorkItemStatus,
     mode: String(row.mode) as WorkItemMode,
     conversationId: String(row.conversation_id),
+    sessionId: row.session_id === null || row.session_id === undefined
+      ? null
+      : String(row.session_id),
     agentId: row.agent_id === null ? null : String(row.agent_id),
     workflowId: row.workflow_id === null ? null : String(row.workflow_id),
     workflowRevision:
@@ -1080,6 +1277,12 @@ function toRun(row: SqliteRow): Run {
     schemaVersion: Number(row.schema_version) as 1,
     id: String(row.id),
     workItemId: String(row.work_item_id),
+    sessionId: row.session_id === null || row.session_id === undefined
+      ? null
+      : String(row.session_id),
+    turnId: row.turn_id === null || row.turn_id === undefined
+      ? null
+      : String(row.turn_id),
     mode: String(row.mode) as WorkItemMode,
     status: String(row.status) as RunStatus,
     agentId: row.agent_id === null ? null : String(row.agent_id),
@@ -1089,8 +1292,71 @@ function toRun(row: SqliteRow): Run {
       row.workflow_revision === null || row.workflow_revision === undefined
         ? null
         : String(row.workflow_revision),
+    terminalReason:
+      row.terminal_reason === null || row.terminal_reason === undefined
+        ? null
+        : String(row.terminal_reason),
+    replaySafety: String(row.replay_safety ?? "safe") as ReplaySafety,
+    leaseOwner:
+      row.lease_owner === null || row.lease_owner === undefined
+        ? null
+        : String(row.lease_owner),
+    leaseExpiresAt:
+      row.lease_expires_at === null || row.lease_expires_at === undefined
+        ? null
+        : String(row.lease_expires_at),
+    cancelRequestedAt:
+      row.cancel_requested_at === null || row.cancel_requested_at === undefined
+        ? null
+        : String(row.cancel_requested_at),
+    cancelDeadlineAt:
+      row.cancel_deadline_at === null || row.cancel_deadline_at === undefined
+        ? null
+        : String(row.cancel_deadline_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toSessionRuntime(row: SqliteRow): SessionRuntime {
+  return {
+    sessionId: String(row.session_id),
+    activeRunId:
+      row.active_run_id === null || row.active_run_id === undefined
+        ? null
+        : String(row.active_run_id),
+    queueState: String(row.queue_state) as QueueState,
+    queuePauseReason:
+      row.queue_pause_reason === null || row.queue_pause_reason === undefined
+        ? null
+        : String(row.queue_pause_reason) as Exclude<QueuePauseReason, null>,
+    lastEventSequence: Number(row.last_event_sequence),
+    version: Number(row.version),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toSessionTurn(row: SqliteRow): SessionTurn {
+  return {
+    turnId: String(row.turn_id),
+    sessionId: String(row.session_id),
+    queuePosition: Number(row.queue_position),
+    status: String(row.status) as SessionTurnStatus,
+    message: JSON.parse(String(row.message_json)) as SessionTurnMessage,
+    version: Number(row.version),
+    dispatchedRunId:
+      row.dispatched_run_id === null || row.dispatched_run_id === undefined
+        ? null
+        : String(row.dispatched_run_id),
+    createdAt: String(row.created_at),
+    dispatchedAt:
+      row.dispatched_at === null || row.dispatched_at === undefined
+        ? null
+        : String(row.dispatched_at),
+    cancelledAt:
+      row.cancelled_at === null || row.cancelled_at === undefined
+        ? null
+        : String(row.cancelled_at),
   };
 }
 
