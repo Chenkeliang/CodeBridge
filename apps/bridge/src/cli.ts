@@ -46,6 +46,7 @@ import { createFlowApp } from "./flow-api.js";
 import { createChannelSessionIngress } from "./channel-ingress.js";
 import { createMcpApp } from "./mcp-api.js";
 import { resolveStartupSurfaces } from "./startup-surfaces.js";
+import { SessionRuntimeMigration } from "./session-runtime-migration.js";
 
 const program = new Command();
 
@@ -92,6 +93,28 @@ program
     const sessionCatalog = new SessionCatalogStore(
       path.join(dataDir, "sessions.sqlite"),
     );
+    const migration = new SessionRuntimeMigration(sessionCatalog, workItemStore);
+    try {
+      const migrationResult = migration.run({ batchSize: 1_000 });
+      console.log("session runtime migration complete", migrationResult);
+    } catch (error) {
+      if (
+        error instanceof Error
+        && error.message === "session_runtime_migration_conflict"
+      ) {
+        console.error(
+          "session runtime migration conflict",
+          JSON.stringify({
+            conflicts: (error as Error & {
+              conflicts?: unknown;
+            }).conflicts ?? [],
+          }, null, 2),
+        );
+        process.exitCode = 1;
+        return;
+      }
+      throw error;
+    }
     const flowCatalog = new FlowCatalogStore(path.join(dataDir, "flows.sqlite"));
     const approvalService = new ApprovalService(
       workItemStore,
