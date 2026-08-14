@@ -232,4 +232,35 @@ describe("Composer", () => {
     act(() => contextView.root.unmount());
     contextView.host.remove();
   });
+
+  it("uses Enter to navigate a selected Workspace directory instead of submitting", () => {
+    const view = renderComposer({
+      contextOpen: true,
+      draft: "@src",
+      workspaceListing: {
+        ok: true,
+        root: "/workspace/app",
+        path: "/workspace/app",
+        relativePath: "",
+        entries: [{
+          name: "src",
+          path: "src",
+          absolutePath: "/workspace/app/src",
+          kind: "directory",
+        }],
+      },
+    });
+    const editor = view.host.querySelector('[contenteditable="true"]')!;
+
+    act(() => editor.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    })));
+
+    expect(view.props.onContextNavigate).toHaveBeenCalledWith("src", "/workspace/app");
+    expect(view.props.onSubmit).not.toHaveBeenCalled();
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
 });

@@ -1,4 +1,4 @@
-import { Extension } from "@tiptap/core";
+import { Extension, type Editor, type JSONContent } from "@tiptap/core";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
@@ -84,7 +84,7 @@ const ComposerEvents = Extension.create<Record<string, never>, ComposerEventsSto
         const parsed = runtime.codec.parseSafely(runtime.value);
         commands.setContent(parsed.document, { emitUpdate: false });
         this.storage.lastEmitted = runtime.value;
-        runtime.callbacks.onTrigger(triggerAtEnd(runtime.value));
+        runtime.callbacks.onTrigger(triggerFromDocument(parsed.document, runtime.value));
         runtime.callbacks.onSerializationError(null);
         return true;
       },
@@ -97,6 +97,9 @@ const ComposerEvents = Extension.create<Record<string, never>, ComposerEventsSto
         handleKeyDown: (_view, event) => {
           const callbacks = this.storage.callbacks;
           if (!callbacks || event.isComposing || this.editor.view.composing) return false;
+          if (event.key === "Enter" && this.editor.state.selection.$from.parent.type.name === "sourceBlock") {
+            return false;
+          }
           if (event.key === "Enter" && event.shiftKey) {
             return this.editor.commands.setHardBreak();
           }
@@ -164,11 +167,12 @@ export function MarkdownComposer({
       const storage = current.storage.composerEvents as ComposerEventsStorage;
       if (!storage.callbacks || !storage.codec) return;
       try {
-        const markdown = storage.codec.serialize(current.getJSON());
+        const document = current.getJSON();
+        const markdown = storage.codec.serialize(document);
         storage.lastEmitted = markdown;
         storage.callbacks.onSerializationError(null);
         storage.callbacks.onChange(markdown);
-        storage.callbacks.onTrigger(triggerAtEnd(markdown));
+        storage.callbacks.onTrigger(triggerFromEditor(current, markdown));
       } catch (error) {
         storage.callbacks.onSerializationError(
           error instanceof Error ? error.message : "Markdown 序列化失败",
@@ -225,4 +229,14 @@ function triggerAtEnd(markdown: string): ComposerTrigger {
     kind: match[1] === "/" ? "command" : "context",
     query: match[2] ?? "",
   };
+}
+
+function triggerFromDocument(document: JSONContent, markdown: string): ComposerTrigger {
+  return document.content?.at(-1)?.type === "sourceBlock" ? null : triggerAtEnd(markdown);
+}
+
+function triggerFromEditor(editor: Editor, markdown: string): ComposerTrigger {
+  return editor.state.selection.$from.parent.type.name === "sourceBlock"
+    ? null
+    : triggerAtEnd(markdown);
 }

@@ -98,6 +98,23 @@ describe("MarkdownComposer", () => {
     view.host.remove();
   });
 
+  it("keeps Enter available for multiline editing inside source blocks", () => {
+    const view = renderEditor({ value: "```ts\nconst value = 1;\n```" });
+    const source = view.host.querySelector("[data-markdown-source]")!;
+    const before = source.textContent?.length ?? 0;
+
+    act(() => source.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    })));
+
+    expect(view.props.onSubmit).not.toHaveBeenCalled();
+    expect(source.textContent?.length).toBeGreaterThan(before);
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
+
   it("accepts an external clear without emitting a replacement update", () => {
     const onChange = vi.fn();
     const view = renderEditor({ value: "待发送", onChange });
@@ -138,6 +155,21 @@ describe("MarkdownComposer", () => {
 
     act(() => view.root.render(<MarkdownComposer {...view.props} onTrigger={onTrigger} value="@src" />));
     expect(onTrigger).toHaveBeenLastCalledWith({ kind: "context", query: "src" });
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
+
+  it("does not report command or context triggers from source blocks", () => {
+    const onTrigger = vi.fn();
+    const view = renderEditor({ onTrigger });
+
+    act(() => view.root.render(<MarkdownComposer
+      {...view.props}
+      onTrigger={onTrigger}
+      value={"```text\n@not-context\n```"}
+    />));
+
+    expect(onTrigger).toHaveBeenLastCalledWith(null);
     act(() => view.root.unmount());
     view.host.remove();
   });
