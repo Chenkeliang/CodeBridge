@@ -150,6 +150,7 @@ export interface Run {
   status: RunStatus;
   agentId: string | null;
   planId: string | null;
+  planIrHash: string | null;
   workflowRevision: string | null;
   createdAt: string;
   updatedAt: string;
@@ -161,6 +162,7 @@ export interface CreateRunInput {
   mode: WorkItemMode;
   agentId?: string | null;
   planId?: string | null;
+  planIrHash?: string | null;
   workflowRevision?: string | null;
 }
 
@@ -182,6 +184,7 @@ export interface PersistedPlan {
   source: "workflow" | "agent_generated";
   workflowId: string;
   definitionRevision: string | null;
+  planIrHash: string | null;
   sessionId: string | null;
   runId: string | null;
   steps: PersistedPlanStep[];
@@ -193,6 +196,7 @@ export interface SavePlanInput {
   source: PersistedPlan["source"];
   workflowId: string;
   definitionRevision: string | null;
+  planIrHash?: string | null;
   sessionId?: string | null;
   runId?: string | null;
   steps: PersistedPlanStep[];
@@ -420,10 +424,12 @@ export class SqliteEventStore {
       );
       CREATE INDEX IF NOT EXISTS verifications_run_created ON verifications (run_id, created_at);
     `);
-    try {
-      this.database.exec("ALTER TABLE runs ADD COLUMN workflow_revision TEXT");
-    } catch {
-      // Existing databases already contain the column.
+    for (const statement of [
+      "ALTER TABLE runs ADD COLUMN workflow_revision TEXT",
+      "ALTER TABLE plans ADD COLUMN plan_ir_hash TEXT",
+      "ALTER TABLE runs ADD COLUMN plan_ir_hash TEXT",
+    ]) {
+      try { this.database.exec(statement); } catch { /* Existing databases already contain the column. */ }
     }
   }
 
@@ -601,6 +607,7 @@ export class SqliteEventStore {
       source: input.source,
       workflowId: input.workflowId,
       definitionRevision: input.definitionRevision,
+      planIrHash: input.planIrHash ?? null,
       sessionId: input.sessionId ?? null,
       runId: input.runId ?? null,
       steps: input.steps.map(clonePlanStep),
@@ -610,12 +617,13 @@ export class SqliteEventStore {
       .prepare(
         `INSERT INTO plans (
           plan_id, schema_version, source, workflow_id, definition_revision,
-          session_id, run_id, steps, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          plan_ir_hash, session_id, run_id, steps, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(plan_id) DO UPDATE SET
           source = excluded.source,
           workflow_id = excluded.workflow_id,
           definition_revision = excluded.definition_revision,
+          plan_ir_hash = excluded.plan_ir_hash,
           session_id = excluded.session_id,
           run_id = excluded.run_id,
           steps = excluded.steps`,
@@ -626,6 +634,7 @@ export class SqliteEventStore {
         plan.source,
         plan.workflowId,
         plan.definitionRevision,
+        plan.planIrHash,
         plan.sessionId,
         plan.runId,
         JSON.stringify(plan.steps),
@@ -667,6 +676,7 @@ export class SqliteEventStore {
       status: "queued",
       agentId: input.agentId ?? workItem.agentId,
       planId: input.planId ?? null,
+      planIrHash: input.planIrHash ?? plan?.planIrHash ?? null,
       workflowRevision:
         input.workflowRevision ?? plan?.definitionRevision ?? workItem.workflowRevision,
       createdAt: now,
@@ -679,8 +689,8 @@ export class SqliteEventStore {
         .prepare(
           `INSERT INTO runs (
             id, schema_version, work_item_id, mode, status, agent_id,
-            plan_id, workflow_revision, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            plan_id, plan_ir_hash, workflow_revision, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           run.id,
@@ -690,6 +700,7 @@ export class SqliteEventStore {
           run.status,
           run.agentId,
           run.planId,
+          run.planIrHash,
           run.workflowRevision,
           run.createdAt,
           run.updatedAt,
@@ -1072,6 +1083,7 @@ function toRun(row: SqliteRow): Run {
     status: String(row.status) as RunStatus,
     agentId: row.agent_id === null ? null : String(row.agent_id),
     planId: row.plan_id === null ? null : String(row.plan_id),
+    planIrHash: row.plan_ir_hash === null || row.plan_ir_hash === undefined ? null : String(row.plan_ir_hash),
     workflowRevision:
       row.workflow_revision === null || row.workflow_revision === undefined
         ? null
@@ -1089,6 +1101,7 @@ function toPlan(row: SqliteRow): PersistedPlan {
     workflowId: String(row.workflow_id),
     definitionRevision:
       row.definition_revision === null ? null : String(row.definition_revision),
+    planIrHash: row.plan_ir_hash === null || row.plan_ir_hash === undefined ? null : String(row.plan_ir_hash),
     sessionId: row.session_id === null ? null : String(row.session_id),
     runId: row.run_id === null ? null : String(row.run_id),
     steps: (JSON.parse(String(row.steps)) as PersistedPlanStep[]).map(clonePlanStep),

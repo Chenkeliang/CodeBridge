@@ -368,4 +368,18 @@ describe("SqliteEventStore", () => {
     expect(store.listMessageAttachments(item.id, [attachment.id])).toEqual([attachment]);
     store.close();
   });
+
+  it("persists planIrHash on plans and runs", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({ title: "t", mode: "auto", conversationId: "c", riskLevel: "read_only" });
+    const plan = store.savePlan({
+      planId: "plan_1", source: "workflow", workflowId: "flow_1",
+      definitionRevision: "sha256:def", planIrHash: "sha256:plan",
+      steps: [{ id: "s", capabilityId: "c.d", risk: "read_only", dependsOn: [], guard: null, approval: "none", branches: [], purpose: null }],
+    });
+    expect(plan.planIrHash).toBe("sha256:plan");
+    const run = store.createRun({ workItemId: item.id, planId: "plan_1", mode: "auto" });
+    expect(run.planIrHash).toBe("sha256:plan");
+    store.close();
+  });
 });
