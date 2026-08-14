@@ -3,7 +3,17 @@ import { describe, expect, it } from "vitest";
 
 /** The workbench component tree, concatenated: policy assertions apply to the whole surface. */
 function readSource(): string {
-  return ["./workbench.tsx", "./composer.tsx", "./conversation.tsx", "./session-chrome.tsx", "./command-palette.tsx"]
+  return [
+    "./workbench.tsx",
+    "./composer.tsx",
+    "./composer-attachments.tsx",
+    "./composer-controls.tsx",
+    "./markdown-composer/markdown-composer.tsx",
+    "./conversation.tsx",
+    "./session-chrome.tsx",
+    "./session-timeline.tsx",
+    "./command-palette.tsx",
+  ]
     .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
     .join("\n");
 }
@@ -19,7 +29,20 @@ describe("Workbench component policy", () => {
   });
 
   it("consumes semantic design tokens instead of hardcoded palette colors", () => {
-    const files = ["./workbench.tsx", "./design-preview.tsx", "./ui/button.tsx", "./ui/textarea.tsx", "./ui/badge.tsx", "./ui/slider.tsx", "./ui/select.tsx", "./ui/popover.tsx"];
+    const files = [
+      "./workbench.tsx",
+      "./composer.tsx",
+      "./composer-attachments.tsx",
+      "./composer-controls.tsx",
+      "./markdown-composer/markdown-composer.tsx",
+      "./design-preview.tsx",
+      "./ui/button.tsx",
+      "./ui/textarea.tsx",
+      "./ui/badge.tsx",
+      "./ui/slider.tsx",
+      "./ui/select.tsx",
+      "./ui/popover.tsx",
+    ];
     for (const file of files) {
       const source = readFileSync(new URL(file, import.meta.url), "utf8");
 
@@ -50,12 +73,13 @@ describe("Workbench component policy", () => {
   });
 
   it("places command and context suggestions outside the composer input surface", () => {
-    const source = readSource();
+    const source = readFileSync(new URL("./composer.tsx", import.meta.url), "utf8");
 
-    expect(source).toContain('"absolute bottom-[calc(100%+0.5rem)] left-3 z-30');
-    expect(source).toContain('"absolute bottom-[calc(100%+0.5rem)] left-12 z-30');
-    expect(source).toContain('<div className="flex items-center gap-1">');
-    expect(source).not.toContain('<div className="relative flex items-center gap-1">');
+    expect(source).toContain("function CommandPicker");
+    expect(source).toContain("function ContextPicker");
+    expect(source).toContain("bottom-[calc(100%+0.5rem)]");
+    expect(source).not.toContain('aria-label="Agent commands"');
+    expect(source).not.toContain('aria-label="插入上下文"');
   });
 
   it("renders math and Mermaid diagrams as rich conversation content", () => {
@@ -82,26 +106,27 @@ describe("Workbench component policy", () => {
 
   it("keeps Agent-native model, reasoning, and permission controls in the Composer", () => {
     const source = readSource();
+    const controls = readFileSync(new URL("./composer-controls.tsx", import.meta.url), "utf8");
     const sliderUrl = new URL("./ui/slider.tsx", import.meta.url);
 
     expect(source).toContain("permissionOption={permissionOption}");
     expect(source).toContain("thoughtLevelOption={thoughtLevelOption}");
     expect(source).toContain("onPermissionMode={setSessionPermissionMode}");
     expect(source).toContain("onEffort={setSessionEffort}");
-    expect(source).toContain("<ReasoningLevelControl");
+    expect(controls).toContain("<ReasoningLevelControl");
     expect(source).toContain("speedOption={speedOption}");
-    expect(source).toContain("<SpeedControl");
+    expect(controls).toContain("<SpeedControl");
     expect(existsSync(sliderUrl)).toBe(true);
-    expect(source).toContain('const effectiveValue = value || option.currentValue || levels[0]?.value || ""');
-    expect(source).toContain('onClick={() => onValue("")}>恢复默认</button>');
-    expect(source).toContain('label="Agent 默认"');
-    expect(source).toContain("<SelectValue>{triggerLabel}</SelectValue>");
+    expect(controls).toContain("const effectiveValue = value || option.currentValue");
+    expect(controls).toContain('onClick={() => onValue("")}');
+    expect(controls).toContain('label="Agent 默认"');
+    expect(controls).toContain("<SelectValue>{triggerLabel}</SelectValue>");
     expect(source).toContain('session.status === "active" ? "bg-success" : "bg-faint"');
     expect(source).toContain('session.status !== "idle"');
   });
 
   it("uses reduced-motion-safe feedback for the discrete reasoning slider", () => {
-    const source = readSource();
+    const source = readFileSync(new URL("./composer-controls.tsx", import.meta.url), "utf8");
     const slider = readFileSync(new URL("./ui/slider.tsx", import.meta.url), "utf8");
 
     expect(source).toContain("previewIndex >= index");
@@ -238,10 +263,71 @@ describe("Workbench component policy", () => {
   });
 
   it("checks the resolved default model instead of a duplicate Agent-default item", () => {
-    const source = readFileSync(new URL("./composer.tsx", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./composer-controls.tsx", import.meta.url), "utf8");
 
     expect(source).toContain('const effective = value || option.currentValue || "";');
     expect(source).toContain("{!selected && <SelectItem");
+  });
+
+  it("uses the approved minimal rich Composer without removing capabilities", () => {
+    const composer = readFileSync(new URL("./composer.tsx", import.meta.url), "utf8");
+    const editor = readFileSync(new URL("./markdown-composer/markdown-composer.tsx", import.meta.url), "utf8");
+    const controls = readFileSync(new URL("./composer-controls.tsx", import.meta.url), "utf8");
+
+    expect(composer).toContain("<ComposerAttachments");
+    expect(composer).toContain("<MarkdownComposer");
+    expect(composer).toContain("<ComposerActions");
+    expect(composer).toContain("<PermissionControl");
+    expect(composer).toContain("<ModelControls");
+    expect(composer).toContain('aria-label="停止当前 Run"');
+    expect(composer).toContain('aria-label="发送"');
+    expect(composer).not.toContain("<Textarea");
+    expect(composer).not.toContain("Enter 发送");
+    expect(editor).toContain('name: "composerEvents"');
+    expect(editor).toContain("onFiles");
+    expect(editor).toContain("onPickerKey");
+    expect(controls).toContain("添加文件");
+    expect(controls).toContain("Workspace");
+    expect(controls).toContain("Flow");
+    expect(controls).toContain("<ReasoningLevelControl");
+    expect(controls).toContain("<SpeedControl");
+  });
+
+  it("keeps glass local to the Composer and floating interaction surfaces", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const composer = readFileSync(new URL("./composer.tsx", import.meta.url), "utf8");
+    const controls = readFileSync(new URL("./composer-controls.tsx", import.meta.url), "utf8");
+    const palette = readFileSync(new URL("./command-palette.tsx", import.meta.url), "utf8");
+    const popover = readFileSync(new URL("./ui/popover.tsx", import.meta.url), "utf8");
+    const select = readFileSync(new URL("./ui/select.tsx", import.meta.url), "utf8");
+
+    expect(popover).toContain('surface?: "solid" | "frosted"');
+    expect(select).toContain('surface?: "solid" | "frosted"');
+    expect(controls).toContain('surface="frosted"');
+    expect(`${composer}\n${palette}`).toContain("surface-frosted");
+    expect(workbench).not.toContain("surface-frosted");
+    expect(workbench).not.toContain("backdrop-blur");
+  });
+
+  it("reveals only newly live Assistant segments and respects reduced motion", () => {
+    const timeline = readFileSync(new URL("./session-timeline.tsx", import.meta.url), "utf8");
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+
+    expect(timeline).toContain("seenSegmentIds");
+    expect(timeline).toContain("newlyLiveAssistantSegments");
+    expect(timeline).toContain("data-streaming-caret");
+    expect(workbench).toContain("key={selectedSessionId}");
+    expect(styles).toContain(".assistant-reveal");
+    expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+  });
+
+  it("keeps successful attachments when another selected file cannot be read", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(workbench).toContain("Promise.allSettled");
+    expect(workbench).toContain("if (successful.length) setAttachments");
+    expect(workbench).toContain("if (failed) setError(messageOf(failed.reason))");
   });
 
   it("submits a message atomically and resolves uncertain outcomes before changing authority", () => {
