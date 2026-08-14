@@ -63,7 +63,7 @@ export function CommandPalette({ agents, sessions, canCreate, onClose, onSelectA
 
   let lastGroup = "";
   return <div aria-modal="true" className="fixed inset-0 z-50 bg-canvas/80" onClick={onClose} role="dialog">
-    <div className={cn("mx-auto mt-[18vh] w-full max-w-[480px] overflow-hidden rounded-xl border", "bg-surface", "border-line-strong", "shadow-panel")} onClick={(event) => event.stopPropagation()}>
+    <div className={cn("surface-frosted mx-auto mt-[18vh] w-full max-w-[480px] overflow-hidden rounded-xl border", "border-line-strong", "shadow-panel")} onClick={(event) => event.stopPropagation()}>
       <div className={cn("flex h-11 items-center gap-2 border-b px-3.5", "border-line")}>
         <Search className={cn("size-4 shrink-0", "text-muted")} />
         <input aria-label="命令面板" autoFocus className={cn("min-w-0 flex-1 bg-transparent text-sm outline-none", "text-ink", "placeholder:text-faint")} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKey} placeholder="切换 Agent / Session，或执行操作…" value={query} />
@@ -83,4 +83,3 @@ export function CommandPalette({ agents, sessions, canCreate, onClose, onSelectA
     </div>
   </div>;
 }
-

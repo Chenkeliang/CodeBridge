@@ -62,6 +62,16 @@ describe("design tokens", () => {
     expect(Object.keys(paper).sort()).toEqual(Object.keys(carbon).sort());
   });
 
+  it("defines matching semantic overlay tokens and scopes frosting to opt-in surfaces", () => {
+    expect(paper["--agnet-overlay"]).toBe("#FFFFFF");
+    expect(carbon["--agnet-overlay"]).toBe("#1D1D1D");
+    expect(css).toContain("--agnet-overlay-strength: 94%");
+    expect(css).toContain("--agnet-overlay-strength: 84%");
+    expect(css).toContain("@utility surface-frosted");
+    expect(css).toContain("background: color-mix(in srgb, var(--agnet-overlay) var(--agnet-overlay-strength), transparent)");
+    expect(css).toContain("backdrop-filter: blur(");
+  });
+
   it("keeps carbon structural surfaces neutral instead of green-tinted", () => {
     for (const token of ["--agnet-canvas", "--agnet-sidebar", "--agnet-surface", "--agnet-surface-soft", "--agnet-surface-tint", "--agnet-line"]) {
       expect(channelSpread(carbon[token]!), token).toBeLessThanOrEqual(1);

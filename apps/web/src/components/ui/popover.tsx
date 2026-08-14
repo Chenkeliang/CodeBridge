@@ -5,15 +5,20 @@ import { cn } from "@/lib/utils";
 const Popover = PopoverPrimitive.Root;
 const PopoverTrigger = PopoverPrimitive.Trigger;
 
+type PopoverContentProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content> & {
+  surface?: "solid" | "frosted";
+};
+
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ align = "center", className, sideOffset = 6, ...props }, ref) => (
+  PopoverContentProps
+>(({ align = "center", className, sideOffset = 6, surface = "solid", ...props }, ref) => (
   <PopoverPrimitive.Portal>
     <PopoverPrimitive.Content
       align={align}
       className={cn(
         "z-50 rounded-lg border p-3 outline-none shadow-lg data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+        surface === "frosted" ? "surface-frosted" : "bg-surface",
         className,
       )}
       ref={ref}
