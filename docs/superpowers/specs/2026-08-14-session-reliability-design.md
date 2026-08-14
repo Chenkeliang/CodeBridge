@@ -5,9 +5,9 @@
 - Scope: `packages/work-items`, `packages/run-executor`, `packages/runner-host`, `packages/backends`, `apps/bridge`, `apps/web`
 - Related: `docs/orchestration/architecture.md`, `docs/orchestration/api-contract.md`, `docs/superpowers/specs/2026-08-13-flow-design.md`
 - Upstream references:
-  - DeepSeek Harness `47f943859bef60e4160492346772ded9b24f765a`
-  - Oh My Pi `5535b5097ef80e4716bce7e6bdf4ae938cd48b70`
-  - Pi / `earendil-works/pi` `9d2ec7ffabe927bfad2214c1cee25b6632a78dcf`
+  - DeepSeek Harness `47f943859bef60e4160492346772ded9b24f765a`：持久 Inbox、未知工具结果 Repair、delta 无损打包和增量 Surface 投影。
+  - Oh My Pi `5535b5097ef80e4716bce7e6bdf4ae938cd48b70`：单活动 Prompt、内存 Follow-up Queue、Replay-safe Retry 和可取消重试生命周期。
+  - Pi / `earendil-works/pi` `9d2ec7ffabe927bfad2214c1cee25b6632a78dcf`：单活动 Agent Run、`followUp` / `steer` 语义和 Append-only JSONL Session。
 
 ## 1. 背景与问题
 
@@ -140,7 +140,12 @@ packages/work-items
   └─ Timeline / command read models
             │
             ▼
-Run Executor → Runner Host → Provider Adapter
+Run Executor
+  ├─ Run lease heartbeat
+  └─ AgentEventAggregator
+       │
+       ├─ committed domain events → Event Store + Projector
+       └─ raw stream ← Runner Host ← Provider Adapter
 ```
 
 ### 4.1 `SessionCoordinator`
@@ -171,7 +176,19 @@ queued → running
 WHERE run_id = ? AND status = queued
 ```
 
-同一个 Run 只能被一个执行器领取。未开始的 `queued` Run 可在重启后重新领取；已经进入 `running` 或 `waiting` 且租约失效的 Run 不自动重放，进入恢复判定。
+同一个 Run 只能被一个执行器领取。未开始的 `queued` Run 可在重启后重新领取；`running` Run 租约失效后不自动重放，进入恢复判定；`waiting` Run 没有执行租约，按持久审批状态等待。
+
+租约生命周期写死为：
+
+1. 执行器通过条件更新领取 `queued → running`，同时写入稳定的 `lease_owner` 实例 ID 和 `lease_expires_at = database_now + 60 seconds`。
+2. 持有者每 15 秒续租一次，条件为 `status = running AND lease_owner = current_owner`。
+3. 续租使用数据库 UTC 时间，不使用进程启动时间或 Provider 事件时间；Provider 即使长时间没有输出，租约仍独立续期。
+4. 续租条件更新失败时，原执行器立即请求取消 Runner、停止写入该 Run，并交由 Coordinator 收敛状态。
+5. Coordinator Recovery Sweeper 每 15 秒扫描 `status = running AND lease_expires_at <= database_now` 的 Run，以条件更新取得恢复权。
+6. `running → waiting` 时清空租约；`waiting` 表示等待持久审批，不需要执行器心跳。审批通过后进入 `queued`，再由执行器重新领取。
+7. 任一终态都清空 `lease_owner` 和 `lease_expires_at`。
+
+租约过期只代表执行权丢失，不代表任务可重放。Sweeper 必须按第 7.3 节分类后才能写终态。
 
 ## 5. 持久化模型
 
@@ -201,7 +218,7 @@ session_id             indexed
 queue_position         monotonic per session
 status                 queued | dispatched | cancelled
 message_json           normalized message + attachment refs
-idempotency_key        scoped unique
+version                integer
 dispatched_run_id      nullable unique
 created_at
 dispatched_at          nullable
@@ -214,21 +231,23 @@ cancelled_at           nullable
 - `queued` Turn 尚未进入 Conversation Timeline。
 - Turn 变为 `dispatched` 时，才在同一事务中追加 `MESSAGE_RECEIVED`。
 - `cancelled` 是终态，不能恢复或重新排序。
+- `version` 初始为 1；取消或 dispatch 成功时递增，供单项队列操作做条件更新。
 - 队列分页按 `(session_id, status, queue_position)` 索引读取。
-- 每个 Session 最多保留 100 条 `queued` Turn；超过后返回 `409 queue_full`，防止 Snapshot、浏览器内存和误操作无界增长。
+- `session.max_queued_turns` 默认 100，可配置范围 1～1,000；默认值既能把正常队列放进一页，也能限制误提交和浏览器内存。达到上限后返回 `409 queue_full`。降低配置不会取消已有 Turn，但队列降到新上限以下前不接受新 Turn。
 
 ### 5.3 `runs`
 
-Run 增加：
+Run 保留现有 `status` 字段，并把枚举扩展为包含 `interrupted`。新增字段：
 
 ```text
 session_id
 turn_id
-status
 terminal_reason
 replay_safety          safe | side_effect_started | outcome_unknown
 lease_owner            nullable
 lease_expires_at       nullable
+cancel_requested_at    nullable
+cancel_deadline_at     nullable
 ```
 
 数据库必须建立部分唯一约束：
@@ -254,6 +273,7 @@ TURN_DISPATCHED
 QUEUE_PAUSED
 QUEUE_RESUMED
 RUN_INTERRUPTED
+RUN_CANCEL_REQUESTED
 RUN_RETRY_SCHEDULED
 RUN_RETRY_STARTED
 RUN_RETRY_FINISHED
@@ -314,6 +334,34 @@ session_output_segments
 
 Commands 使用独立的 `session_commands` 读模型，追加相关事件时同步更新。`GET /commands` 不允许 `listEvents().reverse()`。
 
+### 5.6 领域事件到投影的映射
+
+`SessionEventWriter` 由 `packages/work-items` 提供事务写入接口。所有新实时事件由它在写 Event Store 的同一个数据库事务中调用纯函数 Projector。投影失败会回滚事件写入，不能提交“事件已存在但权威 Snapshot 看不到”的半状态。旧数据回填复用同一个 Projector，并用 `(session_id, last_projected_sequence)` 持久 Cursor 保证幂等。
+
+| 领域事件 | 时间线投影 | 控制面/其他读模型 |
+| --- | --- | --- |
+| `TURN_QUEUED` | 不进入 Timeline | Queue 读取 `session_turns`；Runtime version 更新 |
+| `TURN_DISPATCHED` | 新增 `session_timeline_turns`，状态 `dispatched` | 从 Queue 移除；绑定 `run_id` |
+| `MESSAGE_RECEIVED` | 在对应 Turn 新增 sealed `user_message` Block/Segment | 更新 Commands（若消息是命令） |
+| `RUN_STARTED` | Turn 状态改为 `running`；创建 Run Activity Block | `active_run` 保持权威 |
+| 聚合后的 `text_delta` / `thought_delta` | 按稳定 `block_id` 创建 Block，并追加、更新或封存尾 Segment | 不改变 Run 控制状态 |
+| `tool_start` | 先封存输出尾 Segment，再创建 `tool` Block，状态 `running` | 若 `side_effects: true`，更新 `replay_safety` |
+| `tool_update` | 只更新对应 Tool Block 的有界详情 | 不创建新 Block |
+| `tool_end` | 封存 Tool Block 和结果 Segment | 持久化确定工具结果 |
+| `APPROVAL_REQUIRED` | 创建 `approval` Block，Turn 状态改为 `waiting` | Run `running → waiting` 并清租约 |
+| `APPROVAL_GRANTED` | Approval Block 标记 `granted` | Run `waiting → queued` |
+| `APPROVAL_REJECTED` | Approval Block 标记 `rejected` | 进入取消终态事务 |
+| `RUN_RETRY_SCHEDULED/STARTED/FINISHED` | 更新同一个 Attempt/Retry Block，不新增 Turn | 更新 Attempt 读模型 |
+| `RUN_CANCEL_REQUESTED` | Run Activity Block 标记 `stopping` | 写取消期限，不改变 Run status |
+| `RUN_SUCCEEDED` | Turn 标记 `succeeded`，封存该 Run 全部未关闭 Block | 清 `active_run`；可原子推进队列 |
+| `RUN_FAILED` | Turn 标记 `failed`，封存全部 Block | 清 `active_run`；暂停队列 |
+| `RUN_CANCELLED` | Turn 标记 `cancelled`，封存全部 Block | 清 `active_run`；暂停队列 |
+| `RUN_INTERRUPTED` | Turn 标记 `interrupted`，封存全部 Block并追加中断说明 | 清 `active_run`；暂停队列 |
+| `TURN_CANCELLED` | 不创建 Timeline Turn；若遇到已有 Timeline 行则视为数据不变量错误并回滚 | Queue 移除该 Turn |
+| `QUEUE_PAUSED/RESUMED` | 不修改 Timeline | 更新 Runtime Queue 状态 |
+
+同一来源事件通过 `(session_id, sequence)` 唯一应用。Projector 收到未知事件时只前移 Cursor 并保留原事件，不猜测投影含义。
+
 ## 6. Coordinator 状态机
 
 ### 6.1 提交消息
@@ -324,7 +372,7 @@ Commands 使用独立的 `session_commands` 读模型，追加相关事件时同
 BEGIN IMMEDIATE
   read prior idempotency result
   lock/create session_runtime
-  reject when queued count = 100
+  reject when queued count = configured max
   insert SessionTurn(queued)
 
   if active_run_id is null and queue_state = ready:
@@ -394,11 +442,13 @@ COMMIT
 
 ### 6.4 取消排队消息
 
-`cancelQueuedTurn(turnId, expectedVersion)`：
+`cancelQueuedTurn(turnId, expectedTurnVersion)`：
 
 - 只允许 `queued → cancelled`。
+- 条件更新使用 `session_turns.version`，不使用粗粒度的 `session_runtime.version`。
 - 已经 `dispatched` 返回 `409 turn_already_dispatched`。
 - 已经 `cancelled` 返回第一次取消结果，保持幂等。
+- 成功取消时同时递增 Turn version 和 Runtime version。
 - 取消后保留 `queue_position` 空洞，不重新编号其他 Turn。
 
 ### 6.5 恢复队列
@@ -419,6 +469,19 @@ COMMIT
 ```
 
 队列为空时，Resume 只清除暂停状态。暂停期间新提交的消息继续排队，不隐式恢复。
+
+### 6.6 取消活动 Run
+
+取消不是新的 Run 状态。`interrupting` 只表示 API 已接受取消请求、仍在等待 Runner 确认：
+
+1. 对 `queued` Run，Coordinator 可以在执行领取前直接写 `RUN_CANCELLED`。
+2. 对 `waiting` Run，撤销等待并直接写 `RUN_CANCELLED`。
+3. 对 `running` Run，事务写 `RUN_CANCEL_REQUESTED`、`cancel_requested_at` 和 `cancel_deadline_at = database_now + 10 seconds`，但 Run status 仍为 `running`；API 返回 `interrupting`。
+4. Runner 在期限内确认取消且没有未知副作用时，Coordinator 写 `RUN_CANCELLED`。
+5. 独立 Cancellation Sweeper 每 1 秒检查已到 `cancel_deadline_at` 的 Run；Runner 返回未知工具结果、Run 已越过未知副作用边界，或期限内无法确认停止时，Coordinator 写 `RUN_INTERRUPTED`。
+6. 相同 Idempotency Key 的重复 Stop 返回第一次响应；调用 `GET /v1/runs/{run_id}` 获取当前收敛状态。使用新 Key 重复 Stop 时返回当前取消进度或既有终态，且不延长 10 秒期限。
+
+因此持久终态仍只有 `succeeded | failed | cancelled | interrupted`，不存在持久 `interrupting` 状态。取消请求在正常运行或单进程重启后最迟于 `cancel_deadline_at + 1 second` 收敛。
 
 ## 7. Provider 重试与中断恢复
 
@@ -455,7 +518,9 @@ side_effect_boundary
 Bridge 或 Runner 重启后：
 
 - `queued` 且从未领取：重新进入执行领取；
-- `running` 但无任何副作用工具开始：关闭原 Attempt，Run 标记 `interrupted`，等待用户显式恢复；
+- `waiting`：保留等待状态和审批记录，不创建租约；审批通过后回到 `queued`；
+- `running` 且租约仍有效：由当前 `lease_owner` 继续执行，其他实例不得接管；
+- `running` 且租约已过期、但无任何副作用工具开始：关闭原 Attempt，Run 标记 `interrupted`，等待用户显式恢复；
 - 副作用工具已开始且没有确定结果：设置 `outcome_unknown`，Run 标记 `interrupted`；
 - 工具结果和后置条件都已持久化，只缺终态事件：通过确定性 Repair 补写终态；
 - 不能从日志证明的情况一律不推断成功。
@@ -511,6 +576,19 @@ Provider 与 CodeBridge 历史不一致时：
 
 ### 9.1 服务端聚合
 
+`AgentEventAggregator` 位于 `packages/run-executor`，处在 `RunnerClient.run()` 原始事件流与 `SessionEventWriter` 之间。Runner Host 只负责 Provider 适配、取消和原始流背压，不持久化 CodeBridge 领域事件；Bridge SSE 只发布 Event Store 已提交的聚合事件。
+
+数据流固定为：
+
+```text
+Provider Adapter
+  → Runner Host raw AgentEvent stream
+  → Run Executor AgentEventAggregator
+  → SessionEventWriter(Event Store + Projector transaction)
+  → committed-event notification
+  → Bridge SSE / channels
+```
+
 Provider 原始 delta 先进入每个活动 Run 的单一聚合器。按 `(run_id, block_id, delta_kind)` 合并：
 
 - 最长每 125 ms 刷新一次；
@@ -521,7 +599,7 @@ Provider 原始 delta 先进入每个活动 Run 的单一聚合器。按 `(run_i
 
 因此，平稳输出时每个活动 block 的持久 delta 事件率不超过每秒 8 条，语义边界除外。
 
-聚合事件提交 Event Store 后才通过 SSE 发布。进程异常最多留下尚未对客户端发布的内存 buffer，不会出现已展示但不可恢复的文本。
+聚合事件提交 Event Store 并完成投影后，才调用 committed-event callback 并通过 SSE 发布。现有 Run Executor 中“先 `onEvent`、后 `appendEvent`”的顺序必须反转。进程异常最多留下尚未对客户端发布的内存 buffer，不会出现已展示但不可恢复的文本。
 
 ### 9.2 客户端批处理
 
@@ -642,7 +720,8 @@ Idempotency-Key: <key>
   "turn": {
     "turn_id": "turn_...",
     "status": "queued",
-    "queue_position": 12
+    "queue_position": 12,
+    "version": 1
   },
   "runtime": {
     "active_run": {"run_id": "run_..."},
@@ -661,7 +740,7 @@ POST   /v1/sessions/{session_id}/queue/resume
 GET    /v1/sessions/{session_id}/queue
 ```
 
-Mutation 使用 `If-Match: "<runtime.version>"`。版本冲突返回最新 Runtime Snapshot。
+取消单项 Queue Turn 使用 `If-Match: "<turn.version>"`。Resume 使用 `If-Match: "<runtime.version>"`。版本冲突分别返回最新 Turn 或 Runtime Snapshot。
 
 ### 12.3 Run 操作
 
@@ -678,6 +757,12 @@ interrupting
 already_terminal
 ```
 
+- `cancelled`：取消已收敛到持久 `cancelled` 终态；
+- `interrupting`：只是一条命令响应，表示 `RUN_CANCEL_REQUESTED` 已提交，Run 仍是 `running`；
+- `already_terminal`：Run 已经终态，同时返回实际 `succeeded | failed | cancelled | interrupted`。
+
+`interrupting` 最迟在 `cancel_deadline_at + 1 second` 收敛为 `cancelled` 或 `interrupted`。
+
 ### 12.4 时间线与事件
 
 ```text
@@ -689,9 +774,23 @@ GET /v1/sessions/{session_id}/events?after_sequence=<n>&live=true
 
 `timeline` 面向展示，`events` 面向增量恢复和审计，两者不能互相替代。事件补读默认最多 500 条且响应不超过 1 MiB；调用方可将 `limit` 提高到 2,000，但响应仍受 4 MiB 硬上限约束。
 
+### 12.5 幂等边界
+
+不在 `session_turns` 重复保存一套幂等事实。Coordinator 复用现有 `idempotency_responses(namespace, idempotency_key)`，并确保幂等响应与 Turn/Run/事件在同一个数据库事务中提交。
+
+三类幂等语义严格分开：
+
+| 层级 | Namespace / Key | 负责 | 不负责 |
+| --- | --- | --- | --- |
+| HTTP 命令接受 | `session:message:{session_id}`、`session:queue-cancel:{session_id}:{turn_id}`、`session:queue-resume:{session_id}`、`session:run-cancel:{run_id}` + 调用方 `Idempotency-Key` | 防止网络重试重复创建 Turn、Run 或控制命令 | 不判断工具副作用是否执行 |
+| Flow 写步骤 | 现有 `flow-step` + Flow 计算的业务 Key | 防止同一业务写步骤重复调用 Capability | 不去重用户消息或 Run 创建 |
+| 外部系统幂等 | Capability/Adapter 传给外部系统的业务幂等键 | 由目标系统防止重复副作用 | 不替代 CodeBridge HTTP 响应缓存 |
+
+HTTP Key 的作用域是“操作 Namespace + 资源 ID”，不是全局；同一个 Key 可以在不同 Session 或不同操作复用。重复请求永久返回第一次已提交的响应。普通 Session 消息切到原子 `submitTurn()` 后，不再额外调用 `session:run:{session_id}` 创建第二个 Run；该 Namespace 只保留给兼容接口。
+
 ## 13. 兼容与迁移
 
-本设计收紧 `docs/orchestration/api-contract.md` 第 5 节的旧恢复规则：Bridge 重启后，只有从未开始的 `queued` Run 可以重新领取；遗留的 `running` / `waiting` Run 必须先按第 7.3 节判定并进入 `interrupted` 或确定性 Repair，不能直接改回 `queued`。实现本设计时同步更新该基线文档和 OpenAPI Schema。
+本设计收紧 `docs/orchestration/api-contract.md` 第 5 节的旧恢复规则：Bridge 重启后，只有从未开始的 `queued` Run 可以重新领取；遗留且租约过期的 `running` Run 必须先按第 7.3 节判定并进入 `interrupted` 或确定性 Repair，不能直接改回 `queued`；`waiting` Run 保持等待审批。实现本设计时同步更新该基线文档和 OpenAPI Schema。
 
 ### 13.1 数据迁移
 
@@ -726,11 +825,14 @@ GET /v1/sessions/{session_id}/events?after_sequence=<n>&live=true
 
 - 两个并发提交只能产生一个活动 Run，另一个稳定排队；
 - 相同 Idempotency Key 不重复创建 Turn、消息或 Run；
+- 同一个 Idempotency Key 可在不同 Session/Namespace 独立使用；
 - Run 成功后自动领取且只领取 FIFO 头；
 - Run 失败、取消、中断后队列保持顺序并暂停；
 - 暂停期间新消息只排队；
 - Resume 原子领取队列头；
+- 取消 Queue Turn 只比较 Turn version；无关的 Runtime version 变化不会制造冲突；
 - 取消已排队 Turn 成功，取消已 dispatch Turn 返回冲突；
+- `interrupting` 不进入 Run status，并在 `cancel_deadline_at + 1 second` 内收敛为 `cancelled` 或 `interrupted`；
 - Bridge 重启后队列和暂停状态不丢失；
 - 数据库唯一约束能阻止绕过 Coordinator 的第二个活动 Run。
 
@@ -740,6 +842,9 @@ GET /v1/sessions/{session_id}/events?after_sequence=<n>&live=true
 - SSE 断线后使用 Sequence 恢复；
 - Sequence 缺口触发补读或 Snapshot，不继续错误投影；
 - 未开始 Run 在重启后可领取；
+- `running` Run 每 15 秒续租，60 秒租约过期后只触发恢复分类；
+- `waiting` Run 不因没有租约而被回收；
+- 旧 lease owner 续租失败后不能继续写该 Run；
 - 已开始且副作用未知的 Run 变为 `interrupted`；
 - Repair 只补结构化结束事件，不调用工具或 Provider；
 - Provider 429/连接重置仅在副作用边界前重试。
@@ -762,10 +867,13 @@ Provider 历史 Import 只在显式命令测试中允许变化。
 - Snapshot 返回的队列不超过 100 条；
 - Snapshot 和单页 Timeline 内容不超过 1 MiB；
 - SQL Query Plan 对 Queue、Timeline、Commands、Run 状态使用索引，不全表扫描 Session Events；
+- 同一事务中的领域事件和实时投影要么同时提交，要么同时回滚；
+- Projector 对重复 `(session_id, sequence)` 不产生第二次更新；
 - 应用一个新事件不重新回放 150,000 个事件；
 - 输入字符不重新渲染完成的 Markdown；
 - 活动 Markdown 每次只解析不超过 16 KiB 的尾 Segment；
 - 平稳 Provider 输出的持久 delta 不超过每个 block 每秒 8 条；
+- committed-event callback 不得早于 Event Store 和 Projector 事务提交；
 - 浏览器内存中的历史范围由已挂载 Turn Window 决定，不随完整 Session 历史线性增长；
 - 切换 Session 后立即可见缓存窗口，补齐期间不暂时丢失 Agent 消息；
 - Run 终态后所有对应 Work block 都停止，Stop 同步消失。
