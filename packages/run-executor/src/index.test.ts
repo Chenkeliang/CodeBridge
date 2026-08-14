@@ -786,4 +786,38 @@ describe("RunExecutor", () => {
     registry.close();
     store.close();
   });
+
+  it("replays a plan deterministically and diffs decision traces", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const plan = store.savePlan({
+      planId: "plan_rp", source: "workflow", workflowId: "rp-flow",
+      definitionRevision: "git:rp",
+      steps: [{
+        id: "lookup", capabilityId: "catalog.lookup", risk: "read_only",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: null,
+        successWhen: "output.id != null",
+      }],
+    });
+    const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.lookup", ({ input }) => ({
+        output: { id: String(input.id ?? "v") },
+      })),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: (_w, run) => ({ runId: run.id, sessionKey: { chatId: "c", backendId: "pi", cwd: "/tmp" }, prompt: "x" }),
+    });
+
+    const trace1 = await executor.replayPlan(plan, { id: "value" });
+    const trace2 = await executor.replayPlan(plan, { id: "value" });
+    expect(trace1).toHaveLength(1);
+    expect(executor.diffTrace(trace1, trace2).identical).toBe(true);
+
+    const changed = await executor.replayPlan(plan, { id: "other" });
+    expect(executor.diffTrace(trace1, changed).identical).toBe(false);
+    registry.close();
+    store.close();
+  });
 });

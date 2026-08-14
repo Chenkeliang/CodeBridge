@@ -30,6 +30,20 @@ export interface RunExecutorOptions {
   capabilities?: CapabilityRuntime;
 }
 
+export interface DecisionTraceStep {
+  step_id: string;
+  capability_id: string | null;
+  input: Record<string, unknown>;
+  verification_status: "passed" | "failed" | "skipped";
+}
+
+export interface ReplayDiff {
+  identical: boolean;
+  original: DecisionTraceStep[];
+  replayed: DecisionTraceStep[];
+  diffs: string[];
+}
+
 export class RunExecutor {
   private readonly activeControllers = new Map<string, AbortController>();
   private readonly activeCompletions = new Map<string, Promise<void>>();
@@ -63,6 +77,45 @@ export class RunExecutor {
       throw new Error("Runner cancellation failed");
     }
     return result;
+  }
+
+  /** Replay a frozen plan with dry-run side effects, returning the decision trace. */
+  async replayPlan(plan: PersistedPlan, inputs: Record<string, unknown>): Promise<DecisionTraceStep[]> {
+    const trace: DecisionTraceStep[] = [];
+    for (const step of orderSteps(plan.steps)) {
+      if (!step.capabilityId) continue;
+      const definition = this.options.policy?.getCapability(step.capabilityId);
+      if (!definition || !this.options.capabilities) continue;
+      const result = await this.options.capabilities.execute(definition.adapter, {
+        input: { ...inputs, step: { id: step.id, purpose: step.purpose } },
+        context: { dry_run: true, environment: step.risk === "production_write" ? "production" : "local" },
+      });
+      // Replay must mirror B2's definition of "verification result": a
+      // successWhen postcondition is evaluated, not just adapter self-report.
+      const verificationStatus = step.successWhen
+        ? (evaluatePostcondition(step.successWhen, result.output) ? "passed" : "failed")
+        : (result.verification?.status ?? "passed");
+      trace.push({
+        step_id: step.id,
+        capability_id: step.capabilityId,
+        input: { ...inputs, step: { id: step.id, purpose: step.purpose } },
+        verification_status: verificationStatus,
+      });
+    }
+    return trace;
+  }
+
+  diffTrace(original: DecisionTraceStep[], replayed: DecisionTraceStep[]): ReplayDiff {
+    const diffs: string[] = [];
+    const identical = original.length === replayed.length && original.every((step, index) => {
+      const replayedStep = replayed[index];
+      const same = replayedStep !== undefined && JSON.stringify(step) === JSON.stringify(replayedStep);
+      if (!same) {
+        diffs.push(`step ${index} (${step.step_id}): original ${JSON.stringify(step)} vs replayed ${JSON.stringify(replayedStep)}`);
+      }
+      return same;
+    });
+    return { identical, original, replayed, diffs };
   }
 
   async execute(runId: string, signal?: AbortSignal, options?: { force?: boolean }): Promise<Run> {
