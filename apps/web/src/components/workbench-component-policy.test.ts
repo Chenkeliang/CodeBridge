@@ -166,14 +166,15 @@ describe("Workbench component policy", () => {
 
     expect(source).toContain("viewport.scrollTop = viewport.scrollHeight");
     expect(source).toContain("stuckToBottom");
-    expect(source).toContain("[events, selectedSessionId, loadingSession, sending, stuckToBottom]");
+    expect(source).toContain("[sessionView, selectedSessionId, loadingSession, sending, stuckToBottom]");
     expect(source).toContain("requestAnimationFrame");
   });
 
-  it("clears the previous Session projection before hydrating the next one", () => {
+  it("selects the external Store view by Session id so projections cannot leak across Sessions", () => {
     const source = readSource();
 
-    expect(source).toContain("setEvents(cached ? mergeConversationEvents(cached.events, pendingEvents.current[sessionId] ?? []) : (pendingEvents.current[sessionId] ?? []))");
+    expect(source).toContain("useSessionView(selectedSessionId)");
+    expect(source).not.toContain("setEvents(");
   });
 
   it("does not block the first paint on provider Session import", () => {
@@ -221,11 +222,12 @@ describe("Workbench component policy", () => {
     expect(source).toContain("请先在设置中完成安装/配置");
   });
 
-  it("paints a cached Session snapshot instantly and revalidates in the background", () => {
+  it("reads Session state from the external Store and revalidates through the connection", () => {
     const source = readSource();
 
-    expect(source).toContain("sessionCache.current[sessionId]");
-    expect(source).toContain("setLoadingSession(!cached)");
+    expect(source).toContain("useSessionView(selectedSessionId)");
+    expect(source).toContain("sessionConnection.open(sessionId)");
+    expect(source).not.toContain("sessionCache");
   });
 
   it("resets composer config when switching Agents without a session change", () => {
@@ -242,12 +244,13 @@ describe("Workbench component policy", () => {
     expect(source).toContain("{!selected && <SelectItem");
   });
 
-  it("projects the accepted user message before the run starts", () => {
+  it("submits a message atomically and resolves uncertain outcomes before changing authority", () => {
     const source = readSource();
 
-    expect(source).toContain("const receipt = await api.sendMessage");
-    expect(source).toContain("event_id: receipt.event_id");
-    expect(source).toContain("mergeConversationEvents");
+    expect(source).toContain("submitSessionMessage({");
+    expect(source).toContain("pendingSubmissionKey.current");
+    expect(source).not.toContain("api.startRun");
+    expect(source).not.toContain("mergeConversationEvents");
   });
 
   it("offers per-Session management from each Session row", () => {

@@ -1,0 +1,188 @@
+import { describe, expect, it, vi } from "vitest";
+import { SessionViewStore } from "./session-store";
+import type { SessionView } from "./session-store";
+import type { AgentSession, SessionEvent, SessionSnapshot, SessionRuntimeView, TimelineTurnView } from "./types";
+
+function session(sessionId: string): AgentSession {
+  return {
+    session_id: sessionId,
+    agent_id: "codex",
+    provider_session_id: null,
+    task_record_id: null,
+    flow_id: null,
+    model: null,
+    effort: null,
+    permission_mode: null,
+    cwd: "/workspace",
+    additional_directories: [],
+    title: sessionId,
+    status: "idle",
+    pinned_at: null,
+    archived_at: null,
+    created_at: "2026-08-14T00:00:00.000Z",
+    updated_at: "2026-08-14T00:00:00.000Z",
+  };
+}
+
+function runtime(lastEventSequence: number): SessionRuntimeView {
+  return {
+    active_run: null,
+    queue_state: "ready",
+    queue_pause_reason: null,
+    queue: { turns: [], total: 0, next_cursor: null },
+    version: 1,
+    last_event_sequence: lastEventSequence,
+  };
+}
+
+function snapshot(sessionId: string, lastEventSequence: number): SessionSnapshot {
+  const turn: TimelineTurnView = {
+    turn_id: `${sessionId}-turn`,
+    status: "running",
+    timeline_index: 0,
+    run_id: `${sessionId}-run`,
+    blocks: [],
+  };
+  return {
+    session: session(sessionId),
+    runtime: runtime(lastEventSequence),
+    timeline: {
+      turns: [{
+        ...turn,
+        blocks: [{
+          block_id: `${sessionId}-block`,
+          block_index: 0,
+          kind: "assistant",
+          status: "running",
+          metadata: {},
+          segments: [{ segment_id: `${sessionId}-segment`, segment_index: 0, content: "", byte_length: 0, sealed: false }],
+          next_segment_cursor: 1,
+        }],
+      }],
+      previous_cursor: null,
+      truncated_block_ids: [],
+    },
+    commands: [],
+  };
+}
+
+function deltaEvent(sessionId: string, sequence: number, text: string, type: "text_delta" | "thought_delta" = "text_delta"): SessionEvent {
+  return {
+    event_id: `${sessionId}-event-${sequence}`,
+    sequence,
+    run_id: `${sessionId}-run`,
+    type: "AGENT_EVENT",
+    occurred_at: `2026-08-14T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+    payload: {
+      event: type === "text_delta"
+        ? { type, phase: "final_answer", text }
+        : { type, text },
+    },
+  };
+}
+
+function activeTail(view: SessionView): string {
+  const lastTurn = view.snapshot.timeline.turns.at(-1);
+  const lastBlock = lastTurn?.blocks.at(-1);
+  return lastBlock?.segments.map((segment) => segment.content).join("") ?? "";
+}
+
+describe("SessionViewStore", () => {
+  it("keeps cached Session windows isolated", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+    store.hydrate(snapshot("sess_2", 20));
+    store.receive("sess_1", deltaEvent("sess_1", 11, "A"));
+    expect(store.get("sess_1")?.snapshot.runtime.last_event_sequence).toBe(11);
+    expect(store.get("sess_2")?.snapshot.runtime.last_event_sequence).toBe(20);
+  });
+
+  it("ignores duplicates and detects Sequence gaps", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+    expect(store.receive("sess_1", deltaEvent("sess_1", 10, "A"))).toBe("duplicate");
+    expect(store.receive("sess_1", deltaEvent("sess_1", 12, "B"))).toBe("gap");
+    expect(store.get("sess_1")?.status).toBe("recovering");
+  });
+
+  it("does not overwrite a newer cache with an older snapshot", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+    store.receive("sess_1", deltaEvent("sess_1", 11, "new"));
+    store.hydrate(snapshot("sess_1", 10));
+    expect(store.get("sess_1")?.snapshot.runtime.last_event_sequence).toBe(11);
+    expect(activeTail(store.get("sess_1")!)).toBe("new");
+  });
+
+  it("batches subscribers while applying only the active tail", () => {
+    const scheduled: Array<() => void> = [];
+    const store = new SessionViewStore({ schedule: (flush) => scheduled.push(flush) });
+    store.hydrate(snapshot("sess_1", 10));
+    const listener = vi.fn();
+    store.subscribe("sess_1", listener);
+    store.receive("sess_1", deltaEvent("sess_1", 11, "a"));
+    store.receive("sess_1", deltaEvent("sess_1", 12, "b"));
+    expect(listener).not.toHaveBeenCalled();
+    scheduled.shift()?.();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(activeTail(store.get("sess_1")!)).toBe("ab");
+  });
+
+  it("merges earlier Timeline pages without duplicating Turns", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+    store.mergeTimelinePage("sess_1", {
+      turns: [{
+        turn_id: "earlier",
+        run_id: "earlier-run",
+        timeline_index: -1,
+        status: "succeeded",
+        blocks: [],
+      }],
+      previous_cursor: 3,
+      truncated_block_ids: [],
+    });
+    expect(store.get("sess_1")?.snapshot.timeline.turns.map((turn) => turn.turn_id)).toEqual([
+      "earlier",
+      "sess_1-turn",
+    ]);
+    expect(store.get("sess_1")?.snapshot.timeline.previous_cursor).toBe(3);
+  });
+
+  it("merges Segment and Queue pages into the authoritative snapshot", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    const initial = snapshot("sess_1", 10);
+    initial.runtime.queue = {
+      turns: [{
+        turn_id: "turn-1",
+        queue_position: 1,
+        status: "queued",
+        version: 1,
+        message: { text: "one", attachment_ids: [] },
+        created_at: "2026-08-14T00:00:00.000Z",
+      }],
+      total: 2,
+      next_cursor: 1,
+    };
+    store.hydrate(initial);
+    store.mergeSegmentPage("sess_1", "sess_1-block", {
+      segments: [{ segment_id: "segment-2", segment_index: 1, content: "more", byte_length: 4, sealed: true }],
+      next_cursor: null,
+    });
+    store.mergeQueuePage("sess_1", {
+      turns: [{
+        turn_id: "turn-2",
+        queue_position: 2,
+        status: "queued",
+        version: 1,
+        message: { text: "two", attachment_ids: [] },
+        created_at: "2026-08-14T00:00:01.000Z",
+      }],
+      total: 2,
+      next_cursor: null,
+    });
+    const next = store.get("sess_1")!.snapshot;
+    expect(next.timeline.turns[0]?.blocks[0]?.segments.map((segment) => segment.content)).toEqual(["", "more"]);
+    expect(next.runtime.queue.turns.map((turn) => turn.turn_id)).toEqual(["turn-1", "turn-2"]);
+  });
+});

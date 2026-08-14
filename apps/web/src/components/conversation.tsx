@@ -119,7 +119,7 @@ function ApprovalCard({ approval, item, onApproval }: { approval: ApprovalRecord
   return <section className={cn("relative max-w-[760px] overflow-hidden rounded-lg border", "bg-surface", "border-line-strong", "shadow-card")}><svg aria-hidden="true" className={cn("pointer-events-none absolute inset-0 size-full", "text-warning")}><rect className={cn("h-[calc(100%-2px)] w-[calc(100%-2px)]", "motion-safe:animate-march")} fill="none" rx="7" stroke="currentColor" strokeDasharray="4 4" strokeWidth="1.5" x="1" y="1" /></svg><div className={cn("flex items-center justify-between gap-3 border-b px-3.5 py-3", "border-line")}><span className={cn("flex items-center gap-2 text-xs font-semibold", "text-ink")}><ShieldAlert className={cn("size-3.5", "text-warning")} />需要审批</span><span className={cn("font-mono text-xs", "text-muted")}>仅本次 Run 有效</span></div><div className={cn("px-3.5 pb-1 pt-3 text-xs leading-5", "text-ink-soft")}>{item.title}</div><div className="flex gap-2 px-3.5 pb-3.5 pt-2"><Button className={cn("h-8 text-xs", "bg-accent", "text-accent-ink")} disabled={!approval} onClick={() => void onApproval(item, true)} size="sm">允许一次</Button><Button className={cn("h-8 border text-xs", "bg-surface", "text-ink", "border-line-strong")} disabled={!approval} onClick={() => void onApproval(item, false)} size="sm" variant="outline">拒绝</Button></div></section>;
 }
 
-const Markdown = memo(function Markdown({ content }: { content: string }) {
+export const Markdown = memo(function Markdown({ content }: { content: string }) {
   return <div className={cn("conversation-body max-w-[780px] text-sm font-normal leading-7 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-2", "text-ink-soft")}><ReactMarkdown components={{
     a: ({ children, href }) => <a className={cn("underline underline-offset-4", "text-ink")} href={href} rel="noreferrer" target="_blank">{children}</a>,
     blockquote: ({ children }) => <blockquote className={cn("my-3 border-l-2 pl-3", "border-line-strong", "text-muted")}>{children}</blockquote>,
@@ -165,4 +165,3 @@ function highlightCode(source: string): ReactNode[] {
 export function LoadingConversation() {
   return <div className="grid gap-5" aria-label="正在加载 Session"><div className={cn("skeleton-pixel h-3 w-24 animate-pulse rounded", "bg-surface-soft")} /><div className={cn("skeleton-pixel h-16 w-2/3 animate-pulse rounded-lg", "bg-surface-soft")} /><div className={cn("skeleton-pixel ml-auto h-12 w-1/2 animate-pulse rounded-lg", "bg-surface-soft")} /></div>;
 }
-
