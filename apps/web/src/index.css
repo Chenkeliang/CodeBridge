@@ -34,6 +34,8 @@
   --agnet-surface: #FFFFFF;
   --agnet-surface-soft: #EEF1EB;
   --agnet-surface-tint: #F2F4EF;
+  --agnet-overlay: #FFFFFF;
+  --agnet-overlay-strength: 94%;
   --agnet-ink: #191C16;
   --agnet-ink-soft: #373C32;
   --agnet-muted: #5C6255;
@@ -65,6 +67,8 @@
   --agnet-surface: #1D1D1D;
   --agnet-surface-soft: #292929;
   --agnet-surface-tint: #232323;
+  --agnet-overlay: #1D1D1D;
+  --agnet-overlay-strength: 84%;
   --agnet-ink: #F1F1ED;
   --agnet-ink-soft: #D4D3CE;
   --agnet-muted: #AAA9A3;
@@ -122,6 +126,7 @@
   --color-surface: var(--agnet-surface);
   --color-surface-soft: var(--agnet-surface-soft);
   --color-surface-tint: var(--agnet-surface-tint);
+  --color-overlay: var(--agnet-overlay);
   --color-ink: var(--agnet-ink);
   --color-ink-soft: var(--agnet-ink-soft);
   --color-muted: var(--agnet-muted);
@@ -144,6 +149,12 @@
   --color-agent-opencode: var(--agnet-agent-opencode);
   --shadow-panel: var(--agnet-shadow-panel);
   --shadow-card: var(--agnet-shadow-card);
+}
+
+@utility surface-frosted {
+  background: color-mix(in srgb, var(--agnet-overlay) var(--agnet-overlay-strength), transparent);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
 }
 
 @keyframes breathe {

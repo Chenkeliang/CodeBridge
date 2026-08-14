@@ -24,7 +24,7 @@ export function ComposerActions({ flowId, flows, hasWorkspace, onFiles, onFlow, 
         <Plus className="size-4" />
       </Button>
     </PopoverTrigger>
-    <PopoverContent align="start" className="grid w-64 gap-1 border-line-strong bg-surface p-1.5 text-ink-soft shadow-panel" side="top">
+    <PopoverContent align="start" className="grid w-64 gap-1 border-line-strong p-1.5 text-ink-soft shadow-panel" side="top" surface="frosted">
       <ActionButton icon={<Paperclip className="size-3.5" />} label="添加文件" onClick={onFiles} />
       <ActionButton disabled={!hasWorkspace} icon={<FolderOpen className="size-3.5" />} label="插入 Workspace 上下文" onClick={onWorkspaceContext} />
       <ActionButton icon={<Plus className="size-3.5" />} label="添加 Workspace" onClick={onPickDirectory} />
@@ -34,7 +34,7 @@ export function ComposerActions({ flowId, flows, hasWorkspace, onFiles, onFlow, 
             <Workflow className="size-3.5" />
             <SelectValue />
           </SelectTrigger>
-          <SelectContent className="border-line-strong bg-surface text-ink-soft shadow-panel">
+          <SelectContent className="border-line-strong text-ink-soft shadow-panel" surface="frosted">
             <SelectItem className="data-[highlighted]:bg-surface-soft" value={DEFAULT_SELECT_VALUE}>Flow · 自动</SelectItem>
             {flows.map((flow) => <SelectItem className="data-[highlighted]:bg-surface-soft" key={flow.flow_id} value={flow.flow_id}>{flow.name || flow.flow_id}</SelectItem>)}
           </SelectContent>
@@ -92,7 +92,7 @@ export function ModelControls({ configOverrides, effort, model, modelOption, onC
         <span className="truncate">{modelLabel}</span><ChevronDown className="size-3 opacity-60" />
       </Button>
     </PopoverTrigger>
-    <PopoverContent align="end" className="grid w-80 gap-4 border-line-strong bg-surface text-ink-soft shadow-panel" side="top">
+    <PopoverContent align="end" className="grid w-80 gap-4 border-line-strong text-ink-soft shadow-panel" side="top" surface="frosted">
       {modelOption && <ControlGroup label="Model">
         <SessionConfigSelect ariaLabel={modelOption.name} label={defaultModelLabel(modelOption)} onValue={onModel} option={modelOption} value={model} wide />
       </ControlGroup>}
@@ -176,7 +176,7 @@ function SpeedControl({ onValue, option, overridden, value }: {
     <SelectTrigger aria-label="速度" className="h-8 w-full border-line bg-surface-soft px-2 py-0 text-xs text-ink-soft shadow-none focus-visible:ring-1">
       <Gauge className="size-3" /><SelectValue>{label}</SelectValue>
     </SelectTrigger>
-    <SelectContent className="max-w-80 border-line-strong bg-surface text-ink-soft shadow-panel">
+    <SelectContent className="max-w-80 border-line-strong text-ink-soft shadow-panel" surface="frosted">
       <SelectItem className="data-[highlighted]:bg-surface-soft" value={DEFAULT_SELECT_VALUE}>跟随默认（{speedValueLabel(option.currentValue ?? "false")}）</SelectItem>
       {option.values.map((candidate) => <SelectItem className="data-[highlighted]:bg-surface-soft" key={candidate.value} textValue={speedValueLabel(candidate.value, candidate.name)} value={candidate.value}>
         <span className="grid gap-0.5 py-0.5">
@@ -211,7 +211,7 @@ function SessionConfigSelect({ ariaLabel, label, onValue, option, value, wide = 
     >
       <SelectValue>{triggerLabel}</SelectValue>
     </SelectTrigger>
-    <SelectContent className="max-w-80 border-line-strong bg-surface text-ink-soft shadow-panel">
+    <SelectContent className="max-w-80 border-line-strong text-ink-soft shadow-panel" surface="frosted">
       {!selected && <SelectItem className="data-[highlighted]:bg-surface-soft" value={DEFAULT_SELECT_VALUE}>{label}</SelectItem>}
       {option.values.map((candidate) => <SelectItem className="data-[highlighted]:bg-surface-soft" key={candidate.value} textValue={candidate.name || candidate.value} value={candidate.value}>
         <span className="grid gap-0.5 py-0.5">

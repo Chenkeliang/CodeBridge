@@ -193,7 +193,7 @@ export function Composer({
 
   return <div
     className={cn(
-      "relative rounded-xl border border-line-strong bg-surface shadow-panel",
+      "surface-frosted relative rounded-xl border border-line-strong shadow-panel",
       running && "motion-safe:animate-breathe",
     )}
     data-composer
@@ -284,7 +284,7 @@ function ContextPicker({ activeIndex, entries, listing, loading, onNavigate, onP
   onPick: (index: number) => void;
   onSelect: (index: number) => void;
 }) {
-  return <div className="absolute bottom-[calc(100%+0.5rem)] left-3 z-30 w-[420px] overflow-hidden rounded-lg border border-line-strong bg-surface shadow-panel">
+  return <div className="surface-frosted absolute bottom-[calc(100%+0.5rem)] left-3 z-30 w-[420px] overflow-hidden rounded-lg border border-line-strong shadow-panel">
     <div className="flex h-9 items-center gap-2 border-b border-line px-2.5 text-xs text-muted">
       {listing?.relativePath && <button
         aria-label="返回上级目录"
@@ -331,7 +331,7 @@ function CommandPicker({ activeIndex, commands, onPick, onSelect }: {
   onPick: (index: number) => void;
   onSelect: (index: number) => void;
 }) {
-  return <div className="absolute bottom-[calc(100%+0.5rem)] left-3 z-30 max-h-72 w-[420px] overflow-y-auto rounded-lg border border-line-strong bg-surface p-1 shadow-panel">
+  return <div className="surface-frosted absolute bottom-[calc(100%+0.5rem)] left-3 z-30 max-h-72 w-[420px] overflow-y-auto rounded-lg border border-line-strong p-1 shadow-panel">
     {commands.map((command, index) => <button
       aria-selected={index === activeIndex}
       className={cn(
