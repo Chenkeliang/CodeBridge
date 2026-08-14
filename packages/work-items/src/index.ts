@@ -175,6 +175,7 @@ export interface PersistedPlanStep {
   approval: "none" | "required";
   branches: Array<{ when: string; next: string }>;
   purpose: string | null;
+  successWhen?: string | null;
   retry?: { maxAttempts: number; delayMs: number } | null;
 }
 

@@ -194,6 +194,9 @@ importers:
       '@codebridge/core':
         specifier: workspace:*
         version: link:../core
+      '@codebridge/session-catalog':
+        specifier: workspace:*
+        version: link:../session-catalog
       '@earendil-works/pi-coding-agent':
         specifier: 0.84.1
         version: 0.84.1(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))(ws@8.21.0)(zod@3.25.76)
@@ -350,6 +353,9 @@ importers:
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../work-items
+      '@codebridge/workflow-engine':
+        specifier: workspace:*
+        version: link:../workflow-engine
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -376,6 +382,9 @@ importers:
 
   packages/runner-host:
     dependencies:
+      '@codebridge/agent-registry':
+        specifier: workspace:*
+        version: link:../agent-registry
       '@codebridge/backends':
         specifier: workspace:*
         version: link:../backends

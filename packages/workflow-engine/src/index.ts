@@ -645,8 +645,8 @@ export function evaluatePostcondition(expression: string, output: unknown): bool
   const actual = valueAtPath(output, comparison[1]!);
   const expected = parseLiteral(comparison[3]!);
   switch (comparison[2]) {
-    case "==": return actual === expected;
-    case "!=": return actual !== expected;
+    case "==": return expected === null ? (actual === null || actual === undefined) : actual === expected;
+    case "!=": return expected === null ? (actual !== null && actual !== undefined) : actual !== expected;
     case ">": return typeof actual === "number" && typeof expected === "number" && actual > expected;
     default: return false;
   }
