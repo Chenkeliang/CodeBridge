@@ -34,7 +34,8 @@
         "manual_review",
         "completed",
         "failed",
-        "cancelled"
+        "cancelled",
+        "interrupted"
       ]
     },
     "mode": {
@@ -56,6 +57,17 @@
       "type": "string",
       "enum": ["read_only", "workspace_write", "git_write", "production_write"]
     },
+    "session_id": { "type": ["string", "null"] },
+    "turn_id": { "type": ["string", "null"] },
+    "terminal_reason": { "type": ["string", "null"] },
+    "replay_safety": {
+      "type": ["string", "null"],
+      "enum": ["safe", "side_effect_started", "outcome_unknown", null]
+    },
+    "lease_owner": { "type": ["string", "null"] },
+    "lease_expires_at": { "type": ["string", "null"], "format": "date-time" },
+    "cancel_requested_at": { "type": ["string", "null"], "format": "date-time" },
+    "cancel_deadline_at": { "type": ["string", "null"], "format": "date-time" },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" }
   },

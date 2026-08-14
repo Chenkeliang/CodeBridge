@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "@codebridge/core";
 import { AgentRegistry, projectSetupState, supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import { SqliteEventStore } from "@codebridge/work-items";
+import { SessionCoordinator } from "@codebridge/session-coordinator";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
@@ -110,6 +111,161 @@ function createSetupFixture(
     workItems,
     registry,
     configStore,
+  };
+}
+
+interface WriteCounters {
+  totalChanges: number;
+  eventCount: number;
+  attachmentCount: number;
+  runCount: number;
+  historyImportCount: number;
+}
+
+function snapshotWriteCounters(
+  store: SqliteEventStore,
+  sessionId: string,
+  providerSessionId: string,
+): WriteCounters {
+  const workItem = store.getWorkItemBySessionId(sessionId);
+  if (!workItem) {
+    throw new Error(`WorkItem not found for Session ${sessionId}`);
+  }
+  return {
+    totalChanges: store.countAllChanges(),
+    eventCount: store.listEvents(workItem.id).length,
+    attachmentCount: store.listMessageAttachments(workItem.id).length,
+    runCount: store.listRuns(workItem.id).length,
+    historyImportCount: store.getProviderHistoryImport(sessionId, providerSessionId)
+      ? 1
+      : 0,
+  };
+}
+
+async function createReadOnlyMatrixFixture() {
+  const dataDir = fs.mkdtempSync(
+    path.join(process.cwd(), ".codebridge-session-api-"),
+  );
+  tempDirs.push(dataDir);
+  const catalog = new SessionCatalogStore(":memory:");
+  const workItems = new SqliteEventStore(path.join(dataDir, "session.sqlite"));
+  const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 100 });
+  const loadSessionHistory = vi.fn().mockResolvedValue([
+    { kind: "message", text: "old question" },
+    {
+      kind: "agent_event",
+      event: {
+        type: "text_delta",
+        blockId: "answer",
+        text: "old answer",
+      },
+    },
+  ]);
+  const runner = {
+    loadSessionHistory,
+  } as unknown as RunnerClient;
+  const app = createSessionApp({
+    catalog,
+    agents,
+    workItems,
+    coordinator,
+    runner,
+  }, TOKEN);
+  const session = catalog.createSession({
+    agentId: "pi",
+    cwd: "/workspace",
+    providerSessionId: "provider_1",
+  });
+  const headers = {
+    authorization: `Bearer ${TOKEN}`,
+    "content-type": "application/json",
+  };
+
+  const preview = await app.request(
+    `/v1/sessions/${session.id}/provider-history/preview`,
+    { method: "POST", headers },
+  );
+  expect(preview.status).toBe(200);
+
+  const imported = await app.request(
+    `/v1/sessions/${session.id}/provider-history/import`,
+    {
+      method: "POST",
+      headers: {
+        ...headers,
+        "idempotency-key": "history-import-1",
+      },
+      body: JSON.stringify({ confirm: true }),
+    },
+  );
+  expect(imported.status).toBe(200);
+
+  const first = coordinator.submitTurn({
+    sessionId: session.id,
+    idempotencyKey: "message_1",
+    attachments: [
+      {
+        id: "attachment_1",
+        name: "context.txt",
+        mimeType: "text/plain",
+        dataBase64: Buffer.from("hello").toString("base64"),
+      },
+    ],
+    message: {
+      text: "请读取这个上下文",
+      attachmentIds: [],
+      flowId: null,
+      model: null,
+      effort: null,
+      permissionMode: null,
+      plan: null,
+    },
+    workItem: {
+      title: "请读取这个上下文",
+      mode: "auto",
+      conversationId: `conv_${session.id.slice("sess_".length)}`,
+      agentId: session.agentId,
+      workspaceScope: session.cwd ? [session.cwd] : [],
+      riskLevel: "read_only",
+    },
+  });
+  expect(first.run).toBeTruthy();
+
+  const second = coordinator.submitTurn({
+    sessionId: session.id,
+    idempotencyKey: "message_2",
+    message: {
+      text: "继续追踪",
+      attachmentIds: [],
+      flowId: null,
+      model: null,
+      effort: null,
+      permissionMode: null,
+      plan: null,
+    },
+    workItem: {
+      title: "继续追踪",
+      mode: "auto",
+      conversationId: `conv_${session.id.slice("sess_".length)}`,
+      agentId: session.agentId,
+      workspaceScope: session.cwd ? [session.cwd] : [],
+      riskLevel: "read_only",
+    },
+  });
+  expect(second.run).toBeNull();
+  loadSessionHistory.mockClear();
+
+  return {
+    app,
+    catalog,
+    workItems,
+    loadSessionHistory,
+    sessionId: session.id,
+    providerSessionId: session.providerSessionId,
+    close() {
+      catalog.close();
+      workItems.close();
+    },
   };
 }
 
@@ -309,6 +465,39 @@ describe("session API", () => {
     expect(workItems.countAllChanges()).toBe(before);
     catalog.close();
     workItems.close();
+  });
+
+  it.each([
+    "",
+    "/timeline",
+    "/queue",
+    "/commands",
+    "/events?after_sequence=0&limit=500",
+  ] as const)("keeps GET %s read-only", async (suffix) => {
+    const fixture = await createReadOnlyMatrixFixture();
+    try {
+      const path = `/v1/sessions/${fixture.sessionId}${suffix}`;
+      const before = snapshotWriteCounters(
+        fixture.workItems,
+        fixture.sessionId,
+        fixture.providerSessionId ?? "provider_1",
+      );
+      const loadCalls = fixture.loadSessionHistory.mock.calls.length;
+
+      const response = await fixture.app.request(path, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+
+      expect(response.status).toBe(200);
+      expect(snapshotWriteCounters(
+        fixture.workItems,
+        fixture.sessionId,
+        fixture.providerSessionId ?? "provider_1",
+      )).toEqual(before);
+      expect(fixture.loadSessionHistory.mock.calls.length).toBe(loadCalls);
+    } finally {
+      fixture.close();
+    }
   });
 
   it("previews and imports Provider history only through confirmed POSTs", async () => {

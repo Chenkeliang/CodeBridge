@@ -8,6 +8,8 @@ info:
   x-codebridge-status: session-first-target
 servers:
   - url: /
+security:
+  - bearerAuth: []
 paths:
   /v1/agents:
     get:
@@ -97,7 +99,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AgentSession'
+                $ref: '#/components/schemas/SessionSnapshot'
         '404':
           $ref: '#/components/responses/NotFound'
   /v1/sessions/{session_id}/directories:
@@ -161,7 +163,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Acknowledgement'
+                $ref: '#/components/schemas/SubmitTurnReceipt'
   /v1/channels/{channel}/conversations/{conversation_id}/messages:
     parameters:
       - in: path
@@ -294,22 +296,10 @@ paths:
                       $ref: '#/components/schemas/SessionRun'
     post:
       operationId: createSessionRun
-      summary: Create a Run with an optional Flow binding
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StartSessionRun'
+      summary: Legacy Run creation route
       responses:
-        '202':
-          description: Run accepted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RunReference'
+        '410':
+          description: Run creation moved to POST /v1/sessions/{session_id}/messages
   /v1/sessions/{session_id}/events:
     parameters:
       - $ref: '#/components/parameters/SessionId'
@@ -331,6 +321,167 @@ paths:
             text/event-stream:
               schema:
                 type: string
+  /v1/sessions/{session_id}/timeline:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getSessionTimeline
+      summary: Get the paginated Session timeline
+      parameters:
+        - in: query
+          name: before
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+      responses:
+        '200':
+          description: Session timeline projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTimeline'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions/{session_id}/blocks/{block_id}/segments:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - in: path
+        name: block_id
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getSessionBlockSegments
+      summary: Get paginated content Segments for one Timeline block
+      parameters:
+        - in: query
+          name: after
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        '200':
+          description: Timeline block segments
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [segments, next_cursor]
+                properties:
+                  segments:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TimelineSegment'
+                  next_cursor: { type: [integer, 'null'] }
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions/{session_id}/queue:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getSessionQueue
+      summary: Get queued Turns for a Session
+      parameters:
+        - in: query
+          name: after_position
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        '200':
+          description: Session queue projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionQueue'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions/{session_id}/commands:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getSessionCommands
+      summary: Get the visible Session command palette
+      responses:
+        '200':
+          description: Session commands
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionCommands'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions/{session_id}/queue/{turn_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - in: path
+        name: turn_id
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: cancelQueuedTurn
+      summary: Cancel a queued Turn
+      parameters:
+        - $ref: '#/components/parameters/RequiredIdempotencyKey'
+        - $ref: '#/components/parameters/RequiredIfMatch'
+      responses:
+        '200':
+          description: Queue cancellation result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [turn, runtime]
+                properties:
+                  turn:
+                    $ref: '#/components/schemas/SessionTurn'
+                  runtime:
+                    $ref: '#/components/schemas/SessionRuntime'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/sessions/{session_id}/queue/resume:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: resumeSessionQueue
+      summary: Resume a paused Session queue and dispatch the head Turn
+      parameters:
+        - $ref: '#/components/parameters/RequiredIdempotencyKey'
+        - $ref: '#/components/parameters/RequiredIfMatch'
+      responses:
+        '200':
+          description: Queue resume result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runtime]
+                properties:
+                  runtime:
+                    $ref: '#/components/schemas/SessionRuntime'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/sessions/{session_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: cancelSessionRun
+      summary: Cancel the active Run for a Session
+      responses:
+        '200':
+          description: Cancellation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunCancellationResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /v1/attachments/{attachment_id}:
     parameters:
       - in: path
@@ -626,6 +777,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Acknowledgement'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/runs/{run_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      operationId: cancelRun
+      summary: Cancel the active Run and return the current disposition
+      parameters:
+        - $ref: '#/components/parameters/RequiredIdempotencyKey'
+        - $ref: '#/components/parameters/RequiredIfMatch'
+      responses:
+        '200':
+          description: Run cancellation result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [disposition, run]
+                properties:
+                  disposition:
+                    type: string
+                    enum: [cancelled, interrupting, already_terminal]
+                  run:
+                    $ref: '#/components/schemas/SessionRun'
+        '202':
+          description: Run cancellation in progress
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [disposition, run]
+                properties:
+                  disposition:
+                    type: string
+                    enum: [interrupting]
+                  run:
+                    $ref: '#/components/schemas/SessionRun'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
   /v1/runs/{run_id}/approvals:
@@ -1047,12 +1238,35 @@ components:
       required: false
       schema:
         type: string
+    RequiredIdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema:
+        type: string
+    IfMatch:
+      in: header
+      name: If-Match
+      required: false
+      schema:
+        type: string
+    RequiredIfMatch:
+      in: header
+      name: If-Match
+      required: true
+      schema:
+        type: string
     LastEventId:
       in: header
       name: Last-Event-ID
       required: false
       schema:
         type: string
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
   responses:
     BadRequest:
       description: Invalid request
@@ -1167,6 +1381,157 @@ components:
         byte_size: { type: integer, minimum: 1 }
         content_hash: { type: string }
         created_at: { type: string, format: date-time }
+    SessionCommand:
+      type: object
+      required: [name, description]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        input:
+          type: object
+          required: [hint]
+          properties:
+            hint: { type: string }
+    SessionCommands:
+      type: object
+      required: [commands]
+      properties:
+        commands:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionCommand'
+    SessionTurn:
+      type: object
+      required: [turn_id, queue_position, status, version, message, created_at]
+      properties:
+        turn_id: { type: string }
+        queue_position: { type: integer, minimum: 1 }
+        status:
+          type: string
+          enum: [queued, dispatched, cancelled]
+        version: { type: integer, minimum: 1 }
+        message:
+          type: object
+          required: [text, attachment_ids]
+          properties:
+            text: { type: string }
+            attachment_ids:
+              type: array
+              items: { type: string }
+        dispatched_run_id: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        dispatched_at: { type: [string, 'null'], format: date-time }
+        cancelled_at: { type: [string, 'null'], format: date-time }
+    SessionQueue:
+      type: object
+      required: [turns, total, next_cursor]
+      properties:
+        turns:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionTurn'
+        total: { type: integer, minimum: 0 }
+        next_cursor: { type: [integer, 'null'] }
+    TimelineSegment:
+      type: object
+      required: [segment_id, segment_index, content, byte_length, sealed]
+      properties:
+        segment_id: { type: string }
+        segment_index: { type: integer, minimum: 0 }
+        content: { type: string }
+        byte_length: { type: integer, minimum: 0 }
+        sealed: { type: boolean }
+    TimelineBlock:
+      type: object
+      required: [block_id, block_index, kind, status, metadata, segments, next_segment_cursor]
+      properties:
+        block_id: { type: string }
+        block_index: { type: integer, minimum: 0 }
+        kind: { type: string }
+        status: { type: string }
+        metadata: { type: object }
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineSegment'
+        next_segment_cursor: { type: [integer, 'null'] }
+    TimelineTurn:
+      type: object
+      required: [timeline_index, turn_id, run_id, status, blocks]
+      properties:
+        timeline_index: { type: integer, minimum: 0 }
+        turn_id: { type: string }
+        run_id: { type: string }
+        status:
+          type: string
+          enum: [dispatched, running, waiting, succeeded, failed, cancelled, interrupted]
+        blocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineBlock'
+    SessionTimeline:
+      type: object
+      required: [turns, previous_cursor, truncated_block_ids]
+      properties:
+        turns:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineTurn'
+        previous_cursor: { type: [integer, 'null'] }
+        truncated_block_ids:
+          type: array
+          items: { type: string }
+    SessionRuntime:
+      type: object
+      required: [active_run, queue_state, queue_pause_reason, queue, version, last_event_sequence]
+      properties:
+        active_run:
+          anyOf:
+            - $ref: '#/components/schemas/SessionRun'
+            - type: 'null'
+        queue_state:
+          type: string
+          enum: [ready, paused]
+        queue_pause_reason:
+          type: [string, 'null']
+          enum: [failed, cancelled, interrupted, null]
+        queue:
+          $ref: '#/components/schemas/SessionQueue'
+        version: { type: integer, minimum: 1 }
+        last_event_sequence: { type: integer, minimum: 0 }
+    SessionSnapshot:
+      type: object
+      required: [session, runtime, timeline, commands]
+      properties:
+        session:
+          $ref: '#/components/schemas/AgentSession'
+        runtime:
+          $ref: '#/components/schemas/SessionRuntime'
+        timeline:
+          $ref: '#/components/schemas/SessionTimeline'
+        commands:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionCommand'
+    SubmitTurnReceipt:
+      type: object
+      required: [request_id, accepted, session_id, task_record_id, event_id, sequence, attachment_ids]
+      properties:
+        request_id: { type: string }
+        accepted: { type: boolean }
+        session_id: { type: string }
+        task_record_id: { type: string }
+        event_id: { type: string }
+        sequence: { type: integer, minimum: 1 }
+        attachment_ids:
+          type: array
+          items: { type: string }
+    RunCancellationResponse:
+      type: object
+      required: [stopped]
+      properties:
+        stopped: { type: boolean }
+        run_id: { type: [string, 'null'] }
     StartSessionRun:
       type: object
       properties:
@@ -1291,7 +1656,7 @@ components:
           type: string
         status:
           type: string
-          enum: [queued, running, waiting, succeeded, failed, cancelled]
+          enum: [queued, running, waiting, succeeded, failed, cancelled, interrupted]
         plan_id:
           type: [string, 'null']
         workflow_revision:
@@ -1306,8 +1671,17 @@ components:
         agent_id: { type: [string, 'null'] }
         plan_id: { type: [string, 'null'] }
         workflow_revision: { type: [string, 'null'] }
+        turn_id: { type: [string, 'null'] }
         mode: { type: string, enum: [auto, investigation, change, review, release, observe] }
-        status: { type: string, enum: [queued, running, waiting, succeeded, failed, cancelled] }
+        status: { type: string, enum: [queued, running, waiting, succeeded, failed, cancelled, interrupted] }
+        terminal_reason: { type: [string, 'null'] }
+        replay_safety:
+          type: [string, 'null']
+          enum: [safe, side_effect_started, outcome_unknown, null]
+        lease_owner: { type: [string, 'null'] }
+        lease_expires_at: { type: [string, 'null'], format: date-time }
+        cancel_requested_at: { type: [string, 'null'], format: date-time }
+        cancel_deadline_at: { type: [string, 'null'], format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     TaskReference:

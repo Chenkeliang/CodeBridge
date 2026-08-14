@@ -66,6 +66,12 @@ Tasks（可选）
 └──────────────────────────────────────────────┘
 ```
 
+右侧还会显示一个 FIFO Queue 面板：
+
+- 队列中的消息只存在于 Queue，不会进入时间线，直到它被真正派发。
+- 失败、取消和中断会暂停队列；Resume 只派发队首。
+- 消息确认使用同一 Idempotency-Key 重试，避免重复入队。
+
 输入框周边的控件都是可选上下文：
 
 - Agent：新建 Session 时由左侧分组确定，已有 Session 显示为只读身份。
@@ -169,6 +175,8 @@ queued / running / waiting / succeeded / failed / cancelled
 ```
 
 页面不预置任何业务字段或示例流程。
+
+当 Session 处于 `interrupted` / `cancelled` / `failed` 时，队列面板应明确显示暂停原因，并保留历史时间线供恢复判断。
 
 ## 9. 飞书和 Telegram
 
