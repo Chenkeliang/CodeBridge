@@ -1121,6 +1121,37 @@ export class SqliteEventStore {
     return this.getRun(runId)!;
   }
 
+  claimRun(
+    runId: string,
+    owner: string,
+    now: string,
+    expiresAt: string,
+  ): Run | null {
+    return this.withSessionTransaction((tx) =>
+      tx.claimRun(runId, owner, now, expiresAt)
+    );
+  }
+
+  renewRunLease(
+    runId: string,
+    owner: string,
+    expiresAt: string,
+  ): Run | null {
+    return this.withSessionTransaction((tx) =>
+      tx.renewRunLease(runId, owner, expiresAt)
+    );
+  }
+
+  listExpiredRunningRuns(now: string, limit: number): Run[] {
+    return createSqliteSessionRuntimeTransaction(this.database)
+      .listExpiredRunningRuns(now, limit);
+  }
+
+  listCancellationDeadlineRuns(now: string, limit: number): Run[] {
+    return createSqliteSessionRuntimeTransaction(this.database)
+      .listCancellationDeadlineRuns(now, limit);
+  }
+
   requeueRun(runId: string): Run {
     return this.updateRunStatus(runId, "queued");
   }

@@ -201,6 +201,19 @@ export interface SessionRuntimeTransaction {
       cancelDeadlineAt?: string | null;
     },
   ): Run;
+  claimRun(
+    runId: string,
+    owner: string,
+    now: string,
+    expiresAt: string,
+  ): Run | null;
+  renewRunLease(
+    runId: string,
+    owner: string,
+    expiresAt: string,
+  ): Run | null;
+  listExpiredRunningRuns(now: string, limit: number): Run[];
+  listCancellationDeadlineRuns(now: string, limit: number): Run[];
   updateRuntime(
     sessionId: string,
     patch: Partial<
@@ -633,6 +646,74 @@ export function createSqliteSessionRuntimeTransaction(
           runId,
         );
       return transaction.getRun(runId)!;
+    },
+
+    claimRun(runId, owner, now, expiresAt) {
+      const result = database
+        .prepare(
+          `UPDATE runs
+           SET status = 'running', lease_owner = ?, lease_expires_at = ?,
+             updated_at = ?
+           WHERE id = ? AND status = 'queued' AND lease_owner IS NULL`,
+        )
+        .run(owner, expiresAt, now, runId);
+      return Number(result.changes) === 1
+        ? transaction.getRun(runId) ?? null
+        : null;
+    },
+
+    renewRunLease(runId, owner, expiresAt) {
+      const result = database
+        .prepare(
+          `UPDATE runs
+           SET lease_expires_at = ?, updated_at = ?
+           WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+        )
+        .run(
+          expiresAt,
+          new Date().toISOString(),
+          runId,
+          owner,
+        );
+      return Number(result.changes) === 1
+        ? transaction.getRun(runId) ?? null
+        : null;
+    },
+
+    listExpiredRunningRuns(now, limit) {
+      const boundedLimit = Math.max(
+        1,
+        Math.min(1_000, Math.floor(limit)),
+      );
+      const rows = database
+        .prepare(
+          `SELECT * FROM runs
+           WHERE status = 'running'
+             AND lease_expires_at IS NOT NULL
+             AND lease_expires_at < ?
+           ORDER BY lease_expires_at ASC
+           LIMIT ?`,
+        )
+        .all(now, boundedLimit) as SqliteRow[];
+      return rows.map(toRun);
+    },
+
+    listCancellationDeadlineRuns(now, limit) {
+      const boundedLimit = Math.max(
+        1,
+        Math.min(1_000, Math.floor(limit)),
+      );
+      const rows = database
+        .prepare(
+          `SELECT * FROM runs
+           WHERE status = 'running'
+             AND cancel_deadline_at IS NOT NULL
+             AND cancel_deadline_at <= ?
+           ORDER BY cancel_deadline_at ASC
+           LIMIT ?`,
+        )
+        .all(now, boundedLimit) as SqliteRow[];
+      return rows.map(toRun);
     },
 
     updateRuntime(sessionId, patch) {
