@@ -7,10 +7,13 @@ import { initializeSessionRuntimeSchema } from "./session-schema.js";
 import {
   appendSessionEventInTransaction,
   createSqliteSessionRuntimeTransaction,
+  importProviderHistoryInTransaction,
 } from "./session-runtime.js";
 import type {
   QueuePauseReason,
   QueueState,
+  ProviderHistoryImportInput,
+  ProviderHistoryImportResult,
   ReplaySafety,
   RunAttempt,
   SessionRuntime,
@@ -26,6 +29,8 @@ import type {
 
 export type {
   ImportedHistoryEntry,
+  ProviderHistoryImportInput,
+  ProviderHistoryImportResult,
   QueuePauseReason,
   QueueState,
   ReplaySafety,
@@ -772,6 +777,47 @@ export class SqliteEventStore {
       .prepare("SELECT total_changes() AS value")
       .get() as { value?: number } | undefined;
     return Number(row?.value ?? 0);
+  }
+
+  getProviderHistoryImport(
+    sessionId: string,
+    providerSessionId: string,
+  ): {
+    providerDigest: string;
+    importedPosition: number;
+    importedAt: string;
+  } | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT provider_digest, imported_position, imported_at
+         FROM provider_history_imports
+         WHERE session_id = ? AND provider_session_id = ?`,
+      )
+      .get(sessionId, providerSessionId) as SqliteRow | undefined;
+    return row
+      ? {
+          providerDigest: String(row.provider_digest),
+          importedPosition: Number(row.imported_position),
+          importedAt: String(row.imported_at),
+        }
+      : undefined;
+  }
+
+  importProviderHistory(
+    input: ProviderHistoryImportInput,
+  ): ProviderHistoryImportResult {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const result = importProviderHistoryInTransaction(
+        this.database,
+        input,
+      );
+      this.database.exec("COMMIT;");
+      return result;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
   }
 
   withSessionTransaction<T>(

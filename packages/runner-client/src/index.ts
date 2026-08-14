@@ -18,7 +18,7 @@ export interface RunnerClientOptions {
   sessionHistoryTimeoutMs?: number;
 }
 
-export type { CliSessionSummary };
+export type { CliSessionSummary, ProviderSessionHistoryEvent };
 
 export interface WorkspaceDirectoryEntry {
   name: string;

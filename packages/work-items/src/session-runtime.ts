@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { projectSessionEvent } from "./session-projector.js";
 import type {
@@ -138,6 +138,22 @@ export interface SessionEventInput {
   inputHash?: string | null;
   resultRef?: string | null;
   payload?: Record<string, unknown>;
+}
+
+export interface ProviderHistoryImportInput {
+  sessionId: string;
+  providerSessionId: string;
+  priorPosition: number;
+  priorDigest: string;
+  nextDigest: string;
+  events: ImportedHistoryEntry[];
+  idempotencyKey: string;
+}
+
+export interface ProviderHistoryImportResult {
+  importedEvents: number;
+  importedTurns: number;
+  lastEventSequence: number;
 }
 
 export interface SessionRunSpec {
@@ -840,6 +856,228 @@ export function appendSessionEventInTransaction(
   }
   projectSessionEvent(database, input.sessionId, event);
   return event;
+}
+
+export function importProviderHistoryInTransaction(
+  database: DatabaseSync,
+  input: ProviderHistoryImportInput,
+): ProviderHistoryImportResult {
+  const namespace = `session:history-import:${input.sessionId}`;
+  const transaction = createSqliteSessionRuntimeTransaction(database);
+  const cached = transaction.getIdempotencyResponse<
+    ProviderHistoryImportResult
+  >(namespace, input.idempotencyKey);
+  if (cached) return cached;
+
+  const cursor = database
+    .prepare(
+      `SELECT provider_digest, imported_position
+       FROM provider_history_imports
+       WHERE session_id = ? AND provider_session_id = ?`,
+    )
+    .get(input.sessionId, input.providerSessionId) as
+      | { provider_digest?: string; imported_position?: number }
+      | undefined;
+  if (
+    cursor
+    && (
+      Number(cursor.imported_position) !== input.priorPosition
+      || String(cursor.provider_digest) !== input.priorDigest
+    )
+  ) {
+    throw new Error("provider_history_cursor_conflict");
+  }
+  if (!cursor && input.priorPosition !== 0) {
+    throw new Error("provider_history_cursor_conflict");
+  }
+
+  const workItemId = transaction.getOrCreateWorkItem(input.sessionId, {
+    title: "Imported Session",
+    mode: "auto",
+    conversationId: `conv_${input.sessionId.replace(/^sess_/, "")}`,
+    agentId: null,
+    workspaceScope: [],
+    riskLevel: "read_only",
+  });
+  let active:
+    | { turnId: string; runId: string }
+    | undefined;
+  let importedTurns = 0;
+
+  const finishActive = () => {
+    if (!active) return;
+    transaction.updateRun(active.runId, {
+      status: "succeeded",
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+    transaction.appendEvent({
+      workItemId,
+      sessionId: input.sessionId,
+      runId: active.runId,
+      type: "RUN_SUCCEEDED",
+      actor: "system",
+      target: active.runId,
+      payload: { imported: true },
+    });
+    transaction.updateRuntime(input.sessionId, {
+      activeRunId: null,
+      queueState: "ready",
+      queuePauseReason: null,
+    });
+    active = undefined;
+  };
+
+  const startTurn = (
+    providerPosition: number,
+    message?: string,
+  ) => {
+    const identity = createHash("sha256")
+      .update(`${input.providerSessionId}\0${providerPosition}`)
+      .digest("hex")
+      .slice(0, 32);
+    const turnId = `turn_import_${identity}`;
+    const runId = `run_import_${identity}`;
+    const now = new Date().toISOString();
+    const position = database
+      .prepare(
+        `SELECT COALESCE(MAX(queue_position), 0) + 1 AS next_position
+         FROM session_turns WHERE session_id = ?`,
+      )
+      .get(input.sessionId) as { next_position?: number } | undefined;
+    database
+      .prepare(
+        `INSERT INTO session_turns (
+          turn_id, session_id, queue_position, status, message_json,
+          version, dispatched_run_id, created_at, dispatched_at,
+          cancelled_at
+        ) VALUES (?, ?, ?, 'dispatched', ?, 2, ?, ?, ?, NULL)`,
+      )
+      .run(
+        turnId,
+        input.sessionId,
+        Number(position?.next_position ?? 1),
+        JSON.stringify({
+          text: message ?? "",
+          attachmentIds: [],
+          flowId: null,
+          model: null,
+          effort: null,
+          permissionMode: null,
+          plan: null,
+        } satisfies SessionTurnMessage),
+        runId,
+        now,
+        now,
+      );
+    database
+      .prepare(
+        `INSERT INTO runs (
+          id, schema_version, work_item_id, session_id, turn_id, mode,
+          status, agent_id, plan_id, plan_ir_hash, workflow_revision,
+          terminal_reason, replay_safety, lease_owner, lease_expires_at,
+          cancel_requested_at, cancel_deadline_at, created_at, updated_at
+        ) VALUES (?, 1, ?, ?, ?, 'auto', 'running', NULL, NULL, NULL,
+          NULL, NULL, 'safe', NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        runId,
+        workItemId,
+        input.sessionId,
+        turnId,
+        now,
+        now,
+      );
+    transaction.updateRuntime(input.sessionId, {
+      activeRunId: runId,
+      queueState: "ready",
+      queuePauseReason: null,
+    });
+    transaction.appendEvent({
+      workItemId,
+      sessionId: input.sessionId,
+      runId,
+      type: "TURN_DISPATCHED",
+      actor: "system",
+      target: turnId,
+      payload: { turn_id: turnId, imported: true },
+    });
+    if (message !== undefined) {
+      transaction.appendEvent({
+        workItemId,
+        sessionId: input.sessionId,
+        runId,
+        type: "MESSAGE_RECEIVED",
+        actor: "user",
+        target: turnId,
+        payload: { message, attachment_ids: [], imported: true },
+      });
+    }
+    transaction.appendEvent({
+      workItemId,
+      sessionId: input.sessionId,
+      runId,
+      type: "RUN_CREATED",
+      actor: "system",
+      target: runId,
+      payload: { mode: "auto", imported: true },
+    });
+    active = { turnId, runId };
+    importedTurns += 1;
+  };
+
+  for (const [offset, entry] of input.events.entries()) {
+    const providerPosition = input.priorPosition + offset;
+    if (entry.kind === "message") {
+      finishActive();
+      startTurn(providerPosition, entry.text);
+      continue;
+    }
+    if (!active) startTurn(providerPosition);
+    transaction.appendEvent({
+      workItemId,
+      sessionId: input.sessionId,
+      runId: active!.runId,
+      type: "AGENT_EVENT",
+      actor: "agent",
+      target: String(entry.event.type ?? "agent_event"),
+      payload: { event: entry.event, imported: true },
+    });
+  }
+  finishActive();
+
+  const importedPosition =
+    input.priorPosition + input.events.length;
+  database
+    .prepare(
+      `INSERT INTO provider_history_imports (
+        session_id, provider_session_id, provider_digest,
+        imported_position, imported_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, provider_session_id) DO UPDATE SET
+        provider_digest = excluded.provider_digest,
+        imported_position = excluded.imported_position,
+        imported_at = excluded.imported_at`,
+    )
+    .run(
+      input.sessionId,
+      input.providerSessionId,
+      input.nextDigest,
+      importedPosition,
+      new Date().toISOString(),
+    );
+  const result: ProviderHistoryImportResult = {
+    importedEvents: input.events.length,
+    importedTurns,
+    lastEventSequence:
+      transaction.getRuntime(input.sessionId)!.lastEventSequence,
+  };
+  transaction.putIdempotencyResponse(
+    namespace,
+    input.idempotencyKey,
+    result,
+  );
+  return result;
 }
 
 function statusForEvent(

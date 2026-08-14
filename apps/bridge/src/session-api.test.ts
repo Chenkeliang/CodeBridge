@@ -279,6 +279,110 @@ describe("session API agent setup routing", () => {
 });
 
 describe("session API", () => {
+  it("does not call the Runner or write SQLite when opening a Session", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const loadSessionHistory = vi.fn();
+    const runner = {
+      loadSessionHistory,
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "pi",
+      cwd: "/workspace",
+      providerSessionId: "provider_1",
+    });
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      runner,
+    }, TOKEN);
+    const before = workItems.countAllChanges();
+
+    const response = await app.request(
+      `/v1/sessions/${session.id}`,
+      { headers: { authorization: "Bearer " + TOKEN } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(loadSessionHistory).not.toHaveBeenCalled();
+    expect(workItems.countAllChanges()).toBe(before);
+    catalog.close();
+    workItems.close();
+  });
+
+  it("previews and imports Provider history only through confirmed POSTs", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      loadSessionHistory: vi.fn().mockResolvedValue([
+        { kind: "message", text: "old question" },
+        {
+          kind: "agent_event",
+          event: {
+            type: "text_delta",
+            blockId: "answer",
+            text: "old answer",
+          },
+        },
+      ]),
+    } as unknown as RunnerClient;
+    const session = catalog.createSession({
+      agentId: "pi",
+      cwd: "/workspace",
+      providerSessionId: "provider_1",
+    });
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      runner,
+    }, TOKEN);
+    const headers = {
+      authorization: "Bearer " + TOKEN,
+      "content-type": "application/json",
+    };
+
+    const preview = await app.request(
+      `/v1/sessions/${session.id}/provider-history/preview`,
+      { method: "POST", headers },
+    );
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({
+      importableEvents: 2,
+    });
+
+    const unconfirmed = await app.request(
+      `/v1/sessions/${session.id}/provider-history/import`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ confirm: true }),
+      },
+    );
+    expect(unconfirmed.status).toBe(400);
+
+    const imported = await app.request(
+      `/v1/sessions/${session.id}/provider-history/import`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "idempotency-key": "import_1",
+        },
+        body: JSON.stringify({ confirm: true }),
+      },
+    );
+    expect(imported.status).toBe(200);
+    expect(await imported.json()).toMatchObject({
+      importedEvents: 2,
+      importedTurns: 1,
+    });
+    expect(catalog.getSession(session.id)?.taskRecordId).toBeTruthy();
+    catalog.close();
+    workItems.close();
+  });
+
   it("creates a session fixed to an Agent and maps messages to a TaskRecord", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
@@ -530,7 +634,7 @@ describe("session API", () => {
     workItems.close();
   });
 
-  it("imports provider sessions into the Session Catalog on demand", async () => {
+  it("moves provider Session discovery off the GET route", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     const runner = {
@@ -538,17 +642,17 @@ describe("session API", () => {
     } as unknown as RunnerClient;
     const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/tmp/project" }, TOKEN);
     const response = await app.request("/v1/sessions?import=true&agent_id=codex", { headers: { authorization: `Bearer ${TOKEN}` } });
-    expect((await response.json() as { sessions: Array<{ provider_session_id: string; updated_at: string }> }).sessions[0]).toMatchObject({
-      provider_session_id: "provider-1",
-      updated_at: "2026-08-07T00:00:00.000Z",
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({
+      error: "provider_import_moved",
     });
     const refreshed = await app.request("/v1/sessions?import=true&agent_id=codex", { headers: { authorization: `Bearer ${TOKEN}` } });
-    expect((await refreshed.json() as { sessions: Array<{ updated_at: string }> }).sessions[0]?.updated_at).toBe("2026-08-07T00:00:00.000Z");
+    expect(refreshed.status).toBe(410);
     catalog.close();
     workItems.close();
   });
 
-  it("hydrates imported provider history into the unified event stream", async () => {
+  it("keeps provider history out of the Session GET path", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     const runner = {
@@ -569,17 +673,20 @@ describe("session API", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(response.status).toBe(200);
-    expect((await response.json() as { task_record_id: string }).task_record_id).toBeTruthy();
+    expect(
+      (await response.json() as { task_record_id: string | null })
+        .task_record_id,
+    ).toBeNull();
 
     const events = await app.request(`/v1/sessions/${session.id}/events`, {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     const body = await events.text();
-    expect(body).toContain("MESSAGE_RECEIVED");
-    expect(body).toContain("查询手机号用户信息");
-    expect(body).toContain("text_delta");
-    expect(body).toContain("会员有效期为 30 天");
-    expect(body).toContain("SESSION_HISTORY_HYDRATED");
+    expect(body).not.toContain("MESSAGE_RECEIVED");
+    expect(body).not.toContain("查询手机号用户信息");
+    expect(body).not.toContain("text_delta");
+    expect(body).not.toContain("会员有效期为 30 天");
+    expect(body).not.toContain("SESSION_HISTORY_HYDRATED");
     catalog.close();
     workItems.close();
   });
@@ -675,7 +782,7 @@ describe("session API", () => {
     workItems.close();
   });
 
-  it("imports provider messages appended after the initial history hydration", async () => {
+  it("does not import appended provider messages during GET", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     let loads = 0;
@@ -707,21 +814,13 @@ describe("session API", () => {
     await app.request(`/v1/sessions/${session.id}`, { headers });
 
     const taskId = catalog.getSession(session.id)?.taskRecordId;
-    expect(loads).toBe(2);
-    expect(workItems.listEvents(taskId!).filter((event) => event.type === "MESSAGE_RECEIVED"))
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ payload: { message: "初始问题" } }),
-        expect.objectContaining({ payload: { message: "后来追加的问题" } }),
-      ]));
-    expect(workItems.listEvents(taskId!)).toContainEqual(expect.objectContaining({
-      type: "AGENT_EVENT",
-      payload: { event: { type: "text_delta", text: "后来追加的回复" } },
-    }));
+    expect(loads).toBe(0);
+    expect(taskId).toBeNull();
     catalog.close();
     workItems.close();
   });
 
-  it("does not mark provider history complete before the Agent has produced output", async () => {
+  it("does not inspect partial provider history during GET", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     let loads = 0;
@@ -746,14 +845,13 @@ describe("session API", () => {
     });
 
     const taskId = catalog.getSession(session.id)?.taskRecordId;
-    expect(taskId).toBeTruthy();
-    expect(loads).toBe(1);
-    expect(workItems.listEvents(taskId!).map((event) => event.type)).not.toContain("SESSION_HISTORY_HYDRATED");
+    expect(taskId).toBeNull();
+    expect(loads).toBe(0);
     catalog.close();
     workItems.close();
   });
 
-  it("rechecks a legacy hydration marker when the saved history has no Agent output", async () => {
+  it("does not recheck legacy hydration markers during GET", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     const task = workItems.createWorkItem({
@@ -797,8 +895,8 @@ describe("session API", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
 
-    expect(loads).toBe(1);
-    expect(workItems.listEvents(task.id)).toContainEqual(expect.objectContaining({
+    expect(loads).toBe(0);
+    expect(workItems.listEvents(task.id)).not.toContainEqual(expect.objectContaining({
       type: "AGENT_EVENT",
       payload: { event: { type: "text_delta", text: "补齐的回复" } },
     }));
@@ -806,7 +904,7 @@ describe("session API", () => {
     workItems.close();
   });
 
-  it("repairs an imported Session whose history binding is still empty", async () => {
+  it("does not repair an empty history binding during GET", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     const task = workItems.createWorkItem({
@@ -837,7 +935,7 @@ describe("session API", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
 
-    expect(workItems.listEvents(task.id)).toContainEqual(expect.objectContaining({
+    expect(workItems.listEvents(task.id)).not.toContainEqual(expect.objectContaining({
       type: "MESSAGE_RECEIVED",
       payload: { message: "原始问题" },
     }));
@@ -845,7 +943,7 @@ describe("session API", () => {
     workItems.close();
   });
 
-  it("marks legacy hydrated history without duplicating its existing events", async () => {
+  it("does not add legacy hydration markers during GET", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     const task = workItems.createWorkItem({
@@ -881,7 +979,9 @@ describe("session API", () => {
 
     const events = workItems.listEvents(task.id);
     expect(events.filter((event) => event.type === "MESSAGE_RECEIVED")).toHaveLength(1);
-    expect(events).toContainEqual(expect.objectContaining({ type: "SESSION_HISTORY_HYDRATED" }));
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: "SESSION_HISTORY_HYDRATED" }),
+    );
     catalog.close();
     workItems.close();
   });
