@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { initializeSessionRuntimeSchema } from "./session-schema.js";
+import { projectSessionEvent } from "./session-projector.js";
 import {
   appendSessionEventInTransaction,
   createSqliteSessionRuntimeTransaction,
@@ -837,6 +838,439 @@ export class SqliteEventStore {
     }
   }
 
+  previewSessionRuntimeMigration(
+    bindings: Array<{ sessionId: string; workItemId: string }>,
+  ): {
+    conflicts: Array<{ sessionId: string; activeRunIds: string[] }>;
+  } {
+    const conflicts: Array<{ sessionId: string; activeRunIds: string[] }> = [];
+    for (const binding of bindings) {
+      const activeRuns = this.database
+        .prepare(
+          `SELECT id
+           FROM runs
+           WHERE work_item_id = ?
+             AND status IN ('queued', 'running', 'waiting')
+           ORDER BY created_at ASC, id ASC`,
+        )
+        .all(binding.workItemId) as Array<{ id?: unknown }>;
+      const activeRunIds = activeRuns.map((row) => String(row.id));
+      if (activeRunIds.length > 1) {
+        conflicts.push({
+          sessionId: binding.sessionId,
+          activeRunIds,
+        });
+      }
+    }
+    return { conflicts };
+  }
+
+  bindWorkItemToSession(sessionId: string, workItemId: string): void {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const workItem = this.database
+        .prepare("SELECT session_id FROM work_items WHERE id = ?")
+        .get(workItemId) as { session_id?: unknown } | undefined;
+      if (!workItem) {
+        throw new Error(`WorkItem not found: ${workItemId}`);
+      }
+      const existingBinding = this.database
+        .prepare(
+          "SELECT id FROM work_items WHERE session_id = ? AND id != ? LIMIT 1",
+        )
+        .get(sessionId, workItemId) as { id?: unknown } | undefined;
+      if (existingBinding) {
+        throw new Error(`Session already bound to another WorkItem: ${sessionId}`);
+      }
+      if (
+        workItem.session_id !== null
+        && workItem.session_id !== undefined
+        && String(workItem.session_id) !== sessionId
+      ) {
+        throw new Error(`WorkItem already bound to another Session: ${workItemId}`);
+      }
+      const now = new Date().toISOString();
+      this.database
+        .prepare(
+          "UPDATE work_items SET session_id = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(sessionId, now, workItemId);
+      this.database
+        .prepare(
+          `INSERT INTO session_runtime (
+            session_id, active_run_id, queue_state, queue_pause_reason,
+            last_event_sequence, version, updated_at
+          ) VALUES (?, NULL, 'ready', NULL, 0, 1, ?)
+          ON CONFLICT(session_id) DO NOTHING`,
+        )
+        .run(sessionId, now);
+      this.database.exec("COMMIT;");
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
+  backfillRunTurns(sessionId: string, workItemId: string): number {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const runs = this.database
+        .prepare(
+          `SELECT *
+           FROM runs
+           WHERE work_item_id = ?
+           ORDER BY created_at ASC, id ASC`,
+        )
+        .all(workItemId) as SqliteRow[];
+      if (runs.length === 0) {
+        const events = this.database
+          .prepare(
+            `SELECT *
+             FROM domain_events
+             WHERE work_item_id = ?
+               AND type IN ('MESSAGE_RECEIVED', 'AGENT_EVENT')
+             ORDER BY sequence ASC`,
+          )
+          .all(workItemId) as SqliteRow[];
+        let activeGroup = false;
+        let syntheticCount = 0;
+        for (const row of events) {
+          const event = toDomainEvent(row);
+          if (event.type !== "MESSAGE_RECEIVED" && activeGroup) continue;
+          const seed = event.type === "MESSAGE_RECEIVED"
+            ? `message:${event.sequence}`
+            : `agent:${event.sequence}`;
+          const turnId = createMigrationId("turn", sessionId, seed);
+          const runId = createMigrationId("run", sessionId, seed);
+          const message = event.type === "MESSAGE_RECEIVED"
+            ? legacyTurnMessageFromEvent(event)
+            : emptyLegacyTurnMessage();
+          const run = createLegacySyntheticRun({
+            runId,
+            turnId,
+            workItemId,
+            sessionId,
+            occurredAt: event.occurredAt,
+          });
+          upsertLegacyRunTurn(
+            this.database,
+            {
+              sessionId,
+              workItemId,
+              runId,
+              turnId,
+              queuePosition: syntheticCount + 1,
+              message,
+              createdAt: event.occurredAt,
+            },
+            run,
+            event.occurredAt,
+          );
+          syntheticCount += 1;
+          activeGroup = true;
+        }
+        this.database.exec("COMMIT;");
+        return syntheticCount;
+      }
+
+      const messageRows = this.database
+        .prepare(
+          `SELECT *
+           FROM domain_events
+           WHERE work_item_id = ? AND type = 'MESSAGE_RECEIVED'
+           ORDER BY sequence ASC`,
+        )
+        .all(workItemId) as SqliteRow[];
+      const explicitMessagesByRunId = new Map<string, DomainEvent>();
+      const unscopedMessages: DomainEvent[] = [];
+      for (const row of messageRows) {
+        const message = toDomainEvent(row);
+        if (message.runId) {
+          explicitMessagesByRunId.set(message.runId, message);
+        } else {
+          unscopedMessages.push(message);
+        }
+      }
+      let unscopedIndex = 0;
+      let boundCount = 0;
+      for (const [index, row] of runs.entries()) {
+        const run = toRun(row);
+        const turnEvent = this.database
+          .prepare(
+            `SELECT *
+             FROM domain_events
+             WHERE work_item_id = ? AND run_id = ? AND type = 'TURN_DISPATCHED'
+             ORDER BY sequence ASC
+             LIMIT 1`,
+          )
+          .get(workItemId, run.id) as SqliteRow | undefined;
+        const messageEvent = explicitMessagesByRunId.get(run.id)
+          ?? unscopedMessages.at(unscopedIndex++)
+          ?? undefined;
+        const turnId = turnEvent
+          ? legacyTurnIdFromEvent(sessionId, turnEvent, run.id)
+          : run.turnId
+            ?? (messageEvent
+              ? createMigrationId("turn", sessionId, `message:${messageEvent.sequence}`)
+              : createMigrationId("turn", sessionId, `run:${run.id}`));
+        const queuePosition = index + 1;
+        const message = messageEvent
+          ? legacyTurnMessageFromEvent(messageEvent)
+          : emptyLegacyTurnMessage();
+        upsertLegacyRunTurn(
+          this.database,
+          {
+            sessionId,
+            workItemId,
+            runId: run.id,
+            turnId,
+            queuePosition,
+            message,
+            createdAt:
+              messageEvent?.occurredAt === undefined
+                ? run.createdAt
+                : String(messageEvent.occurredAt),
+          },
+          run,
+          turnEvent ? String(turnEvent.occurred_at) : undefined,
+        );
+        boundCount += 1;
+      }
+
+      this.database.exec("COMMIT;");
+      return boundCount;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
+  ensureRuntimeFromRuns(sessionId: string): SessionRuntime {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const current = this.getSessionRuntime(sessionId);
+      const runs = this.database
+        .prepare(
+          `SELECT *
+           FROM runs
+           WHERE session_id = ? OR work_item_id IN (
+             SELECT id FROM work_items WHERE session_id = ?
+           )
+           ORDER BY created_at ASC, id ASC`,
+        )
+        .all(sessionId, sessionId) as SqliteRow[];
+      const activeRuns = runs
+        .map(toRun)
+        .filter((run) => isActiveRunStatus(run.status));
+      if (activeRuns.length > 1) {
+        const error = new Error("session_runtime_migration_conflict");
+        (error as Error & {
+          conflicts?: Array<{ sessionId: string; activeRunIds: string[] }>;
+        }).conflicts = [{
+          sessionId,
+          activeRunIds: activeRuns.map((run) => run.id),
+        }];
+        throw error;
+      }
+      const latestRun = runs.length > 0
+        ? toRun(runs.at(-1)!)
+        : undefined;
+      const next = activeRuns[0]
+        ? {
+            activeRunId: activeRuns[0].id,
+            queueState: "ready" as const,
+            queuePauseReason: null,
+          }
+        : latestRun && (
+            latestRun.status === "failed"
+            || latestRun.status === "cancelled"
+            || latestRun.status === "interrupted"
+          )
+          ? {
+              activeRunId: null,
+              queueState: "paused" as const,
+              queuePauseReason: latestRun.status as QueuePauseReason,
+            }
+          : {
+              activeRunId: current?.activeRunId ?? null,
+              queueState: current?.queueState ?? "ready",
+              queuePauseReason: current?.queuePauseReason ?? null,
+            };
+      const now = new Date().toISOString();
+      if (current) {
+        this.database
+          .prepare(
+            `UPDATE session_runtime
+             SET active_run_id = ?, queue_state = ?, queue_pause_reason = ?,
+               updated_at = ?
+             WHERE session_id = ?`,
+          )
+          .run(
+            next.activeRunId,
+            next.queueState,
+            next.queuePauseReason,
+            now,
+            sessionId,
+          );
+      } else {
+        this.database
+          .prepare(
+            `INSERT INTO session_runtime (
+              session_id, active_run_id, queue_state, queue_pause_reason,
+              last_event_sequence, version, updated_at
+            ) VALUES (?, ?, ?, ?, 0, 1, ?)`,
+          )
+          .run(
+            sessionId,
+            next.activeRunId,
+            next.queueState,
+            next.queuePauseReason,
+            now,
+          );
+      }
+      this.database.exec("COMMIT;");
+      return this.getSessionRuntime(sessionId)!;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
+  getProjectionCursor(sessionId: string): number {
+    const row = this.database
+      .prepare(
+        "SELECT last_projected_sequence FROM session_projection_cursors WHERE session_id = ?",
+      )
+      .get(sessionId) as { last_projected_sequence?: unknown } | undefined;
+    return row ? Number(row.last_projected_sequence) : 0;
+  }
+
+  backfillSessionProjection(
+    sessionId: string,
+    workItemId: string,
+    batchSize: number,
+  ): number {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const cursor = this.getProjectionCursor(sessionId);
+      const boundedBatchSize = Math.max(1, Math.min(1_000, Math.floor(batchSize)));
+      const projectionBindings = this.database
+        .prepare(
+          `SELECT st.turn_id, st.dispatched_run_id
+           FROM session_turns st
+           WHERE st.session_id = ?
+             AND NOT EXISTS (
+               SELECT 1
+               FROM domain_events de
+               WHERE de.run_id = st.dispatched_run_id
+                 AND de.type = 'MESSAGE_RECEIVED'
+             )
+           ORDER BY queue_position ASC, turn_id ASC`,
+        )
+        .all(sessionId) as Array<{
+          turn_id?: unknown;
+          dispatched_run_id?: unknown;
+        }>;
+      const priorUnscopedMessages = this.database
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM domain_events
+           WHERE work_item_id = ? AND type = 'MESSAGE_RECEIVED'
+             AND run_id IS NULL AND sequence <= ?`,
+        )
+        .get(workItemId, cursor) as { count?: unknown } | undefined;
+      const bindings = projectionBindings.map((row) => ({
+          turnId: String(row.turn_id),
+          runId: String(row.dispatched_run_id),
+        }));
+      const bindingIndex = Number(priorUnscopedMessages?.count ?? 0);
+      const bindingState = {
+        index: bindingIndex,
+        bindings,
+      };
+      const priorUnscopedMessageRow = bindingIndex > 0
+        ? this.database
+            .prepare(
+              `SELECT *
+               FROM domain_events
+               WHERE work_item_id = ? AND type = 'MESSAGE_RECEIVED'
+                 AND run_id IS NULL AND sequence <= ?
+               ORDER BY sequence DESC
+               LIMIT 1`,
+            )
+            .get(workItemId, cursor) as SqliteRow | undefined
+        : undefined;
+      const rows = this.database
+        .prepare(
+          `SELECT *
+           FROM domain_events
+           WHERE work_item_id = ? AND sequence > ?
+           ORDER BY sequence ASC
+           LIMIT ?`,
+        )
+        .all(workItemId, cursor, boundedBatchSize) as SqliteRow[];
+      if (!rows.length) {
+        this.database.exec("COMMIT;");
+        return 0;
+      }
+
+      const priorBinding = bindingIndex > 0
+        ? bindings.at(bindingIndex - 1)
+        : undefined;
+      const priorMessage = priorUnscopedMessageRow
+        ? toDomainEvent(priorUnscopedMessageRow)
+        : undefined;
+      let currentSynthetic: {
+        runId: string;
+        turnId: string;
+        queuePosition: number;
+      } | null = priorBinding
+        ? {
+            ...priorBinding,
+            queuePosition: bindingIndex,
+          }
+        : priorMessage
+          ? {
+              runId: createMigrationId(
+                "run",
+                sessionId,
+                `message:${priorMessage.sequence}`,
+              ),
+              turnId: createMigrationId(
+                "turn",
+                sessionId,
+                `message:${priorMessage.sequence}`,
+              ),
+              queuePosition: bindingIndex,
+            }
+        : null;
+      let projected = 0;
+      for (const row of rows) {
+        const event = toDomainEvent(row);
+        const projectedEvent = normalizeLegacyProjectionEvent(
+          this.database,
+          sessionId,
+          event,
+          currentSynthetic,
+          bindingState,
+        );
+        currentSynthetic = projectedEvent.syntheticGroup ?? currentSynthetic;
+        projectSessionEvent(
+          this.database,
+          sessionId,
+          projectedEvent.event,
+        );
+        projected += 1;
+      }
+
+      this.database.exec("COMMIT;");
+      return projected;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
   updateWorkflowBinding(
     workItemId: string,
     workflowId: string | null,
@@ -1640,6 +2074,379 @@ export class SqliteEventStore {
 
 function createId(prefix: "wi" | "evt" | "run" | "artifact" | "verification" | "attachment"): string {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
+}
+
+function createMigrationId(prefix: "run" | "turn", sessionId: string, seed: string): string {
+  return `${prefix}_mig_${createHash("sha256")
+    .update(`${sessionId}\0${seed}`)
+    .digest("hex")
+    .slice(0, 24)}`;
+}
+
+function createLegacySyntheticRun(input: {
+  runId: string;
+  turnId: string;
+  workItemId: string;
+  sessionId: string;
+  occurredAt: string;
+}): Run {
+  return {
+    schemaVersion: 1,
+    id: input.runId,
+    workItemId: input.workItemId,
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    mode: "auto",
+    status: "succeeded",
+    agentId: null,
+    planId: null,
+    planIrHash: null,
+    workflowRevision: null,
+    terminalReason: "legacy_history_import",
+    replaySafety: "safe",
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    cancelRequestedAt: null,
+    cancelDeadlineAt: null,
+    createdAt: input.occurredAt,
+    updatedAt: input.occurredAt,
+  };
+}
+
+function isActiveRunStatus(status: RunStatus): boolean {
+  return status === "queued" || status === "running" || status === "waiting";
+}
+
+function legacyTurnMessageFromEvent(event: DomainEvent): SessionTurnMessage {
+  const payload = event.payload as Record<string, unknown>;
+  return {
+    text: typeof payload.message === "string" ? payload.message : "",
+    attachmentIds: Array.isArray(payload.attachment_ids)
+      ? payload.attachment_ids.map((value) => String(value))
+      : [],
+    flowId: null,
+    model: null,
+    effort: null,
+    permissionMode: null,
+    plan: null,
+  };
+}
+
+function emptyLegacyTurnMessage(): SessionTurnMessage {
+  return {
+    text: "",
+    attachmentIds: [],
+    flowId: null,
+    model: null,
+    effort: null,
+    permissionMode: null,
+    plan: null,
+  };
+}
+
+function legacyTurnIdFromEvent(
+  sessionId: string,
+  event: { target?: unknown },
+  runId: string,
+): string {
+  const target = event.target === null || event.target === undefined
+    ? null
+    : String(event.target);
+  if (target) return target;
+  return createMigrationId("turn", sessionId, `run:${runId}`);
+}
+
+function nextLegacyQueuePosition(
+  database: DatabaseSyncType,
+  sessionId: string,
+): number {
+    const row = database
+      .prepare(
+        `SELECT COALESCE(MAX(queue_position), 0) + 1 AS next_position
+         FROM session_turns
+         WHERE session_id = ?`,
+      )
+      .get(sessionId) as { next_position?: unknown } | undefined;
+    return Number(row?.next_position ?? 1);
+}
+
+function ensureSyntheticTimelineTurn(
+    database: DatabaseSyncType,
+    sessionId: string,
+  turnId: string,
+  runId: string,
+  startedSequence: number,
+  occurredAt: string,
+): void {
+  const existing = database
+    .prepare(
+      `SELECT 1 FROM session_timeline_turns
+       WHERE turn_id = ? OR run_id = ?`,
+    )
+    .get(turnId, runId);
+  if (existing) return;
+  const row = database
+    .prepare(
+      `SELECT COALESCE(MAX(timeline_index), 0) + 1 AS next_index
+       FROM session_timeline_turns
+       WHERE session_id = ?`,
+    )
+    .get(sessionId) as { next_index?: unknown } | undefined;
+  database
+    .prepare(
+      `INSERT INTO session_timeline_turns (
+        session_id, timeline_index, turn_id, run_id, started_sequence,
+        ended_sequence, status, updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, 'dispatched', ?)`,
+    )
+    .run(
+      sessionId,
+      Number(row?.next_index ?? 1),
+      turnId,
+      runId,
+      startedSequence,
+      occurredAt,
+    );
+}
+
+function upsertLegacyRunTurn(
+  database: DatabaseSyncType,
+  input: {
+    sessionId: string;
+    workItemId: string;
+    runId: string;
+    turnId: string;
+    queuePosition: number;
+    message: SessionTurnMessage;
+    createdAt: string;
+  },
+  run: Run,
+  dispatchOccurredAt?: string,
+): void {
+  database
+    .prepare(
+      `INSERT INTO runs (
+        id, schema_version, work_item_id, session_id, turn_id, mode, status,
+        agent_id, plan_id, plan_ir_hash, workflow_revision, terminal_reason,
+        replay_safety, lease_owner, lease_expires_at, cancel_requested_at,
+        cancel_deadline_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        work_item_id = excluded.work_item_id,
+        session_id = excluded.session_id,
+        turn_id = excluded.turn_id`,
+    )
+    .run(
+      input.runId,
+      run.schemaVersion,
+      input.workItemId,
+      input.sessionId,
+      input.turnId,
+      run.mode,
+      run.status,
+      run.agentId,
+      run.planId,
+      run.planIrHash,
+      run.workflowRevision,
+      run.terminalReason,
+      run.replaySafety,
+      run.leaseOwner,
+      run.leaseExpiresAt,
+      run.cancelRequestedAt,
+      run.cancelDeadlineAt,
+      run.createdAt,
+      run.updatedAt,
+    );
+  upsertSessionTurnBinding(database, {
+    turnId: input.turnId,
+    sessionId: input.sessionId,
+    queuePosition: input.queuePosition,
+    message: input.message,
+    dispatchedRunId: input.runId,
+    createdAt: input.createdAt,
+    dispatchedAt: dispatchOccurredAt ?? input.createdAt,
+  });
+}
+
+function upsertSessionTurnBinding(
+  database: DatabaseSyncType,
+  input: {
+    turnId: string;
+    sessionId: string;
+    queuePosition: number;
+    message: SessionTurnMessage;
+    dispatchedRunId: string;
+    createdAt: string;
+    dispatchedAt: string;
+  },
+): void {
+  const existingTurn = database
+    .prepare(
+      `SELECT turn_id, queue_position
+       FROM session_turns
+       WHERE turn_id = ? OR dispatched_run_id = ? OR (
+         session_id = ? AND queue_position = ?
+       )
+       ORDER BY queue_position ASC
+       LIMIT 1`,
+    )
+    .get(
+      input.turnId,
+      input.dispatchedRunId,
+      input.sessionId,
+      input.queuePosition,
+    ) as { turn_id?: unknown } | undefined;
+  if (existingTurn?.turn_id) {
+    database
+      .prepare(
+        `UPDATE session_turns
+         SET session_id = ?, status = 'dispatched',
+           message_json = ?, dispatched_run_id = ?, created_at = ?,
+           dispatched_at = ?, cancelled_at = NULL
+         WHERE turn_id = ?`,
+      )
+      .run(
+        input.sessionId,
+        JSON.stringify(input.message),
+        input.dispatchedRunId,
+        input.createdAt,
+        input.dispatchedAt,
+        String(existingTurn.turn_id),
+      );
+    return;
+  }
+
+  database
+    .prepare(
+      `INSERT INTO session_turns (
+        turn_id, session_id, queue_position, status, message_json, version,
+        dispatched_run_id, created_at, dispatched_at, cancelled_at
+      ) VALUES (?, ?, ?, 'dispatched', ?, 2, ?, ?, ?, NULL)`,
+    )
+    .run(
+      input.turnId,
+      input.sessionId,
+      input.queuePosition,
+      JSON.stringify(input.message),
+      input.dispatchedRunId,
+      input.createdAt,
+      input.dispatchedAt,
+    );
+}
+
+function normalizeLegacyProjectionEvent(
+  database: DatabaseSyncType,
+  sessionId: string,
+  event: DomainEvent,
+  currentSynthetic: {
+    runId: string;
+    turnId: string;
+    queuePosition: number;
+  } | null,
+  bindingState?: {
+    index: number;
+    bindings: Array<{ turnId: string; runId: string }>;
+  },
+): {
+  event: DomainEvent;
+  syntheticGroup: { runId: string; turnId: string; queuePosition: number } | null;
+} {
+  if (event.runId) {
+    if (
+      event.type === "MESSAGE_RECEIVED"
+      || event.type === "AGENT_EVENT"
+      || event.type === "APPROVAL_REQUESTED"
+    ) {
+      ensureSyntheticProjectionTurnForRun(database, sessionId, event);
+    }
+    return { event, syntheticGroup: currentSynthetic };
+  }
+
+  let syntheticGroup = currentSynthetic;
+  if (event.type !== "MESSAGE_RECEIVED" && event.type !== "AGENT_EVENT") {
+    return { event, syntheticGroup };
+  }
+  if (event.type === "MESSAGE_RECEIVED" || !syntheticGroup) {
+    const binding = bindingState && bindingState.index < bindingState.bindings.length
+      ? bindingState.bindings[bindingState.index++]
+      : undefined;
+    if (binding) {
+      syntheticGroup = {
+        runId: binding.runId,
+        turnId: binding.turnId,
+        queuePosition: bindingState ? bindingState.index : nextLegacyQueuePosition(database, sessionId),
+      };
+      ensureSyntheticTimelineTurn(
+        database,
+        sessionId,
+        binding.turnId,
+        binding.runId,
+        event.sequence,
+        event.occurredAt,
+      );
+    } else {
+      const seed = event.type === "MESSAGE_RECEIVED"
+        ? `message:${event.sequence}`
+        : `agent:${event.sequence}`;
+      syntheticGroup = {
+        runId: createMigrationId("run", sessionId, seed),
+        turnId: createMigrationId("turn", sessionId, seed),
+        queuePosition: nextLegacyQueuePosition(database, sessionId),
+      };
+      ensureSyntheticTimelineTurn(
+        database,
+        sessionId,
+        syntheticGroup.turnId,
+        syntheticGroup.runId,
+        event.sequence,
+        event.occurredAt,
+      );
+    }
+  } else {
+    ensureSyntheticTimelineTurn(
+      database,
+      sessionId,
+      syntheticGroup.turnId,
+      syntheticGroup.runId,
+      event.sequence,
+      event.occurredAt,
+    );
+  }
+
+  if (!syntheticGroup) {
+    throw new Error("legacy synthetic projection group missing");
+  }
+
+  return {
+    event: {
+      ...event,
+      runId: syntheticGroup.runId,
+      target: event.target ?? syntheticGroup.turnId,
+    },
+    syntheticGroup,
+  };
+}
+
+function ensureSyntheticProjectionTurnForRun(
+  database: DatabaseSyncType,
+  sessionId: string,
+  event: DomainEvent,
+): void {
+  const run = database
+    .prepare("SELECT * FROM runs WHERE id = ?")
+    .get(event.runId) as SqliteRow | undefined;
+  if (!run) return;
+  const turnId = run.turn_id === null || run.turn_id === undefined
+    ? legacyTurnIdFromEvent(sessionId, event, event.runId!)
+    : String(run.turn_id);
+  ensureSyntheticTimelineTurn(
+    database,
+    sessionId,
+    turnId,
+    event.runId!,
+    event.sequence,
+    event.occurredAt,
+  );
 }
 
 function toWorkItem(row: SqliteRow): WorkItem {
