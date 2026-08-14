@@ -13,6 +13,7 @@ import {
   type PersistedPlan,
   type PersistedPlanStep,
 } from "@codebridge/work-items";
+import { evaluatePostcondition } from "@codebridge/workflow-engine";
 
 export interface RunnerStream {
   run(
@@ -402,6 +403,26 @@ export class RunExecutor {
     signal?: AbortSignal,
   ): Promise<void> {
     const capabilityResult = await this.executeCapability(workItem, run, step, signal);
+    if (step?.successWhen && capabilityResult && !capabilityResult.forwardToAgent) {
+      const passed = evaluatePostcondition(step.successWhen, capabilityResult.output);
+      if (!passed) {
+        this.store.appendEvent({
+          workItemId: workItem.id,
+          runId: run.id,
+          type: "VERIFICATION_FAILED",
+          actor: "adapter",
+          target: step.id,
+          payload: {
+            step_id: step.id,
+            category: "verification",
+            postcondition: step.successWhen,
+            actual: capabilityResult.output ?? null,
+            truncated: false,
+          },
+        });
+        throw new Error(`Postcondition failed for step ${step.id}: ${step.successWhen}`);
+      }
+    }
     let request = await this.options.resolveRequest(workItem, run, step ?? undefined);
     const latestMessage = this.store
       .listEvents(workItem.id)

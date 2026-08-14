@@ -754,4 +754,36 @@ describe("RunExecutor", () => {
     registry.close();
     store.close();
   });
+
+  it("fails a step whose success_when postcondition is unmet", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "deliver", mode: "change", conversationId: "web:pc", riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_pc", source: "workflow", workflowId: "pc-flow",
+      definitionRevision: "git:pc",
+      steps: [{
+        id: "deliver", capabilityId: "equity.deliver", risk: "read_only",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: null,
+        successWhen: "output.order_id != null",
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const registry = new CapabilityRegistry([{ id: "equity.deliver", risk: "read_only", adapter: "local.deliver" }]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.deliver", () => ({ output: {} })),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: (_w, run) => ({ runId: run.id, sessionKey: { chatId: "web:pc", backendId: "pi", cwd: "/tmp" }, prompt: "unused" }),
+    });
+
+    await expect(executor.execute(run.id)).rejects.toThrow(/Postcondition failed/);
+    const failed = store.listEvents(item.id).find((e) => e.type === "VERIFICATION_FAILED");
+    expect(failed?.payload).toMatchObject({ step_id: "deliver", category: "verification" });
+    registry.close();
+    store.close();
+  });
 });
