@@ -8,6 +8,7 @@ import type {
   PersistedPlanStep,
   RiskLevel,
   Run,
+  RunStatus,
   WorkItemMode,
 } from "./index.js";
 
@@ -171,14 +172,35 @@ export interface SessionRuntimeTransaction {
   ): SessionTurn;
   getTurn(turnId: string): SessionTurn | undefined;
   nextQueuedTurn(sessionId: string): SessionTurn | undefined;
+  getRun(runId: string): Run | undefined;
+  getWorkItemForSession(sessionId: string): {
+    id: string;
+    mode: WorkItemMode;
+    agentId: string | null;
+  } | undefined;
   dispatchTurn(
     turnId: string,
     run: SessionRunSpec,
   ): { turn: SessionTurn; run: Run };
+  dispatchNextTurn(
+    sessionId: string,
+  ): { turn: SessionTurn; run: Run } | null;
   cancelTurn(
     turnId: string,
     expectedVersion: number,
   ): SessionTurn | undefined;
+  updateRun(
+    runId: string,
+    patch: {
+      status?: RunStatus;
+      terminalReason?: string | null;
+      replaySafety?: ReplaySafety;
+      leaseOwner?: string | null;
+      leaseExpiresAt?: string | null;
+      cancelRequestedAt?: string | null;
+      cancelDeadlineAt?: string | null;
+    },
+  ): Run;
   updateRuntime(
     sessionId: string,
     patch: Partial<
@@ -342,6 +364,29 @@ export function createSqliteSessionRuntimeTransaction(
         )
         .get(sessionId) as SqliteRow | undefined;
       return row ? toSessionTurn(row) : undefined;
+    },
+
+    getRun(runId) {
+      const row = database
+        .prepare("SELECT * FROM runs WHERE id = ?")
+        .get(runId) as SqliteRow | undefined;
+      return row ? toRun(row) : undefined;
+    },
+
+    getWorkItemForSession(sessionId) {
+      const row = database
+        .prepare(
+          `SELECT id, mode, agent_id FROM work_items
+           WHERE session_id = ?`,
+        )
+        .get(sessionId) as SqliteRow | undefined;
+      return row
+        ? {
+            id: String(row.id),
+            mode: String(row.mode) as WorkItemMode,
+            agentId: nullableString(row.agent_id),
+          }
+        : undefined;
     },
 
     dispatchTurn(turnId, input) {
@@ -519,6 +564,31 @@ export function createSqliteSessionRuntimeTransaction(
       };
     },
 
+    dispatchNextTurn(sessionId) {
+      const turn = transaction.nextQueuedTurn(sessionId);
+      if (!turn) return null;
+      const workItem = transaction.getWorkItemForSession(sessionId);
+      if (!workItem) {
+        throw new Error(`Session WorkItem not found: ${sessionId}`);
+      }
+      const plan = turn.message.plan;
+      const dispatched = transaction.dispatchTurn(turn.turnId, {
+        id: createId("run"),
+        workItemId: workItem.id,
+        sessionId,
+        turnId: turn.turnId,
+        mode: workItem.mode,
+        agentId: workItem.agentId,
+        planId: plan?.planId ?? null,
+        planIrHash: plan?.planIrHash ?? null,
+        workflowRevision: plan?.definitionRevision ?? null,
+      });
+      transaction.updateRuntime(sessionId, {
+        activeRunId: dispatched.run.id,
+      });
+      return dispatched;
+    },
+
     cancelTurn(turnId, expectedVersion) {
       const now = new Date().toISOString();
       const result = database
@@ -532,6 +602,37 @@ export function createSqliteSessionRuntimeTransaction(
       return Number(result.changes) === 1
         ? transaction.getTurn(turnId)
         : undefined;
+    },
+
+    updateRun(runId, patch) {
+      const current = transaction.getRun(runId);
+      if (!current) throw new Error(`Run not found: ${runId}`);
+      const next = {
+        ...current,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      };
+      database
+        .prepare(
+          `UPDATE runs
+           SET status = ?, terminal_reason = ?, replay_safety = ?,
+             lease_owner = ?, lease_expires_at = ?,
+             cancel_requested_at = ?, cancel_deadline_at = ?,
+             updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          next.status,
+          next.terminalReason,
+          next.replaySafety,
+          next.leaseOwner,
+          next.leaseExpiresAt,
+          next.cancelRequestedAt,
+          next.cancelDeadlineAt,
+          next.updatedAt,
+          runId,
+        );
+      return transaction.getRun(runId)!;
     },
 
     updateRuntime(sessionId, patch) {
@@ -750,6 +851,6 @@ function nullableString(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
 }
 
-function createId(prefix: "wi" | "evt" | "turn"): string {
+function createId(prefix: "wi" | "evt" | "turn" | "run"): string {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }
