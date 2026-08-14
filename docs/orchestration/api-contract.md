@@ -32,7 +32,10 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `GET` | `/v1/agents/{agent_id}` | 获取 Agent 详情、模型和 Session 能力 |
 | `GET` | `/v1/sessions` | 按 Agent、Folder、状态查询 Session |
 | `POST` | `/v1/sessions` | 创建一个固定绑定 Agent 的 Session |
+| `POST` | `/v1/sessions/import` | 显式发现并导入 Provider Session 元数据 |
 | `GET` | `/v1/sessions/{session_id}` | 获取 Session、目录、最近 Flow 和状态 |
+| `POST` | `/v1/sessions/{session_id}/provider-history/preview` | 只读预览可导入的 Provider 历史 |
+| `POST` | `/v1/sessions/{session_id}/provider-history/import` | 确认并幂等导入 Provider 历史 |
 | `POST` | `/v1/sessions/{session_id}/directories` | 授权并添加 Session 的附加目录 |
 | `DELETE` | `/v1/sessions/{session_id}/directories` | 从 Session 移除附加目录 |
 | `POST` | `/v1/sessions/{session_id}/messages` | 向当前 Session 发送消息 |
@@ -53,6 +56,9 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `POST` | `/v1/projects/candidates/{candidate_id}/accept` | 接受候选并登记正式项目 |
 | `POST` | `/v1/projects/candidates/{candidate_id}/proposals` | 在独立 Git 分支创建 Catalog 提案，不切换当前 checkout |
 | `POST` | `/v1/projects/catalog/sync` | 将已审核的 Git revision 同步为 SQLite 查询投影 |
+
+所有 Session `GET` 接口均为纯读取，不触发 Provider 请求、历史导入或
+SQLite 写入。Provider Session 与历史同步只能通过上述显式 `POST` 接口。
 | `GET` | `/v1/mcp/servers` | 查询 MCP Server 配置摘要和健康状态 |
 | `POST` | `/v1/mcp/servers/{server_id}/discover` | 刷新 Server 的 Tool Candidate |
 | `GET` | `/v1/mcp/candidates` | 查询待审核 MCP Capability Candidate |

@@ -1,9 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import type {
   AgentProfile,
-  AgentSession,
   SessionCatalogStore,
   UpdateSessionInput,
 } from "@codebridge/session-catalog";
@@ -16,6 +16,7 @@ import type { ProjectDiscovery } from "@codebridge/project-catalog";
 import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
 import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
+import { ProviderHistoryImporter } from "./session-history-import.js";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
@@ -37,9 +38,15 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   const currentAgents = () => options.agentRegistry?.list()
     ?? (typeof options.agents === "function" ? options.agents() : options.agents);
   const currentProfiles = () => new Map(currentAgents().map((agent) => [agent.agentId, agent]));
-  const historyHydrations = new Map<string, Promise<void>>();
-  const historyRetryAfter = new Map<string, number>();
   const configOptionRequests = new Map<string, Promise<Awaited<ReturnType<RunnerClient["listConfigOptions"]>>>>();
+  const historyImporter = options.runner
+    ? new ProviderHistoryImporter({
+        store: options.workItems,
+        catalog: options.catalog,
+        runner: options.runner,
+        defaultCwd: options.defaultCwd,
+      })
+    : undefined;
 
   function agentListPayload() {
     const agents = currentAgents();
@@ -56,112 +63,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     setup: Parameters<typeof projectSetupState>[0],
   ): AgentProfile {
     return options.agentRegistry?.updateSetup(agent.agentId, setup) ?? mergeAgentSetup(agent, setup);
-  }
-
-  async function hydrateProviderHistory(session: AgentSession): Promise<AgentSession> {
-    if (!options.runner || !session.providerSessionId) return session;
-    if ((historyRetryAfter.get(session.id) ?? 0) > Date.now()) return session;
-    const existingWorkItem = session.taskRecordId
-      ? options.workItems.getWorkItem(session.taskRecordId)
-      : undefined;
-    let hydration = historyHydrations.get(session.id);
-    if (!hydration) {
-      hydration = (async () => {
-        const history = await options.runner!.loadSessionHistory(
-          session.agentId,
-          session.cwd ?? options.defaultCwd ?? process.cwd(),
-          session.providerSessionId!,
-          session.additionalDirectories,
-        );
-        const workItem = existingWorkItem ?? options.workItems.createWorkItem({
-            title: session.title ?? "Imported Session",
-            mode: "auto",
-            conversationId: `conv_${session.id.slice("sess_".length)}`,
-            agentId: session.agentId,
-            workflowId: session.flowId,
-            workspaceScope: session.cwd ? [session.cwd] : [],
-            riskLevel: "read_only",
-          });
-        const persistedInputHashes = options.workItems.listEventInputHashes(workItem.id);
-        let persistedEvents: ReturnType<SqliteEventStore["listEvents"]> | undefined;
-        const existingEvents = () => {
-          if (!persistedEvents) {
-            persistedEvents = persistedInputHashes.size > 0
-              ? options.workItems.listRecentEvents(workItem.id, 2_000)
-              : options.workItems.listEvents(workItem.id);
-          }
-          return persistedEvents;
-        };
-        const existingHistory = new Map<string, number>();
-        let existingHistoryLoaded = false;
-        const loadExistingHistory = () => {
-          if (existingHistoryLoaded) return;
-          existingHistoryLoaded = true;
-          for (const event of existingEvents()) {
-            const key = event.type === "MESSAGE_RECEIVED" && typeof event.payload.message === "string"
-              ? `message:${event.payload.message}`
-              : event.type === "AGENT_EVENT" && event.payload.event
-                ? `agent:${JSON.stringify(event.payload.event)}`
-                : undefined;
-            if (key) existingHistory.set(key, (existingHistory.get(key) ?? 0) + 1);
-          }
-        };
-        const historyInputHash = (position: string | number) => `sha256:${createHash("sha256")
-          .update(`${session.agentId}\0${session.providerSessionId}\0${position}`)
-          .digest("hex")}`;
-        for (const [index, item] of history.entries()) {
-          if (persistedInputHashes.has(historyInputHash(index))) continue;
-          loadExistingHistory();
-          const key = item.kind === "message"
-            ? `message:${item.text}`
-            : `agent:${JSON.stringify(item.event)}`;
-          const remaining = existingHistory.get(key) ?? 0;
-          if (remaining > 0) {
-            existingHistory.set(key, remaining - 1);
-            continue;
-          }
-          if (item.kind === "agent_event" && isProviderSnapshotCovered(existingEvents(), item.event)) continue;
-          options.workItems.appendEventOnce(item.kind === "message"
-            ? {
-                workItemId: workItem.id,
-                type: "MESSAGE_RECEIVED",
-                actor: "user",
-                inputHash: historyInputHash(index),
-                payload: { message: item.text },
-              }
-            : {
-                workItemId: workItem.id,
-                type: "AGENT_EVENT",
-                actor: "agent",
-                inputHash: historyInputHash(index),
-                payload: { event: item.event },
-              });
-        }
-        if (history.some((item) => item.kind === "agent_event" && isAgentResponse(item.event))) {
-          options.workItems.appendEventOnce({
-            workItemId: workItem.id,
-            type: "SESSION_HISTORY_HYDRATED",
-            actor: "system",
-            inputHash: historyInputHash("complete"),
-            payload: { providerSessionId: session.providerSessionId },
-          });
-          historyRetryAfter.delete(session.id);
-        } else {
-          historyRetryAfter.set(session.id, Date.now() + 30_000);
-        }
-        options.catalog.updateSession(session.id, { taskRecordId: workItem.id });
-      })();
-      historyHydrations.set(session.id, hydration);
-    }
-    try {
-      await hydration;
-    } catch {
-      // Provider history may be temporarily unavailable; a later Session open retries it.
-      historyRetryAfter.set(session.id, Date.now() + 30_000);
-    } finally {
-      if (historyHydrations.get(session.id) === hydration) historyHydrations.delete(session.id);
-    }
-    return options.catalog.getSession(session.id) ?? session;
   }
 
   app.use("/v1/*", async (c, next) => {
@@ -308,12 +209,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     }));
   });
 
-  app.get("/v1/sessions", async (c) => {
+  app.get("/v1/sessions", (c) => {
+    if (c.req.query("import") === "true") {
+      return c.json({ error: "provider_import_moved" }, 410);
+    }
     const agentId = c.req.query("agent_id");
-    const importSessions = c.req.query("import") === "true";
-    const cwd = c.req.query("cwd") ?? options.defaultCwd;
     const profiles = currentProfiles();
-    const sync = importSessions && cwd ? await syncProviderSessions(options, profiles, agentId, cwd) : undefined;
     return c.json({
       sessions: options.catalog.listSessions(agentId, {
         includeArchived: c.req.query("include_archived") === "true",
@@ -321,7 +222,30 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         ...toApiSession(session),
         agent: profiles.get(session.agentId)?.displayName ?? session.agentId,
       })),
-      provider_errors: sync?.errors ?? [],
+      provider_errors: [],
+    });
+  });
+
+  app.post("/v1/sessions/import", async (c) => {
+    const body = await readJson(c);
+    const cwd = typeof body?.cwd === "string"
+      ? body.cwd
+      : options.defaultCwd;
+    if (!cwd) return c.json({ error: "workspace_required" }, 400);
+    const agentId = typeof body?.agent_id === "string"
+      ? body.agent_id
+      : undefined;
+    const sync = await syncProviderSessions(
+      options,
+      currentProfiles(),
+      agentId,
+      cwd,
+    );
+    return c.json({
+      sessions: options.catalog
+        .listSessions(agentId)
+        .map(toApiSession),
+      provider_errors: sync.errors,
     });
   });
 
@@ -561,10 +485,52 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(toApiSession(options.catalog.updateSession(session.id, { additionalDirectories })!));
   });
 
-  app.get("/v1/sessions/:session_id", async (c) => {
-    let session = options.catalog.getSession(c.req.param("session_id"));
+  app.post(
+    "/v1/sessions/:session_id/provider-history/preview",
+    async (c) => {
+      if (!historyImporter) {
+        return c.json({ error: "runner_unavailable" }, 503);
+      }
+      try {
+        return c.json(
+          await historyImporter.preview(c.req.param("session_id")),
+        );
+      } catch (error) {
+        return providerHistoryError(c, error);
+      }
+    },
+  );
+
+  app.post(
+    "/v1/sessions/:session_id/provider-history/import",
+    async (c) => {
+      if (!historyImporter) {
+        return c.json({ error: "runner_unavailable" }, 503);
+      }
+      const idempotencyKey = c.req.header("idempotency-key");
+      const body = await readJson(c);
+      if (!idempotencyKey || body?.confirm !== true) {
+        return c.json(
+          { error: "confirmation_and_idempotency_key_required" },
+          400,
+        );
+      }
+      try {
+        return c.json(
+          await historyImporter.import(
+            c.req.param("session_id"),
+            idempotencyKey,
+          ),
+        );
+      } catch (error) {
+        return providerHistoryError(c, error);
+      }
+    },
+  );
+
+  app.get("/v1/sessions/:session_id", (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
-    session = await hydrateProviderHistory(session);
     return c.json(toApiSession(session));
   });
 
@@ -997,37 +963,19 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   return app;
 }
 
-function isAgentResponse(event: unknown): boolean {
-  if (!event || typeof event !== "object") return false;
-  const type = (event as { type?: unknown }).type;
-  return typeof type === "string" && ![
-    "available_commands_update",
-    "current_mode_update",
-    "config_option_update",
-    "session_info_update",
-    "usage_update",
-  ].includes(type);
-}
-
-function isProviderSnapshotCovered(existingEvents: Array<{ payload?: Record<string, unknown> }>, candidate: Record<string, unknown>): boolean {
-  const type = candidate.type;
-  const text = candidate.text;
-  if ((type !== "thought_delta" && type !== "text_delta") || typeof text !== "string") return false;
-  for (let start = 0; start < existingEvents.length; start += 1) {
-    let combined = "";
-    let count = 0;
-    for (let index = start; index < existingEvents.length; index += 1) {
-      const value = existingEvents[index].payload?.event;
-      if (!value || typeof value !== "object" || (value as Record<string, unknown>).type !== type || typeof (value as Record<string, unknown>).text !== "string") break;
-      combined += String((value as Record<string, unknown>).text);
-      count += 1;
-      if (combined.length >= text.length) {
-        if (count > 1 && combined === text) return true;
-        break;
-      }
-    }
+function providerHistoryError(c: Context, error: unknown) {
+  const code = error instanceof Error ? error.message : String(error);
+  if (code === "session_not_found") {
+    return c.json({ error: code }, 404);
   }
-  return false;
+  if (
+    code === "provider_session_not_bound"
+    || code === "provider_history_prefix_changed"
+    || code === "provider_history_cursor_conflict"
+  ) {
+    return c.json({ error: code }, 409);
+  }
+  return c.json({ error: "provider_history_unavailable" }, 502);
 }
 
 function toWorkflowDefinition(flow: FlowRecord): Record<string, unknown> {
