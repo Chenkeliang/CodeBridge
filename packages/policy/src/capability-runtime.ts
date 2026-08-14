@@ -11,6 +11,8 @@ export interface CapabilityInvocationContext {
   runId?: string;
   stepId?: string;
   signal?: AbortSignal;
+  /** dry-run contract: side-effecting adapters must only validate + describe, not write. */
+  dry_run?: boolean;
 }
 
 export interface CapabilityInvocation {
@@ -37,6 +39,11 @@ export interface CapabilityExecutionResult {
     validator: string;
     status: VerificationStatus;
     summary: string;
+  };
+  /** dry-run contract: side-effecting adapters return this instead of performing writes. */
+  dry_run_report?: {
+    would_do: string;
+    checks: Array<{ name: string; passed: boolean }>;
   };
 }
 

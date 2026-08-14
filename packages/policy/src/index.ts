@@ -23,6 +23,8 @@ export interface CapabilityDefinition {
   environments?: string[];
   description?: string;
   source?: CapabilitySource;
+  /** true when the capability mutates state; such adapters must honor context.dry_run. */
+  side_effects?: boolean;
 }
 
 export interface CapabilitySource {
@@ -73,6 +75,7 @@ export class CapabilityRegistry {
       "ALTER TABLE capabilities ADD COLUMN source_ref TEXT",
       "ALTER TABLE capabilities ADD COLUMN source_version TEXT",
       "ALTER TABLE capabilities ADD COLUMN source_revision TEXT",
+      "ALTER TABLE capabilities ADD COLUMN side_effects TEXT",
     ]) {
       try { this.database.exec(statement); } catch { /* Existing databases already contain the column. */ }
     }
@@ -92,13 +95,13 @@ export class CapabilityRegistry {
       .prepare(
         `INSERT INTO capabilities (
            id, risk, adapter, environments, description,
-           source_kind, source_ref, source_version, source_revision, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           source_kind, source_ref, source_version, source_revision, side_effects, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET risk = excluded.risk, adapter = excluded.adapter,
            environments = excluded.environments, description = excluded.description,
            source_kind = excluded.source_kind, source_ref = excluded.source_ref,
            source_version = excluded.source_version, source_revision = excluded.source_revision,
-           updated_at = excluded.updated_at`,
+           side_effects = excluded.side_effects, updated_at = excluded.updated_at`,
       )
       .run(
         definition.id,
@@ -110,6 +113,7 @@ export class CapabilityRegistry {
         definition.source?.ref ?? null,
         definition.source?.version ?? null,
         definition.source?.revision ?? null,
+        definition.side_effects === undefined ? null : definition.side_effects ? "1" : "0",
         new Date().toISOString(),
       );
   }
@@ -154,6 +158,7 @@ function toCapability(row: Record<string, unknown>): CapabilityDefinition {
     environments: row.environments === null ? undefined : JSON.parse(String(row.environments)) as string[],
     description: row.description === null ? undefined : String(row.description),
     source,
+    side_effects: row.side_effects === null || row.side_effects === undefined ? undefined : String(row.side_effects) === "1",
   };
 }
 
