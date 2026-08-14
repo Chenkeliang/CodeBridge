@@ -37,6 +37,7 @@ function turns(count: number): TimelineTurnView[] {
 }
 
 const timelineProps = {
+  activeRunId: null as string | null,
   hasEarlier: false,
   loadingBlockId: null,
   loadingEarlier: false,
@@ -68,6 +69,7 @@ describe("SessionTimeline", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
     act(() => root.render(<SessionTimeline
+      activeRunId={null}
       hasEarlier
       loadingBlockId={null}
       loadingEarlier={false}
@@ -107,6 +109,7 @@ describe("SessionTimeline", () => {
     const root = createRoot(host);
     act(() => root.render(<SessionTimeline
       {...timelineProps}
+      activeRunId="run-1"
       turns={timelineTurn("assistant", [segment("already-present", "已有内容", false)])}
     />));
 
@@ -122,10 +125,12 @@ describe("SessionTimeline", () => {
     const root = createRoot(host);
     act(() => root.render(<SessionTimeline
       {...timelineProps}
+      activeRunId="run-1"
       turns={timelineTurn("assistant", [segment("stable", "第一段")])}
     />));
     act(() => root.render(<SessionTimeline
       {...timelineProps}
+      activeRunId="run-1"
       turns={timelineTurn("assistant", [
         segment("stable", "第一段"),
         segment("live", "第二段", false),
@@ -135,6 +140,39 @@ describe("SessionTimeline", () => {
     expect(host.querySelector('[data-segment-id="stable"]')?.classList.contains("assistant-reveal")).toBe(false);
     expect(host.querySelector('[data-segment-id="live"]')?.classList.contains("assistant-reveal")).toBe(true);
     expect(host.querySelectorAll("[data-streaming-caret]")).toHaveLength(1);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("does not animate a stale running thought without an active Run", () => {
+    const stale = timelineTurn("thought", [segment("stale-thought", "已经完成", false)]);
+    stale[0]!.status = "succeeded";
+    stale[0]!.blocks[0]!.status = "running";
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+
+    act(() => root.render(<SessionTimeline {...timelineProps} turns={stale} />));
+
+    expect(host.querySelector(".animate-spin")).toBeNull();
+    expect(host.querySelector("details")?.hasAttribute("open")).toBe(false);
+    expect(host.querySelector("[data-streaming-caret]")).toBeNull();
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("animates thought only when its Run is active", () => {
+    const active = timelineTurn("thought", [segment("live-thought", "正在推理", false)]);
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      activeRunId="run-1"
+      turns={active}
+    />));
+
+    expect(host.querySelector(".animate-spin")).not.toBeNull();
+    expect(host.querySelector("details")?.hasAttribute("open")).toBe(true);
     act(() => root.unmount());
     host.remove();
   });
@@ -184,6 +222,7 @@ describe("SessionTimeline", () => {
     const root = createRoot(host);
     act(() => root.render(<SessionTimeline
       {...timelineProps}
+      activeRunId="run-1"
       turns={timelineTurn("work", [segment("work-live", "执行中", false)])}
     />));
 

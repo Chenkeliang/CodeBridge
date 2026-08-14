@@ -762,6 +762,7 @@ export function Workbench() {
               <div className="mx-auto w-full max-w-[880px] pb-7">
                 {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
                   <SessionTimeline
+                    activeRunId={sessionView.snapshot.runtime.active_run?.run_id ?? null}
                     hasEarlier={sessionView.snapshot.timeline.previous_cursor !== null}
                     key={selectedSessionId}
                     loadingBlockId={loadingBlockId}
