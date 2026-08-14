@@ -75,6 +75,61 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("persists aggregated Agent events before notifying subscribers", async () => {
+    const { store, item, run } = setup();
+    const observed: AgentEvent[] = [];
+    const executor = new RunExecutor(
+      store,
+      new FakeRunner([
+        {
+          type: "text_delta",
+          blockId: "answer",
+          phase: "final_answer",
+          text: "a",
+        },
+        {
+          type: "text_delta",
+          blockId: "answer",
+          phase: "final_answer",
+          text: "b",
+        },
+        { type: "done", exitCode: 0 },
+      ]),
+      {
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: item.conversationId,
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+        onEvent: (_currentRun, event) => {
+          const persisted = store
+            .listEvents(item.id)
+            .filter((candidate) => candidate.type === "AGENT_EVENT")
+            .at(-1);
+          expect(persisted?.payload.event).toEqual(event);
+          observed.push(event);
+        },
+      },
+    );
+
+    await executor.execute(run.id);
+
+    expect(observed).toEqual([
+      {
+        type: "text_delta",
+        blockId: "answer",
+        phase: "final_answer",
+        text: "ab",
+      },
+      { type: "done", exitCode: 0 },
+    ]);
+    store.close();
+  });
+
   it("marks a run failed when the Runner stream errors", async () => {
     const { store, item, run } = setup();
     const executor = new RunExecutor(store, new FakeRunner([], true), {
