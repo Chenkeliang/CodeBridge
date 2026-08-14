@@ -314,4 +314,64 @@ describe("Session runtime migration", () => {
     fixture.catalog.close();
     fixture.store.close();
   });
+
+  it("keeps existing Run bindings when legacy queue positions drift", () => {
+    const fixture = createFixture();
+    const secondRun = fixture.store.createRun({
+      id: "run_second",
+      workItemId: fixture.workItem.id,
+      mode: "auto",
+    });
+    fixture.store.updateRunStatus(fixture.run.id, "succeeded");
+    fixture.store.updateRunStatus(secondRun.id, "succeeded");
+    const migration = new SessionRuntimeMigration(fixture.catalog, fixture.store);
+    migration.run({ batchSize: 1_000 });
+
+    const databasePath = path.join(fixture.dataDir, "orchestration.sqlite");
+    const database = new DatabaseSync(databasePath);
+    const bindings = database
+      .prepare(
+        `SELECT turn_id, dispatched_run_id
+         FROM session_turns
+         WHERE session_id = ?
+         ORDER BY queue_position ASC`,
+      )
+      .all(fixture.session.id) as Array<{
+        turn_id: string;
+        dispatched_run_id: string;
+      }>;
+    expect(bindings).toHaveLength(2);
+    database.exec("BEGIN IMMEDIATE;");
+    database
+      .prepare("UPDATE session_turns SET queue_position = 99 WHERE turn_id = ?")
+      .run(bindings[0]!.turn_id);
+    database
+      .prepare("UPDATE session_turns SET queue_position = 1 WHERE turn_id = ?")
+      .run(bindings[1]!.turn_id);
+    database
+      .prepare("UPDATE session_turns SET queue_position = 2 WHERE turn_id = ?")
+      .run(bindings[0]!.turn_id);
+    database.exec("COMMIT;");
+    database.close();
+
+    expect(() => migration.run({ batchSize: 1_000 })).not.toThrow();
+
+    const verification = new DatabaseSync(databasePath);
+    const rebound = verification
+      .prepare(
+        `SELECT turn_id, dispatched_run_id
+         FROM session_turns
+         WHERE session_id = ?`,
+      )
+      .all(fixture.session.id) as Array<{
+        turn_id: string;
+        dispatched_run_id: string;
+      }>;
+    verification.close();
+    expect(new Map(rebound.map((row) => [row.turn_id, row.dispatched_run_id])))
+      .toEqual(new Map(bindings.map((row) => [row.turn_id, row.dispatched_run_id])));
+
+    fixture.catalog.close();
+    fixture.store.close();
+  });
 });

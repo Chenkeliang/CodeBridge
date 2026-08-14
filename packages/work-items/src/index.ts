@@ -2287,7 +2287,13 @@ function upsertSessionTurnBinding(
        WHERE turn_id = ? OR dispatched_run_id = ? OR (
          session_id = ? AND queue_position = ?
        )
-       ORDER BY queue_position ASC
+       ORDER BY
+         CASE
+           WHEN turn_id = ? THEN 0
+           WHEN dispatched_run_id = ? THEN 1
+           ELSE 2
+         END,
+         queue_position ASC
        LIMIT 1`,
     )
     .get(
@@ -2295,6 +2301,8 @@ function upsertSessionTurnBinding(
       input.dispatchedRunId,
       input.sessionId,
       input.queuePosition,
+      input.turnId,
+      input.dispatchedRunId,
     ) as { turn_id?: unknown } | undefined;
   if (existingTurn?.turn_id) {
     database
