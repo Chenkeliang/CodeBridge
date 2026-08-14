@@ -42,6 +42,40 @@ function setup() {
   return { store, item, run };
 }
 
+function setupSessionRun() {
+  const store = new SqliteEventStore(":memory:");
+  const coordinator = new SessionCoordinator(store, {
+    maxQueuedTurns: 100,
+  });
+  const submitted = coordinator.submitTurn({
+    sessionId: "sess_1",
+    idempotencyKey: "message_1",
+    message: {
+      text: "调查",
+      attachmentIds: [],
+      flowId: null,
+      model: null,
+      effort: null,
+      permissionMode: null,
+      plan: null,
+    },
+    workItem: {
+      title: "Session",
+      mode: "investigation",
+      conversationId: "conv_sess_1",
+      agentId: "pi",
+      workspaceScope: ["/tmp/project"],
+      riskLevel: "read_only",
+    },
+  });
+  return {
+    store,
+    coordinator,
+    leaseService: new SessionLeaseService(store),
+    run: submitted.run!,
+  };
+}
+
 describe("RunExecutor", () => {
   it("executes a queued run and persists Agent events and terminal state", async () => {
     const { store, item, run } = setup();
@@ -328,6 +362,102 @@ describe("RunExecutor", () => {
 
     expect((await cancelled).status).toBe("cancelled");
     expect((await executing).status).toBe("cancelled");
+    store.close();
+  });
+
+  it("retries a Provider disconnect only before a side-effect boundary", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, coordinator, leaseService, run } =
+        setupSessionRun();
+      let calls = 0;
+      const runner = {
+        async *run(): AsyncGenerator<AgentEvent> {
+          calls += 1;
+          if (calls === 1) throw new Error("socket closed");
+          yield {
+            type: "text_delta",
+            blockId: "answer",
+            text: "ok",
+          };
+        },
+      };
+      const executor = new RunExecutor(store, runner, {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: leaseService,
+        executorOwner: "bridge:123",
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+      });
+
+      const execution = executor.execute(run.id);
+      await vi.runAllTimersAsync();
+      expect((await execution).status).toBe("succeeded");
+      expect(calls).toBe(2);
+      expect(store.listRunAttempts(run.id)).toMatchObject([
+        {
+          attemptNumber: 1,
+          providerError: "socket closed",
+          sideEffectBoundary: "safe",
+        },
+        {
+          attemptNumber: 2,
+          providerError: null,
+          sideEffectBoundary: "safe",
+        },
+      ]);
+      store.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not replay after an unknown tool outcome", async () => {
+    const { store, coordinator, leaseService, run } =
+      setupSessionRun();
+    let calls = 0;
+    const runner = {
+      async *run(): AsyncGenerator<AgentEvent> {
+        calls += 1;
+        yield {
+          type: "tool_start",
+          toolCallId: "tool_1",
+          name: "write_file",
+          input: {},
+        };
+        throw new Error("socket closed");
+      },
+    };
+    const executor = new RunExecutor(store, runner, {
+      sessionCoordinator: coordinator,
+      sessionLeaseService: leaseService,
+      executorOwner: "bridge:123",
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: {
+          chatId: "conv_sess_1",
+          backendId: "pi",
+          cwd: "/tmp/project",
+        },
+        prompt: "调查",
+      }),
+    });
+
+    expect((await executor.execute(run.id)).status).toBe(
+      "interrupted",
+    );
+    expect(calls).toBe(1);
+    expect(store.getRun(run.id)).toMatchObject({
+      status: "interrupted",
+      replaySafety: "outcome_unknown",
+    });
     store.close();
   });
 

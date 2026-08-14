@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import {
@@ -19,6 +20,11 @@ import {
 } from "@codebridge/policy";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
+import {
+  SessionCoordinator,
+  SessionLeaseService,
+  SessionRecoveryService,
+} from "@codebridge/session-coordinator";
 import {
   ProjectCatalogGitRepository,
   ProjectCatalogStore,
@@ -116,10 +122,24 @@ program
       baseUrl: config.runner.url,
       token: config.runner.token,
     });
+    const sessionCoordinator = new SessionCoordinator(workItemStore, {
+      maxQueuedTurns:
+        config.orchestration?.session?.maxQueuedTurns ?? 100,
+    });
+    const sessionLeaseService = new SessionLeaseService(workItemStore);
+    const sessionRecovery = new SessionRecoveryService(
+      workItemStore,
+      sessionCoordinator,
+      sessionLeaseService,
+    );
+    const executorOwner = `${hostname()}:${process.pid}`;
     const runExecutor = new RunExecutor(workItemStore, runnerClient, {
       approvals: approvalService,
       policy: policyEngine,
       capabilities: capabilityRuntime,
+      sessionCoordinator,
+      sessionLeaseService,
+      executorOwner,
       onEvent: (run, event) => {
         if (event.type !== "session") return;
         const workItem = workItemStore.getWorkItem(run.workItemId);
@@ -189,11 +209,28 @@ program
         };
       },
     });
-    // A process crash can leave a Run marked running. There is no in-memory
-    // lease after restart, so move it back to the durable queue and resume it.
-    for (const staleRun of workItemStore.listRunsByStatus(["running"])) {
-      workItemStore.requeueRun(staleRun.id);
-    }
+    sessionRecovery.scanExpired();
+    sessionRecovery.scanCancellationDeadlines();
+    const recoveryInterval = setInterval(() => {
+      try {
+        sessionRecovery.scanExpired();
+      } catch (error) {
+        console.error(
+          "Session recovery scan failed:",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }, 15_000);
+    const cancellationInterval = setInterval(() => {
+      try {
+        sessionRecovery.scanCancellationDeadlines();
+      } catch (error) {
+        console.error(
+          "Session cancellation scan failed:",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }, 1_000);
     for (const queuedRun of workItemStore.listRunsByStatus(["queued"])) {
       void runExecutor.execute(queuedRun.id).catch(() => {});
     }
@@ -342,6 +379,8 @@ program
       await mcpRuntime.close();
       mcpRegistry.close();
       capabilityRegistry.close();
+      clearInterval(recoveryInterval);
+      clearInterval(cancellationInterval);
       stopAgentHealthChecks();
       registry.close();
       projectDiscovery.close();

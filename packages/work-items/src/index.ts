@@ -12,6 +12,7 @@ import type {
   QueuePauseReason,
   QueueState,
   ReplaySafety,
+  RunAttempt,
   SessionRuntime,
   SessionEventInput,
   SessionTimelineBlock,
@@ -1174,6 +1175,26 @@ export class SqliteEventStore {
     );
   }
 
+  updateLeasedRunReplaySafety(
+    runId: string,
+    owner: string,
+    replaySafety: ReplaySafety,
+  ): Run {
+    const now = new Date().toISOString();
+    const result = this.database
+      .prepare(
+        `UPDATE runs
+         SET replay_safety = ?, updated_at = ?
+         WHERE id = ? AND status = 'running' AND lease_owner = ?
+           AND lease_expires_at >= ?`,
+      )
+      .run(replaySafety, now, runId, owner, now);
+    if (Number(result.changes) !== 1) {
+      throw new Error("run_lease_lost");
+    }
+    return this.getRun(runId)!;
+  }
+
   listExpiredRunningRuns(now: string, limit: number): Run[] {
     return createSqliteSessionRuntimeTransaction(this.database)
       .listExpiredRunningRuns(now, limit);
@@ -1182,6 +1203,97 @@ export class SqliteEventStore {
   listCancellationDeadlineRuns(now: string, limit: number): Run[] {
     return createSqliteSessionRuntimeTransaction(this.database)
       .listCancellationDeadlineRuns(now, limit);
+  }
+
+  startRunAttempt(runId: string): RunAttempt {
+    if (!this.getRun(runId)) throw new Error(`Run not found: ${runId}`);
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const row = this.database
+        .prepare(
+          `SELECT COALESCE(MAX(attempt_number), 0) + 1 AS next_attempt
+           FROM run_attempts WHERE run_id = ?`,
+        )
+        .get(runId) as { next_attempt?: number } | undefined;
+      const attemptId =
+        `attempt_${randomUUID().replaceAll("-", "")}`;
+      this.database
+        .prepare(
+          `INSERT INTO run_attempts (
+            attempt_id, run_id, attempt_number, started_at, ended_at,
+            provider_error, side_effect_boundary
+          ) VALUES (?, ?, ?, ?, NULL, NULL, 'safe')`,
+        )
+        .run(
+          attemptId,
+          runId,
+          Number(row?.next_attempt ?? 1),
+          new Date().toISOString(),
+        );
+      const attempt = this.database
+        .prepare("SELECT * FROM run_attempts WHERE attempt_id = ?")
+        .get(attemptId) as SqliteRow;
+      this.database.exec("COMMIT;");
+      return toRunAttempt(attempt);
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
+  finishRunAttempt(
+    attemptId: string,
+    input: {
+      providerError: string | null;
+      sideEffectBoundary: ReplaySafety;
+    },
+  ): RunAttempt {
+    const result = this.database
+      .prepare(
+        `UPDATE run_attempts
+         SET ended_at = ?, provider_error = ?,
+           side_effect_boundary = ?
+         WHERE attempt_id = ? AND ended_at IS NULL`,
+      )
+      .run(
+        new Date().toISOString(),
+        input.providerError,
+        input.sideEffectBoundary,
+        attemptId,
+      );
+    if (Number(result.changes) !== 1) {
+      throw new Error(`Open Run attempt not found: ${attemptId}`);
+    }
+    const row = this.database
+      .prepare("SELECT * FROM run_attempts WHERE attempt_id = ?")
+      .get(attemptId) as SqliteRow;
+    return toRunAttempt(row);
+  }
+
+  listRunAttempts(runId: string): RunAttempt[] {
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM run_attempts
+         WHERE run_id = ? ORDER BY attempt_number ASC`,
+      )
+      .all(runId) as SqliteRow[];
+    return rows.map(toRunAttempt);
+  }
+
+  findTerminalEventForRun(runId: string): DomainEvent | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM domain_events
+         WHERE run_id = ?
+           AND type IN (
+             'RUN_SUCCEEDED', 'RUN_FAILED',
+             'RUN_CANCELLED', 'RUN_INTERRUPTED'
+           )
+         ORDER BY sequence DESC
+         LIMIT 1`,
+      )
+      .get(runId) as SqliteRow | undefined;
+    return row ? toDomainEvent(row) : undefined;
   }
 
   requeueRun(runId: string): Run {
@@ -1593,6 +1705,24 @@ function toSessionTurn(row: SqliteRow): SessionTurn {
       row.cancelled_at === null || row.cancelled_at === undefined
         ? null
         : String(row.cancelled_at),
+  };
+}
+
+function toRunAttempt(row: SqliteRow): RunAttempt {
+  return {
+    attemptId: String(row.attempt_id),
+    runId: String(row.run_id),
+    attemptNumber: Number(row.attempt_number),
+    startedAt: String(row.started_at),
+    endedAt: row.ended_at === null
+      ? null
+      : String(row.ended_at),
+    providerError: row.provider_error === null
+      ? null
+      : String(row.provider_error),
+    sideEffectBoundary: String(
+      row.side_effect_boundary,
+    ) as ReplaySafety,
   };
 }
 
