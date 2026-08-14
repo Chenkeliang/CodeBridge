@@ -10,6 +10,7 @@
     { "path": "./packages/channel-telegram" },
     { "path": "./packages/memory-plugin" },
     { "path": "./packages/work-items" },
+    { "path": "./packages/session-coordinator" },
     { "path": "./packages/workflow-engine" },
     { "path": "./packages/policy" },
     { "path": "./packages/run-executor" },

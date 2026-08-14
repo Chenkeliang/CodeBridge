@@ -414,6 +414,19 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.0)(jsdom@30.0.1)(lightningcss@1.33.0)
 
+  packages/session-coordinator:
+    dependencies:
+      '@codebridge/work-items':
+        specifier: workspace:*
+        version: link:../work-items
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.0)(jsdom@30.0.1)(lightningcss@1.33.0)
+
   packages/work-items:
     devDependencies:
       typescript:
