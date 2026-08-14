@@ -6,6 +6,7 @@ import type {
   DomainEventActor,
   DomainEventType,
   PersistedPlanStep,
+  MessageAttachmentRecord,
   RiskLevel,
   Run,
   RunStatus,
@@ -175,6 +176,13 @@ export interface SessionRuntimeTransaction {
     sessionId: string,
     input: SessionRuntimeWorkItemInput,
   ): string;
+  insertMessageAttachment(input: {
+    id: string;
+    workItemId: string;
+    name: string;
+    mimeType: string;
+    dataBase64: string;
+  }): MessageAttachmentRecord;
   getIdempotencyResponse<T>(namespace: string, key: string): T | undefined;
   putIdempotencyResponse(
     namespace: string,
@@ -309,6 +317,42 @@ export function createSqliteSessionRuntimeTransaction(
         actor: "system",
       });
       return workItemId;
+    },
+
+    insertMessageAttachment(input) {
+      const now = new Date().toISOString();
+      const content = Buffer.from(input.dataBase64, "base64");
+      const contentHash = `sha256:${createHash("sha256")
+        .update(content)
+        .digest("hex")}`;
+      database
+        .prepare(
+          `INSERT INTO message_attachments (
+            id, schema_version, work_item_id, name, mime_type,
+            data_base64, byte_size, content_hash, created_at
+          ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.id,
+          input.workItemId,
+          input.name,
+          input.mimeType,
+          input.dataBase64,
+          content.byteLength,
+          contentHash,
+          now,
+        );
+      return {
+        schemaVersion: 1,
+        id: input.id,
+        workItemId: input.workItemId,
+        name: input.name,
+        mimeType: input.mimeType,
+        dataBase64: input.dataBase64,
+        byteSize: content.byteLength,
+        contentHash,
+        createdAt: now,
+      };
     },
 
     getIdempotencyResponse<T>(namespace: string, key: string) {
