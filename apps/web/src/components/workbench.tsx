@@ -492,12 +492,11 @@ export function Workbench() {
   }
 
   async function addFiles(files: FileList | File[]) {
-    try {
-      const next = await Promise.all(Array.from(files).map(readAttachment));
-      setAttachments((current) => [...current, ...next]);
-    } catch (caught) {
-      setError(messageOf(caught));
-    }
+    const results = await Promise.allSettled(Array.from(files).map(readAttachment));
+    const successful = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    if (successful.length) setAttachments((current) => [...current, ...successful]);
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) setError(messageOf(failed.reason));
   }
 
   async function browseWorkspace(relativePath = "", root?: string) {
