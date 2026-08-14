@@ -55,6 +55,8 @@ export interface WorkflowStep {
   mode?: WorkflowStepMode;
   approval?: "none" | "required";
   purpose?: string;
+  /** postcondition: JSONPath + (== | != | > | contains | exists). Step succeeds only when this holds on the capability output. */
+  successWhen?: string;
   dependsOn: string[];
   branches: WorkflowBranch[];
   retry?: WorkflowRetryPolicy;
@@ -80,6 +82,7 @@ export interface PlanStep {
   approval: "none" | "required";
   branches: WorkflowBranch[];
   purpose: string | null;
+  successWhen: string | null;
   retry: WorkflowRetryPolicy | null;
 }
 
@@ -142,6 +145,7 @@ export function compileWorkflow(
       approval: step.approval ?? "none",
       branches: step.branches.map((branch) => ({ ...branch })),
       purpose: step.purpose ?? null,
+      successWhen: step.successWhen ?? null,
       retry: step.retry ? { ...step.retry } : null,
     })),
   };
@@ -275,6 +279,14 @@ function normalizeCanonicalStep(
     input.purpose === undefined
       ? undefined
       : stringField(input.purpose, `${prefix}.purpose`, issues);
+  const successWhen =
+    input.successWhen === undefined
+      ? undefined
+      : stringField(input.successWhen, `${prefix}.successWhen`, issues);
+  if (successWhen !== undefined) {
+    const error = validatePostcondition(successWhen);
+    if (error) issues.push(`${prefix}.successWhen ${error}`);
+  }
   const dependsOn = stringArrayField(
     input.dependsOn ?? [],
     `${prefix}.dependsOn`,
@@ -288,6 +300,7 @@ function normalizeCanonicalStep(
     mode: mode as WorkflowStepMode | undefined,
     approval: approval as "none" | "required" | undefined,
     purpose,
+    successWhen,
     dependsOn,
     branches,
     retry,
@@ -337,6 +350,14 @@ function normalizeStep(
     input.purpose === undefined
       ? undefined
       : stringField(input.purpose, `${prefix}.purpose`, issues);
+  const successWhen =
+    input.success_when === undefined
+      ? undefined
+      : stringField(input.success_when, `${prefix}.success_when`, issues);
+  if (successWhen !== undefined) {
+    const error = validatePostcondition(successWhen);
+    if (error) issues.push(`${prefix}.success_when ${error}`);
+  }
   const dependsOn = stringArrayField(
     input.depends_on ?? [],
     `${prefix}.depends_on`,
@@ -351,6 +372,7 @@ function normalizeStep(
     mode: mode as WorkflowStepMode | undefined,
     approval: approval as "none" | "required" | undefined,
     purpose,
+    successWhen,
     dependsOn,
     branches,
     retry,
@@ -595,6 +617,67 @@ export function definitionHash(value: unknown): string {
 /** sha256 of raw bytes — for prompt templates where whitespace is semantically meaningful. */
 export function promptHash(text: string): string {
   return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
+}
+
+/**
+ * Pure postcondition evaluator. Expression forms:
+ *   `output.path exists`             — path resolves to a defined value
+ *   `output.path == <literal>`       — strict equality (also `!=`)
+ *   `output.path > <literal>`        — numeric greater-than
+ *   `output.path contains <literal>` — string includes, or array contains
+ * The path is a dot-separated JSONPath into the output object.
+ */
+export function evaluatePostcondition(expression: string, output: unknown): boolean {
+  const exists = expression.match(/^([\w.-]+)\s+exists$/);
+  if (exists) return valueAtPath(output, exists[1]!) !== undefined;
+
+  const contains = expression.match(/^([\w.-]+)\s+contains\s+(.+)$/);
+  if (contains) {
+    const actual = valueAtPath(output, contains[1]!);
+    const expected = parseLiteral(contains[2]!);
+    if (typeof actual === "string" && typeof expected === "string") return actual.includes(expected);
+    if (Array.isArray(actual)) return actual.includes(expected);
+    return false;
+  }
+
+  const comparison = expression.match(/^([\w.-]+)\s*(==|!=|>)(?!=)\s*(.+)$/);
+  if (!comparison) throw new Error(`invalid postcondition: ${expression}`);
+  const actual = valueAtPath(output, comparison[1]!);
+  const expected = parseLiteral(comparison[3]!);
+  switch (comparison[2]) {
+    case "==": return actual === expected;
+    case "!=": return actual !== expected;
+    case ">": return typeof actual === "number" && typeof expected === "number" && actual > expected;
+    default: return false;
+  }
+}
+
+/** Returns null when valid, or an error string. Used at compile time. */
+export function validatePostcondition(expression: string): string | null {
+  if (/^[\w.-]+\s+exists$/.test(expression)) return null;
+  if (/^[\w.-]+\s+contains\s+.+$/.test(expression)) return null;
+  if (/^[\w.-]+\s*(==|!=|>)(?!=)\s*.+$/.test(expression)) return null;
+  return "invalid postcondition expression";
+}
+
+function valueAtPath(root: unknown, path: string): unknown {
+  // `output.` is the conceptual root marker pointing at the passed output object,
+  // not a real key inside it.
+  const normalized = path.startsWith("output.") ? path.slice("output.".length) : path;
+  let value: unknown = root;
+  for (const key of normalized.split(".")) {
+    if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value)) return undefined;
+    value = (value as Record<string, unknown>)[key];
+  }
+  return value;
+}
+
+function parseLiteral(value: string): unknown {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value === "null") return null;
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  return value.replace(/^(["'])(.*)\1$/, "$2");
 }
 
 function messageOf(error: unknown): string {

@@ -3,8 +3,10 @@ import {
   WorkflowValidationError,
   compileWorkflow,
   definitionHash,
+  evaluatePostcondition,
   parseWorkflow,
   promptHash,
+  validatePostcondition,
 } from "./index.js";
 
 const workflow = {
@@ -274,5 +276,31 @@ steps:
       { id: "company_id", type: "string", source: "user" },
       { id: "package_id", type: "string", source: "user" },
     ]);
+  });
+});
+
+describe("postconditions", () => {
+  it("evaluates exists / == / != / > / contains", () => {
+    const out = { order_id: "o1", count: 3, tags: ["vip", "new"], status: "ok" };
+    expect(evaluatePostcondition("output.order_id exists", out)).toBe(true);
+    expect(evaluatePostcondition("output.missing exists", out)).toBe(false);
+    expect(evaluatePostcondition('output.order_id == "o1"', out)).toBe(true);
+    expect(evaluatePostcondition("output.order_id != null", out)).toBe(true);
+    expect(evaluatePostcondition("output.count > 2", out)).toBe(true);
+    expect(evaluatePostcondition('output.tags contains "vip"', out)).toBe(true);
+  });
+
+  it("rejects malformed expressions at validate time", () => {
+    expect(validatePostcondition("output.a = b")).toMatch(/invalid/);
+    expect(validatePostcondition("output.a ===")).toMatch(/invalid/);
+    expect(validatePostcondition("output.a exists")).toBeNull();
+  });
+
+  it("parses success_when into PlanIR", () => {
+    const plan = compileWorkflow({
+      schema_version: 1, workflow_id: "w", name: "W", kind: "runbook", status: "draft",
+      steps: [{ id: "deliver", capability: "equity.deliver", success_when: "output.order_id != null" }],
+    });
+    expect(plan.steps[0].successWhen).toBe("output.order_id != null");
   });
 });
