@@ -332,6 +332,53 @@ export class SessionCoordinator {
     });
   }
 
+  repairRunFromTerminalEvidence(input: {
+    sessionId: string;
+    runId: string;
+    status: "succeeded" | "failed" | "cancelled" | "interrupted";
+  }): {
+    runtime: SessionRuntime;
+    run: Run;
+    dispatched: { turn: SessionTurn; run: Run } | null;
+  } {
+    return this.store.withSessionTransaction((tx) => {
+      const runtime = tx.ensureRuntime(input.sessionId);
+      const existingRun = tx.getRun(input.runId);
+      if (
+        runtime.activeRunId !== input.runId
+        || !existingRun
+        || existingRun.sessionId !== input.sessionId
+      ) {
+        throw new SessionCommandError("active_run_mismatch", 409);
+      }
+      const run = tx.updateRun(input.runId, {
+        status: input.status,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      });
+      let dispatched: { turn: SessionTurn; run: Run } | null = null;
+      if (input.status === "succeeded") {
+        tx.updateRuntime(input.sessionId, {
+          activeRunId: null,
+          queueState: "ready",
+          queuePauseReason: null,
+        });
+        dispatched = tx.dispatchNextTurn(input.sessionId);
+      } else {
+        tx.updateRuntime(input.sessionId, {
+          activeRunId: null,
+          queueState: "paused",
+          queuePauseReason: input.status,
+        });
+      }
+      return {
+        runtime: tx.getRuntime(input.sessionId)!,
+        run,
+        dispatched,
+      };
+    });
+  }
+
   protected finishRunInTransaction(
     tx: SessionRuntimeTransaction,
     input: {

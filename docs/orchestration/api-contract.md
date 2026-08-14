@@ -145,7 +145,9 @@ retry:
 
 - 同一个 Session 内 `sequence` 严格递增。
 - Event Store 是恢复事实源，客户端只维护展示投影。
-- Bridge 重启后将遗留的 `running` Run 重新放回 `queued`，再由 Runtime 继续执行。
+- Bridge 重启后只领取从未开始的 `queued` Run。遗留的 `running`
+  Run 必须先等待租约过期，再按持久终态证据修复或收敛为
+  `interrupted`；不得直接改回 `queued`。`waiting` Run 保持等待审批。
 - Agent 原生 Session 只负责厂商会话恢复；Run 和证据恢复依赖 CodeBridge Event Store。
 
 ## 6. 通用规则

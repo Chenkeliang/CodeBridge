@@ -69,6 +69,9 @@ export function initializeSessionRuntimeSchema(
     CREATE INDEX IF NOT EXISTS runs_cancellation_deadline
       ON runs(cancel_deadline_at)
       WHERE status = 'running' AND cancel_deadline_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS domain_events_run_terminal
+      ON domain_events(run_id, type, sequence DESC)
+      WHERE run_id IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS run_attempts (
       attempt_id TEXT PRIMARY KEY,

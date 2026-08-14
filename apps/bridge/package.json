@@ -24,6 +24,7 @@
     "@codebridge/workflow-engine": "workspace:*",
     "@codebridge/run-executor": "workspace:*",
     "@codebridge/runner-client": "workspace:*",
+    "@codebridge/session-coordinator": "workspace:*",
     "@codebridge/work-items": "workspace:*",
     "@hono/node-server": "^1.19.14",
     "commander": "^12.1.0",

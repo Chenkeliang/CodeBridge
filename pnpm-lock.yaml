@@ -71,6 +71,9 @@ importers:
       '@codebridge/session-catalog':
         specifier: workspace:*
         version: link:../../packages/session-catalog
+      '@codebridge/session-coordinator':
+        specifier: workspace:*
+        version: link:../../packages/session-coordinator
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../../packages/work-items

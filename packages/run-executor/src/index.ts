@@ -13,6 +13,7 @@ import type {
 import {
   SqliteEventStore,
   type AppendEventInput,
+  type ReplaySafety,
   type Run,
   type WorkItem,
   type PersistedPlan,
@@ -253,6 +254,14 @@ export class RunExecutor {
       if (leaseLost || isRunLeaseLost(failure)) {
         return this.store.getRun(runId)!;
       }
+      if (failure instanceof UnsafeProviderDisconnect) {
+        return this.interrupt(
+          initial,
+          failure.boundary === "outcome_unknown"
+            ? "provider_disconnect_unknown_outcome"
+            : "provider_disconnect_after_side_effect_boundary",
+        );
+      }
       if (
         initial.sessionId
         && activeSignal.aborted
@@ -349,6 +358,30 @@ export class RunExecutor {
           leaseExpiresAt: null,
         })
       : this.store.updateRunStatus(run.id, "waiting");
+  }
+
+  private interrupt(run: Run, reason: string): Run {
+    if (run.sessionId) {
+      return this.options.sessionCoordinator!.finishRun({
+        sessionId: run.sessionId,
+        runId: run.id,
+        status: "interrupted",
+        reason,
+      }).run;
+    }
+    this.store.updateRunControl(run.id, {
+      status: "interrupted",
+      terminalReason: reason,
+    });
+    this.store.appendEvent({
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "RUN_INTERRUPTED",
+      actor: "system",
+      target: run.id,
+      payload: { reason },
+    });
+    return this.store.getRun(run.id)!;
   }
 
   private cancel(run: Run): Run {
@@ -617,8 +650,18 @@ export class RunExecutor {
       return;
     }
     this.throwIfCancellationRequested(run.id);
+    let replaySafety =
+      this.store.getRun(run.id)?.replaySafety ?? "safe";
     const persistAgentEvent = (event: AgentEvent): void => {
       this.throwIfCancellationRequested(run.id);
+      const nextReplaySafety = replaySafetyAfterEvent(
+        replaySafety,
+        event,
+      );
+      if (nextReplaySafety !== replaySafety) {
+        replaySafety = nextReplaySafety;
+        this.updateReplaySafety(run, replaySafety);
+      }
       this.appendRunEvent(run, {
         workItemId: workItem.id,
         runId: run.id,
@@ -662,22 +705,47 @@ export class RunExecutor {
         throw new Error(`Runner exited with code ${event.exitCode}`);
       }
     };
-    const aggregator = new AgentEventAggregator({
-      runId: run.id,
-      emit: persistAgentEvent,
-      onError: (error) => {
-        this.activeAsyncErrors.set(run.id, error);
-        this.activeControllers.get(run.id)?.abort();
-      },
-    });
-    try {
-      for await (const event of this.runner.run(request, { signal })) {
-        aggregator.accept(event);
+    for (let attemptNumber = 1; attemptNumber <= 3; attemptNumber += 1) {
+      const attempt = this.store.startRunAttempt(run.id);
+      const aggregator = new AgentEventAggregator({
+        runId: run.id,
+        emit: persistAgentEvent,
+        onError: (error) => {
+          this.activeAsyncErrors.set(run.id, error);
+          this.activeControllers.get(run.id)?.abort();
+        },
+      });
+      try {
+        for await (const event of this.runner.run(request, { signal })) {
+          aggregator.accept(event);
+        }
+        const asynchronousError = this.activeAsyncErrors.get(run.id);
+        if (asynchronousError) throw asynchronousError;
+        aggregator.close();
+        this.store.finishRunAttempt(attempt.attemptId, {
+          providerError: null,
+          sideEffectBoundary: replaySafety,
+        });
+        return;
+      } catch (error) {
+        try {
+          aggregator.close();
+        } catch (flushError) {
+          error = flushError;
+        }
+        this.store.finishRunAttempt(attempt.attemptId, {
+          providerError: error instanceof Error
+            ? error.message
+            : String(error),
+          sideEffectBoundary: replaySafety,
+        });
+        if (!isProviderTransportError(error)) throw error;
+        if (replaySafety !== "safe") {
+          throw new UnsafeProviderDisconnect(error, replaySafety);
+        }
+        if (attemptNumber === 3) throw error;
+        await retryDelay(500 * 2 ** (attemptNumber - 1), signal);
       }
-      const asynchronousError = this.activeAsyncErrors.get(run.id);
-      if (asynchronousError) throw asynchronousError;
-    } finally {
-      aggregator.close();
     }
   }
 
@@ -702,6 +770,11 @@ export class RunExecutor {
         return prior as CapabilityExecutionResult;
       }
     }
+    const capabilityBoundary: ReplaySafety =
+      definition.side_effects === false
+        ? "side_effect_started"
+        : "outcome_unknown";
+    this.updateReplaySafety(run, capabilityBoundary);
     const result = await this.options.capabilities.execute(definition.adapter, {
       input: {
         title: workItem.title,
@@ -774,6 +847,21 @@ export class RunExecutor {
     this.store.appendEvent(input);
   }
 
+  private updateReplaySafety(
+    run: Run,
+    replaySafety: ReplaySafety,
+  ): void {
+    if (run.sessionId) {
+      this.store.updateLeasedRunReplaySafety(
+        run.id,
+        this.options.executorOwner!,
+        replaySafety,
+      );
+      return;
+    }
+    this.store.updateRunControl(run.id, { replaySafety });
+  }
+
   private requireSessionExecutionOptions(): void {
     if (
       !this.options.sessionCoordinator
@@ -817,8 +905,44 @@ class RunCancellationRequested extends Error {
   }
 }
 
+class UnsafeProviderDisconnect extends Error {
+  constructor(
+    public readonly cause: unknown,
+    public readonly boundary: Exclude<ReplaySafety, "safe">,
+  ) {
+    super(
+      cause instanceof Error
+        ? cause.message
+        : "Provider disconnected after a side-effect boundary",
+    );
+  }
+}
+
+function replaySafetyAfterEvent(
+  current: ReplaySafety,
+  event: AgentEvent,
+): ReplaySafety {
+  if (current === "outcome_unknown") return current;
+  if (event.type === "tool_start" && event.sideEffects !== false) {
+    return "outcome_unknown";
+  }
+  if (event.type === "tool_start") return "side_effect_started";
+  if (event.type === "tool_end" && event.sideEffects === true) {
+    return "outcome_unknown";
+  }
+  return current;
+}
+
 function isRunLeaseLost(error: unknown): boolean {
   return error instanceof Error && error.message === "run_lease_lost";
+}
+
+function isProviderTransportError(error: unknown): boolean {
+  return error instanceof Error
+    && !isRunnerCancellationError(error)
+    && /socket|offline|disconnect|econn|network|fetch failed/i.test(
+      error.message,
+    );
 }
 
 function isRunnerCancellationError(error: unknown): boolean {
