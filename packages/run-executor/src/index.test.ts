@@ -690,4 +690,24 @@ describe("RunExecutor", () => {
     });
     store.close();
   });
+
+  it("rejects a run whose bound plan_ir_hash drifted from the plan", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "t", mode: "auto", conversationId: "c", riskLevel: "read_only",
+    });
+    store.savePlan({
+      planId: "plan_1", source: "workflow", workflowId: "flow_1",
+      definitionRevision: "sha256:def", planIrHash: "sha256:plan",
+      steps: [{ id: "s", capabilityId: "c.d", risk: "read_only", dependsOn: [], guard: null, approval: "none", branches: [], purpose: null }],
+    });
+    const run = store.createRun({
+      workItemId: item.id, mode: "auto", planId: "plan_1", planIrHash: "sha256:other",
+    });
+    const executor = new RunExecutor(store, new FakeRunner([{ type: "done", exitCode: 0 }]), {
+      resolveRequest: () => ({ runId: run.id, sessionKey: { chatId: "c", backendId: "pi", cwd: "/tmp" }, prompt: "x" }),
+    });
+    await expect(executor.execute(run.id)).rejects.toThrow(/drift/);
+    store.close();
+  });
 });

@@ -71,6 +71,9 @@ export class RunExecutor {
     if (!workItem) throw new Error(`WorkItem not found: ${initial.workItemId}`);
     const plan = initial.planId ? this.store.getPlan(initial.planId) : undefined;
     if (initial.planId && !plan) throw new Error(`Plan not found: ${initial.planId}`);
+    if (plan && runHasIr(initial) && plan.planIrHash && initial.planIrHash !== plan.planIrHash) {
+      throw new Error(`Plan IR drift: run ${runId} bound ${initial.planIrHash} but plan resolves to ${plan.planIrHash}`);
+    }
 
     if (!plan && workItem.riskLevel === "production_write") {
       if (!this.options.approvals) {
@@ -673,6 +676,10 @@ function parseLiteral(value: string): unknown {
 
 function isRetryableError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && (error as { retryable?: unknown }).retryable === true);
+}
+
+function runHasIr(run: Run): boolean {
+  return run.planIrHash !== null && run.planIrHash !== undefined;
 }
 
 async function retryDelay(delayMs: number, signal?: AbortSignal): Promise<void> {

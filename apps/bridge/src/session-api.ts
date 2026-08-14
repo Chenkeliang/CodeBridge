@@ -855,6 +855,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         ...plan,
         sessionId: session.id,
         runId,
+        planIrHash: flow?.planIrHash ?? null,
       });
     }
     const run = options.workItems.createRun({
@@ -863,6 +864,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       mode: "auto",
       agentId: session.agentId,
       planId: plan?.planId ?? null,
+      planIrHash: flow?.planIrHash ?? null,
       workflowRevision: flow?.definitionRevision ?? null,
     });
     if (options.executor) void options.executor.execute(run.id).catch(() => {});
