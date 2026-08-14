@@ -63,6 +63,12 @@ export function initializeSessionRuntimeSchema(
       ON runs(session_id)
       WHERE session_id IS NOT NULL
         AND status IN ('queued', 'running', 'waiting');
+    CREATE INDEX IF NOT EXISTS runs_running_lease_expiry
+      ON runs(lease_expires_at)
+      WHERE status = 'running' AND lease_expires_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS runs_cancellation_deadline
+      ON runs(cancel_deadline_at)
+      WHERE status = 'running' AND cancel_deadline_at IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS run_attempts (
       attempt_id TEXT PRIMARY KEY,

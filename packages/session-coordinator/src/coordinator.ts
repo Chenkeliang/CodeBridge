@@ -229,6 +229,109 @@ export class SessionCoordinator {
     });
   }
 
+  requestRunCancellation(input: {
+    sessionId: string;
+    runId: string;
+    expectedRuntimeVersion: number;
+    idempotencyKey: string;
+  }): {
+    disposition: "cancelled" | "interrupting" | "already_terminal";
+    run: Run;
+    runtime: SessionRuntime;
+  } {
+    const namespace = `session:run-cancel:${input.runId}`;
+    return this.store.withSessionTransaction((tx) => {
+      const prior = tx.getIdempotencyResponse<{
+        disposition: "cancelled" | "interrupting" | "already_terminal";
+        run: Run;
+        runtime: SessionRuntime;
+      }>(namespace, input.idempotencyKey);
+      if (prior) return prior;
+
+      const run = tx.getRun(input.runId);
+      if (!run || run.sessionId !== input.sessionId) {
+        throw new SessionCommandError("active_run_mismatch", 409);
+      }
+      const runtime = tx.ensureRuntime(input.sessionId);
+      if (
+        run.status === "succeeded"
+        || run.status === "failed"
+        || run.status === "cancelled"
+        || run.status === "interrupted"
+      ) {
+        const result = {
+          disposition: "already_terminal" as const,
+          run,
+          runtime,
+        };
+        tx.putIdempotencyResponse(
+          namespace,
+          input.idempotencyKey,
+          result,
+        );
+        return result;
+      }
+      if (runtime.version !== input.expectedRuntimeVersion) {
+        throw new SessionCommandError(
+          "runtime_version_conflict",
+          409,
+        );
+      }
+      if (run.status === "queued" || run.status === "waiting") {
+        const finished = this.finishRunInTransaction(tx, {
+          sessionId: input.sessionId,
+          runId: input.runId,
+          status: "cancelled",
+          reason: "user_requested",
+        });
+        const result = {
+          disposition: "cancelled" as const,
+          run: finished.run,
+          runtime: finished.runtime,
+        };
+        tx.putIdempotencyResponse(
+          namespace,
+          input.idempotencyKey,
+          result,
+        );
+        return result;
+      }
+
+      let interruptingRun = run;
+      if (!run.cancelRequestedAt) {
+        const requestedAt = this.now();
+        interruptingRun = tx.updateRun(run.id, {
+          cancelRequestedAt: requestedAt.toISOString(),
+          cancelDeadlineAt: new Date(
+            requestedAt.getTime() + 10_000,
+          ).toISOString(),
+        });
+        tx.appendEvent({
+          workItemId: run.workItemId,
+          sessionId: input.sessionId,
+          runId: run.id,
+          type: "RUN_CANCEL_REQUESTED",
+          actor: "user",
+          target: run.id,
+          payload: {
+            deadline_at: interruptingRun.cancelDeadlineAt,
+          },
+        });
+      }
+      const result = {
+        disposition: "interrupting" as const,
+        run: interruptingRun,
+        runtime: tx.getRuntime(input.sessionId)!,
+      };
+      tx.putIdempotencyResponse(
+        namespace,
+        input.idempotencyKey,
+        result,
+      );
+      return result;
+    });
+  }
+
   protected finishRunInTransaction(
     tx: SessionRuntimeTransaction,
     input: {

@@ -300,4 +300,99 @@ describe("SessionCoordinator submit", () => {
     });
     expect(second.turn.turnId).not.toBe(first.turn.turnId);
   });
+
+  it("returns interrupting for a running cancellation request", () => {
+    const { store, coordinator } = setup();
+    const submitted = submit(coordinator, "first", "一");
+    store.updateRunControl(submitted.run!.id, {
+      status: "running",
+      leaseOwner: "bridge:123",
+      leaseExpiresAt: "2026-08-14T00:01:00.000Z",
+    });
+
+    const result = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion:
+        store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "cancel_run_1",
+    });
+
+    expect(result).toMatchObject({
+      disposition: "interrupting",
+      run: {
+        cancelRequestedAt: "2026-08-14T00:00:00.000Z",
+        cancelDeadlineAt: "2026-08-14T00:00:10.000Z",
+      },
+    });
+  });
+
+  it("cancels an unclaimed queued Run immediately", () => {
+    const { store, coordinator } = setup();
+    const submitted = submit(coordinator, "first", "一");
+
+    const result = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion:
+        store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "cancel_run_1",
+    });
+
+    expect(result.disposition).toBe("cancelled");
+    expect(result.run.status).toBe("cancelled");
+  });
+
+  it("does not move an existing cancellation deadline", () => {
+    const clock = {
+      now: new Date("2026-08-14T00:00:00.000Z"),
+    };
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, {
+      maxQueuedTurns: 100,
+      now: () => clock.now,
+    });
+    const submitted = submit(coordinator, "first", "一");
+    store.updateRunControl(submitted.run!.id, { status: "running" });
+    const version = store.getSessionRuntime("sess_1")!.version;
+    const first = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion: version,
+      idempotencyKey: "cancel_1",
+    });
+    clock.now = new Date("2026-08-14T00:00:05.000Z");
+    const second = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion: version,
+      idempotencyKey: "cancel_2",
+    });
+
+    expect(second.run.cancelDeadlineAt).toBe(first.run.cancelDeadlineAt);
+    store.close();
+  });
+
+  it("returns the authoritative terminal Run to a stale Stop", () => {
+    const { store, coordinator } = setup();
+    const submitted = submit(coordinator, "first", "一");
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      status: "succeeded",
+    });
+
+    const result = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion:
+        store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "stale_stop",
+    });
+
+    expect(result).toMatchObject({
+      disposition: "already_terminal",
+      run: { status: "succeeded" },
+    });
+  });
 });
