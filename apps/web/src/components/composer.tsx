@@ -191,7 +191,7 @@ export function Composer({
         setContextIndex((index) => (index - 1 + visibleEntries.length) % visibleEntries.length);
         return true;
       }
-      if (event.key === "Tab" || (event.key === "Enter" && visibleEntries[contextIndex]?.kind !== "directory")) {
+      if (event.key === "Tab" || event.key === "Enter") {
         pickEntry(contextIndex);
         return true;
       }
