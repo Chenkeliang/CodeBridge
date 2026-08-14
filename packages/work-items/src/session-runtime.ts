@@ -169,7 +169,12 @@ export interface SessionRunSpec {
   workflowRevision: string | null;
 }
 
+const transactionBrand: unique symbol = Symbol(
+  "codebridge.session-transaction",
+);
+
 export interface SessionRuntimeTransaction {
+  readonly [transactionBrand]: true;
   getRuntime(sessionId: string): SessionRuntime | undefined;
   ensureRuntime(sessionId: string): SessionRuntime;
   getOrCreateWorkItem(
@@ -254,8 +259,16 @@ type SqliteRow = Record<string, unknown>;
 
 export function createSqliteSessionRuntimeTransaction(
   database: DatabaseSync,
-): SessionRuntimeTransaction {
+): { transaction: SessionRuntimeTransaction; deactivate: () => void } {
+  let active = true;
+  const assertActive = (): void => {
+    // active 闭包防「事务结束后继续用」；database.isTransaction 防「根本没进事务就调工厂」
+    if (!active || !database.isTransaction) {
+      throw new Error("session operation requires an active transaction");
+    }
+  };
   const transaction: SessionRuntimeTransaction = {
+    [transactionBrand]: true,
     getRuntime(sessionId) {
       const row = database
         .prepare("SELECT * FROM session_runtime WHERE session_id = ?")
@@ -264,6 +277,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     ensureRuntime(sessionId) {
+      assertActive();
       const existing = transaction.getRuntime(sessionId);
       if (existing) return existing;
       const now = new Date().toISOString();
@@ -279,6 +293,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     getOrCreateWorkItem(sessionId, input) {
+      assertActive();
       const existing = database
         .prepare("SELECT id FROM work_items WHERE session_id = ?")
         .get(sessionId) as { id?: string } | undefined;
@@ -320,6 +335,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     insertMessageAttachment(input) {
+      assertActive();
       const now = new Date().toISOString();
       const content = Buffer.from(input.dataBase64, "base64");
       const contentHash = `sha256:${createHash("sha256")
@@ -368,6 +384,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     putIdempotencyResponse(namespace, key, response) {
+      assertActive();
       database
         .prepare(
           `INSERT OR IGNORE INTO idempotency_responses (
@@ -393,6 +410,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     insertTurn(sessionId, message) {
+      assertActive();
       transaction.ensureRuntime(sessionId);
       const position = database
         .prepare(
@@ -463,6 +481,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     dispatchTurn(turnId, input) {
+      assertActive();
       const turn = transaction.getTurn(turnId);
       if (!turn) throw new Error(`Turn not found: ${turnId}`);
       if (turn.status !== "queued") {
@@ -638,6 +657,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     dispatchNextTurn(sessionId) {
+      assertActive();
       const turn = transaction.nextQueuedTurn(sessionId);
       if (!turn) return null;
       const workItem = transaction.getWorkItemForSession(sessionId);
@@ -663,6 +683,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     cancelTurn(turnId, expectedVersion) {
+      assertActive();
       const now = new Date().toISOString();
       const result = database
         .prepare(
@@ -678,6 +699,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     updateRun(runId, patch) {
+      assertActive();
       const current = transaction.getRun(runId);
       if (!current) throw new Error(`Run not found: ${runId}`);
       const next = {
@@ -709,6 +731,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     claimRun(runId, owner, now, expiresAt) {
+      assertActive();
       const result = database
         .prepare(
           `UPDATE runs
@@ -723,6 +746,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     renewRunLease(runId, owner, expiresAt) {
+      assertActive();
       const result = database
         .prepare(
           `UPDATE runs
@@ -777,6 +801,7 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     updateRuntime(sessionId, patch) {
+      assertActive();
       const current = transaction.ensureRuntime(sessionId);
       const next = {
         activeRunId: patch.activeRunId === undefined
@@ -805,17 +830,21 @@ export function createSqliteSessionRuntimeTransaction(
     },
 
     appendEvent(input) {
+      assertActive();
       return appendSessionEventInTransaction(database, input);
     },
   };
 
-  return transaction;
+  return { transaction, deactivate: () => { active = false; } };
 }
 
 export function appendSessionEventInTransaction(
   database: DatabaseSync,
   input: SessionEventInput,
 ): DomainEvent {
+  if (!database.isTransaction) {
+    throw new Error("session operation requires an active transaction");
+  }
   const workItem = database
     .prepare("SELECT session_id FROM work_items WHERE id = ?")
     .get(input.workItemId) as
@@ -902,12 +931,12 @@ export function appendSessionEventInTransaction(
   return event;
 }
 
-export function importProviderHistoryInTransaction(
+export function importProviderHistory(
+  transaction: SessionRuntimeTransaction,
   database: DatabaseSync,
   input: ProviderHistoryImportInput,
 ): ProviderHistoryImportResult {
   const namespace = `session:history-import:${input.sessionId}`;
-  const transaction = createSqliteSessionRuntimeTransaction(database);
   const cached = transaction.getIdempotencyResponse<
     ProviderHistoryImportResult
   >(namespace, input.idempotencyKey);
