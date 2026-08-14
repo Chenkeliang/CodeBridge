@@ -159,6 +159,35 @@ export interface ChannelSessionMessage {
   attachments?: RunAttachment[];
   idempotencyKey?: string;
   signal?: AbortSignal;
+  /** 槽位 generation（/new 递增）；缺省 0 */
+  generation?: number;
+  /** 回复锚点：需要回复到的渠道消息 id */
+  replyToMessageId?: string;
+}
+
+export interface ChannelSlot {
+  channel: string;
+  conversationId: string;
+  agentId: string;
+  workspaceKey: string;
+  generation: number;
+}
+
+export interface ChannelSubmitReceipt {
+  sessionId: string;
+  turnId: string;
+  runId: string | null;
+  acceptance: "dispatched" | "queued";
+  queueState: "ready" | "paused";
+  eventSequence: number;
+}
+
+export interface ChannelSessionEvent {
+  type: string;
+  sequence: number;
+  runId: string | null;
+  target: string | null;
+  payload: Record<string, unknown>;
 }
 
 export interface ChannelSessionIngress {
