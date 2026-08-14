@@ -1,7 +1,20 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import type { SqliteEventStore } from "@codebridge/work-items";
+import {
+  SessionCommandError,
+  type SessionCoordinator,
+  type SubmitTurnResult,
+} from "@codebridge/session-coordinator";
+import type { RunExecutor } from "@codebridge/run-executor";
+import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
+import type { CapabilityRegistry } from "@codebridge/policy";
+import {
+  compileWorkflow,
+  WorkflowValidationError,
+} from "@codebridge/workflow-engine";
+import { randomUUID } from "node:crypto";
 import {
   toApiRun,
   toApiSession,
@@ -12,6 +25,183 @@ import {
 export interface SessionRuntimeApiOptions {
   catalog: SessionCatalogStore;
   workItems: SqliteEventStore;
+  coordinator?: SessionCoordinator;
+  executor?: RunExecutor;
+  flows?: FlowCatalogStore;
+  capabilities?: CapabilityRegistry;
+}
+
+export function registerSessionRuntimeCommandRoutes(
+  app: Hono,
+  options: SessionRuntimeApiOptions & {
+    coordinator: SessionCoordinator;
+  },
+): void {
+  app.post("/v1/sessions/:session_id/messages", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    const key = c.req.header("idempotency-key");
+    if (!key) return c.json({ error: "idempotency_key_required" }, 400);
+    const body = await c.req.json().catch(() => null) as
+      | Record<string, unknown>
+      | null;
+    if (!body || typeof body.message !== "string" || !body.message.trim()) {
+      return c.json({ error: "message_required" }, 400);
+    }
+    const attachments = parseAttachments(body.attachments);
+    if (!attachments) return c.json({ error: "invalid_attachments" }, 400);
+    const flowId = nullable(body.flow_id, session.flowId);
+    const flow = flowId ? options.flows?.get(flowId) : undefined;
+    if (flowId && !flow) {
+      return c.json({ error: "flow_not_found", flow_id: flowId }, 404);
+    }
+    if (flow?.status === "deprecated") {
+      return c.json({ error: "flow_deprecated", flow_id: flowId }, 409);
+    }
+    let frozenPlan: ReturnType<typeof compileWorkflow> | null = null;
+    if (flow) {
+      try {
+        frozenPlan = compileWorkflow(flowDefinition(flow), {
+          source: flow.source === "agent_generated"
+            ? "agent_generated"
+            : "workflow",
+          definitionRevision: flow.definitionRevision,
+        });
+      } catch (error) {
+        if (error instanceof WorkflowValidationError) {
+          return c.json({ error: "invalid_flow", issues: error.issues }, 409);
+        }
+        throw error;
+      }
+    }
+    try {
+      const result = options.coordinator.submitTurn({
+        sessionId: session.id,
+        idempotencyKey: key,
+        attachments,
+        message: {
+          text: body.message,
+          attachmentIds: [],
+          flowId,
+          model: nullable(body.model, session.model),
+          effort: nullable(body.effort, session.effort),
+          permissionMode: nullable(
+            body.permission_mode,
+            session.permissionMode,
+          ),
+          plan: frozenPlan
+            ? {
+                ...frozenPlan,
+                planIrHash: flow?.planIrHash ?? null,
+              }
+            : null,
+        },
+        workItem: {
+          title: body.message.slice(0, 80),
+          mode: "auto",
+          conversationId: `conv_${session.id.replace(/^sess_/, "")}`,
+          agentId: session.agentId,
+          workspaceScope: session.cwd ? [session.cwd] : [],
+          riskLevel: "read_only",
+        },
+      });
+      options.catalog.updateSession(session.id, {
+        taskRecordId: result.workItemId,
+        flowId: result.turn.message.flowId,
+        model: result.turn.message.model,
+        effort: result.turn.message.effort,
+        permissionMode: result.turn.message.permissionMode,
+        title: session.title ?? body.message.slice(0, 80),
+        status: "active",
+      });
+      if (result.run) observeExecution(options, result.run.id);
+      return c.json(toSubmitReceipt(options, result), 202);
+    } catch (error) {
+      return commandError(c, options, error);
+    }
+  });
+
+  app.get(
+    "/v1/sessions/:session_id/submissions/:idempotency_key",
+    (c) => {
+      const result = options.workItems.getIdempotencyResponse(
+        `session:message:${c.req.param("session_id")}`,
+        c.req.param("idempotency_key"),
+      ) as SubmitTurnResult | undefined;
+      return result
+        ? c.json(toSubmitReceipt(options, result))
+        : c.json({ error: "submission_not_found" }, 404);
+    },
+  );
+
+  app.delete("/v1/sessions/:session_id/queue/:turn_id", (c) => {
+    const headers = commandHeaders(c);
+    if ("error" in headers) return c.json({ error: headers.error }, headers.status);
+    try {
+      const result = options.coordinator.cancelQueuedTurn({
+        sessionId: c.req.param("session_id"),
+        turnId: c.req.param("turn_id"),
+        expectedVersion: headers.version,
+        idempotencyKey: headers.key,
+      });
+      return c.json({
+        turn: toApiSessionTurn(result.turn),
+        runtime: runtimeView(options, c.req.param("session_id")),
+      });
+    } catch (error) {
+      return commandError(c, options, error);
+    }
+  });
+
+  app.post("/v1/sessions/:session_id/queue/resume", (c) => {
+    const headers = commandHeaders(c);
+    if ("error" in headers) return c.json({ error: headers.error }, headers.status);
+    try {
+      const result = options.coordinator.resumeQueue({
+        sessionId: c.req.param("session_id"),
+        expectedRuntimeVersion: headers.version,
+        idempotencyKey: headers.key,
+      });
+      if (result.dispatched) {
+        observeExecution(options, result.dispatched.run.id);
+      }
+      return c.json({
+        runtime: runtimeView(options, c.req.param("session_id")),
+      });
+    } catch (error) {
+      return commandError(c, options, error);
+    }
+  });
+
+  app.post("/v1/runs/:run_id/cancel", (c) => {
+    const headers = commandHeaders(c);
+    if ("error" in headers) return c.json({ error: headers.error }, headers.status);
+    const run = options.workItems.getRun(c.req.param("run_id"));
+    if (!run?.sessionId) return c.json({ error: "run_not_found" }, 404);
+    try {
+      const result = options.coordinator.requestRunCancellation({
+        sessionId: run.sessionId,
+        runId: run.id,
+        expectedRuntimeVersion: headers.version,
+        idempotencyKey: headers.key,
+      });
+      if (result.disposition === "interrupting") {
+        void options.executor?.cancelRunAndWait(run.id).catch(() => {});
+      }
+      return c.json({
+        disposition: result.disposition,
+        run: toApiRun(result.run, run.sessionId),
+      }, result.disposition === "interrupting" ? 202 : 200);
+    } catch (error) {
+      return commandError(c, options, error);
+    }
+  });
+
+  app.post("/v1/sessions/:session_id/runs", (c) =>
+    c.json({
+      error: "run_creation_moved",
+      message: "POST /messages now creates or queues the Run atomically",
+    }, 410));
 }
 
 export function registerSessionRuntimeReadRoutes(
@@ -212,4 +402,149 @@ export function registerSessionRuntimeReadRoutes(
 function integerQuery(value: string | undefined): number | undefined {
   if (value === undefined || !/^-?\d+$/.test(value)) return undefined;
   return Number(value);
+}
+
+function nullable(value: unknown, fallback: string | null): string | null {
+  return value === undefined
+    ? fallback
+    : typeof value === "string"
+      ? value
+      : null;
+}
+
+function parseAttachments(value: unknown) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const result: Array<{
+    id: string;
+    name: string;
+    mimeType: string;
+    dataBase64: string;
+  }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const attachment = item as Record<string, unknown>;
+    const name = attachment.name;
+    const mimeType = attachment.mime_type ?? attachment.mimeType;
+    const dataBase64 = attachment.data_base64 ?? attachment.dataBase64;
+    if (
+      typeof name !== "string"
+      || typeof mimeType !== "string"
+      || typeof dataBase64 !== "string"
+    ) {
+      return null;
+    }
+    result.push({
+      id: `att_${randomUUID().replaceAll("-", "")}`,
+      name,
+      mimeType,
+      dataBase64,
+    });
+  }
+  return result;
+}
+
+function runtimeView(
+  options: SessionRuntimeApiOptions,
+  sessionId: string,
+) {
+  const runtime = options.workItems.getSessionRuntime(sessionId);
+  const activeRun = runtime?.activeRunId
+    ? options.workItems.getRun(runtime.activeRunId)
+    : undefined;
+  const queue = options.workItems.listQueuedTurns(sessionId, {
+    limit: 100,
+  });
+  return {
+    active_run: activeRun ? toApiRun(activeRun, sessionId) : null,
+    queue_state: runtime?.queueState ?? "ready",
+    queue_pause_reason: runtime?.queuePauseReason ?? null,
+    queue: {
+      turns: queue.turns.map(toApiSessionTurn),
+      total: queue.total,
+      next_cursor: queue.nextCursor,
+    },
+    version: runtime?.version ?? 1,
+    last_event_sequence: runtime?.lastEventSequence ?? 0,
+  };
+}
+
+function toSubmitReceipt(
+  options: SessionRuntimeApiOptions,
+  result: SubmitTurnResult,
+) {
+  return {
+    acceptance: result.acceptance,
+    turn: toApiSessionTurn(result.turn),
+    runtime: runtimeView(options, result.turn.sessionId),
+  };
+}
+
+function commandHeaders(c: Context):
+  | { key: string; version: number }
+  | { error: string; status: 400 | 428 } {
+  const key = c.req.header("idempotency-key");
+  if (!key) return { error: "idempotency_key_required", status: 400 };
+  const raw = c.req.header("if-match");
+  if (!raw || !/^\d+$/.test(raw)) {
+    return { error: "if_match_required", status: 428 };
+  }
+  return { key, version: Number(raw) };
+}
+
+function commandError(
+  c: Context,
+  options: SessionRuntimeApiOptions,
+  error: unknown,
+) {
+  if (!(error instanceof SessionCommandError)) throw error;
+  const payload: Record<string, unknown> = { error: error.code };
+  if (error.code === "turn_version_conflict") {
+    const turnId = c.req.param("turn_id");
+    payload.turn = turnId
+      ? options.workItems.getTurn(turnId)
+      : undefined;
+  }
+  if (error.code === "runtime_version_conflict") {
+    const runId = c.req.param("run_id");
+    const sessionId = c.req.param("session_id")
+      || (runId ? options.workItems.getRun(runId)?.sessionId : null);
+    if (sessionId) payload.runtime = runtimeView(options, sessionId);
+  }
+  if (error.status === 404) return c.json(payload, 404);
+  if (error.status === 409) return c.json(payload, 409);
+  return c.json(payload, 422);
+}
+
+function observeExecution(
+  options: SessionRuntimeApiOptions,
+  runId: string,
+): void {
+  void options.executor?.execute(runId).catch(() => {});
+}
+
+function flowDefinition(flow: FlowRecord): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    workflow_id: flow.flowId,
+    name: flow.name ?? flow.flowId,
+    kind: flow.kind === "runbook" ? "runbook" : "guide",
+    status: flow.status === "published" ? "published" : "draft",
+    inputs: [],
+    steps: flow.steps.map((step) => ({
+      id: step.id,
+      capability: step.capability,
+      purpose: step.purpose,
+      depends_on: step.dependsOn ?? [],
+      mode: step.mode,
+      approval: step.approval ?? "none",
+      branches: step.branches ?? [],
+      retry: step.retry
+        ? {
+            max_attempts: step.retry.maxAttempts,
+            delay_ms: step.retry.delayMs,
+          }
+        : undefined,
+    })),
+  };
 }

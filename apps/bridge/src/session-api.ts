@@ -16,8 +16,12 @@ import type { ProjectDiscovery } from "@codebridge/project-catalog";
 import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
 import { compileWorkflow, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
+import type { SessionCoordinator } from "@codebridge/session-coordinator";
 import { ProviderHistoryImporter } from "./session-history-import.js";
-import { registerSessionRuntimeReadRoutes } from "./session-runtime-api.js";
+import {
+  registerSessionRuntimeCommandRoutes,
+  registerSessionRuntimeReadRoutes,
+} from "./session-runtime-api.js";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
@@ -31,6 +35,7 @@ export interface SessionApiOptions {
   flows?: FlowCatalogStore;
   capabilities?: CapabilityRegistry;
   approvals?: ApprovalService;
+  coordinator?: SessionCoordinator;
   defaultCwd?: string;
 }
 
@@ -77,6 +82,16 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     catalog: options.catalog,
     workItems: options.workItems,
   });
+  if (options.coordinator) {
+    registerSessionRuntimeCommandRoutes(app, {
+      catalog: options.catalog,
+      workItems: options.workItems,
+      coordinator: options.coordinator,
+      executor: options.executor,
+      flows: options.flows,
+      capabilities: options.capabilities,
+    });
+  }
 
   app.get("/v1/agents", (c) => c.json(agentListPayload()));
 

@@ -28,6 +28,12 @@ export interface SubmitTurnInput {
   idempotencyKey: string;
   message: SessionTurnMessage;
   workItem: SessionRuntimeWorkItemInput;
+  attachments?: Array<{
+    id: string;
+    name: string;
+    mimeType: string;
+    dataBase64: string;
+  }>;
 }
 
 export interface SubmitTurnResult {
@@ -66,6 +72,16 @@ export class SessionCoordinator {
         input.sessionId,
         input.workItem,
       );
+      const attachments = (input.attachments ?? []).map((attachment) =>
+        tx.insertMessageAttachment({
+          ...attachment,
+          workItemId,
+        })
+      );
+      const persistedMessage = {
+        ...input.message,
+        attachmentIds: attachments.map((attachment) => attachment.id),
+      };
       let runtime = tx.ensureRuntime(input.sessionId);
       if (
         tx.countQueuedTurns(input.sessionId)
@@ -74,7 +90,10 @@ export class SessionCoordinator {
         throw new SessionCommandError("queue_full", 422);
       }
 
-      const submitted = tx.insertTurn(input.sessionId, input.message);
+      const submitted = tx.insertTurn(
+        input.sessionId,
+        persistedMessage,
+      );
       let turn = submitted;
       let run: Run | null = null;
       if (

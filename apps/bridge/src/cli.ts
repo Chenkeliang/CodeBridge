@@ -355,6 +355,7 @@ program
         flows: flowCatalog,
         capabilities: capabilityRegistry,
         approvals: approvalService,
+        coordinator: sessionCoordinator,
         defaultCwd: config.workspaces?.default ?? config.workspaces?.root ?? process.cwd(),
       },
       config.runner.token,
