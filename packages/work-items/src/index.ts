@@ -4,14 +4,22 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { initializeSessionRuntimeSchema } from "./session-schema.js";
+import {
+  appendSessionEventInTransaction,
+  createSqliteSessionRuntimeTransaction,
+} from "./session-runtime.js";
 import type {
   QueuePauseReason,
   QueueState,
   ReplaySafety,
   SessionRuntime,
+  SessionTimelineBlock,
+  SessionTimelineSegment,
+  SessionTimelineTurn,
   SessionTurn,
   SessionTurnMessage,
   SessionTurnStatus,
+  SessionRuntimeTransaction,
 } from "./session-runtime.js";
 
 export type {
@@ -620,11 +628,165 @@ export class SqliteEventStore {
     };
   }
 
+  listTimelineTurns(
+    sessionId: string,
+    options: {
+      before?: number;
+      limit: number;
+      contentBudgetBytes?: number;
+    },
+  ): {
+    turns: SessionTimelineTurn[];
+    previousCursor: number | null;
+    truncatedBlockIds: string[];
+  } {
+    const limit = Math.max(1, Math.min(50, Math.floor(options.limit)));
+    const before = Number.isFinite(options.before)
+      ? Math.max(1, Math.floor(options.before!))
+      : Number.MAX_SAFE_INTEGER;
+    const contentBudget = Math.max(
+      1,
+      Math.min(
+        1_048_576,
+        Math.floor(options.contentBudgetBytes ?? 1_048_576),
+      ),
+    );
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM session_timeline_turns
+         WHERE session_id = ? AND timeline_index < ?
+         ORDER BY timeline_index DESC
+         LIMIT ?`,
+      )
+      .all(sessionId, before, limit + 1) as SqliteRow[];
+    const hasEarlier = rows.length > limit;
+    const selectedRows = rows.slice(0, limit).reverse();
+    const truncatedBlockIds: string[] = [];
+    let usedBytes = 0;
+    const turns = selectedRows.map((turnRow) => {
+      const blockRows = this.database
+        .prepare(
+          `SELECT * FROM session_timeline_blocks
+           WHERE turn_id = ?
+           ORDER BY block_index ASC`,
+        )
+        .all(String(turnRow.turn_id)) as SqliteRow[];
+      const blocks: SessionTimelineBlock[] = blockRows.map((blockRow) => {
+        const segmentRows = this.database
+          .prepare(
+            `SELECT * FROM session_output_segments
+             WHERE block_id = ?
+             ORDER BY segment_index ASC
+             LIMIT 101`,
+          )
+          .all(String(blockRow.block_id)) as SqliteRow[];
+        const segments: SessionTimelineSegment[] = [];
+        for (const segmentRow of segmentRows.slice(0, 100)) {
+          const byteLength = Number(segmentRow.byte_length);
+          if (usedBytes + byteLength > contentBudget) break;
+          segments.push(toTimelineSegment(segmentRow));
+          usedBytes += byteLength;
+        }
+        const hasMore = segments.length < segmentRows.length;
+        if (hasMore) truncatedBlockIds.push(String(blockRow.block_id));
+        return {
+          ...toTimelineBlock(blockRow),
+          segments,
+          nextSegmentCursor: hasMore
+            ? segments.at(-1)?.segmentIndex ?? -1
+            : null,
+        };
+      });
+      return {
+        ...toTimelineTurn(turnRow),
+        blocks,
+      };
+    });
+    return {
+      turns,
+      previousCursor: hasEarlier
+        ? turns[0]?.timelineIndex ?? null
+        : null,
+      truncatedBlockIds,
+    };
+  }
+
+  listTimelineSegments(
+    blockId: string,
+    options: { after?: number; limit: number },
+  ): {
+    segments: SessionTimelineSegment[];
+    nextCursor: number | null;
+  } {
+    const after = Number.isFinite(options.after)
+      ? Math.floor(options.after!)
+      : -1;
+    const limit = Math.max(1, Math.min(100, Math.floor(options.limit)));
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM session_output_segments
+         WHERE block_id = ? AND segment_index > ?
+         ORDER BY segment_index ASC
+         LIMIT ?`,
+      )
+      .all(blockId, after, limit + 1) as SqliteRow[];
+    const hasMore = rows.length > limit;
+    const segments = rows.slice(0, limit).map(toTimelineSegment);
+    return {
+      segments,
+      nextCursor: hasMore
+        ? segments.at(-1)?.segmentIndex ?? null
+        : null,
+    };
+  }
+
+  listSessionCommands(sessionId: string): Array<{
+    name: string;
+    description: string;
+    input?: { hint: string };
+  }> {
+    const rows = this.database
+      .prepare(
+        `SELECT name, description, input_json
+         FROM session_commands
+         WHERE session_id = ?
+         ORDER BY name ASC`,
+      )
+      .all(sessionId) as SqliteRow[];
+    return rows.map((row) => {
+      const input = row.input_json === null || row.input_json === undefined
+        ? undefined
+        : JSON.parse(String(row.input_json)) as { hint: string };
+      return {
+        name: String(row.name),
+        description: String(row.description),
+        ...(input ? { input } : {}),
+      };
+    });
+  }
+
   countAllChanges(): number {
     const row = this.database
       .prepare("SELECT total_changes() AS value")
       .get() as { value?: number } | undefined;
     return Number(row?.value ?? 0);
+  }
+
+  withSessionTransaction<T>(
+    operation: (transaction: SessionRuntimeTransaction) => T,
+  ): T {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const transaction = createSqliteSessionRuntimeTransaction(
+        this.database,
+      );
+      const result = operation(transaction);
+      this.database.exec("COMMIT;");
+      return result;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
   }
 
   updateWorkflowBinding(
@@ -1162,6 +1324,17 @@ export class SqliteEventStore {
   }
 
   private appendEventInTransaction(input: AppendEventInput): DomainEvent {
+    const workItem = this.database
+      .prepare("SELECT session_id FROM work_items WHERE id = ?")
+      .get(input.workItemId) as
+        | { session_id?: string | null }
+        | undefined;
+    if (workItem?.session_id) {
+      return appendSessionEventInTransaction(this.database, {
+        ...input,
+        sessionId: String(workItem.session_id),
+      });
+    }
     const sequenceRow = this.database
       .prepare(
         "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM domain_events WHERE work_item_id = ?",
@@ -1357,6 +1530,51 @@ function toSessionTurn(row: SqliteRow): SessionTurn {
       row.cancelled_at === null || row.cancelled_at === undefined
         ? null
         : String(row.cancelled_at),
+  };
+}
+
+function toTimelineSegment(row: SqliteRow): SessionTimelineSegment {
+  return {
+    segmentId: String(row.segment_id),
+    blockId: String(row.block_id),
+    segmentIndex: Number(row.segment_index),
+    content: String(row.content),
+    byteLength: Number(row.byte_length),
+    sealed: Number(row.sealed) === 1,
+  };
+}
+
+function toTimelineBlock(
+  row: SqliteRow,
+): Omit<SessionTimelineBlock, "segments" | "nextSegmentCursor"> {
+  return {
+    blockId: String(row.block_id),
+    sessionId: String(row.session_id),
+    turnId: String(row.turn_id),
+    runId: String(row.run_id),
+    blockIndex: Number(row.block_index),
+    kind: String(row.kind),
+    status: String(row.status),
+    metadata: JSON.parse(
+      String(row.metadata_json ?? "{}"),
+    ) as Record<string, unknown>,
+  };
+}
+
+function toTimelineTurn(
+  row: SqliteRow,
+): Omit<SessionTimelineTurn, "blocks"> {
+  return {
+    sessionId: String(row.session_id),
+    timelineIndex: Number(row.timeline_index),
+    turnId: String(row.turn_id),
+    runId: String(row.run_id),
+    startedSequence: Number(row.started_sequence),
+    endedSequence:
+      row.ended_sequence === null || row.ended_sequence === undefined
+        ? null
+        : Number(row.ended_sequence),
+    status: String(row.status) as SessionTimelineTurn["status"],
   };
 }
 
