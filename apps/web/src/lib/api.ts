@@ -141,7 +141,14 @@ function sendMessage(
 
 function cancelRun(id: string): Promise<{ stopped: boolean; run_id?: string }>;
 function cancelRun(runId: string, runtimeVersion: number, key: string): Promise<{ stopped?: boolean; run_id?: string } & SessionCancelRunResult>;
-function cancelRun(id: string, runtimeVersion?: number, key?: string): Promise<any> {
+function cancelRun(
+  id: string,
+  runtimeVersion?: number,
+  key?: string,
+): Promise<
+  { stopped: boolean; run_id?: string }
+  | ({ stopped?: boolean; run_id?: string } & SessionCancelRunResult)
+> {
   if (typeof runtimeVersion === "number" && typeof key === "string") {
     return request<{ stopped?: boolean; run_id?: string } & SessionCancelRunResult>(`/v1/runs/${encodeURIComponent(id)}/cancel`, {
       method: "POST",

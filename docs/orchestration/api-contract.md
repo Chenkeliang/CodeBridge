@@ -40,7 +40,11 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `DELETE` | `/v1/sessions/{session_id}/directories` | 从 Session 移除附加目录 |
 | `POST` | `/v1/sessions/{session_id}/messages` | 向当前 Session 发送消息 |
 | `GET` | `/v1/sessions/{session_id}/runs` | 查询 Session 的 Run 状态投影 |
-| `POST` | `/v1/sessions/{session_id}/runs` | 根据当前消息和可选 Flow 创建 Run |
+| `GET` | `/v1/sessions/{session_id}/timeline` | 只读读取 Session 的分页时间线 |
+| `GET` | `/v1/sessions/{session_id}/queue` | 只读读取待执行 Turn 队列 |
+| `GET` | `/v1/sessions/{session_id}/commands` | 只读读取 Session 命令菜单 |
+| `POST` | `/v1/sessions/{session_id}/runs` | 旧入口；新的消息流会返回 410 |
+| `POST` | `/v1/sessions/{session_id}/cancel` | 取消当前 Session 的活跃 Run |
 | `POST` | `/v1/sessions/{session_id}/resume` | 恢复 Agent 原生 Session |
 | `POST` | `/v1/sessions/{session_id}/fork` | 按 Agent 能力创建分支 Session |
 | `POST` | `/v1/sessions/{session_id}/close` | 关闭 Session |
@@ -81,6 +85,10 @@ GET       /v1/work-items/{id}/events
 ```
 
 这些接口对应后台 `TaskRecord`，不定义新的页面导航层级。完整草案见 [api.openapi.yaml](../../schemas/orchestration/api.openapi.yaml)。
+
+Session 相关的 `GET` 接口都是纯读取：不会触发 Provider 历史导入、Run 创建或 SQLite 写入。
+
+消息 POST 会原子地创建或排队一个 Turn；旧的单独 Run POST 入口仅保留兼容，目标合同中返回 410。
 
 ## 3. 创建 Session
 
@@ -146,6 +154,8 @@ retry:
 ## 5. 幂等与恢复
 
 创建 Session、发送消息、创建 Run、应用 Flow 和接受项目候选都支持 `Idempotency-Key`。Key 与操作作用域一起持久化在 SQLite；重复请求返回第一次结果，不会重复创建 Run 或写入副作用事件。Git Catalog 提案使用调用方提供的唯一分支名作为冲突边界，已存在分支返回冲突，不会覆盖。
+
+队列取消与恢复需要 `Idempotency-Key` + `If-Match`；Run 取消返回 200/202，但持久化状态只会落到 `cancelled` 或 `interrupted`，`interrupting` 只是响应态。
 
 事件读取同时接受 `after_sequence` 和标准 `Last-Event-ID`：
 

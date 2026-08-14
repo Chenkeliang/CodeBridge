@@ -33,15 +33,21 @@ Web 工作台                         飞书 / Telegram
      │                    │                    │
  Agent Registry      Session Catalog       Flow Catalog
  Agent Profile       Session / Message     临时 Flow / Workflow
-     │                    │                    │
-     └────────────────────┼────────────────────┘
-                          │
-                    Run Runtime
-              计划、状态、暂停、恢复、事件
-                          │
-                    Policy / Approval
-                          │
-                    Runner Host
+      │                    │                    │
+      └────────────────────┼────────────────────┘
+                           │
+                   SessionCoordinator
+               队列、转交、取消、恢复
+                           │
+                     Run Runtime
+               计划、状态、暂停、恢复、事件
+                           │
+                  AgentEventAggregator
+               原始事件合并、节流、投影前整形
+                           │
+                     Policy / Approval
+                           │
+                     Runner Host
               （独立进程、权限和目录隔离）
                           │
        Pi SDK / Cursor ACP / Claude ACP / Codex Adapter
@@ -65,6 +71,8 @@ Skill / MCP / CLI / HTTP / Git / 项目和外部系统
 | Git | CodeBridge 定义、Skill Manifest、Workflow 和 Catalog 版本 | 运行时 Session、Run 和事件状态 |
 
 CodeBridge 是物理上的单一主项目。Agent Registry、Session Catalog、Flow Catalog、Run Runtime、Policy、Skill Runtime 和 MCP Runtime 是内部模块；现有 Bridge、Runner、ACP Backend 和 Channel 继续复用，不复制第二套运行时。
+
+运行时约束：Lease 固定 60 秒；心跳/过期扫描 15 秒；取消扫描 1 秒。状态变更先持久化再回调 Runner 或外部适配器，避免“先通知后落库”。
 
 外部渠道使用 `channel + conversation_id` 持久化绑定到 Agent Session，再调用共享的 Message/Run API；内置 Feishu/Telegram Router 保持兼容运行，迁移可以逐个渠道进行，不要求一次性改动旧适配器。
 
