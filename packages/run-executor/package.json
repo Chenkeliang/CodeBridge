@@ -17,6 +17,7 @@
   "dependencies": {
     "@codebridge/core": "workspace:*",
     "@codebridge/policy": "workspace:*",
+    "@codebridge/session-coordinator": "workspace:*",
     "@codebridge/work-items": "workspace:*",
     "@codebridge/workflow-engine": "workspace:*"
   },

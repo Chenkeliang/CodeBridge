@@ -26,6 +26,7 @@ export class AgentEventAggregator {
     private readonly options: {
       runId: string;
       emit: (event: AgentEvent) => void;
+      onError?: (error: unknown) => void;
     },
   ) {}
 
@@ -51,7 +52,14 @@ export class AgentEventAggregator {
 
     this.flushOversized();
     if (this.buffer && !this.timer) {
-      this.timer = setTimeout(() => this.flush(), FLUSH_MS);
+      this.timer = setTimeout(() => {
+        try {
+          this.flush();
+        } catch (error) {
+          if (!this.options.onError) throw error;
+          this.options.onError(error);
+        }
+      }, FLUSH_MS);
     }
   }
 

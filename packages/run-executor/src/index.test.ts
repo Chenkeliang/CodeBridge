@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
 import { SqliteEventStore } from "@codebridge/work-items";
+import {
+  SessionCoordinator,
+  SessionLeaseService,
+} from "@codebridge/session-coordinator";
 import {
   ApprovalService,
   CapabilityRegistry,
@@ -127,6 +131,203 @@ describe("RunExecutor", () => {
       },
       { type: "done", exitCode: 0 },
     ]);
+    store.close();
+  });
+
+  it("claims and finishes a Session-bound Run through the Coordinator", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, {
+      maxQueuedTurns: 100,
+    });
+    const submitted = coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "message_1",
+      message: {
+        text: "调查",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      },
+      workItem: {
+        title: "Session",
+        mode: "investigation",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: ["/tmp/project"],
+        riskLevel: "read_only",
+      },
+    });
+    const run = submitted.run!;
+    const leaseService = new SessionLeaseService(store);
+    const claim = vi.spyOn(leaseService, "claim");
+    const finish = vi.spyOn(coordinator, "finishRun");
+    const executorOwner = "bridge:123";
+    const executor = new RunExecutor(
+      store,
+      new FakeRunner([{ type: "done", exitCode: 0 }]),
+      {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: leaseService,
+        executorOwner,
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+      },
+    );
+
+    expect((await executor.execute(run.id)).status).toBe("succeeded");
+    expect(claim).toHaveBeenCalledWith(run.id, executorOwner);
+    expect(finish).toHaveBeenCalledWith({
+      sessionId: "sess_1",
+      runId: run.id,
+      status: "succeeded",
+    });
+    store.close();
+  });
+
+  it("rejects execution events after a Session Run loses ownership", () => {
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, {
+      maxQueuedTurns: 100,
+    });
+    const submitted = coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "message_1",
+      message: {
+        text: "调查",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      },
+      workItem: {
+        title: "Session",
+        mode: "investigation",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    });
+    const run = submitted.run!;
+    const owner = "bridge:123";
+    expect(new SessionLeaseService(store).claim(run.id, owner)).not.toBeNull();
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: run.id,
+      status: "interrupted",
+    });
+    const eventCount = store.listEvents(submitted.workItemId).length;
+    const timeline = store.listTimelineTurns("sess_1", {
+      limit: 50,
+    });
+
+    expect(() =>
+      store.appendLeasedRunEvent(owner, {
+        workItemId: submitted.workItemId,
+        sessionId: "sess_1",
+        runId: run.id,
+        type: "AGENT_EVENT",
+        actor: "agent",
+        payload: {
+          event: {
+            type: "text_delta",
+            blockId: "answer",
+            text: "late",
+          },
+        },
+      }),
+    ).toThrow("run_lease_lost");
+    expect(store.listEvents(submitted.workItemId)).toHaveLength(eventCount);
+    expect(
+      store.listTimelineTurns("sess_1", { limit: 50 }),
+    ).toEqual(timeline);
+    store.close();
+  });
+
+  it("finishes Session cancellation only after the Runner stops", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, {
+      maxQueuedTurns: 100,
+    });
+    const submitted = coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "message_1",
+      message: {
+        text: "调查",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      },
+      workItem: {
+        title: "Session",
+        mode: "investigation",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    });
+    const run = submitted.run!;
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const runner = {
+      async *run(
+        _request: RunRequest,
+        options?: { signal?: AbortSignal },
+      ): AsyncGenerator<AgentEvent> {
+        signalStarted();
+        await new Promise<void>((resolve) => {
+          options?.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+      },
+    };
+    const executor = new RunExecutor(store, runner, {
+      sessionCoordinator: coordinator,
+      sessionLeaseService: new SessionLeaseService(store),
+      executorOwner: "bridge:123",
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: {
+          chatId: "conv_sess_1",
+          backendId: "pi",
+          cwd: "/tmp/project",
+        },
+        prompt: "调查",
+      }),
+    });
+
+    const executing = executor.execute(run.id);
+    await started;
+    coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: run.id,
+      expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "cancel_1",
+    });
+    const cancelled = executor.cancelRunAndWait(run.id);
+    expect(store.getRun(run.id)?.status).toBe("running");
+
+    expect((await cancelled).status).toBe("cancelled");
+    expect((await executing).status).toBe("cancelled");
     store.close();
   });
 
