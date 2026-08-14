@@ -183,6 +183,52 @@
   }
 }
 
+.assistant-reveal > :where(p, ul, ol, blockquote, pre, table) {
+  animation: assistant-reveal 240ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+.assistant-reveal > :where(p, ul, ol, blockquote, pre, table):nth-child(2) {
+  animation-delay: 45ms;
+}
+
+.assistant-reveal > :where(p, ul, ol, blockquote, pre, table):nth-child(n + 3) {
+  animation-delay: 90ms;
+}
+
+[data-streaming-caret] > :last-child::after {
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 0.2rem;
+  background: var(--agnet-accent);
+  content: "";
+  vertical-align: -0.12em;
+  animation: caret-blink 0.85s steps(1) infinite;
+}
+
+@keyframes assistant-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-reveal > :where(p, ul, ol, blockquote, pre, table),
+  .composer-sweep.sent {
+    animation: none !important;
+  }
+
+  [data-streaming-caret] > :last-child::after {
+    display: none;
+    animation: none;
+  }
+}
+
 /* E5: submit sweep — a single accent line racing along the composer bottom edge. */
 .composer-sweep {
   position: absolute;

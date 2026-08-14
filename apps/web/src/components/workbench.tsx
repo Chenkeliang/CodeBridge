@@ -763,6 +763,7 @@ export function Workbench() {
                 {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
                   <SessionTimeline
                     hasEarlier={sessionView.snapshot.timeline.previous_cursor !== null}
+                    key={selectedSessionId}
                     loadingBlockId={loadingBlockId}
                     loadingEarlier={loadingEarlier}
                     onLoadEarlier={() => void loadEarlierTimeline()}
