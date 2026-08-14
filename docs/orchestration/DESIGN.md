@@ -2,7 +2,7 @@
 
 - Version: `1.0.0`
 - Status: `Implementation baseline`
-- Updated: `2026-08-11`
+- Updated: `2026-08-14`
 - Product: Multi-agent conversation workbench
 - Themes: `Paper Lime` / `Carbon Vermilion`
 - Reference viewport: `1440 × 900`
@@ -39,7 +39,7 @@ AGNET 是面向开发者的多 Agent 对话工作台。用户可以在 Pi、Code
 
 #### 精致来自几何秩序
 
-所有精致度由统一网格、固定列、字重、圆角关系、图标光学尺寸和交互反馈建立。禁止依赖大面积渐变、发光、玻璃拟态或装饰性背景制造高级感。
+所有精致度由统一网格、固定列、字重、圆角关系、图标光学尺寸和交互反馈建立。禁止依赖大面积渐变、发光、全局玻璃拟态或装饰性背景制造高级感；Composer 与浮动交互层可使用克制、Token 驱动的局部磨砂表面。
 
 #### 双主题同构
 
@@ -72,6 +72,7 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 - 不使用外发光、霓虹阴影或彩色光晕。
 - 不使用大面积渐变文字。
 - 不使用全局玻璃拟态。
+- 局部磨砂仅允许用于 Composer、Popover、Select、命令/上下文浮层和 Command Palette；Agent Rail、Session Panel、Header、对话画布、Timeline 内容和普通卡片保持不透明。
 - 不使用圆角过大的玩具感胶囊容器。
 - 不使用 Emoji 代替图标。
 - 不用字母方块伪造 Agent Logo；已知 Agent 使用对应品牌图形，未知 Agent 使用统一通用图标。
@@ -85,7 +86,7 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 
 - Token 名称使用 `agnet.{role}`，页面只消费语义角色。
 - 颜色与阴影 Token 在 `src/index.css` 中以 CSS 自定义属性（`--agnet-{role}`）定义：`Paper Lime` 挂在 `:root`，`Carbon Vermilion` 挂在 `[data-theme="carbon"]`，通过 `@theme inline` 暴露为 Tailwind 语义 Utility（`bg-surface`、`text-ink`、`border-line`、`shadow-panel` 等）。主题由应用根节点的 `data-theme` 属性切换；`index.html` 内联脚本在首帧前从 localStorage/系统偏好恢复主题，避免启动闪屏。
-- `src/index.css` 只允许 Tailwind 框架入口、字体 `@font-face` 和上述 Token 层；不新增其他 CSS Selector、CSS Module、styled-components 或内联 `style`。
+- `src/index.css` 允许 Tailwind 框架入口、字体、语义 Token、跨组件 motion/accessibility 规则，以及 ProseMirror 等第三方编辑器所需的严格作用域样式；业务布局仍由 Tailwind Utility 与 shadcn 基础组件实现，不新增全局无作用域选择器、CSS Module 或 styled-components。
 - 组件内部禁止直接写原始颜色或 TS Class Map；阴影透明度除外。组件之间不再传递 `theme` 属性来改变颜色（Mermaid 等需要 JS 感知主题的第三方渲染除外）。
 - 数值尺寸必须来自本节的间距、圆角、字号或组件尺寸。
 
@@ -98,6 +99,7 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.surface` | `#FFFFFF` | 对话区、浮层和面板 |
 | `agnet.surfaceSoft` | `#EEF1EB` | 次级控件 |
 | `agnet.surfaceTint` | `#F2F4EF` | 代码、Diff 和分组底色 |
+| `agnet.overlay` | `#FFFFFF` | Composer 与浮动交互层；Paper 使用 94% 强度 |
 | `agnet.ink` | `#191C16` | 一级文字 |
 | `agnet.inkSoft` | `#373C32` | 正文 |
 | `agnet.muted` | `#5C6255` | 次级文字（canvas 上对比度 5.9:1） |
@@ -125,6 +127,7 @@ Agent 标识色（Paper / Carbon）：`codex #10A37F / #2FC79E`，`claude #D9775
 | `agnet.surface` | `#1D1D1D` | 对话区、浮层和面板 |
 | `agnet.surfaceSoft` | `#292929` | 次级控件 |
 | `agnet.surfaceTint` | `#232323` | 代码、Diff 和分组底色 |
+| `agnet.overlay` | `#1D1D1D` | Composer 与浮动交互层；Carbon 使用 84% 强度 |
 | `agnet.ink` | `#F1F1ED` | 一级文字 |
 | `agnet.inkSoft` | `#D4D3CE` | 正文 |
 | `agnet.muted` | `#AAA9A3` | 次级文字 |
@@ -267,8 +270,10 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 
 ### 5.6 Composer
 
-- 输入自然语言是主动作。
-- 模型、权限、Workspace 和 Flow 以紧凑上下文控件出现。
+- Composer 是一个圆角输入表面，垂直顺序固定为：可选附件区、Rich Markdown 编辑区、最小操作行。Paper Lime 与 Carbon Vermilion 的几何、间距、字体和控件位置完全一致。
+- 操作行左侧只放 `+` 与权限；右侧放模型/Reasoning/Speed 分组、活动 Run 的 Stop 与 Send。不存在 Markdown toolbar、Preview tab、模式标签、语音按钮或常驻 Enter 提示。
+- `+` 菜单承载文件、Workspace 上下文、添加 Workspace 与 Flow；`/` 和 `@` 继续作为编辑器内的直接键盘触发。
+- 图片与其他文件都显示在编辑器上方：图片为可移除缩略图，其他文件为可移除文件卡。
 - 模型与权限选项来自当前 Agent 的 Session Config Options；禁止在 Web 枚举 Codex、Claude Code、Cursor 或其他厂商的固定值。
 - `model` 使用 Select，`thought_level` 使用离散 Slider，`mode` 使用 Select；`model_config` 中具备 fast/speed 语义的选项使用 Speed Select。控件形态由配置类别与语义决定，具体值与说明始终由 Agent Adapter 提供。
 - Reasoning Slider 只展示 Adapter 上报的真实等级；Session 未显式覆盖时，滑块定位到 Adapter 的 `currentValue`，标签追加 `· Default`。用户设置后保存为当前 Session 覆盖，并可通过 `Use default` 清除覆盖。
@@ -277,10 +282,25 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 - 权限选择是当前 Session 的显式覆盖；未选择时显示 `Agent default` 并服从 Agent、本机或企业策略，不把探测 Session 的临时默认值写入业务 Session。
 - Agent 未报告模型、权限、命令或上下文能力时，不显示对应的空控件。
 - Pi SDK Adapter 应上报模型和原生 Thinking Level；OpenCode 通过 Backend 配置进入 Agent Registry，并沿用相同 Session Config Options，不建立厂商专属页面。
-- `+` 用于选择文件；`@` 用于插入当前 Session 已授权的 Workspace 上下文；`/` 用于当前 Agent 动态返回的命令。
+- Rich Markdown 直接呈现段落、标题、有序/无序列表、任务列表、引用、链接、粗体、斜体、删除线和行内代码。
+- fenced code、Mermaid、表格、块级数学与不支持的扩展保持为可编辑 source block；解析失败必须保留原文，不能静默删除内容。
+- 编辑器在前端序列化为 canonical Markdown 后，仍通过现有 `message` 字符串提交。要求语义等价，不要求字节级语法等同。
 - 不支持的能力不显示空按钮；运行时无命令时 `/` 不展示。
 - `Enter` 发送、`Shift+Enter` 换行；IME 合成期间不得误发送。
+- command/context picker 处理 Enter 时优先选择候选；Escape 关闭，方向键移动，Tab 选择。
+- 序列化失败必须阻止发送、显示就地错误，并保留草稿与附件；解析失败回退为 source block 后仍可发送。
+- Run 活动时 Stop 由权威 Runtime 状态显示；Send 仍可提交下一条并进入现有队列。Queue 继续位于 Composer 上方。
+- Markdown/附件仍通过现有 atomic Session message command 提交；Composer 不拥有 Session、Queue、Run、网络或幂等状态。
 - 附件和目录必须使用系统选择器或浏览器授权能力，不能要求用户手写本地绝对路径。
+
+### 5.7 浮动表面与 Assistant 动效
+
+- `PopoverContent` 与 `SelectContent` 默认保持 solid；只有显式 `surface="frosted"` 才使用 `agnet.overlay` 与 backdrop blur。
+- 新追加且未 sealed 的 Assistant Segment 可按段落执行 `240ms`、上移 `6–8px` 的轻量 stagger reveal。
+- 初始 snapshot hydration、加载更早 Timeline、加载更多 Segment 与 Session 切换不得重放 reveal。
+- 仅最后一个未 sealed Assistant Segment 显示 accent caret；Thought、Work、Tool、Approval 和 Error 不显示该 caret。
+- `prefers-reduced-motion: reduce` 关闭 reveal、caret、Composer sweep；Composer breathe 与附件 chip pop 仅通过 `motion-safe` 启用。
+- 动效不改变布局测量、滚动锚点、事件处理或完成 Segment 的 memoization。
 
 ## 6. 状态与空态
 
@@ -312,14 +332,14 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 - 所有按钮具备可读 `aria-label`，纯装饰 SVG 使用 `aria-hidden`。
 - 键盘可完成 Agent/Session 切换、新建、发送、审批和关闭菜单。
 - 焦点状态必须可见；颜色对比满足 WCAG AA。
-- 动效只使用 `opacity` 和 `transform`，并尊重 `prefers-reduced-motion`。唯一例外：待审批卡片的虚线边框允许使用 `stroke-dashoffset` 走线动画（审批是唯一需要用户决策的阻塞态，值得持续视觉提醒）。
+- 动效优先使用 `opacity` 和 `transform`，并尊重 `prefers-reduced-motion`。例外仅限待审批边框的 `stroke-dashoffset`、流式 caret 的 opacity blink，以及 Composer 活动边线；它们都必须有 reduced-motion 关闭路径。
 
 ## 9. 工程约束
 
 - 技术栈固定为 React + Vite + TypeScript + Tailwind CSS + shadcn/ui。
 - Hono 只提供 API、SSE 和可选静态资源托管。
 - 不引入第二套全局状态机；服务端 Session、Run 和 Event 是事实来源。
-- 不新增业务自定义 CSS；Tailwind Utility 和 shadcn 组件源码是唯一样式实现。
+- 不新增页面级业务 CSS；Tailwind Utility 和 shadcn 组件源码负责布局与组件外观。仅允许在 `index.css` 中维护语义 Token、共享动效/accessibility 规则和 `.markdown-composer` 等第三方控件作用域。
 - 功能组件不得访问虚构数据；Demo 数据只允许存在于显式 Preview 入口。
 - 页面不枚举厂商模型、Skill、MCP 或命令；全部由 Agent Adapter 和 Registry 动态报告。
 - 视觉调整先更新本文档和语义 Token，再更新基础组件，最后组合页面。
@@ -342,10 +362,12 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 
 - Markdown、Tool Call、状态、错误和审批清晰可读。
 - 不展示原始事件洪流或内部推理原文。
-- 输入、换行、命令、模型、Flow 和目录能力按运行时状态工作。
+- Rich Markdown、输入、换行、命令、附件、模型、Reasoning、Speed、权限、Flow 和 Workspace 能力按运行时状态工作。
+- 活动 Run 保留 Stop，同时允许发送下一条进入队列；历史加载与 Session 切换不重放 Assistant reveal。
 
 ### 主题与质量
 
 - Paper Lime 和 Carbon Vermilion 布局完全同构。
+- 磨砂表面只出现在 Composer 与获准浮层，其他结构表面保持不透明。
 - `1440 × 900` 无溢出，主要动作不落出视口。
 - `pnpm lint`、Web 测试和生产构建通过。
