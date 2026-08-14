@@ -25,6 +25,12 @@ export interface CapabilityDefinition {
   source?: CapabilitySource;
   /** true when the capability mutates state; such adapters must honor context.dry_run. */
   side_effects?: boolean;
+  idempotency?: {
+    /** input field names that derive the idempotency key. */
+    key: string[];
+    /** dedupe window. `permanent` = never expires. */
+    validity_window?: "24h" | "7d" | "permanent";
+  };
 }
 
 export interface CapabilitySource {
@@ -76,6 +82,7 @@ export class CapabilityRegistry {
       "ALTER TABLE capabilities ADD COLUMN source_version TEXT",
       "ALTER TABLE capabilities ADD COLUMN source_revision TEXT",
       "ALTER TABLE capabilities ADD COLUMN side_effects TEXT",
+      "ALTER TABLE capabilities ADD COLUMN idempotency TEXT",
     ]) {
       try { this.database.exec(statement); } catch { /* Existing databases already contain the column. */ }
     }
@@ -95,13 +102,14 @@ export class CapabilityRegistry {
       .prepare(
         `INSERT INTO capabilities (
            id, risk, adapter, environments, description,
-           source_kind, source_ref, source_version, source_revision, side_effects, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           source_kind, source_ref, source_version, source_revision, side_effects, idempotency, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET risk = excluded.risk, adapter = excluded.adapter,
            environments = excluded.environments, description = excluded.description,
            source_kind = excluded.source_kind, source_ref = excluded.source_ref,
            source_version = excluded.source_version, source_revision = excluded.source_revision,
-           side_effects = excluded.side_effects, updated_at = excluded.updated_at`,
+           side_effects = excluded.side_effects, idempotency = excluded.idempotency,
+           updated_at = excluded.updated_at`,
       )
       .run(
         definition.id,
@@ -114,6 +122,7 @@ export class CapabilityRegistry {
         definition.source?.version ?? null,
         definition.source?.revision ?? null,
         definition.side_effects === undefined ? null : definition.side_effects ? "1" : "0",
+        definition.idempotency ? JSON.stringify(definition.idempotency) : null,
         new Date().toISOString(),
       );
   }
@@ -159,6 +168,7 @@ function toCapability(row: Record<string, unknown>): CapabilityDefinition {
     description: row.description === null ? undefined : String(row.description),
     source,
     side_effects: row.side_effects === null || row.side_effects === undefined ? undefined : String(row.side_effects) === "1",
+    idempotency: row.idempotency === null || row.idempotency === undefined ? undefined : JSON.parse(String(row.idempotency)) as CapabilityDefinition["idempotency"],
   };
 }
 

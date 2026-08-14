@@ -32,6 +32,7 @@ export interface RunExecutorOptions {
 export class RunExecutor {
   private readonly activeControllers = new Map<string, AbortController>();
   private readonly activeCompletions = new Map<string, Promise<void>>();
+  private currentForce = false;
 
   constructor(
     private readonly store: SqliteEventStore,
@@ -63,7 +64,8 @@ export class RunExecutor {
     return result;
   }
 
-  async execute(runId: string, signal?: AbortSignal): Promise<Run> {
+  async execute(runId: string, signal?: AbortSignal, options?: { force?: boolean }): Promise<Run> {
+    this.currentForce = options?.force ?? false;
     const initial = this.store.getRun(runId);
     if (!initial) throw new Error(`Run not found: ${runId}`);
     if (initial.status !== "queued") return initial;
@@ -480,6 +482,17 @@ export class RunExecutor {
     if (!step?.capabilityId || !this.options.capabilities || !this.options.policy) return undefined;
     const definition = this.options.policy.getCapability(step.capabilityId);
     if (!definition || !this.options.capabilities.has(definition.adapter)) return undefined;
+    // namespace "flow-step" is deliberately separate from the HTTP idempotency
+    // keys ("session:run:*") stored in the same idempotency_responses table.
+    const idem = definition.idempotency;
+    let idemKey: string | undefined;
+    if (idem && !this.currentForce && step.risk !== "read_only") {
+      idemKey = idempotencyKey(workItem, step, idem.key);
+      const prior = this.store.getIdempotencyResponse("flow-step", idemKey);
+      if (prior !== undefined) {
+        return prior as CapabilityExecutionResult;
+      }
+    }
     const result = await this.options.capabilities.execute(definition.adapter, {
       input: {
         title: workItem.title,
@@ -495,6 +508,9 @@ export class RunExecutor {
         signal,
       },
     });
+    if (idem && idemKey && step.risk !== "read_only") {
+      this.store.putIdempotencyResponse("flow-step", idemKey, result);
+    }
     const artifactIds = (result.artifacts ?? []).map((artifact) => this.store.createArtifact({
       workItemId: workItem.id,
       runId: run.id,
@@ -680,6 +696,20 @@ function isRetryableError(error: unknown): boolean {
 
 function runHasIr(run: Run): boolean {
   return run.planIrHash !== null && run.planIrHash !== undefined;
+}
+
+function idempotencyKey(
+  workItem: WorkItem,
+  step: PersistedPlanStep,
+  fields: string[],
+): string {
+  // Key fields are business inputs carried in workItem.identifiers at phase 1
+  // (no ResolvedPlan producer yet); the key is flow+step+field-values.
+  const parts = fields.map((field) => {
+    const value = workItem.identifiers[field];
+    return `${field}=${stableStringify(value)}`;
+  });
+  return `sha256:${createHash("sha256").update([workItem.workflowId ?? "", step.id, ...parts].join(":"), "utf8").digest("hex")}`;
 }
 
 async function retryDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
