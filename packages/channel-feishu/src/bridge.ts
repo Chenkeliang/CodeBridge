@@ -72,9 +72,6 @@ export interface FeishuBridgeOptions {
 /** 降级时单条普通消息的最大字符数；结果超过就用 chunkMarkdown 分条发，避免撞飞书消息长度上限 */
 const FEISHU_MSG_CHUNK_CHARS = 12000;
 
-/** 忙时最多排队多少条消息（合并成一条 prompt 发出，防无限堆积） */
-const PENDING_PROMPTS_MAX = 5;
-
 /** 运行状态只在飞书展示层刷新；不进入 Runner，也不参与 ACP 活跃计时。 */
 const FEISHU_LIVE_STATUS_INTERVAL_MS = 5 * 60_000;
 
@@ -197,15 +194,6 @@ export class FeishuBridge {
   private channel?: LarkChannel;
   private orchestrator: RunOrchestrator;
   private config: AppConfig;
-  /** 中断同会话内仍在进行的流式回复（斜杠命令需抢占） */
-  private readonly chatStreamAbort = new Map<string, AbortController>();
-  /** 忙时排队的消息（chatKey → 待发文本 + 累积附件 + 最后一条消息作回复锚点），本轮结束自动派发 */
-  private readonly pendingPrompts = new Map<
-    string,
-    { texts: string[]; attachments: RunAttachment[]; lastMsg: FeishuMessage }
-  >();
-  /** 正在派发（run 尚未在 orchestrator 注册）的 chatKey：堵住 busy-guard 的注册空窗 */
-  private readonly dispatching = new Set<string>();
   /** chat|topic → 最近一条入站消息 id（出站消息回贴话题用） */
   private readonly lastInboundMessageId = new Map<string, string>();
   /** 普通群回复串 → 会话 topic 映射 */
@@ -330,8 +318,6 @@ export class FeishuBridge {
 
   async disconnect(): Promise<void> {
     this.disconnecting = true;
-    for (const ac of this.chatStreamAbort.values()) ac.abort();
-    this.chatStreamAbort.clear();
     await this.channel?.disconnect();
   }
 
@@ -355,12 +341,6 @@ export class FeishuBridge {
 
   private chatKey(chatId: string, topicId?: string): string {
     return `${chatId}|${topicId ?? ""}`;
-  }
-
-  private abortChatStream(chatId: string, topicId?: string): void {
-    const key = this.chatKey(chatId, topicId);
-    this.chatStreamAbort.get(key)?.abort();
-    this.chatStreamAbort.delete(key);
   }
 
   private async dispatchInboundMessage(msg: {
@@ -476,13 +456,6 @@ export class FeishuBridge {
       msg.messageId,
     );
 
-    // /stop /cancel：必须在 handler await 之前「同步」清空排队——handler 里的 abort 会让
-    // 正在跑的 run 就地收尾并触发 finally 的自动派发，清晚了排队消息会抢在清空前被发出去。
-    const inboundCmd = msg.content.trim().split(/\s+/)[0]?.toLowerCase();
-    if (inboundCmd === "/stop" || inboundCmd === "/cancel") {
-      this.pendingPrompts.delete(this.chatKey(msg.chatId, topicId));
-    }
-
     const slash = await handleSlashCommand({
       chatId: msg.chatId,
       topicId,
@@ -526,15 +499,6 @@ export class FeishuBridge {
     });
 
     if (slash?.type === "reply") {
-      const cmd = msg.content.trim().split(/\s+/)[0]?.toLowerCase();
-      // 只有 /stop /cancel 打断正在跑的任务（其取消由各自 handler 通过 cancelActiveRun 完成，
-      // 这里补 abortChatStream 让卡片立即收尾）。其余 reply 命令（/status /model /effort
-      // /permission /help /cd /backend …）绝不打断运行中的任务——尤其 /status 是查进度用的。
-      // 之前这里无差别 abort + cancelActiveForChat，会把长任务连同一次 /status 查询一起杀掉。
-      if (cmd === "/stop" || cmd === "/cancel") {
-        this.abortChatStream(msg.chatId, topicId);
-        // 排队清空已在 handler await 之前同步完成（见 dispatch 前置逻辑）
-      }
       try {
         await this.sendMarkdown(msg.chatId, slash.text, msg.messageId);
       } catch (err) {
@@ -581,58 +545,15 @@ export class FeishuBridge {
       prompt?.trim() ||
       resolveInboundPrompt("", msg.attachments?.length ?? 0);
 
-    // 已有任务在跑时，新消息不打断——排队暂存，本轮结束后自动作为下一条 prompt 发送
-    //（借鉴 codeg 的 pending_prompt）。/stop 中断当前任务并清空队列。
-    const busyKey = this.chatKey(msg.chatId, topicId);
-    const activeElapsedMs = this.orchestrator.activeRunElapsedMs(
-      msg.chatId,
-      topicId,
-    );
-    // dispatching 覆盖「已派发但 run 尚未在 orchestrator 注册」的空窗，否则此刻来的消息
-    // 会绕过排队直接起第二个 run、互相 cancel
-    if (activeElapsedMs !== undefined || this.dispatching.has(busyKey)) {
-      const entry =
-        this.pendingPrompts.get(busyKey) ??
-        ({ texts: [], attachments: [], lastMsg: msg } as {
-          texts: string[];
-          attachments: RunAttachment[];
-          lastMsg: FeishuMessage;
-        });
-      const elapsedText =
-        activeElapsedMs !== undefined
-          ? `已运行 ${formatElapsed(activeElapsedMs)}`
-          : "刚启动";
-      if (entry.texts.length >= PENDING_PROMPTS_MAX) {
-        await this.sendMarkdown(
-          msg.chatId,
-          `⏳ 排队消息已达 ${PENDING_PROMPTS_MAX} 条上限，本条未入队；请等当前任务（${elapsedText}）结束，或发送 \`/stop\` 中断。`,
-          msg.messageId,
-        ).catch(() => {});
-        return;
-      }
-      entry.texts.push(agentPrompt);
-      entry.attachments.push(...(msg.attachments ?? []));
-      entry.lastMsg = msg;
-      this.pendingPrompts.set(busyKey, entry);
-      await this.sendMarkdown(
-        msg.chatId,
-        `⏳ 当前任务进行中（${elapsedText}），消息已排队（第 ${entry.texts.length} 条），本轮结束后自动发送；\`/status\` 查进度，\`/stop\` 中断并清空队列。`,
-        msg.messageId,
-      ).catch(() => {});
-      return;
-    }
-
     await this.dispatchToAgent(msg, agentPrompt, topicId);
   }
 
-  /** 组装话题/引用上下文并启动 agent 流式回复；结束后自动派发排队消息 */
+  /** 组装话题/引用上下文并启动 agent 流式回复 */
   private async dispatchToAgent(
     msg: FeishuMessage,
     agentPrompt: string,
     topicId: string | undefined,
   ): Promise<void> {
-    // 首个同步语句就占位：busy-guard 从此刻起把本会话视为忙，堵住注册空窗
-    this.dispatching.add(this.chatKey(msg.chatId, topicId));
     // 话题根消息 + 引用回复注入 prompt；拉取失败降级，不阻断
     let contextPrefix: string | undefined;
     if (this.channel) {
@@ -697,35 +618,7 @@ export class FeishuBridge {
             sendErr instanceof Error ? sendErr.message : String(sendErr);
           this.options.onLog?.(`Agent 错误回执发送失败: ${sendMsg}`);
         });
-      })
-      .finally(() => {
-        // 同一同步帧内完成「摘牌 → 派发下一条（重新挂牌）」，busy 判定无空隙
-        this.dispatching.delete(this.chatKey(msg.chatId, topicId));
-        this.flushPendingPrompts(msg.chatId, topicId);
       });
-  }
-
-  /** 上一轮结束后，把排队消息合并成下一条 prompt 自动发出（递归 finally 链保证连续排队也能依次跑完） */
-  private flushPendingPrompts(chatId: string, topicId: string | undefined): void {
-    const key = this.chatKey(chatId, topicId);
-    const entry = this.pendingPrompts.get(key);
-    if (!entry || entry.texts.length === 0) {
-      this.pendingPrompts.delete(key);
-      return;
-    }
-    this.pendingPrompts.delete(key);
-    const combined = entry.texts.join("\n\n");
-    // 排队期间收到的全部附件（如图片）合并带上，别只剩最后一条消息的
-    const merged: FeishuMessage = {
-      ...entry.lastMsg,
-      attachments: entry.attachments.length ? entry.attachments : undefined,
-    };
-    void this.sendMarkdown(
-      chatId,
-      `▶️ 上一任务已结束，自动发送排队的 ${entry.texts.length} 条消息`,
-      entry.lastMsg.messageId,
-    ).catch(() => {});
-    void this.dispatchToAgent(merged, combined, topicId);
   }
 
   private async streamAgentReply(
@@ -735,14 +628,7 @@ export class FeishuBridge {
   ): Promise<void> {
     if (!this.channel) return;
 
-    const key = this.chatKey(msg.chatId, topicId);
-    this.abortChatStream(msg.chatId, topicId);
-    void this.orchestrator
-      .cancelActiveForChat(msg.chatId, topicId)
-      .catch(() => {});
-
     const streamAbort = new AbortController();
-    this.chatStreamAbort.set(key, streamAbort);
 
     // /thinking off：隐藏内部思考/工具；仍展示 Codex commentary 检查点和最终答案。
     const showThinking =
@@ -993,9 +879,6 @@ export class FeishuBridge {
         );
       }
     } finally {
-      if (this.chatStreamAbort.get(key) === streamAbort) {
-        this.chatStreamAbort.delete(key);
-      }
       if (streamMessageId && !this.disconnecting) {
         this.pendingStreams.update((all) => {
           const next = { ...all };
