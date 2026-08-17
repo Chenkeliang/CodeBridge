@@ -1,4 +1,5 @@
 import type {
+  ChannelDeliveryInput,
   Run,
   SessionRuntime,
   SessionRuntimeTransaction,
@@ -34,6 +35,7 @@ export interface SubmitTurnInput {
     mimeType: string;
     dataBase64: string;
   }>;
+  delivery?: ChannelDeliveryInput;
 }
 
 export interface SubmitTurnResult {
@@ -118,6 +120,18 @@ export class SessionCoordinator {
         });
       }
       runtime = tx.getRuntime(input.sessionId)!;
+      if (input.delivery) {
+        tx.insertChannelDelivery({
+          turnId: submitted.turnId,
+          sessionId: input.sessionId,
+          channel: input.delivery.channel,
+          conversationId: input.delivery.conversationId,
+          replyToMessageId: input.delivery.replyToMessageId,
+          acceptedSequence: runtime.lastEventSequence,
+          runId: run?.id ?? null,
+          status: run ? "dispatched" : "pending",
+        });
+      }
       const result: SubmitTurnResult = {
         acceptance: turn.status === "dispatched"
           ? "dispatched"
@@ -439,6 +453,7 @@ export class SessionCoordinator {
       actor: "system",
       payload: input.reason ? { reason: input.reason } : {},
     });
+    tx.markDeliveryRunTerminal(input.runId, this.now().toISOString());
 
     let dispatched: { turn: SessionTurn; run: Run } | null = null;
     if (input.status === "succeeded") {
