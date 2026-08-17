@@ -190,10 +190,63 @@ export interface ChannelSessionEvent {
   payload: Record<string, unknown>;
 }
 
+export type ChannelDeliveryStatus =
+  | "pending"
+  | "dispatched"
+  | "delivering"
+  | "completed";
+
+export interface ChannelDeliveryInput {
+  channel: string;
+  conversationId: string;
+  replyToMessageId: string;
+}
+
+export interface ChannelDeliveryRow {
+  turnId: string;
+  sessionId: string;
+  channel: string;
+  conversationId: string;
+  replyToMessageId: string;
+  surfaceMessageId: string | null;
+  claimOwner: string | null;
+  claimExpiresAt: string | null;
+  acceptedSequence: number;
+  runId: string | null;
+  runTerminalAt: string | null;
+  status: ChannelDeliveryStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ChannelSessionIngress {
+  submit(message: ChannelSessionMessage): Promise<ChannelSubmitReceipt>;
+  events(
+    sessionId: string,
+    opts: { afterSequence: number; signal: AbortSignal },
+  ): AsyncGenerator<ChannelSessionEvent>;
+  listDeliveries(channel: string): Promise<ChannelDeliveryRow[]>;
+  claimDelivery(turnId: string, owner: string): Promise<boolean>;
+  ackDelivery(
+    turnId: string,
+    owner: string,
+    surfaceMessageId: string,
+  ): Promise<boolean>;
+  completeDelivery(turnId: string, owner: string): Promise<boolean>;
+  cancelRun(sessionId: string, runId: string): Promise<boolean>;
+  resumeQueue(sessionId: string): Promise<{ queueState: "ready" | "paused" }>;
+  resetSlot(slot: ChannelSlot): Promise<boolean>;
+  resolveApprovalForRun(
+    approval: { sessionId: string; runId: string; approvalId: string },
+    approve: boolean,
+  ): Promise<boolean>;
+  /** @deprecated 旧函数式入口（Task 7/8 迁移后移除） */
   (message: ChannelSessionMessage): AsyncGenerator<AgentEvent>;
+  /** @deprecated 旧按 conversation 取消（Task 7/8 迁移后移除） */
   cancel?(channel: string, conversationId: string): Promise<boolean>;
+  /** @deprecated 旧按 conversation 审批（Task 7/8 迁移后移除） */
   resolveApproval?(channel: string, conversationId: string, approve: boolean): Promise<boolean>;
+  /** @deprecated 旧按 conversation 重置（Task 7/8 迁移后移除） */
   reset?(channel: string, conversationId: string): Promise<boolean>;
 }
 

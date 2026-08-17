@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import type {
+  ChannelDeliveryInput,
+  ChannelDeliveryRow,
+  ChannelDeliveryStatus,
+} from "@codebridge/core";
 import { projectSessionEvent } from "./session-projector.js";
 import type {
   DomainEvent,
@@ -169,34 +174,11 @@ export interface SessionRunSpec {
   workflowRevision: string | null;
 }
 
-export type ChannelDeliveryStatus =
-  | "pending"
-  | "dispatched"
-  | "delivering"
-  | "completed";
-
-export interface ChannelDeliveryInput {
-  channel: string;
-  conversationId: string;
-  replyToMessageId: string;
-}
-
-export interface ChannelDeliveryRow {
-  turnId: string;
-  sessionId: string;
-  channel: string;
-  conversationId: string;
-  replyToMessageId: string;
-  surfaceMessageId: string | null;
-  claimOwner: string | null;
-  claimExpiresAt: string | null;
-  acceptedSequence: number;
-  runId: string | null;
-  runTerminalAt: string | null;
-  status: ChannelDeliveryStatus;
-  createdAt: string;
-  updatedAt: string;
-}
+export type {
+  ChannelDeliveryInput,
+  ChannelDeliveryRow,
+  ChannelDeliveryStatus,
+};
 
 const transactionBrand: unique symbol = Symbol(
   "codebridge.session-transaction",

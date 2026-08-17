@@ -1,34 +1,55 @@
 import type { Hono } from "hono";
 import type {
   AgentEvent,
+  ChannelDeliveryRow,
+  ChannelSessionEvent,
   ChannelSessionIngress,
   ChannelSessionMessage,
+  ChannelSlot,
+  ChannelSubmitReceipt,
 } from "@codebridge/core";
-
-interface AcceptedChannelMessage {
-  session_id: string;
-  turn_id: string;
-  run_id: string | null;
-  event_sequence: number;
-}
 
 interface SessionEvent {
   type?: string;
+  sequence?: number;
   target?: string | null;
   run_id?: string | null;
-  payload?: { event?: AgentEvent } & Record<string, unknown>;
+  payload?: Record<string, unknown>;
 }
 
-export function createChannelSessionIngress(app: Hono, token: string): ChannelSessionIngress {
-  const ingress = async function* (message: ChannelSessionMessage): AsyncGenerator<AgentEvent> {
+export function createChannelSessionIngress(
+  app: Hono,
+  token: string,
+): ChannelSessionIngress {
+  const auth = { authorization: `Bearer ${token}` };
+
+  const readRuntimeVersion = async (
+    sessionId: string,
+  ): Promise<number | undefined> => {
+    const response = await app.request(
+      `/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { headers: auth },
+    );
+    if (!response.ok) return undefined;
+    const body = await response.json() as {
+      runtime?: { version?: number };
+    };
+    return body.runtime?.version;
+  };
+
+  const submit = async (
+    message: ChannelSessionMessage,
+  ): Promise<ChannelSubmitReceipt> => {
     const accepted = await app.request(
       `/v1/channels/${encodeURIComponent(message.channel)}/conversations/${encodeURIComponent(message.conversationId)}/messages`,
       {
         method: "POST",
         headers: {
-          authorization: `Bearer ${token}`,
+          ...auth,
           "content-type": "application/json",
-          ...(message.idempotencyKey ? { "idempotency-key": message.idempotencyKey } : {}),
+          ...(message.idempotencyKey
+            ? { "idempotency-key": message.idempotencyKey }
+            : {}),
         },
         body: JSON.stringify({
           message: message.message,
@@ -36,6 +57,8 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
           cwd: message.cwd,
           model: message.model,
           flow_id: message.flowId,
+          generation: message.generation,
+          reply_to_message_id: message.replyToMessageId,
           attachments: message.attachments?.map((attachment) => ({
             name: attachment.name,
             mime_type: attachment.mimeType,
@@ -44,51 +67,296 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
         }),
       },
     );
-    if (!accepted.ok) throw new Error(`Channel ingress failed (${accepted.status}): ${await accepted.text()}`);
-    const result = await accepted.json() as AcceptedChannelMessage;
+    if (!accepted.ok) {
+      throw new Error(
+        `Channel submit failed (${accepted.status}): ${await accepted.text()}`,
+      );
+    }
+    const result = await accepted.json() as {
+      session_id: string;
+      turn_id: string;
+      run_id: string | null;
+      acceptance: "dispatched" | "queued";
+      queue_state: "ready" | "paused";
+      event_sequence: number;
+    };
+    return {
+      sessionId: result.session_id,
+      turnId: result.turn_id,
+      runId: result.run_id,
+      acceptance: result.acceptance,
+      queueState: result.queue_state,
+      eventSequence: result.event_sequence,
+    };
+  };
+
+  const events = async function* (
+    sessionId: string,
+    opts: { afterSequence: number; signal: AbortSignal },
+  ): AsyncGenerator<ChannelSessionEvent> {
+    const response = await app.request(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/events?live=true&after_sequence=${opts.afterSequence}`,
+      { headers: auth, signal: opts.signal },
+    );
+    if (!response.ok || !response.body) {
+      throw new Error(`Channel event stream failed (${response.status})`);
+    }
+    for await (const event of readSessionEvents(response.body)) {
+      yield {
+        type: String(event.type ?? ""),
+        sequence: Number(event.sequence ?? 0),
+        runId: event.run_id ?? null,
+        target: event.target ?? null,
+        payload: (event.payload ?? {}) as Record<string, unknown>,
+      };
+    }
+  };
+
+  const listDeliveries = async (
+    channel: string,
+  ): Promise<ChannelDeliveryRow[]> => {
+    const response = await app.request(
+      `/v1/deliveries?channel=${encodeURIComponent(channel)}`,
+      { headers: auth },
+    );
+    if (!response.ok) {
+      throw new Error(`list deliveries failed (${response.status})`);
+    }
+    const body = await response.json() as { deliveries: ChannelDeliveryRow[] };
+    return body.deliveries;
+  };
+
+  const claimDelivery = async (
+    turnId: string,
+    owner: string,
+  ): Promise<boolean> => {
+    const response = await app.request(
+      `/v1/deliveries/${encodeURIComponent(turnId)}/claim`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ owner }),
+      },
+    );
+    if (!response.ok) return false;
+    return (await response.json() as { claimed?: boolean }).claimed === true;
+  };
+
+  const ackDelivery = async (
+    turnId: string,
+    owner: string,
+    surfaceMessageId: string,
+  ): Promise<boolean> => {
+    const response = await app.request(
+      `/v1/deliveries/${encodeURIComponent(turnId)}/ack`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ owner, surface_message_id: surfaceMessageId }),
+      },
+    );
+    if (!response.ok) return false;
+    return (await response.json() as { acked?: boolean }).acked === true;
+  };
+
+  const completeDelivery = async (
+    turnId: string,
+    owner: string,
+  ): Promise<boolean> => {
+    const response = await app.request(
+      `/v1/deliveries/${encodeURIComponent(turnId)}/complete`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ owner }),
+      },
+    );
+    if (!response.ok) return false;
+    return (await response.json() as { completed?: boolean }).completed === true;
+  };
+
+  const cancelRun = async (
+    sessionId: string,
+    runId: string,
+  ): Promise<boolean> => {
+    const version = await readRuntimeVersion(sessionId);
+    if (version === undefined) return false;
+    const response = await app.request(
+      `/v1/runs/${encodeURIComponent(runId)}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          ...auth,
+          "content-type": "application/json",
+          "idempotency-key": `cancel:${runId}`,
+          "if-match": String(version),
+        },
+        body: "{}",
+      },
+    );
+    if (!response.ok) return false;
+    return (await response.json() as { disposition?: string }).disposition !== undefined;
+  };
+
+  const resumeQueue = async (
+    sessionId: string,
+  ): Promise<{ queueState: "ready" | "paused" }> => {
+    const version = await readRuntimeVersion(sessionId);
+    if (version === undefined) return { queueState: "paused" };
+    const response = await app.request(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/queue/resume`,
+      {
+        method: "POST",
+        headers: {
+          ...auth,
+          "content-type": "application/json",
+          "idempotency-key": `resume:${sessionId}`,
+          "if-match": String(version),
+        },
+        body: "{}",
+      },
+    );
+    if (!response.ok) return { queueState: "paused" };
+    const body = await response.json() as {
+      runtime?: { queue_state?: "ready" | "paused" };
+    };
+    return { queueState: body.runtime?.queue_state ?? "ready" };
+  };
+
+  const resetSlot = async (slot: ChannelSlot): Promise<boolean> => {
+    const response = await app.request(
+      `/v1/channels/${encodeURIComponent(slot.channel)}/conversations/${encodeURIComponent(slot.conversationId)}/reset`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({
+          agent_id: slot.agentId,
+          workspace_key: slot.workspaceKey,
+          generation: slot.generation,
+        }),
+      },
+    );
+    if (!response.ok) return false;
+    return (await response.json() as { reset?: boolean }).reset === true;
+  };
+
+  const resolveApprovalForRun = async (
+    approval: { sessionId: string; runId: string; approvalId: string },
+    approve: boolean,
+  ): Promise<boolean> => {
+    const response = await app.request(
+      `/v1/sessions/${encodeURIComponent(approval.sessionId)}/approval`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({
+          run_id: approval.runId,
+          approval_id: approval.approvalId,
+          approve,
+        }),
+      },
+    );
+    if (!response.ok) return false;
+    return (await response.json() as { resolved?: boolean }).resolved === true;
+  };
+
+  const ingress = Object.assign(legacyStream, {
+    submit,
+    events,
+    listDeliveries,
+    claimDelivery,
+    ackDelivery,
+    completeDelivery,
+    cancelRun,
+    resumeQueue,
+    resetSlot,
+    resolveApprovalForRun,
+    // 旧 conversation 级方法（Task 7/8 迁移后移除）
+    cancel: async (channel: string, conversationId: string) => {
+      const response = await app.request(
+        `/v1/channels/${encodeURIComponent(channel)}/conversations/${encodeURIComponent(conversationId)}/cancel`,
+        { method: "POST", headers: auth },
+      );
+      if (!response.ok) return false;
+      return (await response.json() as { stopped?: boolean }).stopped === true;
+    },
+    reset: async (channel: string, conversationId: string) => {
+      const response = await app.request(
+        `/v1/channels/${encodeURIComponent(channel)}/conversations/${encodeURIComponent(conversationId)}/reset`,
+        { method: "POST", headers: auth },
+      );
+      if (!response.ok) return false;
+      return (await response.json() as { reset?: boolean }).reset === true;
+    },
+    resolveApproval: async (
+      channel: string,
+      conversationId: string,
+      approve: boolean,
+    ) => {
+      const response = await app.request(
+        `/v1/channels/${encodeURIComponent(channel)}/conversations/${encodeURIComponent(conversationId)}/approval`,
+        {
+          method: "POST",
+          headers: { ...auth, "content-type": "application/json" },
+          body: JSON.stringify({ approve }),
+        },
+      );
+      if (!response.ok) return false;
+      return (await response.json() as { resolved?: boolean }).resolved === true;
+    },
+  });
+
+  return ingress as ChannelSessionIngress;
+
+  /** 旧函数式入口：submit + 订阅，按 run 过滤为 AgentEvent（Task 7/8 迁移后移除） */
+  async function* legacyStream(
+    message: ChannelSessionMessage,
+  ): AsyncGenerator<AgentEvent> {
+    const receipt = await submit(message);
     const controller = new AbortController();
     const signal = message.signal
       ? AbortSignal.any([message.signal, controller.signal])
       : controller.signal;
     const fatalAgentErrorRuns = new Set<string>();
-    let submittedRunId = result.run_id;
+    let submittedRunId = receipt.runId;
     try {
-      const response = await app.request(
-        `/v1/sessions/${encodeURIComponent(result.session_id)}/events?live=true&after_sequence=${result.event_sequence}`,
-        {
-          headers: { authorization: `Bearer ${token}` },
-          signal,
-        },
-      );
-      if (!response.ok || !response.body) {
-        throw new Error(`Channel event stream failed (${response.status})`);
-      }
-      for await (const event of readSessionEvents(response.body)) {
+      for await (const event of events(receipt.sessionId, {
+        afterSequence: receipt.eventSequence,
+        signal,
+      })) {
         if (
           event.type === "TURN_DISPATCHED"
-          && event.target === result.turn_id
-          && event.run_id
+          && event.target === receipt.turnId
+          && event.runId
         ) {
-          submittedRunId = event.run_id;
+          submittedRunId = event.runId;
         }
-        if (!submittedRunId || event.run_id !== submittedRunId) continue;
-        if (event.type === "AGENT_EVENT" && event.payload?.event) {
-          const agentEvent = event.payload.event;
-          if (agentEvent.type === "error" && agentEvent.fatal && event.run_id) {
-            fatalAgentErrorRuns.add(event.run_id);
+        if (!submittedRunId || event.runId !== submittedRunId) continue;
+        if (event.type === "AGENT_EVENT") {
+          const agentEvent = event.payload.event as AgentEvent | undefined;
+          if (!agentEvent) continue;
+          if (agentEvent.type === "error" && agentEvent.fatal && event.runId) {
+            fatalAgentErrorRuns.add(event.runId);
           }
           if (agentEvent.type !== "done") yield agentEvent;
         }
         if (event.type === "APPROVAL_REQUESTED") {
           yield {
             type: "permission_request",
-            requestId: String((event.payload as Record<string, unknown> | undefined)?.approval_id ?? "approval"),
+            requestId: String(
+              (event.payload as Record<string, unknown>)?.approval_id ?? "approval",
+            ),
             title: "此步骤需要审批，请在 Web Workbench 中确认",
           };
         }
         if (event.type === "STEP_FAILED") {
-          if (!event.run_id || !fatalAgentErrorRuns.has(event.run_id)) {
-            yield { type: "error", message: String((event.payload as Record<string, unknown> | undefined)?.error ?? "Step failed") };
+          if (!event.runId || !fatalAgentErrorRuns.has(event.runId)) {
+            yield {
+              type: "error",
+              message: String(
+                (event.payload as Record<string, unknown>)?.error ?? "Step failed",
+              ),
+            };
           }
         }
         if (event.type === "RUN_SUCCEEDED") {
@@ -103,36 +371,12 @@ export function createChannelSessionIngress(app: Hono, token: string): ChannelSe
     } finally {
       controller.abort();
     }
-  };
-  ingress.cancel = async (channel: string, conversationId: string): Promise<boolean> => {
-    const response = await app.request(`/v1/channels/${encodeURIComponent(channel)}/conversations/${encodeURIComponent(conversationId)}/cancel`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) return false;
-    return (await response.json() as { stopped?: boolean }).stopped === true;
-  };
-  ingress.resolveApproval = async (channel: string, conversationId: string, approve: boolean): Promise<boolean> => {
-    const response = await app.request(`/v1/channels/${encodeURIComponent(channel)}/conversations/${encodeURIComponent(conversationId)}/approval`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ approve }),
-    });
-    if (!response.ok) return false;
-    return (await response.json() as { resolved?: boolean }).resolved === true;
-  };
-  ingress.reset = async (channel: string, conversationId: string): Promise<boolean> => {
-    const response = await app.request(`/v1/channels/${encodeURIComponent(channel)}/conversations/${encodeURIComponent(conversationId)}/reset`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) return false;
-    return (await response.json() as { reset?: boolean }).reset === true;
-  };
-  return ingress;
+  }
 }
 
-async function* readSessionEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<SessionEvent> {
+async function* readSessionEvents(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<SessionEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
