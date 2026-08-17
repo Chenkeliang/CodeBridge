@@ -28,6 +28,14 @@ function makeCtx(overrides: {
   scopedSessions: CliSessionSummary[];
   allSessions: CliSessionSummary[];
   bound?: string[];
+  resumed?: string[];
+  resumeResult?: {
+    ok: boolean;
+    sessionId?: string;
+    busy?: boolean;
+    conflict?: boolean;
+    error?: string;
+  };
   closeSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   deleteSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
 }): SlashContext {
@@ -37,6 +45,7 @@ function makeCtx(overrides: {
   const config = defaultConfig();
   router.initFromConfig(config);
   const bound = overrides.bound ?? [];
+  const resumed = overrides.resumed ?? [];
   // resumeListCache 按 chatId 缓存，每个用例用独立 chatId 避免互相污染
   chatCounter += 1;
   return {
@@ -48,6 +57,13 @@ function makeCtx(overrides: {
     listSessions: async (options) =>
       options?.all ? overrides.allSessions : overrides.scopedSessions,
     bindSession: (sessionId) => bound.push(sessionId),
+    resumeProviderSession: async (providerSessionId) => {
+      resumed.push(providerSessionId);
+      return overrides.resumeResult ?? {
+        ok: true,
+        sessionId: `sess_${providerSessionId}`,
+      };
+    },
     closeSession: overrides.closeSession,
     deleteSession: overrides.deleteSession,
   };
@@ -373,8 +389,8 @@ describe("/resume <N> after /resume all", () => {
       makeSession("proj-1", scopedCwd, "Topic Content Info"),
       makeSession("proj-2", scopedCwd, "Test Conversation"),
     ];
-    const bound: string[] = [];
-    const ctx = makeCtx({ scopedSessions: scoped, allSessions: all, bound });
+    const resumed: string[] = [];
+    const ctx = makeCtx({ scopedSessions: scoped, allSessions: all, resumed });
 
     const listing = await handleSlashCommand({ ...ctx, text: "/resume all" });
     expect(listing?.type).toBe("reply");
@@ -382,7 +398,7 @@ describe("/resume <N> after /resume all", () => {
 
     const picked = await handleSlashCommand({ ...ctx, text: "/resume 1" });
     expect((picked as { text: string }).text).toContain("go-1");
-    expect(bound).toEqual(["go-1"]);
+    expect(resumed).toEqual(["go-1"]);
     expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(fs.realpathSync(otherCwd));
   });
 
@@ -411,12 +427,12 @@ describe("/resume <N> after /resume all", () => {
       makeSession("scoped-1", "/Users/keliang/Projects", "first"),
       makeSession("scoped-2", "/Users/keliang/Projects", "second"),
     ];
-    const bound: string[] = [];
-    const ctx = makeCtx({ scopedSessions: scoped, allSessions: [], bound });
+    const resumed: string[] = [];
+    const ctx = makeCtx({ scopedSessions: scoped, allSessions: [], resumed });
 
     const picked = await handleSlashCommand({ ...ctx, text: "/resume 2" });
     expect((picked as { text: string }).text).toContain("second");
-    expect(bound).toEqual(["scoped-2"]);
+    expect(resumed).toEqual(["scoped-2"]);
   });
 
   it("plain /resume caches the scoped list for a later /resume <N>", async () => {
@@ -424,13 +440,13 @@ describe("/resume <N> after /resume all", () => {
       makeSession("scoped-1", "/Users/keliang/Projects", "first"),
       makeSession("scoped-2", "/Users/keliang/Projects", "second"),
     ];
-    const bound: string[] = [];
-    const ctx = makeCtx({ scopedSessions: scoped, allSessions: [], bound });
+    const resumed: string[] = [];
+    const ctx = makeCtx({ scopedSessions: scoped, allSessions: [], resumed });
 
     await handleSlashCommand({ ...ctx, text: "/resume" });
     const picked = await handleSlashCommand({ ...ctx, text: "/resume 1" });
     expect((picked as { text: string }).text).toContain("first");
-    expect(bound).toEqual(["scoped-1"]);
+    expect(resumed).toEqual(["scoped-1"]);
   });
 
   it("invalid index reports against the cached list's length", async () => {
@@ -440,6 +456,37 @@ describe("/resume <N> after /resume all", () => {
     await handleSlashCommand({ ...ctx, text: "/resume all" });
     const picked = await handleSlashCommand({ ...ctx, text: "/resume 5" });
     expect((picked as { text: string }).text).toContain("共 1 条");
+  });
+
+  it("reports provider_session_busy from /resume", async () => {
+    const scoped = [makeSession("busy-1", "/Users/keliang/Projects", "busy")];
+    const ctx = makeCtx({
+      scopedSessions: scoped,
+      allSessions: [],
+      resumeResult: { ok: false, busy: true, error: "provider_session_busy" },
+    });
+
+    const picked = await handleSlashCommand({ ...ctx, text: "/resume 1" });
+    expect((picked as { text: string }).text).toContain("正被其他任务占用");
+  });
+
+  it("bumps the slot generation once when the slot is bound to another session", async () => {
+    const scoped = [makeSession("conflict-1", "/Users/keliang/Projects", "conflict")];
+    let calls = 0;
+    const ctx = makeCtx({ scopedSessions: scoped, allSessions: [] });
+    ctx.resumeProviderSession = async (providerSessionId) => {
+      calls += 1;
+      if (calls === 1) {
+        return { ok: false, conflict: true, error: "slot_already_bound" };
+      }
+      return { ok: true, sessionId: `sess_${providerSessionId}` };
+    };
+    const before = ctx.router.getSlotGeneration(ctx.chatId);
+
+    const picked = await handleSlashCommand({ ...ctx, text: "/resume 1" });
+    expect((picked as { text: string }).text).toContain("provider session");
+    expect(calls).toBe(2);
+    expect(ctx.router.getSlotGeneration(ctx.chatId)).toBe(before + 1);
   });
 
   it("does not bind a session whose working directory no longer exists", async () => {

@@ -239,8 +239,8 @@ export interface ChannelSessionIngress {
   ): Promise<boolean>;
   completeDelivery(turnId: string, owner: string): Promise<boolean>;
   getSlotCommandContext(slot: ChannelSlot): Promise<ChannelCommandContext>;
-  /** Task 10 实现：将 Provider Session 绑定到槽位（含 Runner 列表校验 + Lease 预检） */
-  resumeProviderSession?(
+  /** Task 10：将 Provider Session 绑定到槽位（幂等 + Lease 预检 + 原子建绑） */
+  resumeProviderSession(
     slot: ChannelSlot,
     providerSessionId: string,
   ): Promise<{ sessionId: string }>;

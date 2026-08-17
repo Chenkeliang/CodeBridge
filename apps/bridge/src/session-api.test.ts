@@ -883,6 +883,180 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("resume binds a provider session to an unbound slot (D6)", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat%3Atopic/resume",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          agent_id: "pi",
+          workspace_key: canonicalWorkspaceKey("/tmp/project").key,
+          generation: 0,
+          provider_session_id: "provider_old",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { session_id: string };
+    const session = catalog.getChannelSession({
+      channel: "feishu",
+      conversationId: "chat:topic",
+      agentId: "pi",
+      workspaceKey: canonicalWorkspaceKey("/tmp/project").key,
+      generation: 0,
+    });
+    expect(session?.id).toBe(body.session_id);
+    expect(session?.providerSessionId).toBe("provider_old");
+    catalog.close();
+    workItems.close();
+  });
+
+  it("resume is idempotent for the same provider session", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const first = await app.request(
+      "/v1/channels/feishu/conversations/chat%3Atopic/resume",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          agent_id: "pi",
+          workspace_key: canonicalWorkspaceKey("/tmp/project").key,
+          generation: 0,
+          provider_session_id: "provider_dup",
+        }),
+      },
+    );
+    const second = await app.request(
+      "/v1/channels/feishu/conversations/chat%3Atopic/resume",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          agent_id: "pi",
+          workspace_key: canonicalWorkspaceKey("/tmp/project").key,
+          generation: 0,
+          provider_session_id: "provider_dup",
+        }),
+      },
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const a = await first.json() as { session_id: string };
+    const b = await second.json() as { session_id: string };
+    expect(b.session_id).toBe(a.session_id);
+    expect(catalog.listSessions("pi")).toHaveLength(1);
+    catalog.close();
+    workItems.close();
+  });
+
+  it("resume returns busy when the provider session is leased to another run", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    workItems.claimProviderSession({
+      agentId: "pi",
+      providerSessionId: "provider_busy",
+      runId: "run_old",
+      now: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat%3Atopic/resume",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          agent_id: "pi",
+          workspace_key: canonicalWorkspaceKey("/tmp/project").key,
+          generation: 0,
+          provider_session_id: "provider_busy",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "provider_session_busy",
+    });
+    // 旧 Run 不受影响：lease 仍被 run_old 持有（预检只读）。
+    expect(
+      workItems.findLiveProviderLease(
+        "pi",
+        "provider_busy",
+        new Date().toISOString(),
+      ),
+    ).toEqual({ runId: "run_old" });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("resume reports slot_already_bound for a different bound session", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const slot = {
+      channel: "feishu",
+      conversationId: "chat:topic",
+      agentId: "pi",
+      workspaceKey: canonicalWorkspaceKey("/tmp/project").key,
+      generation: 0,
+    };
+    const existing = catalog.createSession({
+      agentId: "pi",
+      cwd: "/tmp/project",
+      providerSessionId: "provider_x",
+    });
+    catalog.bindChannelConversation(slot, existing.id);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat%3Atopic/resume",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          agent_id: "pi",
+          workspace_key: slot.workspaceKey,
+          generation: 0,
+          provider_session_id: "provider_y",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "slot_already_bound",
+    });
+    // 原绑定不被覆盖。
+    expect(catalog.getChannelSession(slot)?.providerSessionId).toBe("provider_x");
+    catalog.close();
+    workItems.close();
+  });
+
   it("persists a channel delivery when a reply_to_message_id is provided", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

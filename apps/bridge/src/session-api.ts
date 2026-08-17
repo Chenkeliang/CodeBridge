@@ -1097,6 +1097,70 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     });
   });
 
+  // D6：/resume —— 幂等先于建 Session，Lease 预检（UX）后原子建+绑。
+  // 真 Claim 由 executor 在 Run 前执行；此处 busy 只读预检，不影响旧 Run。
+  app.post("/v1/channels/:channel/conversations/:conversation_id/resume", async (c) => {
+    const body = await readJson(c);
+    if (
+      !body
+      || typeof body.provider_session_id !== "string"
+      || !body.provider_session_id.trim()
+    ) {
+      return c.json({ error: "provider_session_id is required" }, 400);
+    }
+    const channel = c.req.param("channel");
+    const conversationId = c.req.param("conversation_id");
+    const requestedAgent = typeof body.agent_id === "string"
+      ? currentProfiles().get(body.agent_id)
+      : undefined;
+    const agent = requestedAgent ?? currentAgents().find(
+      (candidate) => candidate.status === "healthy",
+    );
+    if (!agent) return c.json({ error: "agent_unavailable" }, 409);
+    const generation = Number.isSafeInteger(body.generation)
+      ? Number(body.generation)
+      : 0;
+    const slot: ChannelSlot = {
+      channel,
+      conversationId,
+      agentId: agent.agentId,
+      workspaceKey: typeof body.workspace_key === "string" && body.workspace_key
+        ? body.workspace_key
+        : canonicalWorkspaceKey(options.defaultCwd ?? "").key,
+      generation,
+    };
+    const providerSessionId = body.provider_session_id;
+    // 幂等：槽位已绑同 provider session → 直接返回，不重复建 Session。
+    const bound = options.catalog.getChannelSession(slot);
+    if (bound?.providerSessionId === providerSessionId) {
+      return c.json({ session_id: bound.id });
+    }
+    // Lease 预检（UX，只读）：provider session 正被其他 run 持有 → busy。
+    const liveLease = options.workItems.findLiveProviderLease(
+      agent.agentId,
+      providerSessionId,
+      new Date().toISOString(),
+    );
+    if (liveLease) {
+      return c.json({
+        error: "provider_session_busy",
+        detail: `provider session ${providerSessionId} 正被 run ${liveLease.runId} 使用`,
+      }, 409);
+    }
+    try {
+      const session = options.catalog.createAndBindHistoricalSession(
+        slot,
+        providerSessionId,
+      );
+      return c.json({ session_id: session.id });
+    } catch (error) {
+      if (error instanceof Error && error.message === "slot_already_bound") {
+        return c.json({ error: "slot_already_bound" }, 409);
+      }
+      throw error;
+    }
+  });
+
   app.post("/v1/channels/command-context", async (c) => {
     const body = await readJson(c);
     const slot = parseChannelSlot(body?.slot);

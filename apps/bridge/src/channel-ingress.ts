@@ -319,6 +319,41 @@ export function createChannelSessionIngress(
     return (await response.json() as { reset?: boolean }).reset === true;
   };
 
+  const resumeProviderSession = async (
+    slot: ChannelSlot,
+    providerSessionId: string,
+  ): Promise<{ sessionId: string }> => {
+    const response = await app.request(
+      `/v1/channels/${encodeURIComponent(slot.channel)}/conversations/${encodeURIComponent(slot.conversationId)}/resume`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({
+          agent_id: slot.agentId,
+          workspace_key: slot.workspaceKey,
+          generation: slot.generation,
+          provider_session_id: providerSessionId,
+        }),
+      },
+    );
+    if (!response.ok) {
+      let message = `resume provider session failed (${response.status})`;
+      try {
+        const body = await response.json() as {
+          error?: string;
+          detail?: string;
+        };
+        message = body.error ?? message;
+        if (body.detail) message = `${message}: ${body.detail}`;
+      } catch {
+        // 非 JSON 错误体，保留默认消息
+      }
+      throw new Error(message);
+    }
+    const body = await response.json() as { session_id: string };
+    return { sessionId: body.session_id };
+  };
+
   return {
     submit,
     events,
@@ -327,6 +362,7 @@ export function createChannelSessionIngress(
     ackDelivery,
     completeDelivery,
     getSlotCommandContext,
+    resumeProviderSession,
     cancelRun,
     resolvePermission,
     resumeQueue,

@@ -38,6 +38,16 @@ export interface SlashContext {
   ) => Promise<CliSessionSummary[]>;
   bindSession?: (sessionId: string) => void;
   resetSession?: () => Promise<void>;
+  /** /resume：将 Provider Session 绑定到当前槽位（D6）。busy/conflict 供文案区分。 */
+  resumeProviderSession?: (
+    providerSessionId: string,
+  ) => Promise<{
+    ok: boolean;
+    sessionId?: string;
+    busy?: boolean;
+    conflict?: boolean;
+    error?: string;
+  }>;
   closeSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   deleteSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（含真实模型列表） */
@@ -550,14 +560,43 @@ function setResumeListCache(
   resumeListCache.set(cacheKey, sessions);
 }
 
+/** D6：把 Provider Session 绑定到当前槽位；槽位已绑他 Session 时 +1 代重试。 */
+async function resumeBoundSession(
+  ctx: SlashContext,
+  providerSessionId: string,
+): Promise<{ ok: true; sessionId: string } | { ok: false; text: string }> {
+  if (!ctx.resumeProviderSession) {
+    return { ok: false, text: "Runner 未就绪，无法 /resume。" };
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await ctx.resumeProviderSession(providerSessionId);
+    if (result.ok && result.sessionId) {
+      return { ok: true, sessionId: result.sessionId };
+    }
+    if (result.busy) {
+      return {
+        ok: false,
+        text: `Provider session \`${providerSessionId}\` 正被其他任务占用，请稍后再试。`,
+      };
+    }
+    if (result.conflict) {
+      // 当前槽位已绑别的 Session：+1 代后重试（保留旧绑定不被打断）。
+      ctx.router.incrementSlotGeneration(ctx.chatId, ctx.topicId);
+      continue;
+    }
+    return { ok: false, text: `绑定失败：${result.error ?? "未知错误"}` };
+  }
+  return { ok: false, text: "绑定失败：槽位冲突。请先 /new 再试。" };
+}
+
 async function handleResume(
   ctx: SlashContext,
   arg: string,
 ): Promise<SlashResult> {
-  if (!ctx.listSessions || !ctx.bindSession) {
+  if (!ctx.listSessions || !ctx.resumeProviderSession) {
     return {
       type: "reply",
-      text: "Runner 未就绪，无法列出 ACP session。请先启动 codebridge-runner。",
+      text: "Runner 未就绪，无法列出/绑定 ACP session。请先启动 codebridge-runner。",
     };
   }
 
@@ -588,11 +627,14 @@ async function handleResume(
       },
       ctx.topicId,
     );
-    ctx.bindSession(picked.id);
+    const resumed = await resumeBoundSession(ctx, picked.id);
+    if (!resumed.ok) {
+      return { type: "reply", text: resumed.text };
+    }
     return {
       type: "reply",
       text: [
-        `已绑定 **${key.backendId}** session 到当前飞书会话：`,
+        `已绑定 **${key.backendId}** provider session 到当前会话：`,
         `- id: \`${picked.id}\``,
         `- cwd: ${picked.cwd}`,
         ...(picked.additionalDirectories?.length
@@ -626,11 +668,14 @@ async function handleResume(
       },
       ctx.topicId,
     );
-    ctx.bindSession(picked.id);
+    const resumed = await resumeBoundSession(ctx, picked.id);
+    if (!resumed.ok) {
+      return { type: "reply", text: resumed.text };
+    }
     return {
       type: "reply",
       text: [
-        `已绑定最近一条 **${key.backendId}** session：`,
+        `已绑定最近一条 **${key.backendId}** provider session：`,
         `- id: \`${picked.id}\``,
         `- preview: ${picked.preview}`,
         ...(picked.additionalDirectories?.length
