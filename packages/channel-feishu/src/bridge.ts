@@ -445,6 +445,13 @@ export class FeishuBridge {
     const policy = this.config.feishu.policy;
     const topicId = this.resolveTopicId(msg);
 
+    // 槽位是否已绑 session（Catalog 事实源），不再读 sessions.json。
+    const boundSessionId = this.sessionIngress
+      ? (await this.sessionIngress.getSlotCommandContext(
+          this.buildFullSlot(msg.chatId, topicId),
+        )).sessionId
+      : null;
+
     if (
       !isDm &&
       !shouldAcceptGroupMessage({
@@ -455,11 +462,7 @@ export class FeishuBridge {
         topicActive: topicActiveForMessage(
           msg,
           topicId,
-          Boolean(
-            this.orchestrator.router.getSessionRecord(
-              this.orchestrator.router.buildSessionKey(msg.chatId, topicId),
-            )?.sessionId,
-          ),
+          Boolean(boundSessionId),
           this.botParticipatedTopics,
         ),
       })
@@ -482,8 +485,6 @@ export class FeishuBridge {
       router: this.orchestrator.router,
       listSessions: (options) =>
         this.orchestrator.listSessions(msg.chatId, topicId, options),
-      bindSession: (sessionId) =>
-        this.orchestrator.bindSession(msg.chatId, topicId, sessionId),
       resumeProviderSession: async (providerSessionId) => {
         if (!this.sessionIngress) {
           return { ok: false, error: "Runner 未就绪" };

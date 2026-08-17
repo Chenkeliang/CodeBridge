@@ -39,12 +39,13 @@ describe("RunOrchestrator session persistence", () => {
       ),
     );
 
-    for await (const _event of orchestrator.runAgent("chat1", undefined, "hi")) {
-      // consume the complete event stream
+    const events: Array<{ type: string; exitCode?: number }> = [];
+    for await (const event of orchestrator.runAgent("chat1", undefined, "hi")) {
+      events.push(event as { type: string; exitCode?: number });
     }
 
-    const key = orchestrator.router.buildSessionKey("chat1");
-    expect(orchestrator.router.getSessionRecord(key)).toBeUndefined();
+    // runAgent 不再写 sessions.json（Task 12）；失败 run 只透传事件。
+    expect(events).toContainEqual({ type: "done", exitCode: 1 });
   });
 
   it("waits for the stopped stream to finish before cancellation resolves", async () => {
@@ -302,13 +303,12 @@ describe("RunOrchestrator ACP capabilities", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("closes a session through the current backend/cwd and clears its binding", async () => {
+  it("closes a session through the current backend/cwd", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-"));
     tmpDirs.push(dataDir, cwd);
     const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
     orchestrator.router.setBinding("chat1", { backendId: "claude", cwd });
-    orchestrator.bindSession("chat1", undefined, "s1");
     const closeSession = vi.fn().mockResolvedValue({ ok: true });
     (orchestrator as unknown as { client: unknown }).client = { closeSession };
 
@@ -316,16 +316,12 @@ describe("RunOrchestrator ACP capabilities", () => {
       ok: true,
     });
     expect(closeSession).toHaveBeenCalledWith("claude", cwd, "s1");
-    expect(
-      orchestrator.router.getSessionRecord(orchestrator.router.buildSessionKey("chat1")),
-    ).toBeUndefined();
   });
 
-  it("keeps the current binding when session deletion fails", async () => {
+  it("forwards a session deletion failure from the runner", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
     tmpDirs.push(dataDir);
     const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
-    orchestrator.bindSession("chat1", undefined, "s1");
     (orchestrator as unknown as { client: unknown }).client = {
       deleteSession: vi.fn().mockResolvedValue({ ok: false, error: "unsupported" }),
     };
@@ -334,80 +330,10 @@ describe("RunOrchestrator ACP capabilities", () => {
       ok: false,
       error: "unsupported",
     });
-    expect(
-      orchestrator.router.getSessionRecord(orchestrator.router.buildSessionKey("chat1"))
-        ?.sessionId,
-    ).toBe("s1");
-  });
-
-  it("refuses to delete the current session while its chat run is active", async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-orchestrator-"));
-    tmpDirs.push(dataDir);
-    const orchestrator = new RunOrchestrator({ dataDir, config: defaultConfig() });
-    orchestrator.bindSession("chat1", undefined, "s1");
-    const deleteSession = vi.fn().mockResolvedValue({ ok: true });
-    (orchestrator as unknown as { client: unknown }).client = {
-      cancel: vi.fn().mockResolvedValue(undefined),
-      deleteSession,
-    };
-    (orchestrator as unknown as { activeChatRuns: Map<string, unknown> })
-      .activeChatRuns.set("chat1|", {
-        runId: "r1",
-        controller: new AbortController(),
-        startedAt: Date.now(),
-      });
-    expect(await orchestrator.cancelActiveForChat("chat1")).toBe(true);
-
-    await expect(orchestrator.deleteSession("chat1", undefined, "s1")).resolves.toEqual({
-      ok: false,
-      error: "当前 ACP session 正在运行，请先 /stop 后重试",
-    });
-    expect(deleteSession).not.toHaveBeenCalled();
   });
 });
 
-describe("SessionRouter multi-session", () => {
-  it("keeps separate cli sessions per chat and backend", () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-sess-"));
-    tmpDirs.push(dataDir);
-    const router = new SessionRouter(dataDir);
-    const config = defaultConfig();
-    router.initFromConfig(config);
-
-    router.setBinding("chat1", { backendId: "cursor", cwd: "/proj/a" });
-    router.setBinding("chat2", { backendId: "claude", cwd: "/proj/b" });
-    router.bindSession("chat1", "cursor-session-111");
-    router.bindSession("chat2", "claude-session-222");
-
-    const rec1 = router.getSessionRecord(router.buildSessionKey("chat1"));
-    const rec2 = router.getSessionRecord(router.buildSessionKey("chat2"));
-
-    expect(rec1?.sessionId).toBe("cursor-session-111");
-    expect(rec2?.sessionId).toBe("claude-session-222");
-  });
-
-  it("isolates sessions when same chat switches backend", () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-sess-"));
-    tmpDirs.push(dataDir);
-    const router = new SessionRouter(dataDir);
-    router.initFromConfig(defaultConfig());
-
-    router.setBinding("chat1", { backendId: "cursor" });
-    router.bindSession("chat1", "cursor-sess");
-    router.setBinding("chat1", { backendId: "claude" });
-    router.bindSession("chat1", "claude-sess");
-
-    const cursorKey = {
-      chatId: "chat1",
-      backendId: "cursor",
-      cwd: router.getBinding("chat1").cwd,
-    };
-    const claudeKey = router.buildSessionKey("chat1");
-
-    expect(router.getSessionRecord(cursorKey)?.sessionId).toBe("cursor-sess");
-    expect(router.getSessionRecord(claudeKey)?.sessionId).toBe("claude-sess");
-  });
-
+describe("SessionRouter slot keying", () => {
   it("session key includes backend and cwd so bindings do not collide", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-sess-"));
     tmpDirs.push(dataDir);

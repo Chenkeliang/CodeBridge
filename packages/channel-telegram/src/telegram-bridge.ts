@@ -208,8 +208,6 @@ export class TelegramBridge {
       router: this.orchestrator.router,
       listSessions: (options) =>
         this.orchestrator.listSessions(chatId, topicId, options),
-      bindSession: (sessionId) =>
-        this.orchestrator.bindSession(chatId, topicId, sessionId),
       resumeProviderSession: async (providerSessionId) => {
         if (!this.sessionIngress) {
           return { ok: false, error: "Runner 未就绪" };

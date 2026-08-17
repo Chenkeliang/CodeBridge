@@ -6,12 +6,6 @@ export interface SessionKey {
   cwd: string;
 }
 
-export interface SessionRecord {
-  sessionId?: string;
-  lastRunAt: string;
-  lastRunId?: string;
-}
-
 export interface LocalMediaPath {
   path: string;
   mimeType?: string;
