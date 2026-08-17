@@ -1201,7 +1201,8 @@ export function createSqliteSessionRuntimeTransaction(
           ON CONFLICT(agent_id, provider_session_id) DO UPDATE SET
             lease_owner = excluded.lease_owner,
             lease_expires_at = excluded.lease_expires_at
-          WHERE provider_session_leases.lease_expires_at < ?`,
+          WHERE provider_session_leases.lease_expires_at < ?
+             OR provider_session_leases.lease_owner = excluded.lease_owner`,
         )
         .run(
           input.agentId,

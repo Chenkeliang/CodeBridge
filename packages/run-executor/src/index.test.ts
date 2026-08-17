@@ -320,6 +320,159 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("propagates a learned provider session to the auto-dispatched next Run", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, { maxQueuedTurns: 100 });
+    const submit = (key: string, text: string) =>
+      coordinator.submitTurn({
+        sessionId: "sess_1",
+        idempotencyKey: key,
+        message: {
+          text,
+          attachmentIds: [],
+          flowId: null,
+          model: null,
+          effort: null,
+          permissionMode: null,
+          plan: null,
+        },
+        workItem: {
+          title: "Session",
+          mode: "investigation",
+          conversationId: "conv_sess_1",
+          agentId: "pi",
+          workspaceScope: [],
+          riskLevel: "read_only",
+        },
+      });
+    const first = submit("message_1", "一");
+    const second = submit("message_2", "二");
+    const run1 = first.run!;
+    expect(run1.providerSessionId).toBeNull();
+
+    const executor = new RunExecutor(
+      store,
+      new FakeRunner([
+        { type: "session", sessionId: "prov_1" },
+        { type: "done", exitCode: 0 },
+      ]),
+      {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: new SessionLeaseService(store),
+        executorOwner: "bridge:123",
+        resolveRequest: () => ({
+          runId: run1.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "一",
+        }),
+      },
+    );
+
+    const result = await executor.execute(run1.id);
+    expect(result.status).toBe("succeeded");
+
+    // 学到 id 之后 runtime 是事实源。
+    let learned: string | null = null;
+    store.withSessionTransaction((tx) => {
+      learned = tx.getSessionProviderSessionId("sess_1");
+    });
+    expect(learned).toBe("prov_1");
+
+    // 自动推进的下一 Run 带上 providerSessionId（resume 前置）。
+    const nextRunId = store.getTurn(second.turn.turnId)?.dispatchedRunId;
+    expect(nextRunId).toBeTruthy();
+    expect(store.getRun(nextRunId!)?.providerSessionId).toBe("prov_1");
+    store.close();
+  });
+
+  it("interrupts exactly once when the provider lease renew fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new SqliteEventStore(":memory:");
+      const coordinator = new SessionCoordinator(store, { maxQueuedTurns: 100 });
+      store.withSessionTransaction((tx) => {
+        tx.ensureRuntime("sess_1");
+        tx.setSessionProviderSessionId("sess_1", "prov_1");
+      });
+      const submitted = coordinator.submitTurn({
+        sessionId: "sess_1",
+        idempotencyKey: "message_1",
+        message: {
+          text: "调查",
+          attachmentIds: [],
+          flowId: null,
+          model: null,
+          effort: null,
+          permissionMode: null,
+          plan: null,
+        },
+        workItem: {
+          title: "Session",
+          mode: "investigation",
+          conversationId: "conv_sess_1",
+          agentId: "pi",
+          workspaceScope: [],
+          riskLevel: "read_only",
+        },
+      });
+      const run = submitted.run!;
+      const finishSpy = vi.spyOn(coordinator, "finishRun");
+      const runner = {
+        async *run(
+          _request: RunRequest,
+          options?: { signal?: AbortSignal },
+        ): AsyncGenerator<AgentEvent> {
+          yield { type: "text_delta", text: "start" };
+          await new Promise<void>((resolve) => {
+            const signal = options?.signal;
+            if (signal?.aborted) return resolve();
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          throw new Error("aborted by signal");
+        },
+      };
+      const executor = new RunExecutor(store, runner, {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: new SessionLeaseService(store),
+        executorOwner: "bridge:123",
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+      });
+
+      const execution = executor.execute(run.id);
+      // resume 路径在调 Runner 前同步 claim。
+      expect(
+        store.findLiveProviderLease("pi", "prov_1", new Date().toISOString()),
+      ).toEqual({ runId: run.id });
+      // 模拟 lease 被抢/丢失。
+      store.releaseProviderSession({
+        agentId: "pi",
+        providerSessionId: "prov_1",
+        runId: run.id,
+      });
+      vi.advanceTimersByTime(15_000);
+
+      const result = await execution;
+      expect(result.status).toBe("interrupted");
+      expect(result.terminalReason).toBe("provider_session_busy");
+      expect(finishSpy).toHaveBeenCalledTimes(1);
+      store.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("interrupts when the fresh provider session is already claimed", async () => {
     const { store, coordinator, leaseService, run } = setupSessionRun();
     store.claimProviderSession({
