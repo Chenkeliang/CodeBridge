@@ -48,6 +48,48 @@ describe("channel session ingress", () => {
     });
   });
 
+  it("resumes a provider session into a slot", async () => {
+    const app = new Hono();
+    app.post("/v1/channels/:channel/conversations/:conversation/resume", async (c) => {
+      expect(c.req.param("channel")).toBe("feishu");
+      expect(c.req.param("conversation")).toBe("chat|topic");
+      expect(await c.req.json()).toEqual({
+        agent_id: "pi",
+        workspace_key: "ws_1",
+        generation: 3,
+        provider_session_id: "provider_old",
+      });
+      return c.json({ session_id: "sess_9" }, 200);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    const result = await ingress.resumeProviderSession({
+      channel: "feishu",
+      conversationId: "chat|topic",
+      agentId: "pi",
+      workspaceKey: "ws_1",
+      generation: 3,
+    }, "provider_old");
+    expect(result).toEqual({ sessionId: "sess_9" });
+  });
+
+  it("throws the provider_session_busy error from the resume route", async () => {
+    const app = new Hono();
+    app.post("/v1/channels/:channel/conversations/:conversation/resume", async (c) => {
+      return c.json({
+        error: "provider_session_busy",
+        detail: "provider session p 正被 run r 使用",
+      }, 409);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.resumeProviderSession({
+      channel: "feishu",
+      conversationId: "chat|topic",
+      agentId: "pi",
+      workspaceKey: "ws_1",
+      generation: 0,
+    }, "p")).rejects.toThrow(/provider_session_busy/);
+  });
+
   it("streams raw channel session events", async () => {
     const app = new Hono();
     app.get("/v1/sessions/:session/events", (c) => {

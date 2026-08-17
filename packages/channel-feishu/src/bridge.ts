@@ -484,6 +484,26 @@ export class FeishuBridge {
         this.orchestrator.listSessions(msg.chatId, topicId, options),
       bindSession: (sessionId) =>
         this.orchestrator.bindSession(msg.chatId, topicId, sessionId),
+      resumeProviderSession: async (providerSessionId) => {
+        if (!this.sessionIngress) {
+          return { ok: false, error: "Runner 未就绪" };
+        }
+        try {
+          const { sessionId } = await this.sessionIngress.resumeProviderSession(
+            this.buildFullSlot(msg.chatId, topicId),
+            providerSessionId,
+          );
+          return { ok: true, sessionId };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return {
+            ok: false,
+            busy: message === "provider_session_busy",
+            conflict: message === "slot_already_bound",
+            error: message,
+          };
+        }
+      },
       resetSession: async () => {
         if (this.sessionIngress) {
           await this.sessionIngress.resetSlot(
