@@ -176,4 +176,66 @@ describe("Session projector", () => {
     expect(store.listEvents(item.id)).toHaveLength(before);
     store.close();
   });
+
+  it("rejects an unknown event type and keeps the projection cursor", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    const before = store.listEvents(item.id).length;
+
+    expect(() => store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      // 合法 DomainEventType 但未在投影器登记（模拟以后新加的事件忘了投影）。
+      type: "RUN_SNAPSHOT",
+      actor: "system",
+    })).toThrow("Unsupported session projection event type: RUN_SNAPSHOT");
+    // 整笔回滚：事件未落库，cursor 停在旧 sequence。
+    expect(store.listEvents(item.id)).toHaveLength(before);
+    store.close();
+  });
+
+  it("advances the cursor for known no-op event types", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "RUN_CREATED",
+      actor: "system",
+      payload: { mode: "auto" },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      type: "TURN_QUEUED",
+      actor: "user",
+      target: "turn_2",
+      payload: { queue_position: 2 },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "STEP_STARTED",
+      actor: "system",
+    });
+    // session work item 上的策略/流程事件同样不抛错。
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "APPROVAL_GRANTED",
+      actor: "user",
+      target: "run.production",
+    });
+    // no-op 事件不抛错，且后续投影继续可用（cursor 前进）。
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "RUN_SUCCEEDED",
+      actor: "system",
+    });
+    const turn = store
+      .listTimelineTurns("sess_1", { limit: 50 })
+      .turns[0]!;
+    expect(turn.status).toBe("succeeded");
+    store.close();
+  });
 });
