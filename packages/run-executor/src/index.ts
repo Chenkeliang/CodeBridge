@@ -192,17 +192,6 @@ export class RunExecutor {
         this.options.executorOwner!,
       );
       if (!claimed) return this.store.getRun(runId)!;
-      // Task 9 resume 路径：run 已知 providerSessionId，调 Runner 前先 claim。
-      if (initial.providerSessionId && initial.agentId) {
-        const providerClaimed = this.claimProviderSession(
-          initial.agentId,
-          initial.providerSessionId,
-          runId,
-        );
-        if (!providerClaimed) {
-          return this.interrupt(initial, "provider_session_busy");
-        }
-      }
     }
 
     if (!plan && workItem.riskLevel === "production_write") {
@@ -237,6 +226,19 @@ export class RunExecutor {
       this.throwIfCancellationRequested(runId);
     }
 
+    // Task 9 resume 路径：确定会进入 Runner 之后、调 Runner 前才 claim，
+    // 避免审批 markWaiting 提前 return 时留下未释放的 lease。
+    if (initial.sessionId && initial.providerSessionId && initial.agentId) {
+      const providerClaimed = this.claimProviderSession(
+        initial.agentId,
+        initial.providerSessionId,
+        runId,
+      );
+      if (!providerClaimed) {
+        return this.interrupt(initial, "provider_session_busy");
+      }
+    }
+
     if (!initial.sessionId) this.store.updateRunStatus(runId, "running");
     if (!this.hasRunEvent(workItem.id, runId, "RUN_STARTED")) {
       this.appendRunEvent(initial, {
@@ -251,6 +253,7 @@ export class RunExecutor {
     const controller = new AbortController();
     const activeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     let leaseLost = false;
+    let providerLeaseLost = false;
     const heartbeat = initial.sessionId
       ? new RunHeartbeat({
           runId,
@@ -259,9 +262,9 @@ export class RunExecutor {
             const renewed = this.options.sessionLeaseService!.renew(id, owner);
             if (!renewed) return null;
             if (!this.renewProviderSession(runId)) {
-              // Provider Session Lease 被抢/丢失：停止写入并中断本 run。
-              this.interrupt(initial, "provider_session_busy");
-              return null;
+              // 只标记失败 + abort，终态由主路径唯一调用 finishRun。
+              providerLeaseLost = true;
+              controller.abort();
             }
             return renewed;
           },
@@ -293,6 +296,7 @@ export class RunExecutor {
         });
         await this.executeStep(workItem, initial, null, activeSignal);
         if (activeSignal.aborted) {
+          if (providerLeaseLost) return this.interrupt(initial, "provider_session_busy");
           if (leaseLost) return this.store.getRun(runId)!;
           return this.cancel(initial);
         }
@@ -306,6 +310,7 @@ export class RunExecutor {
         });
       }
       if (activeSignal.aborted) {
+        if (providerLeaseLost) return this.interrupt(initial, "provider_session_busy");
         if (leaseLost) return this.store.getRun(runId)!;
         return this.cancel(initial);
       }
@@ -313,6 +318,9 @@ export class RunExecutor {
       return this.succeed(initial);
     } catch (error) {
       const failure = this.activeAsyncErrors.get(runId) ?? error;
+      if (providerLeaseLost) {
+        return this.interrupt(initial, "provider_session_busy");
+      }
       if (leaseLost || isRunLeaseLost(failure)) {
         return this.store.getRun(runId)!;
       }
@@ -730,8 +738,11 @@ export class RunExecutor {
         && !run.providerSessionId
       ) {
         const agentId = run.agentId;
+        const sessionId = run.sessionId;
         const claimed = this.store.withSessionTransaction((tx) => {
           tx.updateRun(run.id, { providerSessionId: event.sessionId });
+          // 学到 id 只在这一处写入 runtime，作为后续 dispatchNextTurn 的事实源。
+          tx.setSessionProviderSessionId(sessionId, event.sessionId);
           const now = new Date();
           return tx.claimProviderSession({
             agentId,

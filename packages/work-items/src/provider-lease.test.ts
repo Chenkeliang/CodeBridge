@@ -59,6 +59,34 @@ describe("provider session lease", () => {
     store.close();
   });
 
+  it("allows the same owner to re-claim its live lease", () => {
+    const store = new SqliteEventStore(":memory:");
+    store.claimProviderSession({
+      agentId: "agent_a",
+      providerSessionId: "prov_1",
+      runId: "run_1",
+      now: T0,
+      expiresAt: T1,
+    });
+    expect(
+      store.claimProviderSession({
+        agentId: "agent_a",
+        providerSessionId: "prov_1",
+        runId: "run_1",
+        now: "2026-01-01T00:00:30.000Z",
+        expiresAt: "2026-01-01T00:02:00.000Z",
+      }),
+    ).toBe(true);
+    expect(
+      store.findLiveProviderLease(
+        "agent_a",
+        "prov_1",
+        "2026-01-01T00:00:30.000Z",
+      ),
+    ).toEqual({ runId: "run_1" });
+    store.close();
+  });
+
   it("release validates the owner", () => {
     const store = new SqliteEventStore(":memory:");
     store.claimProviderSession({
