@@ -245,6 +245,11 @@ export interface ChannelSessionIngress {
     providerSessionId: string,
   ): Promise<{ sessionId: string }>;
   cancelRun(sessionId: string, runId: string): Promise<boolean>;
+  /** /steer：按 runId 向 Runner 注入补充指令（不打 orchestrator 内存表）。 */
+  steerRun(
+    runId: string,
+    prompt: string,
+  ): Promise<{ ok: boolean; outcome?: string; error?: string }>;
   resolvePermission(runId: string, approve: boolean): Promise<boolean>;
   resumeQueue(sessionId: string): Promise<{ queueState: "ready" | "paused" }>;
   resetSlot(slot: ChannelSlot): Promise<boolean>;

@@ -1195,6 +1195,20 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json({ resolved });
   });
 
+  app.post("/v1/runs/:run_id/steer", async (c) => {
+    if (!options.runner) {
+      return c.json({ ok: false, error: "runner_unavailable" }, 503);
+    }
+    const body = await readJson(c);
+    if (typeof body?.prompt !== "string" || !body.prompt.trim()) {
+      return c.json({ ok: false, error: "prompt is required" }, 400);
+    }
+    // 按 runId 直接打 Runner，不依赖 orchestrator 的 activeChatRuns。
+    return c.json(
+      await options.runner.steer(c.req.param("run_id"), body.prompt),
+    );
+  });
+
   return app;
 }
 

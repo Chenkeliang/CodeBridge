@@ -258,8 +258,12 @@ export class TelegramBridge {
         if (!this.sessionIngress) return { queueState: "paused" };
         return this.sessionIngress.resumeQueue(sessionId);
       },
-      steerActiveRun: (prompt) =>
-        this.orchestrator.steerActiveForChat(chatId, topicId, prompt),
+      steerActiveRun: async (runId, prompt) => {
+        if (!this.sessionIngress) {
+          return { ok: false, error: "Runner 未就绪" };
+        }
+        return this.sessionIngress.steerRun(runId, prompt);
+      },
       resolvePermission: async (approve) => {
         if (!this.sessionIngress) {
           return this.orchestrator.resolveActivePermission(

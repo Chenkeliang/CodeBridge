@@ -59,7 +59,9 @@ export interface SlashContext {
   /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（含真实模型列表） */
   listConfigOptions?: () => Promise<BackendConfigOption[]>;
   cancelActiveRun?: () => Promise<boolean>;
+  /** /steer：按 runId 向 Runner 注入补充指令。 */
   steerActiveRun?: (
+    runId: string,
     prompt: string,
   ) => Promise<{ ok: boolean; outcome?: string; error?: string }>;
   /** prompt_feishu：回应当前 run 挂起的权限请求（true=允许 false=拒绝） */
@@ -185,7 +187,7 @@ export async function handleSlashCommand(
           text: "当前没有运行中的任务，无法 steering。",
         };
       }
-      const result = await ctx.steerActiveRun(arg);
+      const result = await ctx.steerActiveRun(slot.activeRunId, arg);
       return {
         type: "reply",
         text: result.ok

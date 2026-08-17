@@ -1184,6 +1184,86 @@ describe("session API", () => {
     }
   });
 
+  it("wires /steer through the slot activeRunId to the Runner", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const runner = {
+      steer: vi.fn().mockResolvedValue({ ok: true, outcome: "injected" }),
+    } as unknown as RunnerClient;
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+    const ingress = createChannelSessionIngress(app, TOKEN);
+
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-steer-wire-"));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "cb-steer-ws-"));
+    try {
+      // 槽位绑定 + runtime active run（Catalog + runtime 为唯一事实源）。
+      const session = catalog.createSession({
+        agentId: "pi",
+        cwd: workspace,
+      });
+      catalog.bindChannelConversation({
+        channel: "feishu",
+        conversationId: "chat-1|",
+        agentId: "pi",
+        workspaceKey: canonicalWorkspaceKey(workspace).key,
+        generation: 0,
+      }, session.id);
+      workItems.withSessionTransaction((tx) => {
+        tx.ensureRuntime(session.id);
+        tx.updateRuntime(session.id, { activeRunId: "run_9" });
+      });
+
+      const bridge = new FeishuBridge({
+        config: defaultConfig(),
+        dataDir,
+      }) as unknown as {
+        sessionIngress: unknown;
+        orchestrator: {
+          router: SessionRouter;
+        };
+        channel: {
+          send(
+            _chatId: string,
+            input: { markdown: string },
+            _options: unknown,
+          ): Promise<void>;
+        };
+        handleMessage(message: FeishuMessage): Promise<void>;
+        disconnect(): Promise<void>;
+      };
+      bridge.sessionIngress = ingress;
+      const router = new SessionRouter(dataDir);
+      router.initFromConfig(defaultConfig());
+      router.setBinding("chat-1", {
+        backendId: "pi",
+        cwd: workspace,
+      });
+      bridge.orchestrator = { router };
+      const replies: string[] = [];
+      bridge.channel = {
+        async send(_chatId, input) {
+          replies.push(input.markdown);
+        },
+      };
+
+      await bridge.handleMessage({
+        messageId: "m1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "/steer focus on tests",
+      });
+
+      expect(runner.steer).toHaveBeenCalledWith("run_9", "focus on tests");
+      expect(replies.join("\n")).toContain("injected");
+    } finally {
+      catalog.close();
+      workItems.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("persists a channel delivery when a reply_to_message_id is provided", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

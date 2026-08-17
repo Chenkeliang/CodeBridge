@@ -546,8 +546,12 @@ export class FeishuBridge {
         if (!this.sessionIngress) return { queueState: "paused" };
         return this.sessionIngress.resumeQueue(sessionId);
       },
-      steerActiveRun: (prompt) =>
-        this.orchestrator.steerActiveForChat(msg.chatId, topicId, prompt),
+      steerActiveRun: async (runId, prompt) => {
+        if (!this.sessionIngress) {
+          return { ok: false, error: "Runner 未就绪" };
+        }
+        return this.sessionIngress.steerRun(runId, prompt);
+      },
       authorizeDirectory: (directory) =>
         this.orchestrator.authorizeDirectory(directory),
       notifyStatus: (text) =>

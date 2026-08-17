@@ -683,15 +683,15 @@ describe("/root additional directories", () => {
 });
 
 describe("/steer", () => {
-  it("forwards an in-flight steering prompt to Runner", async () => {
+  it("forwards an in-flight steering prompt to Runner by runId", async () => {
     const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
     ctx.getSlotCommandContext = async () => ({
       sessionId: "sess_1",
       activeRunId: "run_1",
     });
-    const prompts: string[] = [];
-    ctx.steerActiveRun = async (prompt) => {
-      prompts.push(prompt);
+    const steered: Array<{ runId: string; prompt: string }> = [];
+    ctx.steerActiveRun = async (runId, prompt) => {
+      steered.push({ runId, prompt });
       return { ok: true, outcome: "injected" };
     };
 
@@ -700,7 +700,7 @@ describe("/steer", () => {
       text: "/steer focus on tests",
     });
     expect((result as { text: string }).text).toContain("injected");
-    expect(prompts).toEqual(["focus on tests"]);
+    expect(steered).toEqual([{ runId: "run_1", prompt: "focus on tests" }]);
   });
 });
 
