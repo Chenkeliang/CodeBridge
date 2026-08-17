@@ -264,6 +264,41 @@ describe("channel turn delivery", () => {
     store.close();
   });
 
+  it("completeDelivery is idempotent when retried with the same owner", () => {
+    const { store, coordinator } = setup();
+    const first = submitWithDelivery(coordinator, "m1", "一");
+    const turnId = first.turn.turnId;
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "succeeded",
+    });
+    store.withSessionTransaction((tx) =>
+      tx.claimDelivery(turnId, "owner-1", NOW, "2026-08-14T00:01:00.000Z"),
+    );
+    store.withSessionTransaction((tx) =>
+      tx.ackDelivery(turnId, "owner-1", "card-1"),
+    );
+    expect(
+      store.withSessionTransaction((tx) =>
+        tx.completeDelivery(turnId, "owner-1"),
+      ),
+    ).toBe(true);
+    // 重试同 owner → 幂等成功
+    expect(
+      store.withSessionTransaction((tx) =>
+        tx.completeDelivery(turnId, "owner-1"),
+      ),
+    ).toBe(true);
+    // 不同 owner → 失败
+    expect(
+      store.withSessionTransaction((tx) =>
+        tx.completeDelivery(turnId, "owner-other"),
+      ),
+    ).toBe(false);
+    store.close();
+  });
+
   it("listDeliveries filters by channel", () => {
     const { store, coordinator } = setup();
     submitWithDelivery(coordinator, "m1", "一", {

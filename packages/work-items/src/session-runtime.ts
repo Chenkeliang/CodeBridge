@@ -1068,7 +1068,7 @@ export function createSqliteSessionRuntimeTransaction(
                OR (
                  status = 'delivering'
                  AND surface_message_id IS NULL
-                 AND (claim_expires_at IS NULL OR claim_expires_at < ?)
+                 AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
                )
              )`,
         )
@@ -1116,6 +1116,18 @@ export function createSqliteSessionRuntimeTransaction(
 
     completeDelivery(turnId, owner) {
       assertActive();
+      const row = database
+        .prepare(
+          `SELECT status, claim_owner
+           FROM channel_turn_delivery WHERE turn_id = ?`,
+        )
+        .get(turnId) as
+          | { status?: string; claim_owner?: string | null }
+          | undefined;
+      if (!row) return false;
+      if (row.status === "completed") {
+        return row.claim_owner === owner;
+      }
       const now = new Date().toISOString();
       const result = database
         .prepare(
