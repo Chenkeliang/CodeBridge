@@ -8,7 +8,8 @@ import type {
   UpdateSessionInput,
 } from "@codebridge/session-catalog";
 import { AgentRegistry, cloneSetupManifest, projectAgentStatus, projectSetupState } from "@codebridge/agent-registry";
-import type { ConfigStore } from "@codebridge/core";
+import type { ConfigStore, ChannelSlot } from "@codebridge/core";
+import { canonicalWorkspaceKey } from "@codebridge/core";
 import type { SqliteEventStore } from "@codebridge/work-items";
 import type { RunExecutor } from "@codebridge/run-executor";
 import type { RunnerClient } from "@codebridge/runner-client";
@@ -323,29 +324,35 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     }
     const channel = c.req.param("channel");
     const conversationId = c.req.param("conversation_id");
-    let session = options.catalog.getChannelSession(channel, conversationId);
-    if (!session) {
-      const requestedAgent = typeof body.agent_id === "string" ? currentProfiles().get(body.agent_id) : undefined;
-      const agent = requestedAgent ?? currentAgents().find((candidate) => candidate.status === "healthy");
-      if (!agent) return c.json({ error: "agent_unavailable" }, 409);
-      let cwd = asNullableString(body.cwd);
-      if (cwd && options.runner) {
-        const authorization = await options.runner.authorizeDirectory(cwd);
-        if (!authorization.ok) {
-          return c.json({ error: "workspace_not_authorized", detail: authorization.error ?? "目录无法访问" }, 403);
-        }
-        cwd = authorization.path ?? cwd;
+    const requestedAgent = typeof body.agent_id === "string" ? currentProfiles().get(body.agent_id) : undefined;
+    const agent = requestedAgent ?? currentAgents().find((candidate) => candidate.status === "healthy");
+    if (!agent) return c.json({ error: "agent_unavailable" }, 409);
+    let cwd = asNullableString(body.cwd);
+    if (cwd && options.runner) {
+      const authorization = await options.runner.authorizeDirectory(cwd);
+      if (!authorization.ok) {
+        return c.json({ error: "workspace_not_authorized", detail: authorization.error ?? "目录无法访问" }, 403);
       }
-      session = options.catalog.createSession({
-        agentId: agent.agentId,
-        model: asNullableString(body.model),
-        effort: asNullableString(body.effort),
-        permissionMode: asNullableString(body.permission_mode),
-        cwd: cwd ?? options.defaultCwd ?? null,
-        title: asNullableString(body.title),
-      });
-      options.catalog.bindChannelConversation(channel, conversationId, session.id);
+      cwd = authorization.path ?? cwd;
     }
+    const generation = Number.isSafeInteger(body.generation)
+      ? Number(body.generation)
+      : 0;
+    const slot: ChannelSlot = {
+      channel,
+      conversationId,
+      agentId: agent.agentId,
+      workspaceKey: canonicalWorkspaceKey(cwd ?? options.defaultCwd ?? "").key,
+      generation,
+    };
+    const session = options.catalog.getOrCreateBoundSession(slot, {
+      agentId: agent.agentId,
+      model: asNullableString(body.model),
+      effort: asNullableString(body.effort),
+      permissionMode: asNullableString(body.permission_mode),
+      cwd: slot.workspaceKey || null,
+      title: asNullableString(body.title),
+    });
     const idempotencyKey = c.req.header("idempotency-key");
     const childHeaders = {
       authorization: `Bearer ${token}`,
@@ -412,7 +419,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   });
 
   app.post("/v1/channels/:channel/conversations/:conversation_id/cancel", async (c) => {
-    const session = options.catalog.getChannelSession(c.req.param("channel"), c.req.param("conversation_id"));
+    const binding = options.catalog.getLatestChannelBinding(
+      c.req.param("channel"),
+      c.req.param("conversation_id"),
+    );
+    const session = binding ? options.catalog.getSession(binding.sessionId) : undefined;
     if (!session?.taskRecordId) return c.json({ stopped: false });
     const run = options.workItems.listRuns(session.taskRecordId).reverse().find((candidate) => ["queued", "running", "waiting"].includes(candidate.status));
     if (!run) return c.json({ stopped: false });
@@ -431,17 +442,24 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
   });
 
   app.post("/v1/channels/:channel/conversations/:conversation_id/reset", (c) => {
+    const binding = options.catalog.getLatestChannelBinding(
+      c.req.param("channel"),
+      c.req.param("conversation_id"),
+    );
     return c.json({
-      reset: options.catalog.unbindChannelConversation(
-        c.req.param("channel"),
-        c.req.param("conversation_id"),
-      ),
+      reset: binding
+        ? options.catalog.unbindChannelConversation(binding)
+        : false,
     });
   });
 
   app.post("/v1/channels/:channel/conversations/:conversation_id/approval", async (c) => {
     if (!options.approvals) return c.json({ resolved: false, error: "approval_unavailable" }, 503);
-    const session = options.catalog.getChannelSession(c.req.param("channel"), c.req.param("conversation_id"));
+    const binding = options.catalog.getLatestChannelBinding(
+      c.req.param("channel"),
+      c.req.param("conversation_id"),
+    );
+    const session = binding ? options.catalog.getSession(binding.sessionId) : undefined;
     if (!session?.taskRecordId) return c.json({ resolved: false });
     const run = options.workItems.listRuns(session.taskRecordId).reverse().find((candidate) => candidate.status === "waiting");
     if (!run) return c.json({ resolved: false });

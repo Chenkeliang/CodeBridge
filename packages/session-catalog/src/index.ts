@@ -466,6 +466,21 @@ export class SessionCatalogStore {
     return binding ? this.getSession(binding.sessionId) : undefined;
   }
 
+  /** 临时兼容（Task 6 移除）：按 conversation 取最近一条绑定，用于旧 ingress 的 cancel/reset/approval。 */
+  getLatestChannelBinding(
+    channel: string,
+    conversationId: string,
+  ): ChannelSessionBinding | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM channel_session_bindings
+         WHERE channel = ? AND conversation_id = ?
+         ORDER BY updated_at DESC LIMIT 1`,
+      )
+      .get(channel, conversationId) as SqliteRow | undefined;
+    return row ? toChannelBinding(row) : undefined;
+  }
+
   unbindChannelConversation(slot: ChannelSlot): boolean {
     const result = this.database
       .prepare(
