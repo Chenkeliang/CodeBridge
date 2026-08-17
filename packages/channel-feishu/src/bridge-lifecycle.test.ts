@@ -97,4 +97,46 @@ describe("FeishuBridge stream lifecycle", () => {
     expect(capturedSignal?.aborted).toBe(true);
     await streamPromise;
   });
+
+  it("streams a dispatched run through submit + events", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-lifecycle-"));
+    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge & {
+      streamAgentReply(
+        m: FeishuMessage,
+        p: string,
+        t: string | undefined,
+        s?: string,
+        r?: string | null,
+        a?: number,
+      ): Promise<void>;
+    };
+    let rendered = "";
+    bridge.sessionIngress = {
+      submit: async () => ({
+        sessionId: "sess_1",
+        turnId: "turn_1",
+        runId: "run_1",
+        acceptance: "dispatched",
+        queueState: "ready",
+        eventSequence: 3,
+      }),
+      events: async function* () {
+        yield { type: "AGENT_EVENT", sequence: 4, runId: "run_1", target: null, payload: { event: { type: "text_delta", text: "hi" } } };
+        yield { type: "RUN_SUCCEEDED", sequence: 5, runId: "run_1", target: null, payload: {} };
+      },
+    } as unknown as ChannelSessionIngress;
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-1",
+          async append(chunk: string) { rendered += chunk; },
+          async setContent(full: string) { rendered = full; },
+        });
+      },
+      async disconnect() {},
+    };
+
+    await bridge.streamAgentReply(message("m1"), "hi", undefined, "sess_1", "run_1", 3);
+    expect(rendered).toContain("hi");
+  });
 });
