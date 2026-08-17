@@ -2,6 +2,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   JsonMapStore,
+  canonicalWorkspaceKey,
   serializeSessionKey,
   type AppConfig,
   type BackendProfile,
@@ -37,6 +38,7 @@ export class SessionRouter {
   private readonly sessions: JsonMapStore<SessionRecord>;
   private readonly workspaces: JsonMapStore<string>;
   private readonly bindings: JsonMapStore<ChatBinding>;
+  private readonly generations: JsonMapStore<number>;
 
   constructor(dataDir: string) {
     this.sessions = new JsonMapStore<SessionRecord>(
@@ -48,10 +50,50 @@ export class SessionRouter {
     this.bindings = new JsonMapStore<ChatBinding>(
       path.join(dataDir, "chat-bindings.json"),
     );
+    this.generations = new JsonMapStore<number>(
+      path.join(dataDir, "slot-generations.json"),
+    );
   }
 
   private bindingKey(chatId: string, topicId?: string): string {
     return `${chatId}|${topicId ?? ""}`;
+  }
+
+  private slotKey(chatId: string, topicId?: string): string {
+    const binding = this.getBinding(chatId, topicId);
+    return serializeSessionKey({
+      chatId,
+      topicId,
+      backendId: binding.backendId,
+      cwd: binding.cwd,
+    });
+  }
+
+  /** 当前槽位（backend+cwd）指向第几代 Session，默认 0。 */
+  getSlotGeneration(chatId: string, topicId?: string): number {
+    return this.generations.read()[this.slotKey(chatId, topicId)] ?? 0;
+  }
+
+  /** /new 对当前槽位 +1，返回新 generation。 */
+  incrementSlotGeneration(chatId: string, topicId?: string): number {
+    const key = this.slotKey(chatId, topicId);
+    const next = (this.generations.read()[key] ?? 0) + 1;
+    this.generations.update((all) => ({ ...all, [key]: next }));
+    return next;
+  }
+
+  /** 供 bridge 组装 ingress 消息的槽位描述（agent/cwd 已规范化）。 */
+  buildSlot(chatId: string, topicId?: string): {
+    agentId: string;
+    workspaceKey: string;
+    generation: number;
+  } {
+    const binding = this.getBinding(chatId, topicId);
+    return {
+      agentId: binding.backendId,
+      workspaceKey: canonicalWorkspaceKey(binding.cwd).key,
+      generation: this.getSlotGeneration(chatId, topicId),
+    };
   }
 
   getBinding(chatId: string, topicId?: string): ChatBinding {
@@ -184,6 +226,7 @@ export class SessionRouter {
     };
   }
 
+  /** @deprecated sessions.json 不再是权威（Task 12 删除）；仅旧路径临时使用。 */
   getSessionRecord(key: SessionKey): SessionRecord | undefined {
     const record = this.sessions.read()[serializeSessionKey(key)] as
       | (SessionRecord & { cliSessionId?: string })
@@ -195,11 +238,13 @@ export class SessionRouter {
     };
   }
 
+  /** @deprecated sessions.json 不再是权威（Task 12 删除）；仅旧路径临时使用。 */
   saveSessionRecord(key: SessionKey, record: SessionRecord): void {
     const id = serializeSessionKey(key);
     this.sessions.update((all) => ({ ...all, [id]: record }));
   }
 
+  /** @deprecated sessions.json 不再是权威（Task 12 删除）；仅旧路径临时使用。 */
   bindSession(
     chatId: string,
     sessionId: string,
@@ -214,6 +259,7 @@ export class SessionRouter {
     });
   }
 
+  /** @deprecated sessions.json 不再是权威（Task 12 删除）；仅旧路径临时使用。 */
   clearSession(chatId: string, topicId?: string): void {
     const key = this.buildSessionKey(chatId, topicId);
     const id = serializeSessionKey(key);

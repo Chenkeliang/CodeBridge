@@ -155,4 +155,36 @@ describe("SessionRouter resolveRunOptions", () => {
 
     expect(router.getSessionRecord(key)?.sessionId).toBe("legacy-session-123");
   });
+
+  it("tracks slot generation per backend+cwd", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const router = new SessionRouter(dataDir);
+    router.initFromConfig(defaultConfig());
+    router.setBinding("chat1", { backendId: "pi", cwd: "/tmp/project" });
+
+    expect(router.getSlotGeneration("chat1")).toBe(0);
+    expect(router.incrementSlotGeneration("chat1")).toBe(1);
+
+    router.setBinding("chat1", { backendId: "cursor" });
+    expect(router.getSlotGeneration("chat1")).toBe(0);
+
+    router.setBinding("chat1", { backendId: "pi" });
+    expect(router.getSlotGeneration("chat1")).toBe(1);
+  });
+
+  it("buildSlot canonicalizes the workspace key", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-ws-"));
+    tmpDirs.push(real);
+    const router = new SessionRouter(dataDir);
+    router.initFromConfig(defaultConfig());
+    router.setBinding("chat1", { backendId: "pi", cwd: `${real}/` });
+
+    const slot = router.buildSlot("chat1");
+    expect(slot.agentId).toBe("pi");
+    expect(slot.workspaceKey).toBe(fs.realpathSync(real));
+    expect(slot.generation).toBe(0);
+  });
 });
