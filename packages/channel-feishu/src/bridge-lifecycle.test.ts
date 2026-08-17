@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defaultConfig, type ChannelSessionIngress } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "./bridge.js";
 
@@ -20,7 +20,10 @@ type TestableBridge = {
     disconnect(): Promise<void>;
   };
   orchestrator: {
-    router: { getBinding(chatId: string, topicId?: string): { showThinking: boolean } };
+    router: {
+      getBinding(chatId: string, topicId?: string): { showThinking: boolean };
+      buildSlot(chatId: string, topicId?: string): { agentId: string; workspaceKey: string; generation: number };
+    };
     cancelActiveForChat(chatId: string, topicId?: string): Promise<boolean>;
     runAgent(): AsyncGenerator<never>;
   };
@@ -138,5 +141,71 @@ describe("FeishuBridge stream lifecycle", () => {
 
     await bridge.streamAgentReply(message("m1"), "hi", undefined, "sess_1", "run_1", 3);
     expect(rendered).toContain("hi");
+  });
+
+  it("submits once and routes only the dispatched run through the watcher", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-lifecycle-"));
+    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge & {
+      submitAndStream(m: FeishuMessage, p: string, t?: string): Promise<void>;
+    };
+    let rendered = "";
+    const submit = vi.fn().mockResolvedValue({
+      sessionId: "sess_1",
+      turnId: "turn_1",
+      runId: "run_1",
+      acceptance: "dispatched",
+      queueState: "ready",
+      eventSequence: 3,
+    });
+    const events = vi.fn(async function* () {
+      yield { type: "TURN_DISPATCHED", sequence: 3, runId: "run_1", target: "turn_1", payload: {} };
+      yield { type: "AGENT_EVENT", sequence: 4, runId: "run_1", target: null, payload: { event: { type: "text_delta", text: "own" } } };
+      yield { type: "AGENT_EVENT", sequence: 5, runId: "run_2", target: null, payload: { event: { type: "text_delta", text: "other" } } };
+      yield { type: "RUN_SUCCEEDED", sequence: 6, runId: "run_1", target: null, payload: {} };
+      await new Promise(() => {}); // 模拟 live SSE 保持打开
+    });
+    const claim = vi.fn().mockResolvedValue(true);
+    const ack = vi.fn().mockResolvedValue(true);
+    const complete = vi.fn().mockResolvedValue(true);
+    bridge.sessionIngress = {
+      submit,
+      events,
+      claimDelivery: claim,
+      ackDelivery: ack,
+      completeDelivery: complete,
+      listDeliveries: async () => [],
+    } as unknown as ChannelSessionIngress;
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-1",
+          async append(chunk: string) { rendered += chunk; },
+          async setContent(full: string) { rendered = full; },
+        });
+      },
+      async disconnect() {},
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false, backendId: "pi", cwd: "/tmp/p" }) as never,
+        buildSlot: () => ({ agentId: "pi", workspaceKey: "/tmp/p", generation: 0 }) as never,
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {},
+    };
+
+    await bridge.submitAndStream(message("m1"), "hi");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(events).toHaveBeenCalledWith(
+      "sess_1",
+      expect.objectContaining({ afterSequence: 0 }),
+    );
+    expect(claim).toHaveBeenCalledWith("turn_1", "feishu:run_1");
+    expect(ack).toHaveBeenCalledWith("turn_1", "feishu:run_1", "card-1");
+    expect(complete).toHaveBeenCalledWith("turn_1", "feishu:run_1");
+    expect(rendered).toContain("own");
+    expect(rendered).not.toContain("other");
   });
 });

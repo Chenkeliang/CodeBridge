@@ -28,6 +28,10 @@ import {
 import { registerFeishuExtraEvents } from "./feishu-extra-events.js";
 import { ChainTopicTracker } from "./chain-topics.js";
 import {
+  FeishuSessionWatcher,
+  type FeishuCardHost,
+} from "./session-watcher.js";
+import {
   downloadInboundImages,
   resolveInboundPrompt,
 } from "./feishu-inbound-media.js";
@@ -205,6 +209,8 @@ export class FeishuBridge {
   private readonly pendingStreams: JsonMapStore<PendingFeishuStream>;
   /** 所有活动流的 AbortController（非 chat-scoped），disconnect 时统一 abort */
   private readonly activeAborts = new Set<AbortController>();
+  /** 每 Session 一个持久事件订阅，单订阅路由 Turn/Run/Delivery */
+  private readonly sessionWatchers = new Map<string, FeishuSessionWatcher>();
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
 
@@ -312,6 +318,7 @@ export class FeishuBridge {
 
     await this.channel.connect();
     await this.recoverInterruptedStreams();
+    await this.recoverDeliveries();
     const botName = this.channel.botIdentity?.name ?? "unknown";
     this.options.onLog?.(`已连接飞书 bot: ${botName}`);
     this.options.onLog?.(
@@ -626,6 +633,66 @@ export class FeishuBridge {
       });
   }
 
+  private cardHost(): FeishuCardHost {
+    return {
+      channel: this.channel,
+      sendMarkdown: (chatId, markdown, replyTo) =>
+        this.sendMarkdown(chatId, markdown, replyTo),
+      registerPendingStream: (messageId, entry) => {
+        this.pendingStreams.update((all) => ({ ...all, [messageId]: entry }));
+      },
+      clearPendingStream: (messageId) => {
+        this.pendingStreams.update((all) => {
+          const next = { ...all };
+          delete next[messageId];
+          return next;
+        });
+      },
+      log: (message) => this.options.onLog?.(message),
+      isDisconnecting: () => this.disconnecting,
+    };
+  }
+
+  private ensureSessionWatcher(sessionId: string): FeishuSessionWatcher {
+    const existing = this.sessionWatchers.get(sessionId);
+    if (existing) return existing;
+    const watcher = new FeishuSessionWatcher(
+      this.cardHost(),
+      this.sessionIngress!,
+      sessionId,
+    );
+    this.sessionWatchers.set(sessionId, watcher);
+    watcher.start();
+    return watcher;
+  }
+
+  private async recoverDeliveries(): Promise<void> {
+    if (!this.sessionIngress || !this.channel) return;
+    try {
+      const deliveries = await this.sessionIngress.listDeliveries("feishu");
+      for (const delivery of deliveries) {
+        const watcher = this.ensureSessionWatcher(delivery.sessionId);
+        const chatId =
+          delivery.conversationId.split("|")[0] ?? delivery.conversationId;
+        const turn = {
+          turnId: delivery.turnId,
+          chatId,
+          sourceMessageId: delivery.replyToMessageId,
+          showThinking: true,
+        };
+        if (delivery.runId) {
+          await watcher.openCardForRun(delivery.runId, turn);
+        } else {
+          watcher.registerPendingTurn(delivery.turnId, turn);
+        }
+      }
+    } catch (err) {
+      this.options.onLog?.(
+        `delivery 恢复失败: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   private async submitAndStream(
     msg: FeishuMessage,
     prompt: string,
@@ -649,6 +716,13 @@ export class FeishuBridge {
       idempotencyKey: msg.messageId,
       replyToMessageId: msg.messageId,
     });
+    const turn = {
+      turnId: receipt.turnId,
+      chatId: msg.chatId,
+      sourceMessageId: msg.messageId,
+      showThinking: binding.showThinking ?? true,
+    };
+    const watcher = this.ensureSessionWatcher(receipt.sessionId);
     if (receipt.acceptance === "queued") {
       await this.sendMarkdown(
         msg.chatId,
@@ -657,61 +731,15 @@ export class FeishuBridge {
           : `⏳ 当前任务进行中，消息已排队（turn ${receipt.turnId.slice(0, 8)}）。`,
         msg.messageId,
       ).catch(() => {});
-      void this.waitForTurnDispatch(
-        msg,
-        prompt,
-        topicId,
-        receipt.sessionId,
-        receipt.turnId,
-        receipt.eventSequence,
-      );
+      watcher.registerPendingTurn(receipt.turnId, turn);
       return;
     }
-    await this.streamAgentReply(
-      msg,
-      prompt,
-      topicId,
-      receipt.sessionId,
-      receipt.runId,
-      receipt.eventSequence,
-    );
-  }
-
-  private async waitForTurnDispatch(
-    msg: FeishuMessage,
-    prompt: string,
-    topicId: string | undefined,
-    sessionId: string,
-    turnId: string,
-    afterSequence: number,
-  ): Promise<void> {
-    if (!this.sessionIngress) return;
-    const abort = new AbortController();
-    this.activeAborts.add(abort);
-    try {
-      for await (const event of this.sessionIngress.events(sessionId, {
-        afterSequence,
-        signal: abort.signal,
-      })) {
-        if (
-          event.type === "TURN_DISPATCHED"
-          && event.target === turnId
-          && event.runId
-        ) {
-          await this.streamAgentReply(
-            msg,
-            prompt,
-            topicId,
-            sessionId,
-            event.runId,
-            event.sequence,
-          );
-          return;
-        }
-      }
-    } finally {
-      this.activeAborts.delete(abort);
+    if (!receipt.runId) {
+      throw new Error(
+        `dispatched receipt missing run_id for turn ${receipt.turnId}`,
+      );
     }
+    await watcher.openCardForRun(receipt.runId, turn);
   }
 
   private async streamAgentReply(
