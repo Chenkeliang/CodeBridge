@@ -387,23 +387,28 @@ export class FeishuSessionWatcher {
     );
     this.cards.set(runId, card);
     const owner = `feishu:${this.instanceId}:${runId}`;
-    const claimed = await this.ingress.claimDelivery(turn.turnId, owner);
-    if (!claimed) {
-      this.cards.delete(runId);
-      return;
-    }
     try {
+      const claimed = await this.ingress.claimDelivery(turn.turnId, owner);
+      if (!claimed) {
+        this.cards.delete(runId);
+        return;
+      }
       await card.open();
       const cardId = card.cardMessageId;
       if (cardId) {
-        await this.ingress.ackDelivery(turn.turnId, owner, cardId);
+        const acked = await this.ingress.ackDelivery(
+          turn.turnId,
+          owner,
+          cardId,
+        );
+        if (!acked) {
+          throw new Error(`ack delivery failed for run ${runId}`);
+        }
       }
       this.deliveries.set(runId, { turnId: turn.turnId, owner });
     } catch (err) {
       this.cards.delete(runId);
-      this.host.log(
-        `卡片建卡失败: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw err;
     }
   }
 
@@ -434,8 +439,8 @@ export class FeishuSessionWatcher {
     if (event.type === "TURN_DISPATCHED" && event.runId && event.target) {
       const turn = this.pendingTurns.get(event.target);
       if (turn) {
-        this.pendingTurns.delete(event.target);
         await this.openCardForRun(event.runId, turn);
+        this.pendingTurns.delete(event.target);
       }
       return;
     }
@@ -474,14 +479,17 @@ export class FeishuSessionWatcher {
       }
       const delivery = this.deliveries.get(event.runId);
       if (delivery) {
-        this.deliveries.delete(event.runId);
-        await this.ingress
-          .completeDelivery(delivery.turnId, delivery.owner)
-          .catch((err) => {
-            this.host.log(
-              `complete delivery 失败: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          });
+        const completed = await this.ingress.completeDelivery(
+          delivery.turnId,
+          delivery.owner,
+        );
+        if (completed) {
+          this.deliveries.delete(event.runId);
+        } else {
+          throw new Error(
+            `complete delivery returned false for run ${event.runId}`,
+          );
+        }
       }
     }
   }
