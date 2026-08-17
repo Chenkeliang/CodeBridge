@@ -29,6 +29,7 @@ function makeHost() {
   const host: FeishuCardHost = {
     channel: { stream } as never,
     sendMarkdown: async () => {},
+    updateCard: vi.fn(async () => {}),
     registerPendingStream: () => {},
     clearPendingStream: () => {},
     log: () => {},
@@ -182,17 +183,32 @@ describe("FeishuSessionWatcher", () => {
     w.abort();
   });
 
-  it("recovers a delivering delivery by completing on terminal", async () => {
+  it("recovers a delivering delivery by replaying and updating the original card", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
-    ingress.events = blockingEvents([terminalEvent(9)]);
+    ingress.events = blockingEvents([
+      {
+        type: "AGENT_EVENT",
+        sequence: 7,
+        runId: "run_1",
+        target: null,
+        payload: { event: { type: "text_delta", text: "final answer" } },
+      },
+      terminalEvent(9),
+    ]);
 
     const w = watcher(ingress, host);
-    w.registerTerminalDelivery("run_1", "turn_1", "feishu:old:run_1");
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1");
     w.start(0);
 
     await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
 
+    expect(host.updateCard).toHaveBeenCalledWith(
+      "card-old",
+      expect.objectContaining({
+        body: { elements: [{ tag: "markdown", content: "final answer" }] },
+      }),
+    );
     expect(ingress.completeDelivery).toHaveBeenCalledWith(
       "turn_1",
       "feishu:old:run_1",
@@ -212,7 +228,7 @@ describe("FeishuSessionWatcher", () => {
     ingress.events = blockingEvents([terminalEvent(9)]);
 
     const w = watcher(ingress, host);
-    w.registerTerminalDelivery("run_1", "turn_1", "feishu:old:run_1");
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1");
     w.start(0);
 
     await waitUntil(() => completes >= 2);
@@ -222,6 +238,31 @@ describe("FeishuSessionWatcher", () => {
     >;
     expect(calls[0]?.[1]).toMatchObject({ afterSequence: 0 });
     expect(calls[1]?.[1]).toMatchObject({ afterSequence: 0 });
+    w.abort();
+  });
+
+  it("does not advance the cursor when ack fails and aborts the card", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    let acks = 0;
+    ingress.ackDelivery = vi.fn(async () => {
+      acks += 1;
+      return false;
+    });
+    ingress.events = blockingEvents([dispatchedEvent(5)]);
+
+    const w = watcher(ingress, host);
+    w.registerPendingTurn("turn_1", turn());
+    w.start(0);
+
+    await waitUntil(() => acks >= 2);
+
+    const calls = ingress.events.mock.calls as unknown as Array<
+      [string, { afterSequence: number }]
+    >;
+    expect(calls[0]?.[1]).toMatchObject({ afterSequence: 0 });
+    expect(calls[1]?.[1]).toMatchObject({ afterSequence: 0 });
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
     w.abort();
   });
 
