@@ -218,6 +218,7 @@ export interface Run {
   leaseExpiresAt: string | null;
   cancelRequestedAt: string | null;
   cancelDeadlineAt: string | null;
+  providerSessionId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -232,6 +233,7 @@ export interface CreateRunInput {
   planId?: string | null;
   planIrHash?: string | null;
   workflowRevision?: string | null;
+  providerSessionId?: string | null;
 }
 
 export interface PersistedPlanStep {
@@ -1474,6 +1476,7 @@ export class SqliteEventStore {
       leaseExpiresAt: null,
       cancelRequestedAt: null,
       cancelDeadlineAt: null,
+      providerSessionId: input.providerSessionId ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -1485,8 +1488,8 @@ export class SqliteEventStore {
             id, schema_version, work_item_id, session_id, turn_id, mode, status,
             agent_id, plan_id, plan_ir_hash, workflow_revision, terminal_reason,
             replay_safety, lease_owner, lease_expires_at, cancel_requested_at,
-            cancel_deadline_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            cancel_deadline_at, provider_session_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           run.id,
@@ -1506,6 +1509,7 @@ export class SqliteEventStore {
           run.leaseExpiresAt,
           run.cancelRequestedAt,
           run.cancelDeadlineAt,
+          run.providerSessionId ?? null,
           run.createdAt,
           run.updatedAt,
         );
@@ -1669,6 +1673,57 @@ export class SqliteEventStore {
   listDeliveries(channel: string): ChannelDeliveryRow[] {
     return createSqliteSessionRuntimeTransaction(this.database)
       .transaction.listDeliveries(channel);
+  }
+
+  claimProviderSession(input: {
+    agentId: string;
+    providerSessionId: string;
+    runId: string;
+    now: string;
+    expiresAt: string;
+  }): boolean {
+    return this.withSessionTransaction((tx) =>
+      tx.claimProviderSession(input),
+    );
+  }
+
+  renewProviderSession(input: {
+    agentId: string;
+    providerSessionId: string;
+    runId: string;
+    expiresAt: string;
+  }): boolean {
+    return this.withSessionTransaction((tx) =>
+      tx.renewProviderSession(input),
+    );
+  }
+
+  releaseProviderSession(input: {
+    agentId: string;
+    providerSessionId: string;
+    runId: string;
+  }): boolean {
+    return this.withSessionTransaction((tx) =>
+      tx.releaseProviderSession(input),
+    );
+  }
+
+  findLiveProviderLease(
+    agentId: string,
+    providerSessionId: string,
+    now: string,
+  ): { runId: string } | undefined {
+    return createSqliteSessionRuntimeTransaction(this.database)
+      .transaction.findLiveProviderLease(agentId, providerSessionId, now);
+  }
+
+  setSessionProviderSessionId(
+    sessionId: string,
+    providerSessionId: string | null,
+  ): void {
+    this.withSessionTransaction((tx) =>
+      tx.setSessionProviderSessionId(sessionId, providerSessionId),
+    );
   }
 
   startRunAttempt(runId: string): RunAttempt {
@@ -2503,6 +2558,10 @@ function toRun(row: SqliteRow): Run {
       row.cancel_deadline_at === null || row.cancel_deadline_at === undefined
         ? null
         : String(row.cancel_deadline_at),
+    providerSessionId:
+      row.provider_session_id === null || row.provider_session_id === undefined
+        ? null
+        : String(row.provider_session_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

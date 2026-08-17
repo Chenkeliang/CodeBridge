@@ -290,6 +290,134 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("atomically claims the provider session on the first session event", async () => {
+    const { store, coordinator, leaseService, run } = setupSessionRun();
+    const executor = new RunExecutor(
+      store,
+      new FakeRunner([
+        { type: "session", sessionId: "prov_1" },
+        { type: "done", exitCode: 0 },
+      ]),
+      {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: leaseService,
+        executorOwner: "bridge:123",
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+      },
+    );
+
+    const result = await executor.execute(run.id);
+    expect(result.status).toBe("succeeded");
+    expect(store.getRun(run.id)?.providerSessionId).toBe("prov_1");
+    store.close();
+  });
+
+  it("interrupts when the fresh provider session is already claimed", async () => {
+    const { store, coordinator, leaseService, run } = setupSessionRun();
+    store.claimProviderSession({
+      agentId: "pi",
+      providerSessionId: "prov_1",
+      runId: "other_run",
+      now: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const executor = new RunExecutor(
+      store,
+      new FakeRunner([
+        { type: "session", sessionId: "prov_1" },
+        { type: "done", exitCode: 0 },
+      ]),
+      {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: leaseService,
+        executorOwner: "bridge:123",
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+      },
+    );
+
+    const result = await executor.execute(run.id);
+    expect(result.status).toBe("interrupted");
+    expect(store.getRun(run.id)?.terminalReason).toBe("provider_session_busy");
+    store.close();
+  });
+
+  it("interrupts before the Runner when a resume provider session is busy", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, {
+      maxQueuedTurns: 100,
+    });
+    store.withSessionTransaction((tx) => {
+      tx.ensureRuntime("sess_1");
+      tx.setSessionProviderSessionId("sess_1", "prov_1");
+    });
+    const submitted = coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "message_1",
+      message: {
+        text: "调查",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      },
+      workItem: {
+        title: "Session",
+        mode: "investigation",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    });
+    const run = submitted.run!;
+    expect(run.providerSessionId).toBe("prov_1");
+    store.claimProviderSession({
+      agentId: "pi",
+      providerSessionId: "prov_1",
+      runId: "other_run",
+      now: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const executor = new RunExecutor(store, runner, {
+      sessionCoordinator: coordinator,
+      sessionLeaseService: new SessionLeaseService(store),
+      executorOwner: "bridge:123",
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: {
+          chatId: "conv_sess_1",
+          backendId: "pi",
+          cwd: "/tmp/project",
+        },
+        prompt: "调查",
+      }),
+    });
+
+    const result = await executor.execute(run.id);
+    expect(result.status).toBe("interrupted");
+    expect(runner.requests).toHaveLength(0);
+    store.close();
+  });
+
   it("finishes Session cancellation only after the Runner stops", async () => {
     const store = new SqliteEventStore(":memory:");
     const coordinator = new SessionCoordinator(store, {

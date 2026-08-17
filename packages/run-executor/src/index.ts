@@ -23,6 +23,15 @@ import { evaluatePostcondition } from "@codebridge/workflow-engine";
 import { AgentEventAggregator } from "./agent-event-aggregator.js";
 import { RunHeartbeat } from "./run-heartbeat.js";
 
+const PROVIDER_LEASE_MS = 60_000;
+
+class ProviderSessionBusyError extends Error {
+  constructor() {
+    super("provider_session_busy");
+    this.name = "ProviderSessionBusyError";
+  }
+}
+
 export interface RunnerStream {
   run(
     request: RunRequest,
@@ -59,6 +68,10 @@ export class RunExecutor {
   private readonly activeControllers = new Map<string, AbortController>();
   private readonly activeCompletions = new Map<string, Promise<void>>();
   private readonly activeAsyncErrors = new Map<string, unknown>();
+  private readonly activeProviderSessions = new Map<
+    string,
+    { agentId: string; providerSessionId: string }
+  >();
   private currentForce = false;
 
   constructor(
@@ -66,6 +79,36 @@ export class RunExecutor {
     private readonly runner: RunnerStream,
     private readonly options: RunExecutorOptions,
   ) {}
+
+  private claimProviderSession(
+    agentId: string,
+    providerSessionId: string,
+    runId: string,
+  ): boolean {
+    const now = new Date();
+    const claimed = this.store.claimProviderSession({
+      agentId,
+      providerSessionId,
+      runId,
+      now: now.toISOString(),
+      expiresAt: new Date(now.getTime() + PROVIDER_LEASE_MS).toISOString(),
+    });
+    if (claimed) {
+      this.activeProviderSessions.set(runId, { agentId, providerSessionId });
+    }
+    return claimed;
+  }
+
+  private renewProviderSession(runId: string): boolean {
+    const active = this.activeProviderSessions.get(runId);
+    if (!active) return true;
+    return this.store.renewProviderSession({
+      agentId: active.agentId,
+      providerSessionId: active.providerSessionId,
+      runId,
+      expiresAt: new Date(Date.now() + PROVIDER_LEASE_MS).toISOString(),
+    });
+  }
 
   cancelRun(runId: string): Run {
     const run = this.store.getRun(runId);
@@ -149,6 +192,17 @@ export class RunExecutor {
         this.options.executorOwner!,
       );
       if (!claimed) return this.store.getRun(runId)!;
+      // Task 9 resume 路径：run 已知 providerSessionId，调 Runner 前先 claim。
+      if (initial.providerSessionId && initial.agentId) {
+        const providerClaimed = this.claimProviderSession(
+          initial.agentId,
+          initial.providerSessionId,
+          runId,
+        );
+        if (!providerClaimed) {
+          return this.interrupt(initial, "provider_session_busy");
+        }
+      }
     }
 
     if (!plan && workItem.riskLevel === "production_write") {
@@ -201,8 +255,16 @@ export class RunExecutor {
       ? new RunHeartbeat({
           runId,
           owner: this.options.executorOwner!,
-          renew: (id, owner) =>
-            this.options.sessionLeaseService!.renew(id, owner),
+          renew: (id, owner) => {
+            const renewed = this.options.sessionLeaseService!.renew(id, owner);
+            if (!renewed) return null;
+            if (!this.renewProviderSession(runId)) {
+              // Provider Session Lease 被抢/丢失：停止写入并中断本 run。
+              this.interrupt(initial, "provider_session_busy");
+              return null;
+            }
+            return renewed;
+          },
           onLeaseLost: () => {
             leaseLost = true;
             controller.abort();
@@ -254,6 +316,9 @@ export class RunExecutor {
       if (leaseLost || isRunLeaseLost(failure)) {
         return this.store.getRun(runId)!;
       }
+      if (failure instanceof ProviderSessionBusyError) {
+        return this.interrupt(initial, "provider_session_busy");
+      }
       if (failure instanceof UnsafeProviderDisconnect) {
         return this.interrupt(
           initial,
@@ -293,6 +358,7 @@ export class RunExecutor {
     } finally {
       heartbeat?.close();
       this.activeAsyncErrors.delete(runId);
+      this.activeProviderSessions.delete(runId);
       if (this.activeControllers.get(runId) === controller) this.activeControllers.delete(runId);
       completeExecution();
       if (this.activeCompletions.get(runId) === completion) {
@@ -654,6 +720,36 @@ export class RunExecutor {
       this.store.getRun(run.id)?.replaySafety ?? "safe";
     const persistAgentEvent = (event: AgentEvent): void => {
       this.throwIfCancellationRequested(run.id);
+      // Task 9 fresh 路径：首个 session 事件到达时，persist 前原子
+      // updateRun(providerSessionId) + claim；失败则中断本 run，不 append AGENT_EVENT。
+      if (
+        event.type === "session"
+        && event.sessionId
+        && run.sessionId
+        && run.agentId
+        && !run.providerSessionId
+      ) {
+        const agentId = run.agentId;
+        const claimed = this.store.withSessionTransaction((tx) => {
+          tx.updateRun(run.id, { providerSessionId: event.sessionId });
+          const now = new Date();
+          return tx.claimProviderSession({
+            agentId,
+            providerSessionId: event.sessionId,
+            runId: run.id,
+            now: now.toISOString(),
+            expiresAt: new Date(now.getTime() + PROVIDER_LEASE_MS).toISOString(),
+          });
+        });
+        if (!claimed) {
+          throw new ProviderSessionBusyError();
+        }
+        run = { ...run, providerSessionId: event.sessionId };
+        this.activeProviderSessions.set(run.id, {
+          agentId,
+          providerSessionId: event.sessionId,
+        });
+      }
       const nextReplaySafety = replaySafetyAfterEvent(
         replaySafety,
         event,

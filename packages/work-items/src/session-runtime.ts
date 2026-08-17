@@ -172,6 +172,7 @@ export interface SessionRunSpec {
   planId: string | null;
   planIrHash: string | null;
   workflowRevision: string | null;
+  providerSessionId?: string | null;
 }
 
 export type {
@@ -239,6 +240,7 @@ export interface SessionRuntimeTransaction {
       leaseExpiresAt?: string | null;
       cancelRequestedAt?: string | null;
       cancelDeadlineAt?: string | null;
+      providerSessionId?: string | null;
     },
   ): Run;
   claimRun(
@@ -317,6 +319,34 @@ export interface SessionRuntimeTransaction {
   ): boolean;
   completeDelivery(turnId: string, owner: string): boolean;
   listDeliveries(channel: string): ChannelDeliveryRow[];
+  setSessionProviderSessionId(
+    sessionId: string,
+    providerSessionId: string | null,
+  ): void;
+  getSessionProviderSessionId(sessionId: string): string | null;
+  claimProviderSession(input: {
+    agentId: string;
+    providerSessionId: string;
+    runId: string;
+    now: string;
+    expiresAt: string;
+  }): boolean;
+  renewProviderSession(input: {
+    agentId: string;
+    providerSessionId: string;
+    runId: string;
+    expiresAt: string;
+  }): boolean;
+  releaseProviderSession(input: {
+    agentId: string;
+    providerSessionId: string;
+    runId: string;
+  }): boolean;
+  findLiveProviderLease(
+    agentId: string,
+    providerSessionId: string,
+    now: string,
+  ): { runId: string } | undefined;
   appendEvent(input: SessionEventInput): DomainEvent;
 }
 
@@ -623,9 +653,10 @@ export function createSqliteSessionRuntimeTransaction(
             id, schema_version, work_item_id, session_id, turn_id, mode,
             status, agent_id, plan_id, plan_ir_hash, workflow_revision,
             terminal_reason, replay_safety, lease_owner, lease_expires_at,
-            cancel_requested_at, cancel_deadline_at, created_at, updated_at
+            cancel_requested_at, cancel_deadline_at, provider_session_id,
+            created_at, updated_at
           ) VALUES (?, 1, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, NULL, 'safe',
-            NULL, NULL, NULL, NULL, ?, ?)`,
+            NULL, NULL, NULL, NULL, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -639,6 +670,7 @@ export function createSqliteSessionRuntimeTransaction(
           input.planId,
           input.planIrHash,
           input.workflowRevision,
+          input.providerSessionId ?? null,
           now,
           now,
         );
@@ -741,6 +773,7 @@ export function createSqliteSessionRuntimeTransaction(
         planId: plan?.planId ?? null,
         planIrHash: plan?.planIrHash ?? null,
         workflowRevision: plan?.definitionRevision ?? null,
+        providerSessionId: transaction.getSessionProviderSessionId(sessionId),
       });
       transaction.updateRuntime(sessionId, {
         activeRunId: dispatched.run.id,
@@ -779,6 +812,7 @@ export function createSqliteSessionRuntimeTransaction(
            SET status = ?, terminal_reason = ?, replay_safety = ?,
              lease_owner = ?, lease_expires_at = ?,
              cancel_requested_at = ?, cancel_deadline_at = ?,
+             provider_session_id = ?,
              updated_at = ?
            WHERE id = ?`,
         )
@@ -790,6 +824,7 @@ export function createSqliteSessionRuntimeTransaction(
           next.leaseExpiresAt,
           next.cancelRequestedAt,
           next.cancelDeadlineAt,
+          next.providerSessionId ?? null,
           next.updatedAt,
           runId,
         );
@@ -1134,6 +1169,88 @@ export function createSqliteSessionRuntimeTransaction(
         )
         .all(channel) as SqliteRow[];
       return rows.map(toChannelDeliveryRow);
+    },
+
+    setSessionProviderSessionId(sessionId, providerSessionId) {
+      assertActive();
+      // 运行时行可能尚未创建（消息入口在 submitTurn 之前同步），先 ensure。
+      transaction.ensureRuntime(sessionId);
+      database
+        .prepare(
+          "UPDATE session_runtime SET provider_session_id = ?, updated_at = ? WHERE session_id = ?",
+        )
+        .run(providerSessionId, new Date().toISOString(), sessionId);
+    },
+
+    getSessionProviderSessionId(sessionId) {
+      const row = database
+        .prepare(
+          "SELECT provider_session_id FROM session_runtime WHERE session_id = ?",
+        )
+        .get(sessionId) as { provider_session_id?: string | null } | undefined;
+      return row ? nullableString(row.provider_session_id) : null;
+    },
+
+    claimProviderSession(input) {
+      assertActive();
+      const result = database
+        .prepare(
+          `INSERT INTO provider_session_leases (
+            agent_id, provider_session_id, lease_owner, lease_expires_at
+          ) VALUES (?, ?, ?, ?)
+          ON CONFLICT(agent_id, provider_session_id) DO UPDATE SET
+            lease_owner = excluded.lease_owner,
+            lease_expires_at = excluded.lease_expires_at
+          WHERE provider_session_leases.lease_expires_at < ?`,
+        )
+        .run(
+          input.agentId,
+          input.providerSessionId,
+          input.runId,
+          input.expiresAt,
+          input.now,
+        );
+      return Number(result.changes) === 1;
+    },
+
+    renewProviderSession(input) {
+      assertActive();
+      const result = database
+        .prepare(
+          `UPDATE provider_session_leases
+           SET lease_expires_at = ?
+           WHERE agent_id = ? AND provider_session_id = ? AND lease_owner = ?`,
+        )
+        .run(
+          input.expiresAt,
+          input.agentId,
+          input.providerSessionId,
+          input.runId,
+        );
+      return Number(result.changes) === 1;
+    },
+
+    releaseProviderSession(input) {
+      assertActive();
+      const result = database
+        .prepare(
+          `DELETE FROM provider_session_leases
+           WHERE agent_id = ? AND provider_session_id = ? AND lease_owner = ?`,
+        )
+        .run(input.agentId, input.providerSessionId, input.runId);
+      return Number(result.changes) === 1;
+    },
+
+    findLiveProviderLease(agentId, providerSessionId, now) {
+      const row = database
+        .prepare(
+          `SELECT lease_owner FROM provider_session_leases
+           WHERE agent_id = ? AND provider_session_id = ? AND lease_expires_at >= ?`,
+        )
+        .get(agentId, providerSessionId, now) as
+          | { lease_owner?: string }
+          | undefined;
+      return row ? { runId: String(row.lease_owner) } : undefined;
     },
 
     appendEvent(input) {
@@ -1501,6 +1618,7 @@ function toRun(row: SqliteRow): Run {
     leaseExpiresAt: nullableString(row.lease_expires_at),
     cancelRequestedAt: nullableString(row.cancel_requested_at),
     cancelDeadlineAt: nullableString(row.cancel_deadline_at),
+    providerSessionId: nullableString(row.provider_session_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

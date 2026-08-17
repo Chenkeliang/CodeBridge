@@ -832,6 +832,57 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("syncs session_runtime.provider_session_id for a bound session", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      coordinator,
+    }, TOKEN);
+
+    const session = catalog.createSession({
+      agentId: "pi",
+      cwd: "/tmp/project",
+      providerSessionId: "provider_1",
+    });
+    catalog.bindChannelConversation({
+      channel: "feishu",
+      conversationId: "chat:topic",
+      agentId: "pi",
+      workspaceKey: canonicalWorkspaceKey("/tmp/project").key,
+      generation: 0,
+    }, session.id);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat%3Atopic/messages",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": "provider-sync-1",
+        },
+        body: JSON.stringify({
+          message: "继续",
+          agent_id: "pi",
+          cwd: "/tmp/project",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    let providerSessionId: string | null = null;
+    workItems.withSessionTransaction((tx) => {
+      providerSessionId = tx.getSessionProviderSessionId(session.id);
+    });
+    expect(providerSessionId).toBe("provider_1");
+    catalog.close();
+    workItems.close();
+  });
+
   it("persists a channel delivery when a reply_to_message_id is provided", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
