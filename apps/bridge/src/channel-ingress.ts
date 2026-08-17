@@ -13,7 +13,7 @@ interface SessionEvent {
   type?: string;
   sequence?: number;
   target?: string | null;
-  run_id?: string | null;
+  runId?: string | null;
   payload?: Record<string, unknown>;
 }
 
@@ -105,7 +105,7 @@ export function createChannelSessionIngress(
       yield {
         type: String(event.type ?? ""),
         sequence: Number(event.sequence ?? 0),
-        runId: event.run_id ?? null,
+        runId: event.runId ?? null,
         target: event.target ?? null,
         payload: (event.payload ?? {}) as Record<string, unknown>,
       };
@@ -138,7 +138,11 @@ export function createChannelSessionIngress(
         body: JSON.stringify({ owner }),
       },
     );
-    if (!response.ok) return false;
+    if (!response.ok) {
+      throw new Error(
+        `claim delivery failed (${response.status}): ${await response.text()}`,
+      );
+    }
     return (await response.json() as { claimed?: boolean }).claimed === true;
   };
 
@@ -155,7 +159,11 @@ export function createChannelSessionIngress(
         body: JSON.stringify({ owner, surface_message_id: surfaceMessageId }),
       },
     );
-    if (!response.ok) return false;
+    if (!response.ok) {
+      throw new Error(
+        `ack delivery failed (${response.status}): ${await response.text()}`,
+      );
+    }
     return (await response.json() as { acked?: boolean }).acked === true;
   };
 
@@ -171,8 +179,42 @@ export function createChannelSessionIngress(
         body: JSON.stringify({ owner }),
       },
     );
-    if (!response.ok) return false;
+    if (!response.ok) {
+      throw new Error(
+        `complete delivery failed (${response.status}): ${await response.text()}`,
+      );
+    }
     return (await response.json() as { completed?: boolean }).completed === true;
+  };
+
+  const resumeProviderSession = async (
+    slot: ChannelSlot,
+    providerSessionId: string,
+  ): Promise<{ sessionId: string }> => {
+    const response = await app.request(
+      "/v1/sessions/resume-provider",
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({
+          slot: {
+            channel: slot.channel,
+            conversation_id: slot.conversationId,
+            agent_id: slot.agentId,
+            workspace_key: slot.workspaceKey,
+            generation: slot.generation,
+          },
+          provider_session_id: providerSessionId,
+        }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `resume provider session failed (${response.status}): ${await response.text()}`,
+      );
+    }
+    const body = await response.json() as { session_id: string };
+    return { sessionId: body.session_id };
   };
 
   const cancelRun = async (
@@ -194,7 +236,11 @@ export function createChannelSessionIngress(
         body: "{}",
       },
     );
-    if (!response.ok) return false;
+    if (!response.ok) {
+      throw new Error(
+        `cancel run failed (${response.status}): ${await response.text()}`,
+      );
+    }
     return (await response.json() as { disposition?: string }).disposition !== undefined;
   };
 
@@ -216,7 +262,11 @@ export function createChannelSessionIngress(
         body: "{}",
       },
     );
-    if (!response.ok) return { queueState: "paused" };
+    if (!response.ok) {
+      throw new Error(
+        `resume queue failed (${response.status}): ${await response.text()}`,
+      );
+    }
     const body = await response.json() as {
       runtime?: { queue_state?: "ready" | "paused" };
     };
@@ -267,6 +317,7 @@ export function createChannelSessionIngress(
     claimDelivery,
     ackDelivery,
     completeDelivery,
+    resumeProviderSession,
     cancelRun,
     resumeQueue,
     resetSlot,

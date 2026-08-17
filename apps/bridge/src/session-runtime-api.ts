@@ -104,6 +104,7 @@ export function registerSessionRuntimeCommandRoutes(
           workspaceScope: session.cwd ? [session.cwd] : [],
           riskLevel: "read_only",
         },
+        delivery: parseDelivery(body.delivery),
       });
       options.catalog.updateSession(session.id, {
         taskRecordId: result.workItemId,
@@ -399,6 +400,27 @@ function nullable(value: unknown, fallback: string | null): string | null {
     : typeof value === "string"
       ? value
       : null;
+}
+
+function parseDelivery(value: unknown): {
+  channel: string;
+  conversationId: string;
+  replyToMessageId: string;
+} | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const delivery = value as Record<string, unknown>;
+  if (
+    typeof delivery.channel !== "string"
+    || typeof delivery.conversation_id !== "string"
+    || typeof delivery.reply_to_message_id !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    channel: delivery.channel,
+    conversationId: delivery.conversation_id,
+    replyToMessageId: delivery.reply_to_message_id,
+  };
 }
 
 function parseAttachments(value: unknown) {
