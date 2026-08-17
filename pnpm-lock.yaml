@@ -462,6 +462,10 @@ importers:
         version: 2.1.9(@types/node@22.20.0)(jsdom@30.0.1)(lightningcss@1.33.0)
 
   packages/work-items:
+    dependencies:
+      '@codebridge/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       typescript:
         specifier: ^5.7.2

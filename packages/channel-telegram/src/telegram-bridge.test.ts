@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig, type AgentEvent } from "@codebridge/core";
+import { defaultConfig, type AgentEvent, type ChannelSessionIngress } from "@codebridge/core";
 import { TelegramBridge } from "./telegram-bridge.js";
 
 const tmpDirs: string[] = [];
@@ -303,11 +303,11 @@ describe("TelegramBridge inbound commands", () => {
       config,
       dataDir,
       api: { sendMessage, editMessage } as never,
-      sessionIngress: async function* (message) {
+      sessionIngress: (async function* (message: Parameters<ChannelSessionIngress>[0]) {
         received.push(message);
         yield { type: "text_delta", text: "Session reply" };
         yield { type: "done", exitCode: 0 };
-      },
+      }) as unknown as ChannelSessionIngress,
     });
 
     await bridge.handleUpdate({

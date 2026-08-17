@@ -443,7 +443,29 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json({ stopped: true, run_id: run.id });
   });
 
-  app.post("/v1/channels/:channel/conversations/:conversation_id/reset", (c) => {
+  app.post("/v1/channels/:channel/conversations/:conversation_id/reset", async (c) => {
+    const body = await readJson(c);
+    const rawAgentId = body?.agent_id;
+    const rawWorkspaceKey = body?.workspace_key;
+    const rawGeneration = body?.generation;
+    const agentId = typeof rawAgentId === "string" ? rawAgentId : undefined;
+    const workspaceKey = typeof rawWorkspaceKey === "string"
+      ? rawWorkspaceKey
+      : undefined;
+    const generation = Number.isSafeInteger(rawGeneration)
+      ? Number(rawGeneration)
+      : undefined;
+    if (agentId && workspaceKey && generation !== undefined) {
+      return c.json({
+        reset: options.catalog.unbindChannelConversation({
+          channel: c.req.param("channel"),
+          conversationId: c.req.param("conversation_id"),
+          agentId,
+          workspaceKey,
+          generation,
+        }),
+      });
+    }
     const binding = options.catalog.getLatestChannelBinding(
       c.req.param("channel"),
       c.req.param("conversation_id"),
@@ -1022,6 +1044,107 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     }
     if (!options.catalog.deleteSession(session.id)) return c.json({ error: "session_not_found" }, 404);
     return c.body(null, 204);
+  });
+
+  app.get("/v1/deliveries", (c) => {
+    const channel = c.req.query("channel");
+    if (!channel) return c.json({ error: "channel_required" }, 400);
+    return c.json({
+      deliveries: options.workItems.listDeliveries(channel),
+    });
+  });
+
+  app.post("/v1/deliveries/:turn_id/claim", async (c) => {
+    const body = await readJson(c);
+    const owner = typeof body?.owner === "string" && body.owner
+      ? body.owner
+      : null;
+    if (!owner) return c.json({ error: "owner_required" }, 400);
+    const now = new Date();
+    const claimed = options.workItems.withSessionTransaction((tx) =>
+      tx.claimDelivery(
+        c.req.param("turn_id"),
+        owner,
+        now.toISOString(),
+        new Date(now.getTime() + 60_000).toISOString(),
+      ),
+    );
+    return c.json({ claimed });
+  });
+
+  app.post("/v1/deliveries/:turn_id/ack", async (c) => {
+    const body = await readJson(c);
+    const owner = typeof body?.owner === "string" && body.owner
+      ? body.owner
+      : null;
+    const surfaceMessageId = typeof body?.surface_message_id === "string"
+      ? body.surface_message_id
+      : null;
+    if (!owner || !surfaceMessageId) {
+      return c.json({ error: "owner_and_surface_message_id_required" }, 400);
+    }
+    const acked = options.workItems.withSessionTransaction((tx) =>
+      tx.ackDelivery(c.req.param("turn_id"), owner, surfaceMessageId),
+    );
+    return c.json({ acked });
+  });
+
+  app.post("/v1/deliveries/:turn_id/complete", async (c) => {
+    const body = await readJson(c);
+    const owner = typeof body?.owner === "string" && body.owner
+      ? body.owner
+      : null;
+    if (!owner) return c.json({ error: "owner_required" }, 400);
+    const completed = options.workItems.withSessionTransaction((tx) =>
+      tx.completeDelivery(c.req.param("turn_id"), owner),
+    );
+    return c.json({ completed });
+  });
+
+  app.post("/v1/sessions/:session_id/approval", async (c) => {
+    if (!options.approvals) {
+      return c.json({ resolved: false, error: "approval_unavailable" }, 503);
+    }
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session?.taskRecordId) return c.json({ resolved: false });
+    const body = await readJson(c);
+    const runId = typeof body?.run_id === "string" ? body.run_id : undefined;
+    const runs = options.workItems.listRuns(session.taskRecordId);
+    const run = runId
+      ? runs.find((candidate) => candidate.id === runId)
+      : [...runs].reverse().find((candidate) => candidate.status === "waiting");
+    if (!run) return c.json({ resolved: false });
+    const pending = options.approvals
+      .listForRun(run.id)
+      .find((approval) => approval.status === "requested");
+    if (!pending) return c.json({ resolved: false });
+    const approve = body?.approve === true;
+    const record = approve
+      ? options.approvals.grant(pending.id, "channel")
+      : options.approvals.revoke(pending.id, "channel");
+    if (
+      !record
+      || (approve ? record.status !== "granted" : record.status !== "revoked")
+    ) {
+      return c.json({ resolved: false });
+    }
+    if (approve) {
+      options.workItems.requeueRun(run.id);
+      if (options.executor) void options.executor.execute(run.id).catch(() => {});
+    } else if (options.executor) {
+      options.executor.cancelRun(run.id);
+    } else {
+      options.workItems.updateRunStatus(run.id, "cancelled");
+      options.workItems.appendEvent({
+        workItemId: run.workItemId,
+        runId: run.id,
+        type: "RUN_CANCELLED",
+        actor: "channel",
+        target: run.id,
+        payload: { approval_id: record.id, reason: "approval_rejected" },
+      });
+    }
+    return c.json({ resolved: true, approval_id: record.id });
   });
 
   return app;

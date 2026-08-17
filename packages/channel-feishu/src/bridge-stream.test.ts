@@ -201,11 +201,11 @@ describe("FeishuBridge streaming", () => {
   it("routes media messages through the shared Session ingress", async () => {
     const bridge = new FeishuBridge({ config: defaultConfig(), dataDir: os.tmpdir() }) as unknown as TestableBridge;
     let received: Parameters<ChannelSessionIngress>[0] | undefined;
-    bridge.sessionIngress = async function* (message) {
+    bridge.sessionIngress = (async function* (message: Parameters<ChannelSessionIngress>[0]) {
       received = message;
       yield { type: "text_delta", text: "已读取" };
       yield { type: "done", exitCode: 0 };
-    };
+    }) as unknown as ChannelSessionIngress;
     bridge.channel = {
       async stream(_chatId, input) {
         await input.markdown({ messageId: "card-media-1", async append() {}, async setContent() {} });
@@ -760,11 +760,11 @@ describe("FeishuBridge mentions", () => {
     const bridge = new FeishuBridge({
       config: defaultConfig(),
       dataDir,
-      sessionIngress: async function* (message) {
+      sessionIngress: (async function* (message: Parameters<ChannelSessionIngress>[0]) {
         received.push(message);
         yield { type: "text_delta", text: "Session reply" };
         yield { type: "done", exitCode: 0 };
-      },
+      }) as unknown as ChannelSessionIngress,
     }) as unknown as TestableBridge;
     let rendered = "";
     bridge.channel = {
