@@ -65,7 +65,7 @@ export class SessionRouter {
       chatId,
       topicId,
       backendId: binding.backendId,
-      cwd: binding.cwd,
+      cwd: canonicalWorkspaceKey(binding.cwd).key,
     });
   }
 

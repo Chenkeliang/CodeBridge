@@ -252,6 +252,35 @@ export interface SessionRuntimeTransaction {
       >
     >,
   ): SessionRuntime;
+  getProviderHistoryImportCursor(
+    sessionId: string,
+    providerSessionId: string,
+  ): { providerDigest: string; importedPosition: number } | undefined;
+  nextSessionQueuePosition(sessionId: string): number;
+  insertImportedTurn(input: {
+    turnId: string;
+    sessionId: string;
+    queuePosition: number;
+    message: SessionTurnMessage;
+    runId: string;
+    createdAt: string;
+    dispatchedAt: string;
+  }): void;
+  insertImportedRun(input: {
+    runId: string;
+    workItemId: string;
+    sessionId: string;
+    turnId: string;
+    createdAt: string;
+    updatedAt: string;
+  }): void;
+  upsertProviderHistoryImport(input: {
+    sessionId: string;
+    providerSessionId: string;
+    providerDigest: string;
+    importedPosition: number;
+    importedAt: string;
+  }): void;
   appendEvent(input: SessionEventInput): DomainEvent;
 }
 
@@ -829,6 +858,99 @@ export function createSqliteSessionRuntimeTransaction(
       return transaction.getRuntime(sessionId)!;
     },
 
+    getProviderHistoryImportCursor(sessionId, providerSessionId) {
+      const row = database
+        .prepare(
+          `SELECT provider_digest, imported_position
+           FROM provider_history_imports
+           WHERE session_id = ? AND provider_session_id = ?`,
+        )
+        .get(sessionId, providerSessionId) as
+          | { provider_digest?: string; imported_position?: number }
+          | undefined;
+      return row
+        ? {
+            providerDigest: String(row.provider_digest),
+            importedPosition: Number(row.imported_position),
+          }
+        : undefined;
+    },
+
+    nextSessionQueuePosition(sessionId) {
+      const row = database
+        .prepare(
+          `SELECT COALESCE(MAX(queue_position), 0) + 1 AS next_position
+           FROM session_turns WHERE session_id = ?`,
+        )
+        .get(sessionId) as { next_position?: number } | undefined;
+      return Number(row?.next_position ?? 1);
+    },
+
+    insertImportedTurn(input) {
+      assertActive();
+      database
+        .prepare(
+          `INSERT INTO session_turns (
+            turn_id, session_id, queue_position, status, message_json,
+            version, dispatched_run_id, created_at, dispatched_at,
+            cancelled_at
+          ) VALUES (?, ?, ?, 'dispatched', ?, 2, ?, ?, ?, NULL)`,
+        )
+        .run(
+          input.turnId,
+          input.sessionId,
+          input.queuePosition,
+          JSON.stringify(input.message),
+          input.runId,
+          input.createdAt,
+          input.dispatchedAt,
+        );
+    },
+
+    insertImportedRun(input) {
+      assertActive();
+      database
+        .prepare(
+          `INSERT INTO runs (
+            id, schema_version, work_item_id, session_id, turn_id, mode,
+            status, agent_id, plan_id, plan_ir_hash, workflow_revision,
+            terminal_reason, replay_safety, lease_owner, lease_expires_at,
+            cancel_requested_at, cancel_deadline_at, created_at, updated_at
+          ) VALUES (?, 1, ?, ?, ?, 'auto', 'running', NULL, NULL, NULL,
+            NULL, NULL, 'safe', NULL, NULL, NULL, NULL, ?, ?)`,
+        )
+        .run(
+          input.runId,
+          input.workItemId,
+          input.sessionId,
+          input.turnId,
+          input.createdAt,
+          input.updatedAt,
+        );
+    },
+
+    upsertProviderHistoryImport(input) {
+      assertActive();
+      database
+        .prepare(
+          `INSERT INTO provider_history_imports (
+            session_id, provider_session_id, provider_digest,
+            imported_position, imported_at
+          ) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(session_id, provider_session_id) DO UPDATE SET
+            provider_digest = excluded.provider_digest,
+            imported_position = excluded.imported_position,
+            imported_at = excluded.imported_at`,
+        )
+        .run(
+          input.sessionId,
+          input.providerSessionId,
+          input.providerDigest,
+          input.importedPosition,
+          input.importedAt,
+        );
+    },
+
     appendEvent(input) {
       assertActive();
       return appendSessionEventInTransaction(database, input);
@@ -933,7 +1055,6 @@ export function appendSessionEventInTransaction(
 
 export function importProviderHistory(
   transaction: SessionRuntimeTransaction,
-  database: DatabaseSync,
   input: ProviderHistoryImportInput,
 ): ProviderHistoryImportResult {
   const namespace = `session:history-import:${input.sessionId}`;
@@ -942,20 +1063,15 @@ export function importProviderHistory(
   >(namespace, input.idempotencyKey);
   if (cached) return cached;
 
-  const cursor = database
-    .prepare(
-      `SELECT provider_digest, imported_position
-       FROM provider_history_imports
-       WHERE session_id = ? AND provider_session_id = ?`,
-    )
-    .get(input.sessionId, input.providerSessionId) as
-      | { provider_digest?: string; imported_position?: number }
-      | undefined;
+  const cursor = transaction.getProviderHistoryImportCursor(
+    input.sessionId,
+    input.providerSessionId,
+  );
   if (
     cursor
     && (
-      Number(cursor.imported_position) !== input.priorPosition
-      || String(cursor.provider_digest) !== input.priorDigest
+      cursor.importedPosition !== input.priorPosition
+      || cursor.providerDigest !== input.priorDigest
     )
   ) {
     throw new Error("provider_history_cursor_conflict");
@@ -1012,55 +1128,32 @@ export function importProviderHistory(
     const turnId = `turn_import_${identity}`;
     const runId = `run_import_${identity}`;
     const now = new Date().toISOString();
-    const position = database
-      .prepare(
-        `SELECT COALESCE(MAX(queue_position), 0) + 1 AS next_position
-         FROM session_turns WHERE session_id = ?`,
-      )
-      .get(input.sessionId) as { next_position?: number } | undefined;
-    database
-      .prepare(
-        `INSERT INTO session_turns (
-          turn_id, session_id, queue_position, status, message_json,
-          version, dispatched_run_id, created_at, dispatched_at,
-          cancelled_at
-        ) VALUES (?, ?, ?, 'dispatched', ?, 2, ?, ?, ?, NULL)`,
-      )
-      .run(
-        turnId,
-        input.sessionId,
-        Number(position?.next_position ?? 1),
-        JSON.stringify({
-          text: message ?? "",
-          attachmentIds: [],
-          flowId: null,
-          model: null,
-          effort: null,
-          permissionMode: null,
-          plan: null,
-        } satisfies SessionTurnMessage),
-        runId,
-        now,
-        now,
-      );
-    database
-      .prepare(
-        `INSERT INTO runs (
-          id, schema_version, work_item_id, session_id, turn_id, mode,
-          status, agent_id, plan_id, plan_ir_hash, workflow_revision,
-          terminal_reason, replay_safety, lease_owner, lease_expires_at,
-          cancel_requested_at, cancel_deadline_at, created_at, updated_at
-        ) VALUES (?, 1, ?, ?, ?, 'auto', 'running', NULL, NULL, NULL,
-          NULL, NULL, 'safe', NULL, NULL, NULL, NULL, ?, ?)`,
-      )
-      .run(
-        runId,
-        workItemId,
-        input.sessionId,
-        turnId,
-        now,
-        now,
-      );
+    const position = transaction.nextSessionQueuePosition(input.sessionId);
+    transaction.insertImportedTurn({
+      turnId,
+      sessionId: input.sessionId,
+      queuePosition: position,
+      message: {
+        text: message ?? "",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      } satisfies SessionTurnMessage,
+      runId,
+      createdAt: now,
+      dispatchedAt: now,
+    });
+    transaction.insertImportedRun({
+      runId,
+      workItemId,
+      sessionId: input.sessionId,
+      turnId,
+      createdAt: now,
+      updatedAt: now,
+    });
     transaction.updateRuntime(input.sessionId, {
       activeRunId: runId,
       queueState: "ready",
@@ -1121,24 +1214,13 @@ export function importProviderHistory(
 
   const importedPosition =
     input.priorPosition + input.events.length;
-  database
-    .prepare(
-      `INSERT INTO provider_history_imports (
-        session_id, provider_session_id, provider_digest,
-        imported_position, imported_at
-      ) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(session_id, provider_session_id) DO UPDATE SET
-        provider_digest = excluded.provider_digest,
-        imported_position = excluded.imported_position,
-        imported_at = excluded.imported_at`,
-    )
-    .run(
-      input.sessionId,
-      input.providerSessionId,
-      input.nextDigest,
-      importedPosition,
-      new Date().toISOString(),
-    );
+  transaction.upsertProviderHistoryImport({
+    sessionId: input.sessionId,
+    providerSessionId: input.providerSessionId,
+    providerDigest: input.nextDigest,
+    importedPosition,
+    importedAt: new Date().toISOString(),
+  });
   const result: ProviderHistoryImportResult = {
     importedEvents: input.events.length,
     importedTurns,

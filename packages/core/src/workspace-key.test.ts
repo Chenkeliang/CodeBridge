@@ -34,4 +34,9 @@ describe("canonicalWorkspaceKey", () => {
     expect(result.key.endsWith("/")).toBe(false);
     expect(result.diagnostic).toMatch(/realpath failed/i);
   });
+
+  it("preserves the filesystem root", () => {
+    const result = canonicalWorkspaceKey("/");
+    expect(result.key).toBe("/");
+  });
 });

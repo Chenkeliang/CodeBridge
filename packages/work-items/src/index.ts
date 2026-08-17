@@ -804,7 +804,7 @@ export class SqliteEventStore {
     input: ProviderHistoryImportInput,
   ): ProviderHistoryImportResult {
     return this.withSessionTransaction((tx) =>
-      importProviderHistory(tx, this.database, input),
+      importProviderHistory(tx, input),
     );
   }
 
