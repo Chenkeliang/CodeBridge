@@ -984,14 +984,30 @@ describe("session API", () => {
       workItems,
       runner: { resolvePermission } as unknown as RunnerClient,
     }, TOKEN);
-    const response = await app.request("/v1/runs/run_1/permission", {
+    const approveResponse = await app.request("/v1/runs/run_1/permission", {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
       body: JSON.stringify({ approve: true }),
     });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ resolved: true });
+    expect(approveResponse.status).toBe(200);
+    expect(await approveResponse.json()).toEqual({ resolved: true });
     expect(resolvePermission).toHaveBeenCalledWith("run_1", true);
+
+    const denyResponse = await app.request("/v1/runs/run_1/permission", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ approve: false }),
+    });
+    expect(denyResponse.status).toBe(200);
+    expect(resolvePermission).toHaveBeenCalledWith("run_1", false);
+
+    const invalidResponse = await app.request("/v1/runs/run_1/permission", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(invalidResponse.status).toBe(400);
+    expect(await invalidResponse.json()).toEqual({ error: "approve (boolean) is required" });
     catalog.close();
     workItems.close();
   });

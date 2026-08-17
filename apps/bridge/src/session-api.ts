@@ -1111,10 +1111,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       return c.json({ resolved: false, error: "runner_unavailable" }, 503);
     }
     const body = await readJson(c);
-    const approve = body?.approve === true;
+    if (typeof body?.approve !== "boolean") {
+      return c.json({ error: "approve (boolean) is required" }, 400);
+    }
     const resolved = await options.runner.resolvePermission(
       c.req.param("run_id"),
-      approve,
+      body.approve,
     );
     return c.json({ resolved });
   });
