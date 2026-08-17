@@ -169,6 +169,35 @@ export interface SessionRunSpec {
   workflowRevision: string | null;
 }
 
+export type ChannelDeliveryStatus =
+  | "pending"
+  | "dispatched"
+  | "delivering"
+  | "completed";
+
+export interface ChannelDeliveryInput {
+  channel: string;
+  conversationId: string;
+  replyToMessageId: string;
+}
+
+export interface ChannelDeliveryRow {
+  turnId: string;
+  sessionId: string;
+  channel: string;
+  conversationId: string;
+  replyToMessageId: string;
+  surfaceMessageId: string | null;
+  claimOwner: string | null;
+  claimExpiresAt: string | null;
+  acceptedSequence: number;
+  runId: string | null;
+  runTerminalAt: string | null;
+  status: ChannelDeliveryStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const transactionBrand: unique symbol = Symbol(
   "codebridge.session-transaction",
 );
@@ -281,6 +310,27 @@ export interface SessionRuntimeTransaction {
     importedPosition: number;
     importedAt: string;
   }): void;
+  insertChannelDelivery(input: {
+    turnId: string;
+    sessionId: string;
+    channel: string;
+    conversationId: string;
+    replyToMessageId: string;
+    acceptedSequence: number;
+    runId: string | null;
+    status: "pending" | "dispatched";
+  }): void;
+  markDeliveryDispatched(turnId: string, runId: string): void;
+  markDeliveryRunTerminal(runId: string, now: string): void;
+  claimDelivery(
+    turnId: string,
+    owner: string,
+    now: string,
+    expiresAt: string,
+  ): boolean;
+  ackDelivery(turnId: string, surfaceMessageId: string): void;
+  completeDelivery(turnId: string): void;
+  listDeliveries(channel: string): ChannelDeliveryRow[];
   appendEvent(input: SessionEventInput): DomainEvent;
 }
 
@@ -617,6 +667,7 @@ export function createSqliteSessionRuntimeTransaction(
       if (Number(result.changes) !== 1) {
         throw new Error(`Turn is not queued: ${turnId}`);
       }
+      transaction.markDeliveryDispatched(turnId, input.id);
 
       transaction.appendEvent({
         workItemId: input.workItemId,
@@ -949,6 +1000,111 @@ export function createSqliteSessionRuntimeTransaction(
           input.importedPosition,
           input.importedAt,
         );
+    },
+
+    insertChannelDelivery(input) {
+      assertActive();
+      const now = new Date().toISOString();
+      database
+        .prepare(
+          `INSERT INTO channel_turn_delivery (
+            turn_id, session_id, channel, conversation_id,
+            reply_to_message_id, surface_message_id, claim_owner,
+            claim_expires_at, accepted_sequence, run_id, run_terminal_at,
+            status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL, ?, ?, ?)`,
+        )
+        .run(
+          input.turnId,
+          input.sessionId,
+          input.channel,
+          input.conversationId,
+          input.replyToMessageId,
+          input.acceptedSequence,
+          input.runId,
+          input.status,
+          now,
+          now,
+        );
+    },
+
+    markDeliveryDispatched(turnId, runId) {
+      assertActive();
+      const now = new Date().toISOString();
+      database
+        .prepare(
+          `UPDATE channel_turn_delivery
+           SET run_id = ?, status = 'dispatched', updated_at = ?
+           WHERE turn_id = ?`,
+        )
+        .run(runId, now, turnId);
+    },
+
+    markDeliveryRunTerminal(runId, now) {
+      assertActive();
+      database
+        .prepare(
+          `UPDATE channel_turn_delivery
+           SET run_terminal_at = ?, updated_at = ?
+           WHERE run_id = ?`,
+        )
+        .run(now, now, runId);
+    },
+
+    claimDelivery(turnId, owner, now, expiresAt) {
+      assertActive();
+      const result = database
+        .prepare(
+          `UPDATE channel_turn_delivery
+           SET status = 'delivering', claim_owner = ?, claim_expires_at = ?,
+             updated_at = ?
+           WHERE turn_id = ?
+             AND (
+               status IN ('pending', 'dispatched')
+               OR (
+                 status = 'delivering'
+                 AND surface_message_id IS NULL
+                 AND (claim_expires_at IS NULL OR claim_expires_at < ?)
+               )
+             )`,
+        )
+        .run(owner, expiresAt, now, turnId, now);
+      return Number(result.changes) === 1;
+    },
+
+    ackDelivery(turnId, surfaceMessageId) {
+      assertActive();
+      const now = new Date().toISOString();
+      database
+        .prepare(
+          `UPDATE channel_turn_delivery
+           SET surface_message_id = ?, updated_at = ?
+           WHERE turn_id = ? AND surface_message_id IS NULL`,
+        )
+        .run(surfaceMessageId, now, turnId);
+    },
+
+    completeDelivery(turnId) {
+      assertActive();
+      const now = new Date().toISOString();
+      database
+        .prepare(
+          `UPDATE channel_turn_delivery
+           SET status = 'completed', updated_at = ?
+           WHERE turn_id = ?`,
+        )
+        .run(now, turnId);
+    },
+
+    listDeliveries(channel) {
+      const rows = database
+        .prepare(
+          `SELECT * FROM channel_turn_delivery
+           WHERE channel = ? AND status != 'completed'
+           ORDER BY accepted_sequence ASC`,
+        )
+        .all(channel) as SqliteRow[];
+      return rows.map(toChannelDeliveryRow);
     },
 
     appendEvent(input) {
@@ -1323,6 +1479,25 @@ function toRun(row: SqliteRow): Run {
 
 function nullableString(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
+}
+
+function toChannelDeliveryRow(row: SqliteRow): ChannelDeliveryRow {
+  return {
+    turnId: String(row.turn_id),
+    sessionId: String(row.session_id),
+    channel: String(row.channel),
+    conversationId: String(row.conversation_id),
+    replyToMessageId: String(row.reply_to_message_id),
+    surfaceMessageId: nullableString(row.surface_message_id),
+    claimOwner: nullableString(row.claim_owner),
+    claimExpiresAt: nullableString(row.claim_expires_at),
+    acceptedSequence: Number(row.accepted_sequence),
+    runId: nullableString(row.run_id),
+    runTerminalAt: nullableString(row.run_terminal_at),
+    status: String(row.status) as ChannelDeliveryStatus,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
 }
 
 function createId(prefix: "wi" | "evt" | "turn" | "run"): string {

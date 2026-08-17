@@ -142,5 +142,24 @@ export function initializeSessionRuntimeSchema(
       imported_at TEXT NOT NULL,
       PRIMARY KEY(session_id, provider_session_id)
     );
+
+    CREATE TABLE IF NOT EXISTS channel_turn_delivery (
+      turn_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      reply_to_message_id TEXT NOT NULL,
+      surface_message_id TEXT,
+      claim_owner TEXT,
+      claim_expires_at TEXT,
+      accepted_sequence INTEGER NOT NULL,
+      run_id TEXT,
+      run_terminal_at TEXT,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS channel_delivery_pending
+      ON channel_turn_delivery (channel, status);
   `);
 }

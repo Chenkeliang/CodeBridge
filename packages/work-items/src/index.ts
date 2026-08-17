@@ -11,6 +11,7 @@ import {
   importProviderHistory,
 } from "./session-runtime.js";
 import type {
+  ChannelDeliveryRow,
   QueuePauseReason,
   QueueState,
   ProviderHistoryImportInput,
@@ -29,6 +30,9 @@ import type {
 } from "./session-runtime.js";
 
 export type {
+  ChannelDeliveryInput,
+  ChannelDeliveryRow,
+  ChannelDeliveryStatus,
   ImportedHistoryEntry,
   ProviderHistoryImportInput,
   ProviderHistoryImportResult,
@@ -1660,6 +1664,11 @@ export class SqliteEventStore {
   listCancellationDeadlineRuns(now: string, limit: number): Run[] {
     return createSqliteSessionRuntimeTransaction(this.database)
       .transaction.listCancellationDeadlineRuns(now, limit);
+  }
+
+  listDeliveries(channel: string): ChannelDeliveryRow[] {
+    return createSqliteSessionRuntimeTransaction(this.database)
+      .transaction.listDeliveries(channel);
   }
 
   startRunAttempt(runId: string): RunAttempt {
