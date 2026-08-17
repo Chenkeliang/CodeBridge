@@ -1119,16 +1119,17 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const approvalId = typeof body?.approval_id === "string"
       ? body.approval_id
       : undefined;
+    if (!runId || !approvalId) {
+      return c.json({ error: "run_id_and_approval_id_required" }, 400);
+    }
     const runs = options.workItems.listRuns(session.taskRecordId);
-    const run = runId
-      ? runs.find((candidate) => candidate.id === runId)
-      : [...runs].reverse().find((candidate) => candidate.status === "waiting");
+    const run = runs.find((candidate) => candidate.id === runId);
     if (!run) return c.json({ resolved: false });
     const pending = options.approvals
       .listForRun(run.id)
       .find((approval) =>
         approval.status === "requested"
-        && (approvalId === undefined || approval.id === approvalId),
+        && approval.id === approvalId,
       );
     if (!pending) return c.json({ resolved: false });
     const approve = body?.approve === true;
@@ -1158,42 +1159,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       });
     }
     return c.json({ resolved: true, approval_id: record.id });
-  });
-
-  app.post("/v1/sessions/resume-provider", async (c) => {
-    const body = await readJson(c);
-    const providerSessionId = typeof body?.provider_session_id === "string"
-      ? body.provider_session_id
-      : undefined;
-    const rawSlot = body?.slot;
-    if (!providerSessionId || !rawSlot || typeof rawSlot !== "object") {
-      return c.json({ error: "slot_and_provider_session_id_required" }, 400);
-    }
-    const slot = rawSlot as Record<string, unknown>;
-    if (
-      typeof slot.channel !== "string"
-      || typeof slot.conversation_id !== "string"
-      || typeof slot.agent_id !== "string"
-      || typeof slot.workspace_key !== "string"
-      || !Number.isSafeInteger(slot.generation)
-    ) {
-      return c.json({ error: "invalid_slot" }, 400);
-    }
-    try {
-      const session = options.catalog.createAndBindHistoricalSession({
-        channel: slot.channel,
-        conversationId: slot.conversation_id,
-        agentId: slot.agent_id,
-        workspaceKey: slot.workspace_key,
-        generation: Number(slot.generation),
-      }, providerSessionId);
-      return c.json({ session_id: session.id }, 201);
-    } catch (error) {
-      if (error instanceof Error && error.message === "slot_already_bound") {
-        return c.json({ error: "slot_already_bound" }, 409);
-      }
-      throw error;
-    }
   });
 
   return app;

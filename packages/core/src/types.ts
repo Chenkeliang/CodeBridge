@@ -233,7 +233,8 @@ export interface ChannelSessionIngress {
     surfaceMessageId: string,
   ): Promise<boolean>;
   completeDelivery(turnId: string, owner: string): Promise<boolean>;
-  resumeProviderSession(
+  /** Task 10 实现：将 Provider Session 绑定到槽位（含 Runner 列表校验 + Lease 预检） */
+  resumeProviderSession?(
     slot: ChannelSlot,
     providerSessionId: string,
   ): Promise<{ sessionId: string }>;
