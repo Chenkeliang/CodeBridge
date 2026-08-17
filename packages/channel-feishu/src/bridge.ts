@@ -508,15 +508,8 @@ export class FeishuBridge {
         const ctx = await this.sessionIngress.getSlotCommandContext(
           this.buildFullSlot(msg.chatId, topicId),
         );
-        if (!ctx.activeRunId || !ctx.approvalId) return false;
-        return this.sessionIngress.resolveApprovalForRun(
-          {
-            sessionId: ctx.sessionId,
-            runId: ctx.activeRunId,
-            approvalId: ctx.approvalId,
-          },
-          approve,
-        );
+        if (!ctx.activeRunId) return false;
+        return this.sessionIngress.resolvePermission(ctx.activeRunId, approve);
       },
       cancelActiveRun: async () => {
         if (!this.sessionIngress) {
@@ -525,7 +518,7 @@ export class FeishuBridge {
         const ctx = await this.sessionIngress.getSlotCommandContext(
           this.buildFullSlot(msg.chatId, topicId),
         );
-        if (!ctx.activeRunId) return false;
+        if (!ctx.sessionId || !ctx.activeRunId) return false;
         return this.sessionIngress.cancelRun(ctx.sessionId, ctx.activeRunId);
       },
       hasActiveRun: () =>

@@ -427,99 +427,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     }, 202);
   });
 
-  app.post("/v1/channels/:channel/conversations/:conversation_id/cancel", async (c) => {
-    const binding = options.catalog.getLatestChannelBinding(
-      c.req.param("channel"),
-      c.req.param("conversation_id"),
-    );
-    const session = binding ? options.catalog.getSession(binding.sessionId) : undefined;
-    if (!session?.taskRecordId) return c.json({ stopped: false });
-    const run = options.workItems.listRuns(session.taskRecordId).reverse().find((candidate) => ["queued", "running", "waiting"].includes(candidate.status));
-    if (!run) return c.json({ stopped: false });
-    if (options.executor) await options.executor.cancelRunAndWait(run.id);
-    else {
-      options.workItems.updateRunStatus(run.id, "cancelled");
-      options.workItems.appendEvent({
-        workItemId: run.workItemId,
-        runId: run.id,
-        type: "RUN_CANCELLED",
-        actor: "channel",
-        target: run.id,
-      });
-    }
-    return c.json({ stopped: true, run_id: run.id });
-  });
-
-  app.post("/v1/channels/:channel/conversations/:conversation_id/reset", async (c) => {
-    const body = await readJson(c);
-    const rawAgentId = body?.agent_id;
-    const rawWorkspaceKey = body?.workspace_key;
-    const rawGeneration = body?.generation;
-    const agentId = typeof rawAgentId === "string" ? rawAgentId : undefined;
-    const workspaceKey = typeof rawWorkspaceKey === "string"
-      ? rawWorkspaceKey
-      : undefined;
-    const generation = Number.isSafeInteger(rawGeneration)
-      ? Number(rawGeneration)
-      : undefined;
-    if (agentId && workspaceKey && generation !== undefined) {
-      return c.json({
-        reset: options.catalog.unbindChannelConversation({
-          channel: c.req.param("channel"),
-          conversationId: c.req.param("conversation_id"),
-          agentId,
-          workspaceKey,
-          generation,
-        }),
-      });
-    }
-    const binding = options.catalog.getLatestChannelBinding(
-      c.req.param("channel"),
-      c.req.param("conversation_id"),
-    );
-    return c.json({
-      reset: binding
-        ? options.catalog.unbindChannelConversation(binding)
-        : false,
-    });
-  });
-
-  app.post("/v1/channels/:channel/conversations/:conversation_id/approval", async (c) => {
-    if (!options.approvals) return c.json({ resolved: false, error: "approval_unavailable" }, 503);
-    const binding = options.catalog.getLatestChannelBinding(
-      c.req.param("channel"),
-      c.req.param("conversation_id"),
-    );
-    const session = binding ? options.catalog.getSession(binding.sessionId) : undefined;
-    if (!session?.taskRecordId) return c.json({ resolved: false });
-    const run = options.workItems.listRuns(session.taskRecordId).reverse().find((candidate) => candidate.status === "waiting");
-    if (!run) return c.json({ resolved: false });
-    const pending = options.approvals.listForRun(run.id).find((approval) => approval.status === "requested");
-    if (!pending) return c.json({ resolved: false });
-    const body = await readJson(c);
-    const approve = body?.approve === true;
-    const record = approve ? options.approvals.grant(pending.id, "channel") : options.approvals.revoke(pending.id, "channel");
-    if (!record || (approve ? record.status !== "granted" : record.status !== "revoked")) return c.json({ resolved: false });
-    if (approve) {
-      options.workItems.requeueRun(run.id);
-      if (options.executor) void options.executor.execute(run.id).catch(() => {});
-    } else {
-      if (options.executor) options.executor.cancelRun(run.id);
-      else {
-        options.workItems.updateRunStatus(run.id, "cancelled");
-        options.workItems.appendEvent({
-          workItemId: run.workItemId,
-          runId: run.id,
-          type: "RUN_CANCELLED",
-          actor: "channel",
-          target: run.id,
-          payload: { approval_id: record.id, reason: "approval_rejected" },
-        });
-      }
-    }
-    return c.json({ resolved: true, approval_id: record.id });
-  });
-
   app.post("/v1/sessions/:session_id/directories", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
@@ -1166,22 +1073,27 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const slot = parseChannelSlot(body?.slot);
     if (!slot) return c.json({ error: "invalid_slot" }, 400);
     const session = options.catalog.getChannelSession(slot);
-    if (!session) return c.json({ error: "session_not_found" }, 404);
-    const runtime = options.workItems.getSessionRuntime(session.id);
-    const activeRunId = runtime?.activeRunId ?? null;
-    let approvalId: string | null = null;
-    if (activeRunId && options.approvals) {
-      const requested = options.approvals
-        .listForRun(activeRunId)
-        .filter((approval) => approval.status === "requested")
-        .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-      approvalId = requested[0]?.id ?? null;
+    if (!session) {
+      return c.json({ session_id: null, active_run_id: null });
     }
+    const runtime = options.workItems.getSessionRuntime(session.id);
     return c.json({
       session_id: session.id,
-      active_run_id: activeRunId,
-      approval_id: approvalId,
+      active_run_id: runtime?.activeRunId ?? null,
     });
+  });
+
+  app.post("/v1/runs/:run_id/approve", async (c) => {
+    if (!options.runner) {
+      return c.json({ resolved: false, error: "runner_unavailable" }, 503);
+    }
+    const body = await readJson(c);
+    const approve = body?.approve === true;
+    const resolved = await options.runner.resolvePermission(
+      c.req.param("run_id"),
+      approve,
+    );
+    return c.json({ resolved });
   });
 
   return app;
