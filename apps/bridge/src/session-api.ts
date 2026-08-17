@@ -1110,13 +1110,17 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     }
     const channel = c.req.param("channel");
     const conversationId = c.req.param("conversation_id");
-    const requestedAgent = typeof body.agent_id === "string"
+    // 禁止 fallback：agent 必须显式存在且健康，否则 lease 键 (agent_id, provider_session_id)
+    // 会用错 agent，导致跨 agent 开同一 ACP session。
+    const agent = typeof body.agent_id === "string"
       ? currentProfiles().get(body.agent_id)
       : undefined;
-    const agent = requestedAgent ?? currentAgents().find(
-      (candidate) => candidate.status === "healthy",
-    );
-    if (!agent) return c.json({ error: "agent_unavailable" }, 409);
+    if (!agent) {
+      return c.json({ error: "agent_id must reference a registered Agent" }, 400);
+    }
+    if (agent.status !== "healthy") {
+      return c.json({ error: "agent_unavailable", status: agent.status }, 409);
+    }
     const generation = Number.isSafeInteger(body.generation)
       ? Number(body.generation)
       : 0;

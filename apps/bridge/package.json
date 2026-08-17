@@ -14,6 +14,7 @@
     "@codebridge/channel-feishu": "workspace:*",
     "@codebridge/channel-telegram": "workspace:*",
     "@codebridge/core": "workspace:*",
+    "@codebridge/router": "workspace:*",
     "@codebridge/memory-plugin": "workspace:*",
     "@codebridge/policy": "workspace:*",
     "@codebridge/mcp-runtime": "workspace:*",

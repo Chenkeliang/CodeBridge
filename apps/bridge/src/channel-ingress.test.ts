@@ -72,7 +72,7 @@ describe("channel session ingress", () => {
     expect(result).toEqual({ sessionId: "sess_9" });
   });
 
-  it("throws the provider_session_busy error from the resume route", async () => {
+  it("throws the provider_session_busy code with detail on the error", async () => {
     const app = new Hono();
     app.post("/v1/channels/:channel/conversations/:conversation/resume", async (c) => {
       return c.json({
@@ -81,13 +81,21 @@ describe("channel session ingress", () => {
       }, 409);
     });
     const ingress = createChannelSessionIngress(app, "token");
-    await expect(ingress.resumeProviderSession({
-      channel: "feishu",
-      conversationId: "chat|topic",
-      agentId: "pi",
-      workspaceKey: "ws_1",
-      generation: 0,
-    }, "p")).rejects.toThrow(/provider_session_busy/);
+    let thrown: Error & { detail?: string } | undefined;
+    try {
+      await ingress.resumeProviderSession({
+        channel: "feishu",
+        conversationId: "chat|topic",
+        agentId: "pi",
+        workspaceKey: "ws_1",
+        generation: 0,
+      }, "p");
+    } catch (err) {
+      thrown = err as Error & { detail?: string };
+    }
+    // 只 throw 错误码（bridge 精确匹配依赖 message === "provider_session_busy"）。
+    expect(thrown?.message).toBe("provider_session_busy");
+    expect(thrown?.detail).toContain("正被 run r 使用");
   });
 
   it("streams raw channel session events", async () => {
