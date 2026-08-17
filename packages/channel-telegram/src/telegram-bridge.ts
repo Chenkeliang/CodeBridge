@@ -116,9 +116,9 @@ export class TelegramBridge {
       );
     }
     this.options.onLog?.(`已连接 Telegram bot: ${me.username ?? me.first_name ?? "unknown"}`);
+    await this.recoverDeliveries();
     this.pollAbort = new AbortController();
     this.pollTask = this.poll(this.pollAbort.signal);
-    await this.recoverDeliveries();
   }
 
   async disconnect(): Promise<void> {
@@ -389,12 +389,14 @@ export class TelegramBridge {
           ...list.map((delivery) => delivery.acceptedSequence),
         );
         for (const delivery of list) {
-          const chatId =
-            delivery.conversationId.split("|")[0] ?? delivery.conversationId;
+          const [chatId, rawTopic] = delivery.conversationId.split("|");
+          const topicId = rawTopic && rawTopic.length > 0
+            ? rawTopic
+            : undefined;
           const turn = {
             turnId: delivery.turnId,
             chatId,
-            topicId: undefined,
+            topicId,
             showThinking: true,
           };
           if (delivery.runId && delivery.surfaceMessageId === null) {
@@ -407,7 +409,7 @@ export class TelegramBridge {
               delivery.claimOwner ?? "",
               true,
               chatId,
-              undefined,
+              topicId,
             );
           } else {
             watcher.registerPendingTurn(delivery.turnId, turn);
