@@ -911,6 +911,53 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("resolves command context per slot without cross-slot leakage", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({ catalog, agents, workItems, coordinator }, TOKEN);
+    const submit = (agentId: string, key: string) =>
+      app.request("/v1/channels/feishu/conversations/chat/messages", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": key,
+        },
+        body: JSON.stringify({ message: "hi", agent_id: agentId, cwd: "/tmp/project" }),
+      });
+
+    const pi = await (await submit("pi", "ctx-pi")).json() as { session_id: string; run_id: string };
+    const codex = await (await submit("codex", "ctx-cursor")).json() as { session_id: string; run_id: string };
+
+    const slotFor = (agentId: string) => ({
+      channel: "feishu",
+      conversation_id: "chat",
+      agent_id: agentId,
+      workspace_key: "/tmp/project",
+      generation: 0,
+    });
+    const ctx = async (agentId: string) => {
+      const response = await app.request("/v1/channels/command-context", {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ slot: slotFor(agentId) }),
+      });
+      return await response.json() as { session_id: string; active_run_id: string | null };
+    };
+
+    const piCtx = await ctx("pi");
+    const codexCtx = await ctx("codex");
+
+    expect(piCtx.session_id).toBe(pi.session_id);
+    expect(piCtx.active_run_id).toBe(pi.run_id);
+    expect(codexCtx.session_id).toBe(codex.session_id);
+    expect(codexCtx.active_run_id).toBe(codex.run_id);
+    expect(piCtx.session_id).not.toBe(codexCtx.session_id);
+    catalog.close();
+    workItems.close();
+  });
+
   it("cancels a channel-bound Run and resolves its approval through the same ingress", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

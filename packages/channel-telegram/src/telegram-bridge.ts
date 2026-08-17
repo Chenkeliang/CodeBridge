@@ -6,6 +6,7 @@ import {
   formatMentionGuidance,
   type AppConfig,
   type ChannelSessionIngress,
+  type ChannelSlot,
 } from "@codebridge/core";
 import {
   RunOrchestrator,
@@ -210,7 +211,11 @@ export class TelegramBridge {
       bindSession: (sessionId) =>
         this.orchestrator.bindSession(chatId, topicId, sessionId),
       resetSession: async () => {
-        await this.sessionIngress?.reset?.("telegram", `${chatId}|${topicId ?? ""}`);
+        if (this.sessionIngress) {
+          await this.sessionIngress.resetSlot(
+            this.buildFullSlot(chatId, topicId),
+          );
+        }
       },
       closeSession: (sessionId) =>
         this.orchestrator.closeSession(chatId, topicId, sessionId),
@@ -218,10 +223,16 @@ export class TelegramBridge {
         this.orchestrator.deleteSession(chatId, topicId, sessionId),
       listConfigOptions: () =>
         this.orchestrator.listConfigOptions(chatId, topicId),
-      cancelActiveRun: () =>
-        this.sessionIngress?.cancel
-          ? this.sessionIngress.cancel("telegram", `${chatId}|${topicId ?? ""}`)
-          : this.orchestrator.cancelActiveForChat(chatId, topicId),
+      cancelActiveRun: async () => {
+        if (!this.sessionIngress) {
+          return this.orchestrator.cancelActiveForChat(chatId, topicId);
+        }
+        const ctx = await this.sessionIngress.getSlotCommandContext(
+          this.buildFullSlot(chatId, topicId),
+        );
+        if (!ctx.activeRunId) return false;
+        return this.sessionIngress.cancelRun(ctx.sessionId, ctx.activeRunId);
+      },
       hasActiveRun: () => this.orchestrator.hasActiveRun(chatId, topicId),
       activeRunElapsedMs: () =>
         this.orchestrator.activeRunElapsedMs(chatId, topicId),
@@ -229,10 +240,27 @@ export class TelegramBridge {
         this.orchestrator.activeRunStatus(chatId, topicId),
       steerActiveRun: (prompt) =>
         this.orchestrator.steerActiveForChat(chatId, topicId, prompt),
-      resolvePermission: (approve) =>
-        this.sessionIngress?.resolveApproval
-          ? this.sessionIngress.resolveApproval("telegram", `${chatId}|${topicId ?? ""}`, approve)
-          : this.orchestrator.resolveActivePermission(chatId, topicId, approve),
+      resolvePermission: async (approve) => {
+        if (!this.sessionIngress) {
+          return this.orchestrator.resolveActivePermission(
+            chatId,
+            topicId,
+            approve,
+          );
+        }
+        const ctx = await this.sessionIngress.getSlotCommandContext(
+          this.buildFullSlot(chatId, topicId),
+        );
+        if (!ctx.activeRunId || !ctx.approvalId) return false;
+        return this.sessionIngress.resolveApprovalForRun(
+          {
+            sessionId: ctx.sessionId,
+            runId: ctx.activeRunId,
+            approvalId: ctx.approvalId,
+          },
+          approve,
+        );
+      },
       authorizeDirectory: (directory) =>
         this.orchestrator.authorizeDirectory(directory),
       notifyStatus: (text) => this.sendText(chatId, text, topicId),
@@ -357,6 +385,17 @@ export class TelegramBridge {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
+  }
+
+  private buildFullSlot(chatId: string, topicId?: string): ChannelSlot {
+    const slot = this.orchestrator.router.buildSlot(chatId, topicId);
+    return {
+      channel: "telegram",
+      conversationId: `${chatId}|${topicId ?? ""}`,
+      agentId: slot.agentId,
+      workspaceKey: slot.workspaceKey,
+      generation: slot.generation,
+    };
   }
 
   private ensureSessionWatcher(sessionId: string): TelegramSessionWatcher {

@@ -15,6 +15,7 @@ import {
   type AppConfig,
   type ChannelSessionEvent,
   type ChannelSessionIngress,
+  type ChannelSlot,
   type RunAttachment,
 } from "@codebridge/core";
 import {
@@ -484,7 +485,11 @@ export class FeishuBridge {
       bindSession: (sessionId) =>
         this.orchestrator.bindSession(msg.chatId, topicId, sessionId),
       resetSession: async () => {
-        await this.sessionIngress?.reset?.("feishu", this.chatKey(msg.chatId, topicId));
+        if (this.sessionIngress) {
+          await this.sessionIngress.resetSlot(
+            this.buildFullSlot(msg.chatId, topicId),
+          );
+        }
       },
       closeSession: (sessionId) =>
         this.orchestrator.closeSession(msg.chatId, topicId, sessionId),
@@ -492,14 +497,37 @@ export class FeishuBridge {
         this.orchestrator.deleteSession(msg.chatId, topicId, sessionId),
       listConfigOptions: () =>
         this.orchestrator.listConfigOptions(msg.chatId, topicId),
-      resolvePermission: (approve) =>
-        this.sessionIngress?.resolveApproval
-          ? this.sessionIngress.resolveApproval("feishu", this.chatKey(msg.chatId, topicId), approve)
-          : this.orchestrator.resolveActivePermission(msg.chatId, topicId, approve),
-      cancelActiveRun: () =>
-        this.sessionIngress?.cancel
-          ? this.sessionIngress.cancel("feishu", this.chatKey(msg.chatId, topicId))
-          : this.orchestrator.cancelActiveForChat(msg.chatId, topicId),
+      resolvePermission: async (approve) => {
+        if (!this.sessionIngress) {
+          return this.orchestrator.resolveActivePermission(
+            msg.chatId,
+            topicId,
+            approve,
+          );
+        }
+        const ctx = await this.sessionIngress.getSlotCommandContext(
+          this.buildFullSlot(msg.chatId, topicId),
+        );
+        if (!ctx.activeRunId || !ctx.approvalId) return false;
+        return this.sessionIngress.resolveApprovalForRun(
+          {
+            sessionId: ctx.sessionId,
+            runId: ctx.activeRunId,
+            approvalId: ctx.approvalId,
+          },
+          approve,
+        );
+      },
+      cancelActiveRun: async () => {
+        if (!this.sessionIngress) {
+          return this.orchestrator.cancelActiveForChat(msg.chatId, topicId);
+        }
+        const ctx = await this.sessionIngress.getSlotCommandContext(
+          this.buildFullSlot(msg.chatId, topicId),
+        );
+        if (!ctx.activeRunId) return false;
+        return this.sessionIngress.cancelRun(ctx.sessionId, ctx.activeRunId);
+      },
       hasActiveRun: () =>
         this.orchestrator.hasActiveRun(msg.chatId, topicId),
       activeRunElapsedMs: () =>
@@ -660,6 +688,17 @@ export class FeishuBridge {
     };
   }
 
+  private buildFullSlot(chatId: string, topicId?: string): ChannelSlot {
+    const slot = this.orchestrator.router.buildSlot(chatId, topicId);
+    return {
+      channel: "feishu",
+      conversationId: this.chatKey(chatId, topicId),
+      agentId: slot.agentId,
+      workspaceKey: slot.workspaceKey,
+      generation: slot.generation,
+    };
+  }
+
   private ensureSessionWatcher(sessionId: string): FeishuSessionWatcher {
     const existing = this.sessionWatchers.get(sessionId);
     if (existing) return existing;
@@ -815,7 +854,6 @@ export class FeishuBridge {
     ): Promise<void> => {
       agentConsumed = true;
       try {
-        const binding = this.orchestrator.router.getBinding(msg.chatId, topicId);
         const events = this.sessionIngress && sessionId
           ? mapDomainToAgent(
               this.sessionIngress.events(sessionId, {
@@ -824,19 +862,7 @@ export class FeishuBridge {
               }),
               runId ?? undefined,
             )
-          : this.sessionIngress
-            ? this.sessionIngress({
-                channel: "feishu",
-                conversationId: this.chatKey(msg.chatId, topicId),
-                message: prompt,
-                agentId: binding.backendId,
-                cwd: binding.cwd,
-                model: binding.model,
-                attachments: msg.attachments,
-                idempotencyKey: msg.messageId,
-                signal: streamAbort.signal,
-              })
-            : this.orchestrator.runAgent(msg.chatId, topicId, prompt, msg.attachments);
+          : this.orchestrator.runAgent(msg.chatId, topicId, prompt, msg.attachments);
         for await (const event of events) {
           if (streamAbort.signal.aborted) return;
           onEvent(event);
