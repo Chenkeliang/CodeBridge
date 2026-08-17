@@ -253,4 +253,42 @@ describe("session catalog", () => {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("getOrCreateBoundSession agrees across two store handles on the same file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-catalog-"));
+    const dbPath = path.join(dir, "catalog.sqlite");
+    const a = new SessionCatalogStore(dbPath, { defaultCwd: "/tmp/project" });
+    const b = new SessionCatalogStore(dbPath, { defaultCwd: "/tmp/project" });
+    const key = canonicalWorkspaceKey("/tmp/project").key;
+    const first = a.getOrCreateBoundSession(slot("pi", key), {
+      agentId: "pi",
+      cwd: "/tmp/project",
+    });
+    const second = b.getOrCreateBoundSession(slot("pi", key), {
+      agentId: "pi",
+      cwd: "/tmp/project",
+    });
+    expect(second.id).toBe(first.id);
+    expect(a.listSessions("pi")).toHaveLength(1);
+    expect(b.listSessions("pi")).toHaveLength(1);
+    a.close();
+    b.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("createAndBindHistoricalSession is idempotent across two store handles", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-catalog-"));
+    const dbPath = path.join(dir, "catalog.sqlite");
+    const a = new SessionCatalogStore(dbPath, { defaultCwd: "/tmp/project" });
+    const b = new SessionCatalogStore(dbPath, { defaultCwd: "/tmp/project" });
+    const key = canonicalWorkspaceKey("/tmp/project").key;
+    const first = a.createAndBindHistoricalSession(slot("pi", key), "provider-1");
+    const second = b.createAndBindHistoricalSession(slot("pi", key), "provider-1");
+    expect(second.id).toBe(first.id);
+    expect(a.listSessions("pi")).toHaveLength(1);
+    expect(b.listSessions("pi")).toHaveLength(1);
+    a.close();
+    b.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });

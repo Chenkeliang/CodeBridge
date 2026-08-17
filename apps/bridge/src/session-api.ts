@@ -376,6 +376,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         turn: { turn_id: string };
         runtime: {
           active_run: { run_id: string } | null;
+          queue_state: "ready" | "paused";
           last_event_sequence: number;
         };
       };
@@ -387,6 +388,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         task_record_id: updatedSession?.taskRecordId ?? null,
         event_sequence: result.runtime.last_event_sequence,
         acceptance: result.acceptance,
+        queue_state: result.runtime.queue_state,
         turn_id: result.turn.turn_id,
         run_id: result.acceptance === "dispatched"
           ? result.runtime.active_run?.run_id ?? null

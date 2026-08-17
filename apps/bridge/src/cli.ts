@@ -92,6 +92,10 @@ program
     );
     const sessionCatalog = new SessionCatalogStore(
       path.join(dataDir, "sessions.sqlite"),
+      {
+        defaultCwd:
+          config.workspaces?.default ?? config.workspaces?.root ?? process.cwd(),
+      },
     );
     const migration = new SessionRuntimeMigration(sessionCatalog, workItemStore);
     try {
