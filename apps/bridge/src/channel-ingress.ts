@@ -274,6 +274,35 @@ export function createChannelSessionIngress(
     return (await response.json() as { disposition?: string }).disposition !== undefined;
   };
 
+  const steerRun = async (
+    runId: string,
+    prompt: string,
+  ): Promise<{ ok: boolean; outcome?: string; error?: string }> => {
+    const response = await app.request(
+      `/v1/runs/${encodeURIComponent(runId)}/steer`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      },
+    );
+    if (!response.ok) {
+      let message = `steer run failed (${response.status})`;
+      try {
+        const body = await response.json() as { error?: string };
+        if (body.error) message = body.error;
+      } catch {
+        // 非 JSON 错误体，保留默认消息
+      }
+      throw new Error(message);
+    }
+    return response.json() as Promise<{
+      ok: boolean;
+      outcome?: string;
+      error?: string;
+    }>;
+  };
+
   const resumeQueue = async (
     sessionId: string,
   ): Promise<{ queueState: "ready" | "paused" }> => {
@@ -368,6 +397,7 @@ export function createChannelSessionIngress(
     getSlotCommandContext,
     resumeProviderSession,
     cancelRun,
+    steerRun,
     resolvePermission,
     resumeQueue,
     resetSlot,
