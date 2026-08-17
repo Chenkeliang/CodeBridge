@@ -27,7 +27,6 @@ let chatCounter = 0;
 function makeCtx(overrides: {
   scopedSessions: CliSessionSummary[];
   allSessions: CliSessionSummary[];
-  bound?: string[];
   resumed?: string[];
   resumeResult?: {
     ok: boolean;
@@ -46,7 +45,6 @@ function makeCtx(overrides: {
   const router = new SessionRouter(dataDir);
   const config = defaultConfig();
   router.initFromConfig(config);
-  const bound = overrides.bound ?? [];
   const resumed = overrides.resumed ?? [];
   const resumedSessions = overrides.resumedSessions ?? [];
   const slotContext = overrides.slotContext ?? {
@@ -63,7 +61,6 @@ function makeCtx(overrides: {
     router,
     listSessions: async (options) =>
       options?.all ? overrides.allSessions : overrides.scopedSessions,
-    bindSession: (sessionId) => bound.push(sessionId),
     resumeProviderSession: async (providerSessionId) => {
       resumed.push(providerSessionId);
       const result = overrides.resumeResult ?? {
@@ -507,13 +504,13 @@ describe("/resume <N> after /resume all", () => {
     expect(ctx.router.getSlotGeneration(ctx.chatId)).toBe(before + 1);
   });
 
-  it("does not bind a session whose working directory no longer exists", async () => {
+  it("does not resume a session whose working directory no longer exists", async () => {
     const missing = path.join(os.tmpdir(), "fcb-missing-resume-directory");
-    const bound: string[] = [];
+    const resumed: string[] = [];
     const ctx = makeCtx({
       scopedSessions: [],
       allSessions: [makeSession("missing-1", missing, "gone")],
-      bound,
+      resumed,
     });
     const before = ctx.router.getBinding(ctx.chatId).cwd;
 
@@ -521,7 +518,7 @@ describe("/resume <N> after /resume all", () => {
     const picked = await handleSlashCommand({ ...ctx, text: "/resume 1" });
 
     expect((picked as { text: string }).text).toContain("不存在");
-    expect(bound).toEqual([]);
+    expect(resumed).toEqual([]);
     expect(ctx.router.getBinding(ctx.chatId).cwd).toBe(before);
   });
 });

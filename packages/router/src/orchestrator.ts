@@ -115,13 +115,13 @@ export class RunOrchestrator {
     await this.cancelActiveForChat(chatId, topicId);
 
     const sessionKey = this.router.buildSessionKey(chatId, topicId);
-    const existing = this.router.getSessionRecord(sessionKey);
     const runOpts = this.router.resolveRunOptions(
       chatId,
       topicId,
       this.options.config,
     );
-    const resumeSessionId = existing?.sessionId;
+    // 不再从 sessions.json 读取续聊 session（Task 12）。
+    const resumeSessionId = undefined;
     const runId = this.router.newRunId();
     const chatKey = this.chatRunKey(chatId, topicId);
     const controller = new AbortController();
@@ -168,10 +168,9 @@ export class RunOrchestrator {
       acpConfig: runOpts.acpConfig,
     };
 
-    let sessionId = resumeSessionId ?? existing?.sessionId;
+    let sessionId: string | undefined;
     let stopped = false;
     let loggedDone = false;
-    let finalSessionPersisted = false;
 
     const logDone = () => {
       if (loggedDone) return;
@@ -188,21 +187,6 @@ export class RunOrchestrator {
     const persistSession = (id?: string) => {
       if (!id) return;
       sessionId = id;
-      this.router.saveSessionRecord(sessionKey, {
-        sessionId: id,
-        lastRunAt: new Date().toISOString(),
-        lastRunId: runId,
-      });
-    };
-
-    const persistFinalSession = () => {
-      if (finalSessionPersisted || !sessionId) return;
-      finalSessionPersisted = true;
-      this.router.saveSessionRecord(sessionKey, {
-        sessionId,
-        lastRunAt: new Date().toISOString(),
-        lastRunId: runId,
-      });
     };
 
     try {
@@ -288,17 +272,12 @@ export class RunOrchestrator {
         }
       }
 
-      // Persist before yielding stop notifications so /session delete cannot
-      // race with a late write from this generator.
-      persistFinalSession();
+      // 不再写 sessions.json（Task 12）；session 绑定由 Catalog 权威。
       if (stopped) {
         yield { type: "error", message: "任务已停止", fatal: false };
         yield { type: "done", exitCode: 130 };
       }
     } finally {
-      // If the consumer closes the stream before the stop notifications are
-      // consumed, still persist the latest session before resolving finished.
-      persistFinalSession();
       if (this.activeChatRuns.get(chatKey)?.runId === runId) {
         this.activeChatRuns.delete(chatKey);
       }
@@ -330,14 +309,6 @@ export class RunOrchestrator {
       throw new Error(result.error);
     }
     return result.sessions;
-  }
-
-  bindSession(
-    chatId: string,
-    topicId: string | undefined,
-    sessionId: string,
-  ): void {
-    this.router.bindSession(chatId, sessionId, topicId);
   }
 
   /** prompt_feishu：把 /approve /deny 转给当前 run 挂起的权限请求 */
@@ -384,22 +355,12 @@ export class RunOrchestrator {
     sessionId: string,
   ): Promise<{ ok: boolean; error?: string }> {
     const key = this.router.buildSessionKey(chatId, topicId);
-    if (
-      this.hasActiveRun(chatId, topicId) &&
-      this.router.getSessionRecord(key)?.sessionId === sessionId
-    ) {
-      return {
-        ok: false,
-        error: "当前 ACP session 正在运行，请先 /stop 后重试",
-      };
-    }
+    // 不再用 sessions.json 判断「当前槽位 session 是否运行中」（Task 12）；
+    // 运行中保护由 provider lease + runner 侧处理。
     const result =
       action === "close"
         ? await this.client.closeSession(key.backendId, key.cwd, sessionId)
         : await this.client.deleteSession(key.backendId, key.cwd, sessionId);
-    if (result.ok && this.router.getSessionRecord(key)?.sessionId === sessionId) {
-      this.router.clearSession(chatId, topicId);
-    }
     return result;
   }
 }

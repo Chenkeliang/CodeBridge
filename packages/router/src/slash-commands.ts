@@ -34,7 +34,6 @@ export interface SlashContext {
   listSessions?: (
     options?: { all?: boolean; limit?: number },
   ) => Promise<CliSessionSummary[]>;
-  bindSession?: (sessionId: string) => void;
   /** /resume：将 Provider Session 绑定到当前槽位（D6）。busy/conflict 供文案区分。 */
   resumeProviderSession?: (
     providerSessionId: string,
@@ -324,7 +323,6 @@ export async function handleSlashCommand(
         return { type: "reply", text: resolved.error };
       }
       ctx.router.setBinding(ctx.chatId, { cwd: resolved.cwd }, ctx.topicId);
-      ctx.router.clearSession(ctx.chatId, ctx.topicId);
       return { type: "reply", text: `已切换工作目录: ${resolved.cwd}` };
     }
 
@@ -345,12 +343,11 @@ export async function handleSlashCommand(
       }
       ctx.router.setBinding(ctx.chatId, { backendId: id }, ctx.topicId);
       ctx.router.clearRunOverrides(ctx.chatId, ctx.topicId);
-      ctx.router.clearSession(ctx.chatId, ctx.topicId);
       const profile = ctx.config.backends[id];
       const modelHint = profile?.model ? `，model 默认 \`${profile.model}\`` : "";
       return {
         type: "reply",
-        text: `已切换 backend: ${id}${modelHint}（已清除上一 backend 的 model/effort 覆盖及续聊 session）`,
+        text: `已切换 backend: ${id}${modelHint}（已清除上一 backend 的 model/effort 覆盖）`,
       };
     }
 
@@ -713,10 +710,10 @@ async function handleResume(
   }
 
   const sessions = await ctx.listSessions({ all: listAll });
-  const rec = ctx.router.getSessionRecord(key);
+  const boundSessionId = (await ctx.getSlotCommandContext?.())?.sessionId ?? null;
   if (sessions.length === 0) {
-    const bound = rec?.sessionId
-      ? `\n当前已绑定: \`${rec.sessionId}\``
+    const bound = boundSessionId
+      ? `\n当前已绑定: \`${boundSessionId}\``
       : "";
     const scopeHint = listAll
       ? "本机"
@@ -734,7 +731,7 @@ async function handleResume(
   const lines = listAll
     ? formatGroupedSessionLines(visible)
     : visible.map((s, i) => formatSessionLine(s, i, showCwd));
-  const boundLine = rec?.sessionId ? rec.sessionId : undefined;
+  const boundLine = boundSessionId ?? undefined;
   setResumeListCache(ctx, visible);
 
   return {
@@ -1017,7 +1014,6 @@ function handleWs(ctx: SlashContext, rest: string[]): SlashResult {
       return { type: "reply", text: resolved.error };
     }
     ctx.router.setBinding(ctx.chatId, { cwd: resolved.cwd }, ctx.topicId);
-    ctx.router.clearSession(ctx.chatId, ctx.topicId);
     return { type: "reply", text: `已切换工作区: ${name} (${resolved.cwd})` };
   }
   if (sub === "remove" && name) {
@@ -1040,7 +1036,6 @@ function handleClone(ctx: SlashContext, rest: string[]): SlashResult {
       encoding: "utf8",
     });
     ctx.router.setBinding(ctx.chatId, { cwd: target }, ctx.topicId);
-    ctx.router.clearSession(ctx.chatId, ctx.topicId);
     return { type: "reply", text: `已 clone 到 ${target}` };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

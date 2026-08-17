@@ -123,39 +123,6 @@ describe("SessionRouter resolveRunOptions", () => {
     expect(router.getBinding("chat1").backendId).toBe("claude");
   });
 
-  it("bindSession stores the selected ACP session", () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
-    tmpDirs.push(dataDir);
-    const router = new SessionRouter(dataDir);
-    const config = defaultConfig();
-    router.initFromConfig(config);
-
-    router.bindSession("chat1", "acp-session-123");
-
-    const record = router.getSessionRecord(router.buildSessionKey("chat1"));
-    expect(record?.sessionId).toBe("acp-session-123");
-  });
-
-  it("reads a legacy cliSessionId as the ACP session id", () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
-    tmpDirs.push(dataDir);
-    const router = new SessionRouter(dataDir);
-    const config = defaultConfig();
-    router.initFromConfig(config);
-    const key = router.buildSessionKey("chat1");
-    fs.writeFileSync(
-      path.join(dataDir, "sessions.json"),
-      JSON.stringify({
-        [`${key.chatId}||${key.backendId}|${key.cwd}`]: {
-          cliSessionId: "legacy-session-123",
-          lastRunAt: "2026-07-01T00:00:00.000Z",
-        },
-      }),
-    );
-
-    expect(router.getSessionRecord(key)?.sessionId).toBe("legacy-session-123");
-  });
-
   it("tracks slot generation per backend+cwd", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
     tmpDirs.push(dataDir);

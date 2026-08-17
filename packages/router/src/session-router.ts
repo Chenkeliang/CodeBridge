@@ -8,7 +8,6 @@ import {
   type BackendProfile,
   type ClaudePermissionMode,
   type SessionKey,
-  type SessionRecord,
 } from "@codebridge/core";
 
 export interface ChatBinding {
@@ -35,15 +34,11 @@ export interface ResolvedRunOptions {
 }
 
 export class SessionRouter {
-  private readonly sessions: JsonMapStore<SessionRecord>;
   private readonly workspaces: JsonMapStore<string>;
   private readonly bindings: JsonMapStore<ChatBinding>;
   private readonly generations: JsonMapStore<number>;
 
   constructor(dataDir: string) {
-    this.sessions = new JsonMapStore<SessionRecord>(
-      path.join(dataDir, "sessions.json"),
-    );
     this.workspaces = new JsonMapStore<string>(
       path.join(dataDir, "workspaces.json"),
     );
@@ -224,50 +219,6 @@ export class SessionRouter {
       backendId: b.backendId,
       cwd: b.cwd,
     };
-  }
-
-  /** @deprecated sessions.json 不再是权威（Task 12 删除）；仅旧路径临时使用。 */
-  getSessionRecord(key: SessionKey): SessionRecord | undefined {
-    const record = this.sessions.read()[serializeSessionKey(key)] as
-      | (SessionRecord & { cliSessionId?: string })
-      | undefined;
-    if (!record) return undefined;
-    return {
-      ...record,
-      sessionId: record.sessionId ?? record.cliSessionId,
-    };
-  }
-
-  /** @deprecated sessions.json 不再是权威（Task 12 删除）；仅旧路径临时使用。 */
-  saveSessionRecord(key: SessionKey, record: SessionRecord): void {
-    const id = serializeSessionKey(key);
-    this.sessions.update((all) => ({ ...all, [id]: record }));
-  }
-
-  /** @deprecated sessions.json 不再是权威（Task 12 删除）；仅旧路径临时使用。 */
-  bindSession(
-    chatId: string,
-    sessionId: string,
-    topicId?: string,
-  ): void {
-    const key = this.buildSessionKey(chatId, topicId);
-    const existing = this.getSessionRecord(key);
-    this.saveSessionRecord(key, {
-      sessionId,
-      lastRunAt: new Date().toISOString(),
-      lastRunId: existing?.lastRunId,
-    });
-  }
-
-  /** @deprecated sessions.json 不再是权威（Task 12 删除）；仅旧路径临时使用。 */
-  clearSession(chatId: string, topicId?: string): void {
-    const key = this.buildSessionKey(chatId, topicId);
-    const id = serializeSessionKey(key);
-    this.sessions.update((all) => {
-      const next = { ...all };
-      delete next[id];
-      return next;
-    });
   }
 
   listWorkspaceNames(): Record<string, string> {
