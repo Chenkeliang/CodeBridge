@@ -198,7 +198,7 @@ describe("FeishuSessionWatcher", () => {
     ]);
 
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1");
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
     w.start(0);
 
     await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
@@ -228,7 +228,7 @@ describe("FeishuSessionWatcher", () => {
     ingress.events = blockingEvents([terminalEvent(9)]);
 
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1");
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
     w.start(0);
 
     await waitUntil(() => completes >= 2);
@@ -263,6 +263,79 @@ describe("FeishuSessionWatcher", () => {
     expect(calls[0]?.[1]).toMatchObject({ afterSequence: 0 });
     expect(calls[1]?.[1]).toMatchObject({ afterSequence: 0 });
     expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it("replays the terminal and skips complete when updateCard keeps failing", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    let updates = 0;
+    host.updateCard = vi.fn(async () => {
+      updates += 1;
+      throw new Error("update boom");
+    });
+    ingress.events = blockingEvents([
+      {
+        type: "AGENT_EVENT",
+        sequence: 7,
+        runId: "run_1",
+        target: null,
+        payload: { event: { type: "text_delta", text: "final" } },
+      },
+      terminalEvent(9),
+    ]);
+
+    const w = watcher(ingress, host);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.start(0);
+
+    await waitUntil(() => updates >= 2);
+
+    const calls = ingress.events.mock.calls as unknown as Array<
+      [string, { afterSequence: number }]
+    >;
+    // AGENT_EVENT(7) 成功推进到 7；terminal(9) 失败后按 7 重连，而非 0
+    expect(calls[0]?.[1]).toMatchObject({ afterSequence: 0 });
+    expect(calls[1]?.[1]).toMatchObject({ afterSequence: 7 });
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it("excludes commentary from the recovered final answer", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    ingress.events = blockingEvents([
+      {
+        type: "AGENT_EVENT",
+        sequence: 7,
+        runId: "run_1",
+        target: null,
+        payload: {
+          event: { type: "text_delta", phase: "commentary", text: "thinking…" },
+        },
+      },
+      {
+        type: "AGENT_EVENT",
+        sequence: 8,
+        runId: "run_1",
+        target: null,
+        payload: { event: { type: "text_delta", text: "final answer" } },
+      },
+      terminalEvent(9),
+    ]);
+
+    const w = watcher(ingress, host);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+
+    expect(host.updateCard).toHaveBeenCalledWith(
+      "card-old",
+      expect.objectContaining({
+        body: { elements: [{ tag: "markdown", content: "final answer" }] },
+      }),
+    );
     w.abort();
   });
 
