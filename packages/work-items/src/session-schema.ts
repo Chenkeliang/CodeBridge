@@ -162,4 +162,58 @@ export function initializeSessionRuntimeSchema(
     CREATE INDEX IF NOT EXISTS channel_delivery_pending
       ON channel_turn_delivery (channel, status);
   `);
+
+  migrateChannelDeliveryStatusCheck(database);
+}
+
+/**
+ * 旧版 channel_turn_delivery（无 status CHECK）升级：重建带约束的表。
+ * 迁移包在事务内，保留全部数据；只有检测到缺少 CHECK 时才执行。
+ */
+export function migrateChannelDeliveryStatusCheck(
+  database: DatabaseSync,
+): void {
+  const row = database
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channel_turn_delivery'",
+    )
+    .get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("CHECK")) return;
+
+  database.exec("BEGIN IMMEDIATE;");
+  try {
+    database.exec(
+      "ALTER TABLE channel_turn_delivery RENAME TO channel_turn_delivery_legacy;",
+    );
+    database.exec(`
+      CREATE TABLE channel_turn_delivery (
+        turn_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        reply_to_message_id TEXT NOT NULL,
+        surface_message_id TEXT,
+        claim_owner TEXT,
+        claim_expires_at TEXT,
+        accepted_sequence INTEGER NOT NULL,
+        run_id TEXT,
+        run_terminal_at TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'dispatched', 'delivering', 'completed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    database.exec(
+      "INSERT INTO channel_turn_delivery SELECT * FROM channel_turn_delivery_legacy;",
+    );
+    database.exec("DROP TABLE channel_turn_delivery_legacy;");
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS channel_delivery_pending
+        ON channel_turn_delivery (channel, status);
+    `);
+    database.exec("COMMIT;");
+  } catch (error) {
+    database.exec("ROLLBACK;");
+    throw error;
+  }
 }
