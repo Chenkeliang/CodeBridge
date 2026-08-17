@@ -353,6 +353,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       cwd: slot.workspaceKey || null,
       title: asNullableString(body.title),
     });
+    if (session.providerSessionId) {
+      options.workItems.setSessionProviderSessionId(
+        session.id,
+        session.providerSessionId,
+      );
+    }
     const idempotencyKey = c.req.header("idempotency-key");
     const childHeaders = {
       authorization: `Bearer ${token}`,

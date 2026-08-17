@@ -172,6 +172,47 @@ describe("SessionCoordinator submit", () => {
     expect(store.getTurn(third.turn.turnId)?.status).toBe("queued");
   });
 
+  it("releases the provider lease before dispatching the next Turn", () => {
+    const { store, coordinator } = setup();
+    store.withSessionTransaction((tx) => {
+      tx.ensureRuntime("sess_1");
+      tx.setSessionProviderSessionId("sess_1", "prov_1");
+    });
+    const first = submit(coordinator, "first", "一");
+    submit(coordinator, "second", "二");
+
+    // dispatchTurn 把 session_runtime.provider_session_id 写进 runs。
+    expect(store.getRun(first.run!.id)?.providerSessionId).toBe("prov_1");
+
+    // 模拟 executor resume 路径的 claim。
+    expect(
+      store.claimProviderSession({
+        agentId: "pi",
+        providerSessionId: "prov_1",
+        runId: first.run!.id,
+        now: "2026-08-14T00:00:00.000Z",
+        expiresAt: "2026-08-14T00:01:00.000Z",
+      }),
+    ).toBe(true);
+
+    const result = coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "succeeded",
+    });
+
+    // release 先于 dispatch：lease 已释放，下一 run 已带上 providerSessionId。
+    expect(
+      store.findLiveProviderLease(
+        "pi",
+        "prov_1",
+        "2026-08-14T00:00:30.000Z",
+      ),
+    ).toBeUndefined();
+    expect(result.dispatched?.run.providerSessionId).toBe("prov_1");
+    store.close();
+  });
+
   it.each(["failed", "cancelled", "interrupted"] as const)(
     "pauses the queue after %s",
     (status) => {

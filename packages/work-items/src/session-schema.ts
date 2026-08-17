@@ -28,6 +28,7 @@ export function initializeSessionRuntimeSchema(
   addColumn(database, "ALTER TABLE runs ADD COLUMN lease_expires_at TEXT");
   addColumn(database, "ALTER TABLE runs ADD COLUMN cancel_requested_at TEXT");
   addColumn(database, "ALTER TABLE runs ADD COLUMN cancel_deadline_at TEXT");
+  addColumn(database, "ALTER TABLE runs ADD COLUMN provider_session_id TEXT");
 
   database.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS work_items_one_per_session
@@ -40,6 +41,7 @@ export function initializeSessionRuntimeSchema(
       queue_pause_reason TEXT,
       last_event_sequence INTEGER NOT NULL DEFAULT 0,
       version INTEGER NOT NULL DEFAULT 1,
+      provider_session_id TEXT,
       updated_at TEXT NOT NULL
     );
 
@@ -143,6 +145,14 @@ export function initializeSessionRuntimeSchema(
       PRIMARY KEY(session_id, provider_session_id)
     );
 
+    CREATE TABLE IF NOT EXISTS provider_session_leases (
+      agent_id TEXT NOT NULL,
+      provider_session_id TEXT NOT NULL,
+      lease_owner TEXT NOT NULL,
+      lease_expires_at TEXT NOT NULL,
+      PRIMARY KEY(agent_id, provider_session_id)
+    );
+
     CREATE TABLE IF NOT EXISTS channel_turn_delivery (
       turn_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
@@ -162,6 +172,13 @@ export function initializeSessionRuntimeSchema(
     CREATE INDEX IF NOT EXISTS channel_delivery_pending
       ON channel_turn_delivery (channel, status);
   `);
+
+  // 迁移已有库：session_runtime 表在此处才被 CREATE，故 provider_session_id
+  // 的 ALTER 必须在建表之后执行（新库该列已内联在 CREATE TABLE 中）。
+  addColumn(
+    database,
+    "ALTER TABLE session_runtime ADD COLUMN provider_session_id TEXT",
+  );
 
   migrateChannelDeliveryStatusCheck(database);
 }

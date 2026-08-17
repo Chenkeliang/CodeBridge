@@ -455,6 +455,16 @@ export class SessionCoordinator {
     });
     tx.markDeliveryRunTerminal(input.runId, this.now().toISOString());
 
+    // 释放 Provider Session Lease（owner-conditional），且必须在 dispatchNextTurn 之前，
+    // 否则下一个 Run 会因旧 lease 仍被持有而 claim 失败。
+    if (run.providerSessionId && run.agentId) {
+      tx.releaseProviderSession({
+        agentId: run.agentId,
+        providerSessionId: run.providerSessionId,
+        runId: run.id,
+      });
+    }
+
     let dispatched: { turn: SessionTurn; run: Run } | null = null;
     if (input.status === "succeeded") {
       tx.updateRuntime(input.sessionId, {
