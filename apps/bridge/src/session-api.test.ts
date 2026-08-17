@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConfigStore } from "@codebridge/core";
+import { ConfigStore, canonicalWorkspaceKey } from "@codebridge/core";
 import { AgentRegistry, projectSetupState, supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCoordinator } from "@codebridge/session-coordinator";
@@ -773,7 +773,7 @@ describe("session API", () => {
     const send = (message: string) => app.request("/v1/channels/feishu/conversations/chat%3Atopic/messages", {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ message, agent_id: "pi" }),
+      body: JSON.stringify({ message, agent_id: "pi", cwd: "/tmp/project" }),
     });
 
     const first = await send("第一条");
@@ -783,7 +783,13 @@ describe("session API", () => {
     expect(secondBody.session_id).toBe(firstBody.session_id);
     expect(secondBody.task_record_id).toBe(firstBody.task_record_id);
     expect(secondBody.run_id).not.toBe(firstBody.run_id);
-    expect(catalog.getChannelSession("feishu", "chat:topic")?.id).toBe(firstBody.session_id);
+    expect(catalog.getChannelSession({
+      channel: "feishu",
+      conversationId: "chat:topic",
+      agentId: "pi",
+      workspaceKey: canonicalWorkspaceKey("/tmp/project").key,
+      generation: 0,
+    })?.id).toBe(firstBody.session_id);
     expect(workItems.listRuns(firstBody.task_record_id)).toHaveLength(2);
     catalog.close();
     workItems.close();
