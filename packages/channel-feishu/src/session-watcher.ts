@@ -30,10 +30,20 @@ export interface PendingFeishuStream {
 export interface FeishuCardHost {
   channel?: LarkChannel;
   sendMarkdown(chatId: string, markdown: string, replyTo?: string): Promise<void>;
+  updateCard(messageId: string, card: object): Promise<void>;
   registerPendingStream(messageId: string, entry: PendingFeishuStream): void;
   clearPendingStream(messageId: string): void;
   log(message: string): void;
   isDisconnecting(): boolean;
+}
+
+function markdownCard(content: string): object {
+  return {
+    schema: "2.0",
+    body: {
+      elements: [{ tag: "markdown", content }],
+    },
+  };
 }
 
 function recordLiveActivity(
@@ -302,12 +312,12 @@ export class FeishuRunCard {
   async finalize(): Promise<void> {
     await this.ready;
     if (this.done) return;
-    this.done = true;
     for (const timer of this.timers) clearInterval(timer);
     this.timers = [];
     this.showLiveStatus = false;
     this.queueRender(false);
     await this.writer?.flush();
+    this.done = true;
     if (this.streamMessageId && !this.host.isDisconnecting()) {
       this.host.clearPendingStream(this.streamMessageId);
     }
@@ -342,6 +352,10 @@ export class FeishuSessionWatcher {
     string,
     { turnId: string; owner: string }
   >();
+  private readonly resumedCards = new Map<
+    string,
+    { surfaceMessageId: string; content: string }
+  >();
   private readonly fatalAgentErrorRuns = new Set<string>();
 
   constructor(
@@ -367,12 +381,14 @@ export class FeishuSessionWatcher {
     this.pendingTurns.set(turnId, turn);
   }
 
-  /** 恢复 delivering 状态：卡片已存在/表面 ID 已写，只登记 run→delivery 终态完成映射。 */
-  registerTerminalDelivery(
+  /** 恢复 delivering 状态：按 surfaceMessageId 重放事件累积最终内容，终态更新原卡片。 */
+  resumeCardForRun(
     runId: string,
+    surfaceMessageId: string,
     turnId: string,
     owner: string,
   ): void {
+    this.resumedCards.set(runId, { surfaceMessageId, content: "" });
     this.deliveries.set(runId, { turnId, owner });
   }
 
@@ -395,19 +411,21 @@ export class FeishuSessionWatcher {
       }
       await card.open();
       const cardId = card.cardMessageId;
-      if (cardId) {
-        const acked = await this.ingress.ackDelivery(
-          turn.turnId,
-          owner,
-          cardId,
-        );
-        if (!acked) {
-          throw new Error(`ack delivery failed for run ${runId}`);
-        }
+      if (!cardId) {
+        throw new Error(`card did not produce a message id for run ${runId}`);
+      }
+      const acked = await this.ingress.ackDelivery(
+        turn.turnId,
+        owner,
+        cardId,
+      );
+      if (!acked) {
+        throw new Error(`ack delivery failed for run ${runId}`);
       }
       this.deliveries.set(runId, { turnId: turn.turnId, owner });
     } catch (err) {
       this.cards.delete(runId);
+      card.abort();
       throw err;
     }
   }
@@ -446,9 +464,13 @@ export class FeishuSessionWatcher {
     }
     if (event.type === "AGENT_EVENT" && event.runId) {
       const card = this.cards.get(event.runId);
+      const resumed = this.resumedCards.get(event.runId);
       const agentEvent = event.payload.event as AgentEvent | undefined;
       if (agentEvent?.type === "error" && agentEvent.fatal && event.runId) {
         this.fatalAgentErrorRuns.add(event.runId);
+      }
+      if (resumed && agentEvent?.type === "text_delta") {
+        resumed.content += agentEvent.text;
       }
       if (card && agentEvent && agentEvent.type !== "done") {
         await card.onAgentEvent(agentEvent);
@@ -474,8 +496,16 @@ export class FeishuSessionWatcher {
     ) {
       const card = this.cards.get(event.runId);
       if (card) {
-        this.cards.delete(event.runId);
         await card.finalize();
+        this.cards.delete(event.runId);
+      }
+      const resumed = this.resumedCards.get(event.runId);
+      if (resumed) {
+        this.resumedCards.delete(event.runId);
+        await this.host.updateCard(
+          resumed.surfaceMessageId,
+          markdownCard(resumed.content || "（本次无输出）"),
+        );
       }
       const delivery = this.deliveries.get(event.runId);
       if (delivery) {

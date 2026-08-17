@@ -642,6 +642,9 @@ export class FeishuBridge {
       channel: this.channel,
       sendMarkdown: (chatId, markdown, replyTo) =>
         this.sendMarkdown(chatId, markdown, replyTo),
+      updateCard: async (messageId, card) => {
+        if (this.channel) await this.channel.updateCard(messageId, card);
+      },
       registerPendingStream: (messageId, entry) => {
         this.pendingStreams.update((all) => ({ ...all, [messageId]: entry }));
       },
@@ -697,9 +700,10 @@ export class FeishuBridge {
           if (delivery.runId && delivery.surfaceMessageId === null) {
             await watcher.openCardForRun(delivery.runId, turn);
           } else if (delivery.runId) {
-            // delivering：卡片/表面 ID 已存在，只登记终态完成映射
-            watcher.registerTerminalDelivery(
+            // delivering：按已开卡的 surfaceMessageId 重放事件累积最终内容
+            watcher.resumeCardForRun(
               delivery.runId,
+              delivery.surfaceMessageId ?? "",
               delivery.turnId,
               delivery.claimOwner ?? "",
             );
