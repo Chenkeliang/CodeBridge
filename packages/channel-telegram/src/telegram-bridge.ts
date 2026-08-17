@@ -230,7 +230,7 @@ export class TelegramBridge {
         const ctx = await this.sessionIngress.getSlotCommandContext(
           this.buildFullSlot(chatId, topicId),
         );
-        if (!ctx.activeRunId) return false;
+        if (!ctx.sessionId || !ctx.activeRunId) return false;
         return this.sessionIngress.cancelRun(ctx.sessionId, ctx.activeRunId);
       },
       hasActiveRun: () => this.orchestrator.hasActiveRun(chatId, topicId),
@@ -251,15 +251,8 @@ export class TelegramBridge {
         const ctx = await this.sessionIngress.getSlotCommandContext(
           this.buildFullSlot(chatId, topicId),
         );
-        if (!ctx.activeRunId || !ctx.approvalId) return false;
-        return this.sessionIngress.resolveApprovalForRun(
-          {
-            sessionId: ctx.sessionId,
-            runId: ctx.activeRunId,
-            approvalId: ctx.approvalId,
-          },
-          approve,
-        );
+        if (!ctx.activeRunId) return false;
+        return this.sessionIngress.resolvePermission(ctx.activeRunId, approve);
       },
       authorizeDirectory: (directory) =>
         this.orchestrator.authorizeDirectory(directory),

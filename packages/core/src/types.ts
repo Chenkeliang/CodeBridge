@@ -183,9 +183,8 @@ export interface ChannelSubmitReceipt {
 }
 
 export interface ChannelCommandContext {
-  sessionId: string;
+  sessionId: string | null;
   activeRunId: string | null;
-  approvalId: string | null;
 }
 
 export interface ChannelSessionEvent {
@@ -246,12 +245,9 @@ export interface ChannelSessionIngress {
     providerSessionId: string,
   ): Promise<{ sessionId: string }>;
   cancelRun(sessionId: string, runId: string): Promise<boolean>;
+  resolvePermission(runId: string, approve: boolean): Promise<boolean>;
   resumeQueue(sessionId: string): Promise<{ queueState: "ready" | "paused" }>;
   resetSlot(slot: ChannelSlot): Promise<boolean>;
-  resolveApprovalForRun(
-    approval: { sessionId: string; runId: string; approvalId: string },
-    approve: boolean,
-  ): Promise<boolean>;
 }
 
 export interface DoctorResult {

@@ -9,7 +9,7 @@ import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCoordinator } from "@codebridge/session-coordinator";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
-import { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
+import { CapabilityRegistry } from "@codebridge/policy";
 import { createSessionApp } from "./session-api.js";
 import type { RunnerClient } from "@codebridge/runner-client";
 
@@ -954,45 +954,6 @@ describe("session API", () => {
     expect(codexCtx.session_id).toBe(codex.session_id);
     expect(codexCtx.active_run_id).toBe(codex.run_id);
     expect(piCtx.session_id).not.toBe(codexCtx.session_id);
-    catalog.close();
-    workItems.close();
-  });
-
-  it("cancels a channel-bound Run and resolves its approval through the same ingress", async () => {
-    const catalog = new SessionCatalogStore(":memory:");
-    const workItems = new SqliteEventStore(":memory:");
-    const approvals = new ApprovalService(workItems, ":memory:");
-    const app = createSessionApp({ catalog, agents, workItems, approvals }, TOKEN);
-    const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
-    const accepted = await app.request("/v1/channels/telegram/conversations/chat/messages", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ message: "发布", agent_id: "pi" }),
-    });
-    const body = await accepted.json() as { session_id: string; task_record_id: string; run_id: string };
-    workItems.updateRunStatus(body.run_id, "waiting");
-    const approval = approvals.request({
-      workItemId: body.task_record_id,
-      runId: body.run_id,
-      stepId: "release",
-      capabilityId: "release.execute",
-      sessionId: body.session_id,
-      environment: "production",
-      targetResource: "service/release",
-      inputHash: "sha256:test",
-      requestedBy: "system",
-    });
-    const resolved = await app.request("/v1/channels/telegram/conversations/chat/approval", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ approve: true }),
-    });
-    expect(await resolved.json()).toMatchObject({ resolved: true, approval_id: approval.id });
-    expect(approvals.get(approval.id)?.status).toBe("granted");
-    const cancelled = await app.request("/v1/channels/telegram/conversations/chat/cancel", { method: "POST", headers });
-    expect(await cancelled.json()).toMatchObject({ stopped: true, run_id: body.run_id });
-    expect(workItems.getRun(body.run_id)?.status).toBe("cancelled");
-    approvals.close();
     catalog.close();
     workItems.close();
   });

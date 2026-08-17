@@ -219,15 +219,33 @@ export function createChannelSessionIngress(
       );
     }
     const body = await response.json() as {
-      session_id: string;
+      session_id: string | null;
       active_run_id: string | null;
-      approval_id: string | null;
     };
     return {
       sessionId: body.session_id,
       activeRunId: body.active_run_id,
-      approvalId: body.approval_id,
     };
+  };
+
+  const resolvePermission = async (
+    runId: string,
+    approve: boolean,
+  ): Promise<boolean> => {
+    const response = await app.request(
+      `/v1/runs/${encodeURIComponent(runId)}/approve`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ approve }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `resolve permission failed (${response.status}): ${await response.text()}`,
+      );
+    }
+    return (await response.json() as { resolved?: boolean }).resolved === true;
   };
 
   const cancelRun = async (
@@ -301,26 +319,6 @@ export function createChannelSessionIngress(
     return (await response.json() as { reset?: boolean }).reset === true;
   };
 
-  const resolveApprovalForRun = async (
-    approval: { sessionId: string; runId: string; approvalId: string },
-    approve: boolean,
-  ): Promise<boolean> => {
-    const response = await app.request(
-      `/v1/sessions/${encodeURIComponent(approval.sessionId)}/approval`,
-      {
-        method: "POST",
-        headers: { ...auth, "content-type": "application/json" },
-        body: JSON.stringify({
-          run_id: approval.runId,
-          approval_id: approval.approvalId,
-          approve,
-        }),
-      },
-    );
-    if (!response.ok) return false;
-    return (await response.json() as { resolved?: boolean }).resolved === true;
-  };
-
   return {
     submit,
     events,
@@ -330,9 +328,9 @@ export function createChannelSessionIngress(
     completeDelivery,
     getSlotCommandContext,
     cancelRun,
+    resolvePermission,
     resumeQueue,
     resetSlot,
-    resolveApprovalForRun,
   };
 }
 
