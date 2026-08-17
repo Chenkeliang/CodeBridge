@@ -62,6 +62,9 @@ importers:
       '@codebridge/project-catalog':
         specifier: workspace:*
         version: link:../../packages/project-catalog
+      '@codebridge/router':
+        specifier: workspace:*
+        version: link:../../packages/router
       '@codebridge/run-executor':
         specifier: workspace:*
         version: link:../../packages/run-executor

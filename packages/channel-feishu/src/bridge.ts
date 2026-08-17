@@ -504,13 +504,6 @@ export class FeishuBridge {
           };
         }
       },
-      resetSession: async () => {
-        if (this.sessionIngress) {
-          await this.sessionIngress.resetSlot(
-            this.buildFullSlot(msg.chatId, topicId),
-          );
-        }
-      },
       closeSession: (sessionId) =>
         this.orchestrator.closeSession(msg.chatId, topicId, sessionId),
       deleteSession: (sessionId) =>
@@ -541,12 +534,18 @@ export class FeishuBridge {
         if (!ctx.sessionId || !ctx.activeRunId) return false;
         return this.sessionIngress.cancelRun(ctx.sessionId, ctx.activeRunId);
       },
-      hasActiveRun: () =>
-        this.orchestrator.hasActiveRun(msg.chatId, topicId),
-      activeRunElapsedMs: () =>
-        this.orchestrator.activeRunElapsedMs(msg.chatId, topicId),
-      activeRunStatus: () =>
-        this.orchestrator.activeRunStatus(msg.chatId, topicId),
+      getSlotCommandContext: async () => {
+        if (!this.sessionIngress) {
+          return { sessionId: null, activeRunId: null };
+        }
+        return this.sessionIngress.getSlotCommandContext(
+          this.buildFullSlot(msg.chatId, topicId),
+        );
+      },
+      resumeQueue: async (sessionId) => {
+        if (!this.sessionIngress) return { queueState: "paused" };
+        return this.sessionIngress.resumeQueue(sessionId);
+      },
       steerActiveRun: (prompt) =>
         this.orchestrator.steerActiveForChat(msg.chatId, topicId, prompt),
       authorizeDirectory: (directory) =>

@@ -2,7 +2,6 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type {
-  ActiveRunStatus,
   AppConfig,
   BackendConfigOption,
 } from "@codebridge/core";
@@ -19,7 +18,6 @@ import {
 } from "./model-effort.js";
 import {
   compactProjectPath,
-  formatElapsed,
   formatSessionListFooter,
   formatSessionListHeader,
   formatSessionLine,
@@ -37,7 +35,6 @@ export interface SlashContext {
     options?: { all?: boolean; limit?: number },
   ) => Promise<CliSessionSummary[]>;
   bindSession?: (sessionId: string) => void;
-  resetSession?: () => Promise<void>;
   /** /resume：将 Provider Session 绑定到当前槽位（D6）。busy/conflict 供文案区分。 */
   resumeProviderSession?: (
     providerSessionId: string,
@@ -48,14 +45,20 @@ export interface SlashContext {
     conflict?: boolean;
     error?: string;
   }>;
+  /** /status /steer /continue：读取当前槽位 Catalog 绑定 + runtime 活跃 run。 */
+  getSlotCommandContext?: () => Promise<{
+    sessionId: string | null;
+    activeRunId: string | null;
+  }>;
+  /** /continue：恢复当前槽位 session 的队列。 */
+  resumeQueue?: (sessionId: string) => Promise<{
+    queueState: "ready" | "paused";
+  }>;
   closeSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   deleteSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项（含真实模型列表） */
   listConfigOptions?: () => Promise<BackendConfigOption[]>;
   cancelActiveRun?: () => Promise<boolean>;
-  hasActiveRun?: () => boolean;
-  activeRunElapsedMs?: () => number | undefined;
-  activeRunStatus?: () => ActiveRunStatus | undefined;
   steerActiveRun?: (
     prompt: string,
   ) => Promise<{ ok: boolean; outcome?: string; error?: string }>;
@@ -123,8 +126,8 @@ export async function handleSlashCommand(
 
     case "/new":
     case "/reset":
-      await ctx.resetSession?.();
-      ctx.router.clearSession(ctx.chatId, ctx.topicId);
+      // 只 +1 代：下一句进新 session，旧 generation 的绑定与旧 run 不受影响。
+      ctx.router.incrementSlotGeneration(ctx.chatId, ctx.topicId);
       return {
         type: "reply",
         text: "已新建会话，下一条消息将开启新的 Agent session。",
@@ -148,6 +151,23 @@ export async function handleSlashCommand(
         };
       }
 
+    case "/continue": {
+      if (!ctx.getSlotCommandContext || !ctx.resumeQueue) {
+        return { type: "reply", text: "Runner 未就绪，无法恢复队列。" };
+      }
+      const slot = await ctx.getSlotCommandContext();
+      if (!slot.sessionId) {
+        return { type: "reply", text: "当前槽位还没有 session，无需恢复。" };
+      }
+      const result = await ctx.resumeQueue(slot.sessionId);
+      return {
+        type: "reply",
+        text: result.queueState === "ready"
+          ? "已恢复队列，等待中的消息将开始执行。"
+          : "队列未恢复（当前状态可能仍为 paused）。",
+      };
+    }
+
     case "/steer": {
       if (!arg) {
         return {
@@ -155,8 +175,15 @@ export async function handleSlashCommand(
           text: "用法：`/steer <补充指令>`（注入当前正在执行的 ACP turn）",
         };
       }
-      if (!ctx.steerActiveRun) {
+      if (!ctx.getSlotCommandContext || !ctx.steerActiveRun) {
         return { type: "reply", text: "Runner 未就绪，无法发送 steering。" };
+      }
+      const slot = await ctx.getSlotCommandContext();
+      if (!slot.activeRunId) {
+        return {
+          type: "reply",
+          text: "当前没有运行中的任务，无法 steering。",
+        };
       }
       const result = await ctx.steerActiveRun(arg);
       return {
@@ -237,7 +264,6 @@ export async function handleSlashCommand(
 
     case "/status": {
       const key = ctx.router.buildSessionKey(ctx.chatId, ctx.topicId);
-      const rec = ctx.router.getSessionRecord(key);
       const runOpts = ctx.router.resolveRunOptions(
         ctx.chatId,
         ctx.topicId,
@@ -245,14 +271,15 @@ export async function handleSlashCommand(
       );
       const binding = ctx.router.getBinding(ctx.chatId, ctx.topicId);
       const profile = ctx.config.backends[key.backendId];
-      const activeStatus = ctx.activeRunStatus?.();
-      const elapsedMs = activeStatus
-        ? Date.now() - activeStatus.startedAt
-        : ctx.activeRunElapsedMs?.();
-      const runnerActive =
-        elapsedMs !== undefined
-          ? `是（已运行 ${formatElapsed(elapsedMs)}，请稍候再追问；需要中断请发 \`/stop\`）`
-          : "否";
+      // 当前槽位状态来自 Catalog + runtime（getSlotCommandContext），
+      // 不读 sessions.json（getSessionRecord），不读 activeChatRuns。
+      let sessionId: string | null = null;
+      let activeRunId: string | null = null;
+      if (ctx.getSlotCommandContext) {
+        const slot = await ctx.getSlotCommandContext();
+        sessionId = slot.sessionId;
+        activeRunId = slot.activeRunId;
+      }
       return {
         type: "reply",
         text: [
@@ -264,21 +291,10 @@ export async function handleSlashCommand(
           `**mode/permission**: ${runOpts.mode ?? "(ACP 默认)"}${binding.mode ? " _(会话覆盖)_" : profile?.claudePermissionMode ? " _(配置默认)_" : ""}`,
           `**additionalDirectories**: ${binding.additionalDirectories?.length ? binding.additionalDirectories.join(", ") : "(none)"}`,
           `**thinking**: ${(binding.showThinking ?? true) ? "on（显示思考/工具过程）" : "off（隐藏内部思考/工具，保留进度与最终答案）"}`,
-          `**sessionId**: ${rec?.sessionId ?? "(none)"}`,
-          `**lastRunAt**: ${rec?.lastRunAt ?? "-"}`,
-          `**runnerActive**: ${runnerActive}`,
-          activeStatus
-            ? `**currentPhase**: ${activeStatus.currentPhase}`
-            : undefined,
-          activeStatus
-            ? `**lastRealActivity**: ${formatElapsed(Date.now() - activeStatus.lastActivityAt)}之前`
-            : undefined,
-          activeStatus?.lastCheckpoint
-            ? `**lastCheckpoint**: ${activeStatus.lastCheckpoint}`
-            : undefined,
-        ]
-          .filter((line): line is string => Boolean(line))
-          .join("\n"),
+          `**sessionId**: ${sessionId ?? "(none)"}`,
+          `**activeRun**: ${activeRunId ?? "(none)"}`,
+          `**runnerActive**: ${activeRunId ? "是（请稍候再追问；需要中断请发 `/stop`）" : "否"}`,
+        ].join("\n"),
       };
     }
 
