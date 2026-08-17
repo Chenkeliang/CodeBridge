@@ -354,7 +354,11 @@ export class FeishuSessionWatcher {
   >();
   private readonly resumedCards = new Map<
     string,
-    { surfaceMessageId: string; content: string }
+    {
+      surfaceMessageId: string;
+      content: string;
+      present: (event: AgentEvent) => FeishuStreamPart | null;
+    }
   >();
   private readonly fatalAgentErrorRuns = new Set<string>();
 
@@ -381,14 +385,19 @@ export class FeishuSessionWatcher {
     this.pendingTurns.set(turnId, turn);
   }
 
-  /** 恢复 delivering 状态：按 surfaceMessageId 重放事件累积最终内容，终态更新原卡片。 */
+  /** 恢复 delivering 状态：按 surfaceMessageId 重放事件投影最终回答，终态更新原卡片。 */
   resumeCardForRun(
     runId: string,
     surfaceMessageId: string,
     turnId: string,
     owner: string,
+    showThinking: boolean,
   ): void {
-    this.resumedCards.set(runId, { surfaceMessageId, content: "" });
+    this.resumedCards.set(runId, {
+      surfaceMessageId,
+      content: "",
+      present: createFeishuStreamPresenter({ showThinking }).present,
+    });
     this.deliveries.set(runId, { turnId, owner });
   }
 
@@ -469,8 +478,9 @@ export class FeishuSessionWatcher {
       if (agentEvent?.type === "error" && agentEvent.fatal && event.runId) {
         this.fatalAgentErrorRuns.add(event.runId);
       }
-      if (resumed && agentEvent?.type === "text_delta") {
-        resumed.content += agentEvent.text;
+      if (resumed && agentEvent) {
+        const part = resumed.present(agentEvent);
+        if (part?.zone === "result") resumed.content += part.text;
       }
       if (card && agentEvent && agentEvent.type !== "done") {
         await card.onAgentEvent(agentEvent);
@@ -478,11 +488,13 @@ export class FeishuSessionWatcher {
       return;
     }
     if (event.type === "STEP_FAILED" && event.runId) {
+      const message = String(
+        (event.payload as Record<string, unknown>)?.error ?? "Step failed",
+      );
       if (!this.fatalAgentErrorRuns.has(event.runId)) {
+        const resumed = this.resumedCards.get(event.runId);
+        if (resumed) resumed.content += `\n❌ ${message}\n`;
         const card = this.cards.get(event.runId);
-        const message = String(
-          (event.payload as Record<string, unknown>)?.error ?? "Step failed",
-        );
         if (card) await card.onAgentEvent({ type: "error", message });
       }
       return;
@@ -501,11 +513,11 @@ export class FeishuSessionWatcher {
       }
       const resumed = this.resumedCards.get(event.runId);
       if (resumed) {
-        this.resumedCards.delete(event.runId);
         await this.host.updateCard(
           resumed.surfaceMessageId,
           markdownCard(resumed.content || "（本次无输出）"),
         );
+        this.resumedCards.delete(event.runId);
       }
       const delivery = this.deliveries.get(event.runId);
       if (delivery) {

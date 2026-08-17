@@ -319,8 +319,8 @@ export class FeishuBridge {
     });
 
     await this.channel.connect();
-    await this.recoverInterruptedStreams();
     await this.recoverDeliveries();
+    await this.recoverInterruptedStreams();
     const botName = this.channel.botIdentity?.name ?? "unknown";
     this.options.onLog?.(`已连接飞书 bot: ${botName}`);
     this.options.onLog?.(
@@ -700,12 +700,18 @@ export class FeishuBridge {
           if (delivery.runId && delivery.surfaceMessageId === null) {
             await watcher.openCardForRun(delivery.runId, turn);
           } else if (delivery.runId) {
-            // delivering：按已开卡的 surfaceMessageId 重放事件累积最终内容
+            // delivering：从 legacy interrupted recovery 中剔除，避免被覆盖成“服务中断”
+            this.pendingStreams.update((all) => {
+              const next = { ...all };
+              delete next[delivery.surfaceMessageId!];
+              return next;
+            });
             watcher.resumeCardForRun(
               delivery.runId,
               delivery.surfaceMessageId ?? "",
               delivery.turnId,
               delivery.claimOwner ?? "",
+              turn.showThinking,
             );
           } else {
             watcher.registerPendingTurn(delivery.turnId, turn);
