@@ -227,4 +227,107 @@ describe("TelegramSessionWatcher", () => {
     expect(calls[1]?.[1]).toMatchObject({ afterSequence: 0 });
     w.abort();
   });
+
+  it("replays when the permission notification fails to send", async () => {
+    const api = makeApi();
+    const ingress = makeIngress();
+    let sends = 0;
+    api.sendMessage = vi.fn(async () => {
+      sends += 1;
+      if (sends > 1) throw new Error("send boom");
+      return { message_id: 8 };
+    });
+    ingress.events = blockingEvents([
+      agentEvent(4, { type: "permission_request", title: "写入文件" }),
+      terminalEvent(5),
+    ]);
+
+    const w = watcher(ingress, api);
+    await w.openRun("run_1", turn());
+    w.start(0);
+
+    await waitUntil(() => sends >= 3);
+
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it("recovers a pending turn via TURN_DISPATCHED", async () => {
+    const api = makeApi();
+    const ingress = makeIngress();
+    ingress.events = blockingEvents([
+      {
+        type: "TURN_DISPATCHED",
+        sequence: 5,
+        runId: "run_1",
+        target: "turn_1",
+        payload: {},
+      },
+    ]);
+
+    const w = watcher(ingress, api);
+    w.registerPendingTurn("turn_1", turn());
+    w.start(0);
+
+    await waitUntil(() => ingress.claimDelivery.mock.calls.length >= 1);
+
+    expect(ingress.claimDelivery).toHaveBeenCalledWith(
+      "turn_1",
+      expect.stringMatching(/^telegram:inst-1:run_1$/),
+    );
+    w.abort();
+  });
+
+  it("recovers a dispatched delivery by opening its renderer", async () => {
+    const api = makeApi();
+    const ingress = makeIngress();
+    const w = watcher(ingress, api);
+
+    await w.openRun("run_1", turn());
+
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      "telegram:42",
+      "⏳ Agent 正在处理…",
+      undefined,
+    );
+    expect(ingress.ackDelivery).toHaveBeenCalledWith(
+      "turn_1",
+      expect.stringMatching(/^telegram:inst-1:run_1$/),
+      "8",
+    );
+    w.abort();
+  });
+
+  it("falls back to the topic thread on a delivering run", async () => {
+    const api = makeApi();
+    const ingress = makeIngress();
+    api.editMessage = vi.fn(async () => {
+      throw new Error("edit boom");
+    });
+    ingress.events = blockingEvents([
+      agentEvent(4, { type: "text_delta", text: "final" }),
+      terminalEvent(5),
+    ]);
+
+    const w = watcher(ingress, api);
+    w.resumeRun(
+      "run_1",
+      "8",
+      "turn_1",
+      "telegram:old:run_1",
+      false,
+      "telegram:42",
+      "12345",
+    );
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      "telegram:42",
+      "final",
+      "12345",
+    );
+    w.abort();
+  });
 });

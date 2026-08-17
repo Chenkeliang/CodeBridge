@@ -45,12 +45,12 @@ class TelegramRunRenderer {
     if (part?.zone === "result") this.output += part.text;
   }
 
-  onPermissionRequest(title: string): void {
-    void this.api.sendMessage(
+  async onPermissionRequest(title: string): Promise<void> {
+    await this.api.sendMessage(
       this.chatId,
       `🔐 Agent 请求权限：${title}\n回复 /approve 允许，/deny 拒绝。`,
       this.topicId,
-    ).catch(() => {});
+    );
   }
 
   appendError(message: string): void {
@@ -199,7 +199,7 @@ export class TelegramSessionWatcher {
       }
       if (renderer && agentEvent && agentEvent.type !== "done") {
         if (agentEvent.type === "permission_request") {
-          renderer.onPermissionRequest(agentEvent.title);
+          await renderer.onPermissionRequest(agentEvent.title);
         } else {
           renderer.onAgentEvent(agentEvent);
         }
