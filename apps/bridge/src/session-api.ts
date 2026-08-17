@@ -1068,6 +1068,29 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json({ resolved: true, approval_id: record.id });
   });
 
+  app.post("/v1/channels/:channel/conversations/:conversation_id/reset", async (c) => {
+    const body = await readJson(c);
+    const rawAgentId = body?.agent_id;
+    const rawWorkspaceKey = body?.workspace_key;
+    const rawGeneration = body?.generation;
+    if (
+      typeof rawAgentId !== "string"
+      || typeof rawWorkspaceKey !== "string"
+      || !Number.isSafeInteger(rawGeneration)
+    ) {
+      return c.json({ reset: false });
+    }
+    return c.json({
+      reset: options.catalog.unbindChannelConversation({
+        channel: c.req.param("channel"),
+        conversationId: c.req.param("conversation_id"),
+        agentId: rawAgentId,
+        workspaceKey: rawWorkspaceKey,
+        generation: Number(rawGeneration),
+      }),
+    });
+  });
+
   app.post("/v1/channels/command-context", async (c) => {
     const body = await readJson(c);
     const slot = parseChannelSlot(body?.slot);
@@ -1083,7 +1106,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     });
   });
 
-  app.post("/v1/runs/:run_id/approve", async (c) => {
+  app.post("/v1/runs/:run_id/permission", async (c) => {
     if (!options.runner) {
       return c.json({ resolved: false, error: "runner_unavailable" }, 503);
     }
