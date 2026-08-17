@@ -3,6 +3,10 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import {
+  canonicalWorkspaceKey,
+  type ChannelSlot,
+} from "@codebridge/core";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
   typeof import("node:sqlite");
@@ -88,9 +92,7 @@ export interface AgentSession {
   updatedAt: string;
 }
 
-export interface ChannelSessionBinding {
-  channel: string;
-  conversationId: string;
+export interface ChannelSessionBinding extends ChannelSlot {
   sessionId: string;
   createdAt: string;
   updatedAt: string;
@@ -128,7 +130,10 @@ type SqliteRow = Record<string, unknown>;
 export class SessionCatalogStore {
   private readonly database: DatabaseSyncType;
 
-  constructor(databasePath: string) {
+  constructor(
+    databasePath: string,
+    options: { defaultCwd?: string } = {},
+  ) {
     if (databasePath !== ":memory:") {
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     }
@@ -161,10 +166,13 @@ export class SessionCatalogStore {
       CREATE TABLE IF NOT EXISTS channel_session_bindings (
         channel TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        workspace_key TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 0,
         session_id TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        PRIMARY KEY (channel, conversation_id),
+        PRIMARY KEY (channel, conversation_id, agent_id, workspace_key, generation),
         FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
       );
     `);
@@ -207,6 +215,80 @@ export class SessionCatalogStore {
       this.database.exec("ALTER TABLE agent_sessions ADD COLUMN archived_at TEXT");
     } catch {
       // Existing databases already contain the archive metadata column.
+    }
+
+    const legacy = this.database
+      .prepare(
+        "SELECT COUNT(*) AS n FROM pragma_table_info('channel_session_bindings') WHERE name = 'agent_id'",
+      )
+      .get() as { n?: number } | undefined;
+    if (Number(legacy?.n ?? 0) === 0) {
+      this.migrateLegacyChannelBindings(options.defaultCwd);
+    }
+  }
+
+  private migrateLegacyChannelBindings(defaultCwd?: string): void {
+    const orphans: string[] = [];
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      this.database.exec(`
+        CREATE TABLE channel_session_bindings_new (
+          channel TEXT NOT NULL,
+          conversation_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          workspace_key TEXT NOT NULL,
+          generation INTEGER NOT NULL DEFAULT 0,
+          session_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (channel, conversation_id, agent_id, workspace_key, generation),
+          FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+        );
+      `);
+      const rows = this.database
+        .prepare(
+          `SELECT b.channel, b.conversation_id, b.session_id, b.created_at, b.updated_at,
+                  s.agent_id, s.cwd
+           FROM channel_session_bindings b
+           LEFT JOIN agent_sessions s ON s.id = b.session_id`,
+        )
+        .all() as SqliteRow[];
+      const insert = this.database.prepare(
+        `INSERT INTO channel_session_bindings_new (
+          channel, conversation_id, agent_id, workspace_key, generation,
+          session_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+      );
+      for (const row of rows) {
+        if (row.agent_id === null) {
+          orphans.push(String(row.session_id ?? "<unknown>"));
+          continue;
+        }
+        insert.run(
+          String(row.channel),
+          String(row.conversation_id),
+          String(row.agent_id),
+          canonicalWorkspaceKey(String(row.cwd ?? defaultCwd ?? "")).key,
+          String(row.session_id),
+          String(row.created_at),
+          String(row.updated_at),
+        );
+      }
+      this.database.exec("DROP TABLE channel_session_bindings;");
+      this.database.exec("ALTER TABLE channel_session_bindings_new RENAME TO channel_session_bindings;");
+      this.database.exec(`
+        CREATE INDEX IF NOT EXISTS channel_bindings_lookup
+          ON channel_session_bindings (channel, conversation_id, agent_id, workspace_key, generation);
+      `);
+      this.database.exec("COMMIT;");
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+    if (orphans.length) {
+      console.warn(
+        `[session-catalog] skipped ${orphans.length} orphan channel bindings`,
+      );
     }
   }
 
@@ -292,19 +374,15 @@ export class SessionCatalogStore {
   }
 
   bindChannelConversation(
-    channel: string,
-    conversationId: string,
+    slot: ChannelSlot,
     sessionId: string,
   ): ChannelSessionBinding {
     if (!this.getSession(sessionId)) throw new Error(`Session not found: ${sessionId}`);
-    const existing = this.database
-      .prepare("SELECT * FROM channel_session_bindings WHERE channel = ? AND conversation_id = ?")
-      .get(channel, conversationId) as SqliteRow | undefined;
-    if (existing) return toChannelBinding(existing);
+    const existing = this.getChannelBinding(slot);
+    if (existing) return existing;
     const now = new Date().toISOString();
     const binding: ChannelSessionBinding = {
-      channel,
-      conversationId,
+      ...slot,
       sessionId,
       createdAt: now,
       updatedAt: now,
@@ -312,30 +390,145 @@ export class SessionCatalogStore {
     this.database
       .prepare(
         `INSERT INTO channel_session_bindings (
-          channel, conversation_id, session_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?)`,
+          channel, conversation_id, agent_id, workspace_key, generation,
+          session_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(binding.channel, binding.conversationId, binding.sessionId, binding.createdAt, binding.updatedAt);
+      .run(
+        binding.channel,
+        binding.conversationId,
+        binding.agentId,
+        binding.workspaceKey,
+        binding.generation,
+        binding.sessionId,
+        binding.createdAt,
+        binding.updatedAt,
+      );
     return binding;
   }
 
-  getChannelBinding(channel: string, conversationId: string): ChannelSessionBinding | undefined {
+  bindHistoricalSession(
+    slot: ChannelSlot,
+    sessionId: string,
+  ): ChannelSessionBinding {
+    if (!this.getSession(sessionId)) throw new Error(`Session not found: ${sessionId}`);
+    const existing = this.getChannelBinding(slot);
+    if (existing) {
+      if (existing.sessionId === sessionId) return existing;
+      throw new Error("slot_already_bound");
+    }
+    const now = new Date().toISOString();
+    const binding: ChannelSessionBinding = {
+      ...slot,
+      sessionId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.database
+      .prepare(
+        `INSERT INTO channel_session_bindings (
+          channel, conversation_id, agent_id, workspace_key, generation,
+          session_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        binding.channel,
+        binding.conversationId,
+        binding.agentId,
+        binding.workspaceKey,
+        binding.generation,
+        binding.sessionId,
+        binding.createdAt,
+        binding.updatedAt,
+      );
+    return binding;
+  }
+
+  getChannelBinding(slot: ChannelSlot): ChannelSessionBinding | undefined {
     const row = this.database
-      .prepare("SELECT * FROM channel_session_bindings WHERE channel = ? AND conversation_id = ?")
-      .get(channel, conversationId) as SqliteRow | undefined;
+      .prepare(
+        `SELECT * FROM channel_session_bindings
+         WHERE channel = ? AND conversation_id = ? AND agent_id = ?
+           AND workspace_key = ? AND generation = ?`,
+      )
+      .get(
+        slot.channel,
+        slot.conversationId,
+        slot.agentId,
+        slot.workspaceKey,
+        slot.generation,
+      ) as SqliteRow | undefined;
     return row ? toChannelBinding(row) : undefined;
   }
 
-  getChannelSession(channel: string, conversationId: string): AgentSession | undefined {
-    const binding = this.getChannelBinding(channel, conversationId);
+  getChannelSession(slot: ChannelSlot): AgentSession | undefined {
+    const binding = this.getChannelBinding(slot);
     return binding ? this.getSession(binding.sessionId) : undefined;
   }
 
-  unbindChannelConversation(channel: string, conversationId: string): boolean {
+  unbindChannelConversation(slot: ChannelSlot): boolean {
     const result = this.database
-      .prepare("DELETE FROM channel_session_bindings WHERE channel = ? AND conversation_id = ?")
-      .run(channel, conversationId);
+      .prepare(
+        `DELETE FROM channel_session_bindings
+         WHERE channel = ? AND conversation_id = ? AND agent_id = ?
+           AND workspace_key = ? AND generation = ?`,
+      )
+      .run(
+        slot.channel,
+        slot.conversationId,
+        slot.agentId,
+        slot.workspaceKey,
+        slot.generation,
+      );
     return Number(result.changes) > 0;
+  }
+
+  getOrCreateBoundSession(
+    slot: ChannelSlot,
+    input: CreateSessionInput,
+  ): AgentSession {
+    const existing = this.getChannelSession(slot);
+    if (existing) return existing;
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const recheck = this.getChannelSession(slot);
+      if (recheck) {
+        this.database.exec("COMMIT;");
+        return recheck;
+      }
+      const session = this.createSession(input);
+      this.bindChannelConversation(slot, session.id);
+      this.database.exec("COMMIT;");
+      return session;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
+  }
+
+  createAndBindHistoricalSession(
+    slot: ChannelSlot,
+    providerSessionId: string,
+  ): AgentSession {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const existing = this.getChannelSession(slot);
+      if (existing && existing.providerSessionId === providerSessionId) {
+        this.database.exec("COMMIT;");
+        return existing;
+      }
+      const session = this.createSession({
+        agentId: slot.agentId,
+        providerSessionId,
+        cwd: slot.workspaceKey || null,
+      });
+      this.bindHistoricalSession(slot, session.id);
+      this.database.exec("COMMIT;");
+      return session;
+    } catch (error) {
+      this.database.exec("ROLLBACK;");
+      throw error;
+    }
   }
 
   updateSession(id: string, input: UpdateSessionInput): AgentSession | undefined {
@@ -430,6 +623,9 @@ function toChannelBinding(row: SqliteRow): ChannelSessionBinding {
   return {
     channel: String(row.channel),
     conversationId: String(row.conversation_id),
+    agentId: String(row.agent_id),
+    workspaceKey: String(row.workspace_key),
+    generation: Number(row.generation),
     sessionId: String(row.session_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),

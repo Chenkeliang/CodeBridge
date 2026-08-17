@@ -1,5 +1,27 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
+import { canonicalWorkspaceKey, type ChannelSlot } from "@codebridge/core";
 import { SessionCatalogStore } from "./index.js";
+
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
+  typeof import("node:sqlite");
+
+function slot(
+  agentId: string,
+  workspaceKey: string,
+  generation = 0,
+): ChannelSlot {
+  return {
+    channel: "feishu",
+    conversationId: "chat:topic",
+    agentId,
+    workspaceKey,
+    generation,
+  };
+}
 
 describe("session catalog", () => {
   it("persists sessions grouped by Agent Profile", () => {
@@ -99,13 +121,136 @@ describe("session catalog", () => {
 
   it("binds an external channel conversation to the same Session contract", () => {
     const store = new SessionCatalogStore(":memory:");
-    const session = store.createSession({ agentId: "pi" });
-    const binding = store.bindChannelConversation("feishu", "chat:topic", session.id);
-    expect(binding).toMatchObject({ channel: "feishu", conversationId: "chat:topic", sessionId: session.id });
-    expect(store.getChannelSession("feishu", "chat:topic")).toEqual(session);
-    expect(store.bindChannelConversation("feishu", "chat:topic", session.id).createdAt).toBe(binding.createdAt);
-    expect(store.unbindChannelConversation("feishu", "chat:topic")).toBe(true);
-    expect(store.getChannelSession("feishu", "chat:topic")).toBeUndefined();
+    const session = store.createSession({ agentId: "pi", cwd: "/tmp/project" });
+    const key = canonicalWorkspaceKey("/tmp/project").key;
+    const binding = store.bindChannelConversation(slot("pi", key), session.id);
+    expect(binding).toMatchObject({
+      channel: "feishu",
+      conversationId: "chat:topic",
+      agentId: "pi",
+      workspaceKey: key,
+      generation: 0,
+      sessionId: session.id,
+    });
+    expect(store.getChannelSession(slot("pi", key))).toEqual(session);
+    expect(store.bindChannelConversation(slot("pi", key), session.id).createdAt).toBe(binding.createdAt);
+    expect(store.unbindChannelConversation(slot("pi", key))).toBe(true);
+    expect(store.getChannelSession(slot("pi", key))).toBeUndefined();
     store.close();
+  });
+
+  it("binds pi and cursor to distinct sessions for the same channel+conversation", () => {
+    const store = new SessionCatalogStore(":memory:");
+    const pi = store.createSession({ agentId: "pi", cwd: "/tmp/project" });
+    const cursor = store.createSession({ agentId: "cursor", cwd: "/tmp/project" });
+    const key = canonicalWorkspaceKey("/tmp/project").key;
+    store.bindChannelConversation(slot("pi", key), pi.id);
+    store.bindChannelConversation(slot("cursor", key), cursor.id);
+
+    expect(store.getChannelSession(slot("pi", key))?.id).toBe(pi.id);
+    expect(store.getChannelSession(slot("cursor", key))?.id).toBe(cursor.id);
+    store.close();
+  });
+
+  it("bindHistoricalSession is insert-only and idempotent for the same session", () => {
+    const store = new SessionCatalogStore(":memory:");
+    const key = canonicalWorkspaceKey("/tmp/project").key;
+    const first = store.createSession({ agentId: "pi", cwd: "/tmp/project" });
+    const second = store.createSession({ agentId: "pi", cwd: "/tmp/project" });
+
+    const bound = store.bindHistoricalSession(slot("pi", key), first.id);
+    expect(bound.sessionId).toBe(first.id);
+    // 幂等：同 slot 绑同 session 返回既有
+    expect(store.bindHistoricalSession(slot("pi", key), first.id).sessionId).toBe(first.id);
+    // 不同 session → 冲突
+    expect(() => store.bindHistoricalSession(slot("pi", key), second.id)).toThrow(
+      "slot_already_bound",
+    );
+    store.close();
+  });
+
+  it("getOrCreateBoundSession reuses the bound session and is atomic", () => {
+    const store = new SessionCatalogStore(":memory:");
+    const key = canonicalWorkspaceKey("/tmp/project").key;
+    const created = store.getOrCreateBoundSession(slot("pi", key), {
+      agentId: "pi",
+      cwd: "/tmp/project",
+    });
+    const reused = store.getOrCreateBoundSession(slot("pi", key), {
+      agentId: "pi",
+      cwd: "/tmp/project",
+    });
+    expect(reused.id).toBe(created.id);
+    expect(store.listSessions("pi")).toHaveLength(1);
+    store.close();
+  });
+
+  it("migrates legacy (channel, conversation_id) bindings and skips orphans", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-catalog-"));
+    const dbPath = path.join(dir, "catalog.sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT NOT NULL,
+        provider_session_id TEXT,
+        task_record_id TEXT,
+        flow_id TEXT,
+        model TEXT,
+        effort TEXT,
+        config_overrides TEXT NOT NULL,
+        permission_mode TEXT,
+        folder_id TEXT,
+        cwd TEXT,
+        additional_directories TEXT NOT NULL,
+        title TEXT,
+        status TEXT NOT NULL,
+        pinned_at TEXT,
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE channel_session_bindings (
+        channel TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (channel, conversation_id)
+      );
+    `);
+    db.prepare(
+      `INSERT INTO agent_sessions (id, schema_version, agent_id, cwd, config_overrides, additional_directories, status, created_at, updated_at)
+       VALUES ('sess_legacy', 1, 'pi', NULL, '{}', '[]', 'idle', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO channel_session_bindings (channel, conversation_id, session_id, created_at, updated_at)
+       VALUES ('feishu', 'chat:topic', 'sess_legacy', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO channel_session_bindings (channel, conversation_id, session_id, created_at, updated_at)
+       VALUES ('feishu', 'chat:orphan', 'sess_missing', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
+    ).run();
+    db.close();
+
+    const store = new SessionCatalogStore(dbPath, { defaultCwd: "/default/ws" });
+    const migrated = store.getChannelSession({
+      channel: "feishu",
+      conversationId: "chat:topic",
+      agentId: "pi",
+      workspaceKey: canonicalWorkspaceKey("/default/ws").key,
+      generation: 0,
+    });
+    expect(migrated?.id).toBe("sess_legacy");
+    expect(store.getChannelSession({
+      channel: "feishu",
+      conversationId: "chat:orphan",
+      agentId: "pi",
+      workspaceKey: canonicalWorkspaceKey("/default/ws").key,
+      generation: 0,
+    })).toBeUndefined();
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

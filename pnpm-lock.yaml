@@ -433,6 +433,10 @@ importers:
         version: 5.9.3
 
   packages/session-catalog:
+    dependencies:
+      '@codebridge/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
