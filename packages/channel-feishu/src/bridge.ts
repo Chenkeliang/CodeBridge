@@ -12,6 +12,7 @@ import {
   resolveRequireMention,
   type AgentEvent,
   type AppConfig,
+  type ChannelSessionEvent,
   type ChannelSessionIngress,
   type RunAttachment,
 } from "@codebridge/core";
@@ -609,7 +610,7 @@ export class FeishuBridge {
 
     if (topicId) this.botParticipatedTopics.add(topicId);
 
-    void this.streamAgentReply(msg, finalPrompt, topicId)
+    void this.submitAndStream(msg, finalPrompt, topicId)
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
         this.options.onLog?.(`Agent 回复失败: ${message}`);
@@ -625,10 +626,101 @@ export class FeishuBridge {
       });
   }
 
+  private async submitAndStream(
+    msg: FeishuMessage,
+    prompt: string,
+    topicId: string | undefined,
+  ): Promise<void> {
+    if (!this.sessionIngress) {
+      await this.streamAgentReply(msg, prompt, topicId);
+      return;
+    }
+    const binding = this.orchestrator.router.getBinding(msg.chatId, topicId);
+    const slot = this.orchestrator.router.buildSlot(msg.chatId, topicId);
+    const receipt = await this.sessionIngress.submit({
+      channel: "feishu",
+      conversationId: this.chatKey(msg.chatId, topicId),
+      agentId: binding.backendId,
+      cwd: binding.cwd,
+      generation: slot.generation,
+      message: prompt,
+      model: binding.model,
+      attachments: msg.attachments,
+      idempotencyKey: msg.messageId,
+      replyToMessageId: msg.messageId,
+    });
+    if (receipt.acceptance === "queued") {
+      await this.sendMarkdown(
+        msg.chatId,
+        receipt.queueState === "paused"
+          ? "⏸ 当前 Session 已暂停，消息已排队。发送 /continue 恢复队列，或 /new 新建会话。"
+          : `⏳ 当前任务进行中，消息已排队（turn ${receipt.turnId.slice(0, 8)}）。`,
+        msg.messageId,
+      ).catch(() => {});
+      void this.waitForTurnDispatch(
+        msg,
+        prompt,
+        topicId,
+        receipt.sessionId,
+        receipt.turnId,
+        receipt.eventSequence,
+      );
+      return;
+    }
+    await this.streamAgentReply(
+      msg,
+      prompt,
+      topicId,
+      receipt.sessionId,
+      receipt.runId,
+      receipt.eventSequence,
+    );
+  }
+
+  private async waitForTurnDispatch(
+    msg: FeishuMessage,
+    prompt: string,
+    topicId: string | undefined,
+    sessionId: string,
+    turnId: string,
+    afterSequence: number,
+  ): Promise<void> {
+    if (!this.sessionIngress) return;
+    const abort = new AbortController();
+    this.activeAborts.add(abort);
+    try {
+      for await (const event of this.sessionIngress.events(sessionId, {
+        afterSequence,
+        signal: abort.signal,
+      })) {
+        if (
+          event.type === "TURN_DISPATCHED"
+          && event.target === turnId
+          && event.runId
+        ) {
+          await this.streamAgentReply(
+            msg,
+            prompt,
+            topicId,
+            sessionId,
+            event.runId,
+            event.sequence,
+          );
+          return;
+        }
+      }
+    } finally {
+      this.activeAborts.delete(abort);
+    }
+  }
+
   private async streamAgentReply(
     msg: FeishuMessage,
     prompt: string,
     topicId: string | undefined,
+    sessionId?: string,
+    runId?: string | null,
+    afterSequence?: number,
   ): Promise<void> {
     if (!this.channel) return;
 
@@ -661,19 +753,27 @@ export class FeishuBridge {
       agentConsumed = true;
       try {
         const binding = this.orchestrator.router.getBinding(msg.chatId, topicId);
-        const events = this.sessionIngress
-          ? this.sessionIngress({
-              channel: "feishu",
-              conversationId: this.chatKey(msg.chatId, topicId),
-              message: prompt,
-              agentId: binding.backendId,
-              cwd: binding.cwd,
-              model: binding.model,
-              attachments: msg.attachments,
-              idempotencyKey: msg.messageId,
-              signal: streamAbort.signal,
-            })
-          : this.orchestrator.runAgent(msg.chatId, topicId, prompt, msg.attachments);
+        const events = this.sessionIngress && sessionId
+          ? mapDomainToAgent(
+              this.sessionIngress.events(sessionId, {
+                afterSequence: afterSequence ?? 0,
+                signal: streamAbort.signal,
+              }),
+              runId ?? undefined,
+            )
+          : this.sessionIngress
+            ? this.sessionIngress({
+                channel: "feishu",
+                conversationId: this.chatKey(msg.chatId, topicId),
+                message: prompt,
+                agentId: binding.backendId,
+                cwd: binding.cwd,
+                model: binding.model,
+                attachments: msg.attachments,
+                idempotencyKey: msg.messageId,
+                signal: streamAbort.signal,
+              })
+            : this.orchestrator.runAgent(msg.chatId, topicId, prompt, msg.attachments);
         for await (const event of events) {
           if (streamAbort.signal.aborted) return;
           onEvent(event);
@@ -1027,4 +1127,41 @@ export async function runDoctor(
     runner: health,
     backends: runner,
   };
+}
+
+/** 把会话域事件映射回 AgentEvent，并按 runId 过滤（watcher/单 run 卡片共用）。 */
+async function* mapDomainToAgent(
+  domain: AsyncGenerator<ChannelSessionEvent>,
+  runId?: string,
+): AsyncGenerator<AgentEvent> {
+  for await (const event of domain) {
+    if (runId && event.runId !== runId) continue;
+    if (event.type === "AGENT_EVENT") {
+      const agentEvent = event.payload.event as AgentEvent | undefined;
+      if (agentEvent && agentEvent.type !== "done") yield agentEvent;
+      continue;
+    }
+    if (event.type === "APPROVAL_REQUESTED") {
+      yield {
+        type: "permission_request",
+        requestId: String(
+          (event.payload as Record<string, unknown>)?.approval_id ?? "approval",
+        ),
+        title: "此步骤需要审批，请在 Web Workbench 中确认",
+      };
+      continue;
+    }
+    if (event.type === "RUN_SUCCEEDED") {
+      yield { type: "done", exitCode: 0 };
+      return;
+    }
+    if (
+      event.type === "RUN_FAILED"
+      || event.type === "RUN_CANCELLED"
+      || event.type === "RUN_INTERRUPTED"
+    ) {
+      yield { type: "done", exitCode: 1 };
+      return;
+    }
+  }
 }
