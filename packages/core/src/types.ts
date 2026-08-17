@@ -233,6 +233,10 @@ export interface ChannelSessionIngress {
     surfaceMessageId: string,
   ): Promise<boolean>;
   completeDelivery(turnId: string, owner: string): Promise<boolean>;
+  resumeProviderSession(
+    slot: ChannelSlot,
+    providerSessionId: string,
+  ): Promise<{ sessionId: string }>;
   cancelRun(sessionId: string, runId: string): Promise<boolean>;
   resumeQueue(sessionId: string): Promise<{ queueState: "ready" | "paused" }>;
   resetSlot(slot: ChannelSlot): Promise<boolean>;

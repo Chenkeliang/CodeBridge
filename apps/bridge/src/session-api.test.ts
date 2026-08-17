@@ -832,6 +832,85 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("persists a channel delivery when a reply_to_message_id is provided", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      coordinator,
+    }, TOKEN);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat/messages",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": "feishu-delivery-1",
+        },
+        body: JSON.stringify({
+          message: "继续",
+          agent_id: "pi",
+          reply_to_message_id: "msg-42",
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+
+    const deliveries = workItems.listDeliveries("feishu");
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      channel: "feishu",
+      conversationId: "chat",
+      replyToMessageId: "msg-42",
+      status: "dispatched",
+    });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("serializes channel events with camelCase runId", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      coordinator,
+    }, TOKEN);
+
+    const accepted = await app.request(
+      "/v1/channels/feishu/conversations/chat/messages",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": "feishu-events-1",
+        },
+        body: JSON.stringify({ message: "继续", agent_id: "pi" }),
+      },
+    );
+    const body = await accepted.json() as { session_id: string };
+
+    const eventsResponse = await app.request(
+      `/v1/sessions/${encodeURIComponent(body.session_id)}/events`,
+      { headers: { authorization: `Bearer ${TOKEN}` } },
+    );
+    const eventsBody = await eventsResponse.json() as {
+      events: Array<{ type: string; runId: string | null }>;
+    };
+    const runCreated = eventsBody.events.find((event) => event.type === "RUN_CREATED");
+    expect(runCreated?.runId).toMatch(/^run_/);
+    catalog.close();
+    workItems.close();
+  });
+
   it("cancels a channel-bound Run and resolves its approval through the same ingress", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

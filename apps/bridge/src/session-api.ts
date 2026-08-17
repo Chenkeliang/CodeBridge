@@ -367,6 +367,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         flow_id: asNullableString(body.flow_id),
         model: asNullableString(body.model),
         attachments: body.attachments,
+        delivery: typeof body.reply_to_message_id === "string"
+          ? {
+              channel,
+              conversation_id: conversationId,
+              reply_to_message_id: body.reply_to_message_id,
+            }
+          : undefined,
       }),
     });
     if (!messageResponse.ok) return c.json(await messageResponse.json(), messageResponse.status as 400 | 404 | 409 | 503);
@@ -1109,6 +1116,9 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!session?.taskRecordId) return c.json({ resolved: false });
     const body = await readJson(c);
     const runId = typeof body?.run_id === "string" ? body.run_id : undefined;
+    const approvalId = typeof body?.approval_id === "string"
+      ? body.approval_id
+      : undefined;
     const runs = options.workItems.listRuns(session.taskRecordId);
     const run = runId
       ? runs.find((candidate) => candidate.id === runId)
@@ -1116,7 +1126,10 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!run) return c.json({ resolved: false });
     const pending = options.approvals
       .listForRun(run.id)
-      .find((approval) => approval.status === "requested");
+      .find((approval) =>
+        approval.status === "requested"
+        && (approvalId === undefined || approval.id === approvalId),
+      );
     if (!pending) return c.json({ resolved: false });
     const approve = body?.approve === true;
     const record = approve
@@ -1145,6 +1158,42 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       });
     }
     return c.json({ resolved: true, approval_id: record.id });
+  });
+
+  app.post("/v1/sessions/resume-provider", async (c) => {
+    const body = await readJson(c);
+    const providerSessionId = typeof body?.provider_session_id === "string"
+      ? body.provider_session_id
+      : undefined;
+    const rawSlot = body?.slot;
+    if (!providerSessionId || !rawSlot || typeof rawSlot !== "object") {
+      return c.json({ error: "slot_and_provider_session_id_required" }, 400);
+    }
+    const slot = rawSlot as Record<string, unknown>;
+    if (
+      typeof slot.channel !== "string"
+      || typeof slot.conversation_id !== "string"
+      || typeof slot.agent_id !== "string"
+      || typeof slot.workspace_key !== "string"
+      || !Number.isSafeInteger(slot.generation)
+    ) {
+      return c.json({ error: "invalid_slot" }, 400);
+    }
+    try {
+      const session = options.catalog.createAndBindHistoricalSession({
+        channel: slot.channel,
+        conversationId: slot.conversation_id,
+        agentId: slot.agent_id,
+        workspaceKey: slot.workspace_key,
+        generation: Number(slot.generation),
+      }, providerSessionId);
+      return c.json({ session_id: session.id }, 201);
+    } catch (error) {
+      if (error instanceof Error && error.message === "slot_already_bound") {
+        return c.json({ error: "slot_already_bound" }, 409);
+      }
+      throw error;
+    }
   });
 
   return app;

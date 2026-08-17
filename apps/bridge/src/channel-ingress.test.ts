@@ -54,8 +54,8 @@ describe("channel session ingress", () => {
       expect(c.req.query("after_sequence")).toBe("3");
       expect(c.req.query("live")).toBe("true");
       return sse([
-        '{"type":"AGENT_EVENT","sequence":4,"run_id":"run_1","target":null,"payload":{"event":{"type":"text_delta","text":"ok"}}}',
-        '{"type":"RUN_SUCCEEDED","sequence":5,"run_id":"run_1","target":null,"payload":{}}',
+        '{"type":"AGENT_EVENT","sequence":4,"runId":"run_1","target":null,"payload":{"event":{"type":"text_delta","text":"ok"}}}',
+        '{"type":"RUN_SUCCEEDED","sequence":5,"runId":"run_1","target":null,"payload":{}}',
       ]);
     });
     const ingress = createChannelSessionIngress(app, "token");
@@ -114,5 +114,42 @@ describe("channel session ingress", () => {
     const ingress = createChannelSessionIngress(app, "token");
     const deliveries = await ingress.listDeliveries("feishu");
     expect(deliveries).toEqual([{ turnId: "turn_1", status: "pending" }]);
+  });
+
+  it("resumes a provider session into a slot", async () => {
+    const app = new Hono();
+    app.post("/v1/sessions/resume-provider", async (c) => {
+      expect(await c.req.json()).toEqual({
+        slot: {
+          channel: "feishu",
+          conversation_id: "chat",
+          agent_id: "pi",
+          workspace_key: "/tmp/p",
+          generation: 0,
+        },
+        provider_session_id: "provider-1",
+      });
+      return c.json({ session_id: "sess_1" }, 201);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    const result = await ingress.resumeProviderSession({
+      channel: "feishu",
+      conversationId: "chat",
+      agentId: "pi",
+      workspaceKey: "/tmp/p",
+      generation: 0,
+    }, "provider-1");
+    expect(result).toEqual({ sessionId: "sess_1" });
+  });
+
+  it("throws on a non-2xx delivery claim instead of returning false", async () => {
+    const app = new Hono();
+    app.post("/v1/deliveries/:turn/claim", () =>
+      new Response("service unavailable", { status: 503 }),
+    );
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.claimDelivery("turn_1", "owner-1")).rejects.toThrow(
+      /claim delivery failed \(503\)/,
+    );
   });
 });
