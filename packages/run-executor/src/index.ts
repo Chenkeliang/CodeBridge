@@ -262,9 +262,10 @@ export class RunExecutor {
             const renewed = this.options.sessionLeaseService!.renew(id, owner);
             if (!renewed) return null;
             if (!this.renewProviderSession(runId)) {
-              // 只标记失败 + abort，终态由主路径唯一调用 finishRun。
+              // 只标记失败 + abort + 停表，终态由主路径唯一调用 finishRun。
               providerLeaseLost = true;
               controller.abort();
+              return null;
             }
             return renewed;
           },
@@ -728,6 +729,10 @@ export class RunExecutor {
       this.store.getRun(run.id)?.replaySafety ?? "safe";
     const persistAgentEvent = (event: AgentEvent): void => {
       this.throwIfCancellationRequested(run.id);
+      // provider lease 丢失后，persist 入口直接拒绝写入（不依赖 runner 尊重 abort）。
+      if (signal?.aborted) {
+        throw new RunCancellationRequested();
+      }
       // Task 9 fresh 路径：首个 session 事件到达时，persist 前原子
       // updateRun(providerSessionId) + claim；失败则中断本 run，不 append AGENT_EVENT。
       if (
@@ -740,17 +745,19 @@ export class RunExecutor {
         const agentId = run.agentId;
         const sessionId = run.sessionId;
         const claimed = this.store.withSessionTransaction((tx) => {
-          tx.updateRun(run.id, { providerSessionId: event.sessionId });
-          // 学到 id 只在这一处写入 runtime，作为后续 dispatchNextTurn 的事实源。
-          tx.setSessionProviderSessionId(sessionId, event.sessionId);
           const now = new Date();
-          return tx.claimProviderSession({
+          const ok = tx.claimProviderSession({
             agentId,
             providerSessionId: event.sessionId,
             runId: run.id,
             now: now.toISOString(),
             expiresAt: new Date(now.getTime() + PROVIDER_LEASE_MS).toISOString(),
           });
+          if (!ok) return false;
+          // claim 成功才写 identity；失败时事务内无写，return false 不会留下脏 runtime。
+          tx.updateRun(run.id, { providerSessionId: event.sessionId });
+          tx.setSessionProviderSessionId(sessionId, event.sessionId);
+          return true;
         });
         if (!claimed) {
           throw new ProviderSessionBusyError();

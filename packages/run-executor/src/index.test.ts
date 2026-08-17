@@ -507,6 +507,13 @@ describe("RunExecutor", () => {
     const result = await executor.execute(run.id);
     expect(result.status).toBe("interrupted");
     expect(store.getRun(run.id)?.terminalReason).toBe("provider_session_busy");
+    // claim 失败不得污染 dispatch 事实源：runtime 仍为 null，run 也未被绑定。
+    expect(store.getRun(run.id)?.providerSessionId).toBeNull();
+    let runtimeId: string | null = null;
+    store.withSessionTransaction((tx) => {
+      runtimeId = tx.getSessionProviderSessionId("sess_1");
+    });
+    expect(runtimeId).toBeNull();
     store.close();
   });
 
