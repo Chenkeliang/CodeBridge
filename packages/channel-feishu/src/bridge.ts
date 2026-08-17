@@ -202,6 +202,8 @@ export class FeishuBridge {
   private readonly botParticipatedTopics = new Set<string>();
   private readonly mentionRegistry = new MentionRegistry();
   private readonly pendingStreams: JsonMapStore<PendingFeishuStream>;
+  /** 所有活动流的 AbortController（非 chat-scoped），disconnect 时统一 abort */
+  private readonly activeAborts = new Set<AbortController>();
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
 
@@ -318,6 +320,8 @@ export class FeishuBridge {
 
   async disconnect(): Promise<void> {
     this.disconnecting = true;
+    for (const ac of this.activeAborts) ac.abort();
+    this.activeAborts.clear();
     await this.channel?.disconnect();
   }
 
@@ -629,6 +633,7 @@ export class FeishuBridge {
     if (!this.channel) return;
 
     const streamAbort = new AbortController();
+    this.activeAborts.add(streamAbort);
 
     // /thinking off：隐藏内部思考/工具；仍展示 Codex commentary 检查点和最终答案。
     const showThinking =
@@ -879,6 +884,7 @@ export class FeishuBridge {
         );
       }
     } finally {
+      this.activeAborts.delete(streamAbort);
       if (streamMessageId && !this.disconnecting) {
         this.pendingStreams.update((all) => {
           const next = { ...all };
