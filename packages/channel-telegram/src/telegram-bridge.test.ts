@@ -298,16 +298,42 @@ describe("TelegramBridge inbound commands", () => {
     config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 8 });
     const editMessage = vi.fn().mockResolvedValue({ message_id: 8 });
-    const received: unknown[] = [];
+    const submit = vi.fn().mockResolvedValue({
+      sessionId: "sess_1",
+      turnId: "turn_1",
+      runId: "run_1",
+      acceptance: "dispatched",
+      queueState: "ready",
+      eventSequence: 3,
+    });
     const bridge = new TelegramBridge({
       config,
       dataDir,
       api: { sendMessage, editMessage } as never,
-      sessionIngress: (async function* (message: Parameters<ChannelSessionIngress>[0]) {
-        received.push(message);
-        yield { type: "text_delta", text: "Session reply" };
-        yield { type: "done", exitCode: 0 };
-      }) as unknown as ChannelSessionIngress,
+      sessionIngress: {
+        submit,
+        events: async function* () {
+          yield {
+            type: "AGENT_EVENT",
+            sequence: 4,
+            runId: "run_1",
+            target: null,
+            payload: { event: { type: "text_delta", text: "Session reply" } },
+          };
+          yield {
+            type: "RUN_SUCCEEDED",
+            sequence: 5,
+            runId: "run_1",
+            target: null,
+            payload: {},
+          };
+          await new Promise(() => {});
+        },
+        claimDelivery: vi.fn().mockResolvedValue(true),
+        ackDelivery: vi.fn().mockResolvedValue(true),
+        completeDelivery: vi.fn().mockResolvedValue(true),
+        listDeliveries: vi.fn().mockResolvedValue([]),
+      } as unknown as ChannelSessionIngress,
     });
 
     await bridge.handleUpdate({
@@ -319,15 +345,21 @@ describe("TelegramBridge inbound commands", () => {
         text: "hello",
       },
     });
-    await bridge.disconnect();
 
-    expect(received).toEqual([
+    await vi.waitFor(() => {
+      expect(editMessage).toHaveBeenCalledWith(
+        "telegram:42",
+        8,
+        "Session reply",
+      );
+    });
+    expect(submit).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "telegram",
         conversationId: "telegram:42|",
         message: expect.stringContaining("hello"),
       }),
-    ]);
-    expect(editMessage).toHaveBeenCalledWith("telegram:42", 8, "Session reply");
+    );
+    await bridge.disconnect();
   });
 });

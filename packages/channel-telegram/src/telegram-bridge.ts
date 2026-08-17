@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   MentionRegistry,
   formatMentionGuidance,
@@ -18,6 +19,7 @@ import {
   type TelegramMessageEntity,
   type TelegramUpdate,
 } from "./telegram-api.js";
+import { TelegramSessionWatcher } from "./telegram-session-watcher.js";
 
 export const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "menu", description: "打开手机快捷菜单" },
@@ -76,6 +78,8 @@ export class TelegramBridge {
   private pollTask?: Promise<void>;
   private readonly activeReplies = new Set<Promise<void>>();
   private readonly mentionRegistry = new MentionRegistry();
+  private readonly sessionWatchers = new Map<string, TelegramSessionWatcher>();
+  private readonly instanceId = randomUUID();
   private offset = 0;
   private sessionIngress?: ChannelSessionIngress;
 
@@ -114,11 +118,14 @@ export class TelegramBridge {
     this.options.onLog?.(`已连接 Telegram bot: ${me.username ?? me.first_name ?? "unknown"}`);
     this.pollAbort = new AbortController();
     this.pollTask = this.poll(this.pollAbort.signal);
+    await this.recoverDeliveries();
   }
 
   async disconnect(): Promise<void> {
     this.pollAbort?.abort();
     await this.pollTask?.catch(() => {});
+    for (const watcher of this.sessionWatchers.values()) watcher.abort();
+    this.sessionWatchers.clear();
     await Promise.allSettled([...this.activeReplies]);
   }
 
@@ -246,7 +253,7 @@ export class TelegramBridge {
       mentionTargets,
       requester.ref,
     );
-    const task = this.replyWithAgent(
+    const task = this.submitAndStream(
       chatId,
       topicId,
       `${prompt}\n\n${mentionGuidance}`,
@@ -352,7 +359,118 @@ export class TelegramBridge {
     }
   }
 
-  private async replyWithAgent(
+  private ensureSessionWatcher(sessionId: string): TelegramSessionWatcher {
+    const existing = this.sessionWatchers.get(sessionId);
+    if (existing) return existing;
+    const watcher = new TelegramSessionWatcher(
+      this.api,
+      this.sessionIngress!,
+      sessionId,
+      this.instanceId,
+      (message) => this.options.onLog?.(message),
+    );
+    this.sessionWatchers.set(sessionId, watcher);
+    return watcher;
+  }
+
+  private async recoverDeliveries(): Promise<void> {
+    if (!this.sessionIngress) return;
+    try {
+      const deliveries = await this.sessionIngress.listDeliveries("telegram");
+      const bySession = new Map<string, typeof deliveries>();
+      for (const delivery of deliveries) {
+        const list = bySession.get(delivery.sessionId) ?? [];
+        list.push(delivery);
+        bySession.set(delivery.sessionId, list);
+      }
+      for (const [sessionId, list] of bySession) {
+        const watcher = this.ensureSessionWatcher(sessionId);
+        const minAccepted = Math.min(
+          ...list.map((delivery) => delivery.acceptedSequence),
+        );
+        for (const delivery of list) {
+          const chatId =
+            delivery.conversationId.split("|")[0] ?? delivery.conversationId;
+          const turn = {
+            turnId: delivery.turnId,
+            chatId,
+            topicId: undefined,
+            showThinking: true,
+          };
+          if (delivery.runId && delivery.surfaceMessageId === null) {
+            await watcher.openRun(delivery.runId, turn);
+          } else if (delivery.runId) {
+            watcher.resumeRun(
+              delivery.runId,
+              delivery.surfaceMessageId ?? "",
+              delivery.turnId,
+              delivery.claimOwner ?? "",
+              true,
+              chatId,
+              undefined,
+            );
+          } else {
+            watcher.registerPendingTurn(delivery.turnId, turn);
+          }
+        }
+        watcher.start(minAccepted);
+      }
+    } catch (err) {
+      this.options.onLog?.(
+        `delivery 恢复失败: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private async submitAndStream(
+    chatId: string,
+    topicId: string | undefined,
+    prompt: string,
+  ): Promise<void> {
+    if (!this.sessionIngress) {
+      await this.runLegacyAgent(chatId, topicId, prompt);
+      return;
+    }
+    const binding = this.orchestrator.router.getBinding(chatId, topicId);
+    const slot = this.orchestrator.router.buildSlot(chatId, topicId);
+    const receipt = await this.sessionIngress.submit({
+      channel: "telegram",
+      conversationId: `${chatId}|${topicId ?? ""}`,
+      agentId: binding.backendId,
+      cwd: binding.cwd,
+      generation: slot.generation,
+      message: prompt,
+      model: binding.model,
+    });
+    const turn = {
+      turnId: receipt.turnId,
+      chatId,
+      topicId,
+      showThinking: binding.showThinking ?? true,
+    };
+    const watcher = this.ensureSessionWatcher(receipt.sessionId);
+    if (receipt.acceptance === "queued") {
+      await this.sendText(
+        chatId,
+        receipt.queueState === "paused"
+          ? "⏸ 当前 Session 已暂停，消息已排队。发送 /continue 恢复队列，或 /new 新建会话。"
+          : `⏳ 当前任务进行中，消息已排队（turn ${receipt.turnId.slice(0, 8)}）。`,
+        topicId,
+      );
+      watcher.registerPendingTurn(receipt.turnId, turn);
+      watcher.start(receipt.eventSequence);
+      return;
+    }
+    if (!receipt.runId) {
+      throw new Error(
+        `dispatched receipt missing run_id for turn ${receipt.turnId}`,
+      );
+    }
+    await watcher.openRun(receipt.runId, turn);
+    watcher.start(receipt.eventSequence);
+  }
+
+  private async runLegacyAgent(
     chatId: string,
     topicId: string | undefined,
     prompt: string,
@@ -362,24 +480,12 @@ export class TelegramBridge {
       this.orchestrator.router.getBinding(chatId, topicId).showThinking ?? true;
     const { present } = createFeishuStreamPresenter({ showThinking });
     let output = "";
-    const binding = this.orchestrator.router.getBinding(chatId, topicId);
-    const events = this.sessionIngress
-      ? this.sessionIngress({
-          channel: "telegram",
-          conversationId: `${chatId}|${topicId ?? ""}`,
-          message: prompt,
-          agentId: binding.backendId,
-          cwd: binding.cwd,
-          model: binding.model,
-        })
-      : this.orchestrator.runAgent(chatId, topicId, prompt);
+    const events = this.orchestrator.runAgent(chatId, topicId, prompt);
     for await (const event of events) {
       if (event.type === "permission_request") {
         await this.sendText(
           chatId,
-          this.sessionIngress
-            ? `🔐 Agent 请求权限：${event.title}`
-            : `🔐 Agent 请求权限：${event.title}\n回复 /approve 允许，/deny 拒绝。`,
+          `🔐 Agent 请求权限：${event.title}\n回复 /approve 允许，/deny 拒绝。`,
           topicId,
         );
         continue;
