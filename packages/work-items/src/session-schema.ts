@@ -155,7 +155,7 @@ export function initializeSessionRuntimeSchema(
       accepted_sequence INTEGER NOT NULL,
       run_id TEXT,
       run_terminal_at TEXT,
-      status TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'dispatched', 'delivering', 'completed')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

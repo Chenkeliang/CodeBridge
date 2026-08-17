@@ -328,8 +328,12 @@ export interface SessionRuntimeTransaction {
     now: string,
     expiresAt: string,
   ): boolean;
-  ackDelivery(turnId: string, surfaceMessageId: string): void;
-  completeDelivery(turnId: string): void;
+  ackDelivery(
+    turnId: string,
+    owner: string,
+    surfaceMessageId: string,
+  ): boolean;
+  completeDelivery(turnId: string, owner: string): boolean;
   listDeliveries(channel: string): ChannelDeliveryRow[];
   appendEvent(input: SessionEventInput): DomainEvent;
 }
@@ -1060,7 +1064,7 @@ export function createSqliteSessionRuntimeTransaction(
              updated_at = ?
            WHERE turn_id = ?
              AND (
-               status IN ('pending', 'dispatched')
+               (status = 'dispatched' AND run_id IS NOT NULL)
                OR (
                  status = 'delivering'
                  AND surface_message_id IS NULL
@@ -1072,8 +1076,33 @@ export function createSqliteSessionRuntimeTransaction(
       return Number(result.changes) === 1;
     },
 
-    ackDelivery(turnId, surfaceMessageId) {
+    ackDelivery(turnId, owner, surfaceMessageId) {
       assertActive();
+      const row = database
+        .prepare(
+          `SELECT surface_message_id, claim_owner, status
+           FROM channel_turn_delivery WHERE turn_id = ?`,
+        )
+        .get(turnId) as
+          | {
+              surface_message_id?: string | null;
+              claim_owner?: string | null;
+              status?: string;
+            }
+          | undefined;
+      if (
+        !row
+        || row.status !== "delivering"
+        || row.claim_owner !== owner
+      ) {
+        return false;
+      }
+      if (
+        row.surface_message_id !== null
+        && row.surface_message_id !== undefined
+      ) {
+        return String(row.surface_message_id) === surfaceMessageId;
+      }
       const now = new Date().toISOString();
       database
         .prepare(
@@ -1082,18 +1111,24 @@ export function createSqliteSessionRuntimeTransaction(
            WHERE turn_id = ? AND surface_message_id IS NULL`,
         )
         .run(surfaceMessageId, now, turnId);
+      return true;
     },
 
-    completeDelivery(turnId) {
+    completeDelivery(turnId, owner) {
       assertActive();
       const now = new Date().toISOString();
-      database
+      const result = database
         .prepare(
           `UPDATE channel_turn_delivery
            SET status = 'completed', updated_at = ?
-           WHERE turn_id = ?`,
+           WHERE turn_id = ?
+             AND status = 'delivering'
+             AND claim_owner = ?
+             AND surface_message_id IS NOT NULL
+             AND run_terminal_at IS NOT NULL`,
         )
-        .run(now, turnId);
+        .run(now, turnId, owner);
+      return Number(result.changes) === 1;
     },
 
     listDeliveries(channel) {
