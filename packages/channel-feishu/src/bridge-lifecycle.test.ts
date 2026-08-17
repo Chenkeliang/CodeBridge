@@ -43,45 +43,70 @@ function message(id: string): FeishuMessage {
 }
 
 describe("FeishuBridge stream lifecycle", () => {
-  it("does not abort a previous card when a second message streams", async () => {
+  it("streams two runs without aborting each other", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-lifecycle-"));
-    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge;
-    const signals: AbortSignal[] = [];
-    bridge.sessionIngress = (async function* (incoming: Parameters<ChannelSessionIngress>[0]) {
-      signals.push(incoming.signal!);
-      yield { type: "text_delta", text: "reply" };
-      yield { type: "done", exitCode: 0 };
-    }) as unknown as ChannelSessionIngress;
+    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge & {
+      streamAgentReply(
+        m: FeishuMessage,
+        p: string,
+        t: string | undefined,
+        s?: string,
+        r?: string | null,
+        a?: number,
+      ): Promise<void>;
+    };
+    const rendered: string[] = [];
+    bridge.sessionIngress = {
+      events: async function* () {
+        yield { type: "AGENT_EVENT", sequence: 1, runId: "run_1", target: null, payload: { event: { type: "text_delta", text: "reply" } } };
+        yield { type: "RUN_SUCCEEDED", sequence: 2, runId: "run_1", target: null, payload: {} };
+        await new Promise(() => {});
+      },
+    } as unknown as ChannelSessionIngress;
     bridge.channel = {
       async stream(_chatId, input) {
+        let out = "";
         await input.markdown({
           messageId: "card-1",
-          async append() {},
-          async setContent() {},
+          async append(chunk: string) { out += chunk; },
+          async setContent(full: string) { out = full; },
         });
+        rendered.push(out);
       },
       async disconnect() {},
     };
 
-    await bridge.streamAgentReply(message("m1"), "one");
-    await bridge.streamAgentReply(message("m2"), "two");
+    await bridge.streamAgentReply(message("m1"), "one", undefined, "sess_1", "run_1", 0);
+    await bridge.streamAgentReply(message("m2"), "two", undefined, "sess_1", "run_1", 0);
 
-    expect(signals).toHaveLength(2);
-    expect(signals[0]!.aborted).toBe(false);
+    expect(rendered).toHaveLength(2);
   });
 
   it("aborts an in-flight stream on disconnect", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-lifecycle-"));
-    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge;
+    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge & {
+      streamAgentReply(
+        m: FeishuMessage,
+        p: string,
+        t: string | undefined,
+        s?: string,
+        r?: string | null,
+        a?: number,
+      ): Promise<void>;
+    };
     let capturedSignal: AbortSignal | undefined;
-    bridge.sessionIngress = (async function* (incoming: Parameters<ChannelSessionIngress>[0]) {
-      capturedSignal = incoming.signal;
-      yield { type: "text_delta", text: "hi" };
-      await new Promise<void>((resolve) => {
-        incoming.signal?.addEventListener("abort", () => resolve());
-      });
-      yield { type: "done", exitCode: 130 };
-    }) as unknown as ChannelSessionIngress;
+    bridge.sessionIngress = {
+      events: async function* (
+        _sessionId: string,
+        opts: { afterSequence: number; signal: AbortSignal },
+      ) {
+        capturedSignal = opts.signal;
+        yield { type: "AGENT_EVENT", sequence: 1, runId: "run_1", target: null, payload: { event: { type: "text_delta", text: "hi" } } };
+        await new Promise<void>((resolve) =>
+          opts.signal?.addEventListener("abort", () => resolve()),
+        );
+      },
+    } as unknown as ChannelSessionIngress;
     bridge.channel = {
       async stream(_chatId, input) {
         await input.markdown({
@@ -93,7 +118,7 @@ describe("FeishuBridge stream lifecycle", () => {
       async disconnect() {},
     };
 
-    const streamPromise = bridge.streamAgentReply(message("m1"), "hi");
+    const streamPromise = bridge.streamAgentReply(message("m1"), "hi", undefined, "sess_1", "run_1", 0);
     await new Promise((resolve) => setTimeout(resolve, 20));
     await bridge.disconnect();
 

@@ -1161,6 +1161,29 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json({ resolved: true, approval_id: record.id });
   });
 
+  app.post("/v1/channels/command-context", async (c) => {
+    const body = await readJson(c);
+    const slot = parseChannelSlot(body?.slot);
+    if (!slot) return c.json({ error: "invalid_slot" }, 400);
+    const session = options.catalog.getChannelSession(slot);
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    const runtime = options.workItems.getSessionRuntime(session.id);
+    const activeRunId = runtime?.activeRunId ?? null;
+    let approvalId: string | null = null;
+    if (activeRunId && options.approvals) {
+      const requested = options.approvals
+        .listForRun(activeRunId)
+        .filter((approval) => approval.status === "requested")
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+      approvalId = requested[0]?.id ?? null;
+    }
+    return c.json({
+      session_id: session.id,
+      active_run_id: activeRunId,
+      approval_id: approvalId,
+    });
+  });
+
   return app;
 }
 
@@ -1458,6 +1481,33 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<R
   return body && typeof body === "object" && !Array.isArray(body)
     ? (body as Record<string, unknown>)
     : null;
+}
+
+function parseChannelSlot(value: unknown): {
+  channel: string;
+  conversationId: string;
+  agentId: string;
+  workspaceKey: string;
+  generation: number;
+} | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const slot = value as Record<string, unknown>;
+  if (
+    typeof slot.channel !== "string"
+    || typeof slot.conversation_id !== "string"
+    || typeof slot.agent_id !== "string"
+    || typeof slot.workspace_key !== "string"
+    || !Number.isSafeInteger(slot.generation)
+  ) {
+    return undefined;
+  }
+  return {
+    channel: slot.channel,
+    conversationId: slot.conversation_id,
+    agentId: slot.agent_id,
+    workspaceKey: slot.workspace_key,
+    generation: Number(slot.generation),
+  };
 }
 
 function asNullableString(value: unknown): string | null {

@@ -182,6 +182,12 @@ export interface ChannelSubmitReceipt {
   eventSequence: number;
 }
 
+export interface ChannelCommandContext {
+  sessionId: string;
+  activeRunId: string | null;
+  approvalId: string | null;
+}
+
 export interface ChannelSessionEvent {
   type: string;
   sequence: number;
@@ -233,6 +239,7 @@ export interface ChannelSessionIngress {
     surfaceMessageId: string,
   ): Promise<boolean>;
   completeDelivery(turnId: string, owner: string): Promise<boolean>;
+  getSlotCommandContext(slot: ChannelSlot): Promise<ChannelCommandContext>;
   /** Task 10 实现：将 Provider Session 绑定到槽位（含 Runner 列表校验 + Lease 预检） */
   resumeProviderSession?(
     slot: ChannelSlot,
@@ -245,14 +252,6 @@ export interface ChannelSessionIngress {
     approval: { sessionId: string; runId: string; approvalId: string },
     approve: boolean,
   ): Promise<boolean>;
-  /** @deprecated 旧函数式入口（Task 7/8 迁移后移除） */
-  (message: ChannelSessionMessage): AsyncGenerator<AgentEvent>;
-  /** @deprecated 旧按 conversation 取消（Task 7/8 迁移后移除） */
-  cancel?(channel: string, conversationId: string): Promise<boolean>;
-  /** @deprecated 旧按 conversation 审批（Task 7/8 迁移后移除） */
-  resolveApproval?(channel: string, conversationId: string, approve: boolean): Promise<boolean>;
-  /** @deprecated 旧按 conversation 重置（Task 7/8 迁移后移除） */
-  reset?(channel: string, conversationId: string): Promise<boolean>;
 }
 
 export interface DoctorResult {
