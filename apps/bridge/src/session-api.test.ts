@@ -958,6 +958,85 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("returns a null command context for an unbound slot", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const response = await app.request("/v1/channels/command-context", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        slot: { channel: "feishu", conversation_id: "chat", agent_id: "pi", workspace_key: "/tmp/p", generation: 0 },
+      }),
+    });
+    expect(await response.json()).toEqual({ session_id: null, active_run_id: null });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("proxies runner permission resolution through the permission route", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const resolvePermission = vi.fn().mockResolvedValue(true);
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      runner: { resolvePermission } as unknown as RunnerClient,
+    }, TOKEN);
+    const response = await app.request("/v1/runs/run_1/permission", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ approve: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ resolved: true });
+    expect(resolvePermission).toHaveBeenCalledWith("run_1", true);
+    catalog.close();
+    workItems.close();
+  });
+
+  it("resets only the exact slot", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const submit = (agentId: string, key: string) =>
+      app.request("/v1/channels/feishu/conversations/chat/messages", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": key,
+        },
+        body: JSON.stringify({ message: "hi", agent_id: agentId, cwd: "/tmp/project" }),
+      });
+    await submit("pi", "reset-pi");
+    await submit("codex", "reset-codex");
+
+    const reset = await app.request("/v1/channels/feishu/conversations/chat/reset", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "pi", workspace_key: "/tmp/project", generation: 0 }),
+    });
+    expect((await reset.json()) as { reset: boolean }).toEqual({ reset: true });
+
+    const codexCtx = await app.request("/v1/channels/command-context", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: { channel: "feishu", conversation_id: "chat", agent_id: "codex", workspace_key: "/tmp/project", generation: 0 } }),
+    });
+    expect(((await codexCtx.json()) as { session_id: string | null }).session_id).not.toBeNull();
+
+    const piCtx = await app.request("/v1/channels/command-context", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: { channel: "feishu", conversation_id: "chat", agent_id: "pi", workspace_key: "/tmp/project", generation: 0 } }),
+    });
+    expect(((await piCtx.json()) as { session_id: string | null }).session_id).toBeNull();
+    catalog.close();
+    workItems.close();
+  });
+
   it("moves provider Session discovery off the GET route", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

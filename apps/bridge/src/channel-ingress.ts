@@ -233,7 +233,7 @@ export function createChannelSessionIngress(
     approve: boolean,
   ): Promise<boolean> => {
     const response = await app.request(
-      `/v1/runs/${encodeURIComponent(runId)}/approve`,
+      `/v1/runs/${encodeURIComponent(runId)}/permission`,
       {
         method: "POST",
         headers: { ...auth, "content-type": "application/json" },
