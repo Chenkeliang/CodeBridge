@@ -69,6 +69,35 @@ export function projectSessionEvent(
     case "TURN_CANCELLED":
       assertQueuedTurnHasNoTimeline(database, String(event.target));
       break;
+    // 已知但有意不进时间线的类型：显式 no-op（cursor 正常前进）。
+    case "WORK_ITEM_CREATED":
+    case "TURN_QUEUED":
+    case "RUN_CREATED":
+    case "PLAN_VALIDATED":
+    case "RUN_CANCEL_REQUESTED":
+    case "STEP_STARTED":
+    case "STEP_SUCCEEDED":
+    case "STEP_SKIPPED":
+    case "STEP_RETRYING":
+    case "STEP_FAILED":
+    case "BRANCH_SELECTED":
+    case "FLOW_PROPOSED":
+    case "FLOW_SELECTED":
+    case "FLOW_SAVED_AS_CANDIDATE":
+    case "PROJECT_CANDIDATE_FOUND":
+    case "ARTIFACT_CREATED":
+    case "VERIFICATION_COMPLETED":
+    case "VERIFICATION_FAILED":
+    case "APPROVAL_GRANTED":
+    case "APPROVAL_REJECTED":
+    case "WORK_ITEM_COMPLETED":
+      break;
+    default:
+      // R2：未知事件不得静默跳过——抛错后 cursor 停在旧 sequence，
+      // 修复投影后才能重放（appendEvent 整笔回滚）。
+      throw new Error(
+        `Unsupported session projection event type: ${event.type}`,
+      );
   }
 
   database

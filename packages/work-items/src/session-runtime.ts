@@ -598,6 +598,9 @@ export function createSqliteSessionRuntimeTransaction(
       }
 
       const now = new Date().toISOString();
+      // R3：runs.agent_id 以 WorkItem 为准；input.agentId 有值必须相等，禁止 ?? 选边。
+      const workItemAgentId = nullableString(workItem.agent_id);
+      const agentId = resolveRunAgentId(input.agentId, workItemAgentId);
       const frozenPlan = turn.message.plan;
       if (frozenPlan) {
         if (input.planId !== frozenPlan.planId) {
@@ -664,9 +667,7 @@ export function createSqliteSessionRuntimeTransaction(
           input.sessionId,
           input.turnId,
           input.mode,
-          input.agentId ?? (
-            workItem.agent_id === null ? null : String(workItem.agent_id)
-          ),
+          agentId,
           input.planId,
           input.planIrHash,
           input.workflowRevision,
@@ -1627,6 +1628,24 @@ function toRun(row: SqliteRow): Run {
 
 function nullableString(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
+}
+
+/** R3：runs.agent_id 以 WorkItem 为准；input.agentId 有值则必须相等。 */
+function resolveRunAgentId(
+  requested: string | null | undefined,
+  workItemAgentId: string | null,
+): string | null {
+  const normalized = requested ?? null;
+  if (
+    normalized !== null
+    && workItemAgentId !== null
+    && normalized !== workItemAgentId
+  ) {
+    throw new Error(
+      `Run agent mismatch: requested ${normalized} but WorkItem agent is ${workItemAgentId}`,
+    );
+  }
+  return workItemAgentId ?? normalized;
 }
 
 function toChannelDeliveryRow(row: SqliteRow): ChannelDeliveryRow {

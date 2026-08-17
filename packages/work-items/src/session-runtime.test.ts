@@ -95,4 +95,83 @@ describe("Session runtime schema", () => {
     });
     store.close();
   });
+
+  it("dispatchTurn rejects a Run agent that differs from the WorkItem agent", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "Session",
+      mode: "auto",
+      conversationId: "conv_session_1",
+      sessionId: "sess_1",
+      agentId: "pi",
+      riskLevel: "read_only",
+    });
+    store.withSessionTransaction((tx) => {
+      tx.ensureRuntime("sess_1");
+      const turn = tx.insertTurn("sess_1", {
+        text: "检查",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      });
+      expect(() => tx.dispatchTurn(turn.turnId, {
+        id: "run_1",
+        workItemId: item.id,
+        sessionId: "sess_1",
+        turnId: turn.turnId,
+        mode: "auto",
+        agentId: "cursor",
+        planId: null,
+        planIrHash: null,
+        workflowRevision: null,
+      })).toThrow(
+        "Run agent mismatch: requested cursor but WorkItem agent is pi",
+      );
+    });
+    // 抛错后：不插 runs，Turn 仍为 queued。
+    expect(store.listRunsByStatus(["queued"])).toHaveLength(0);
+    store.close();
+  });
+
+  it("dispatchTurn writes the WorkItem agent when input matches", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "Session",
+      mode: "auto",
+      conversationId: "conv_session_1",
+      sessionId: "sess_1",
+      agentId: "pi",
+      riskLevel: "read_only",
+    });
+    store.withSessionTransaction((tx) => {
+      tx.ensureRuntime("sess_1");
+      const turn = tx.insertTurn("sess_1", {
+        text: "检查",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      });
+      const dispatched = tx.dispatchTurn(turn.turnId, {
+        id: "run_1",
+        workItemId: item.id,
+        sessionId: "sess_1",
+        turnId: turn.turnId,
+        mode: "auto",
+        agentId: "pi",
+        planId: null,
+        planIrHash: null,
+        workflowRevision: null,
+      });
+      expect(dispatched.run.agentId).toBe("pi");
+      // dispatchNextTurn 传 workItem.agentId，保持一致。
+      expect(tx.dispatchNextTurn("sess_1")).toBeNull();
+    });
+    store.close();
+  });
 });
