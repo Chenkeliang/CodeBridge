@@ -25,16 +25,23 @@ export function createChannelSessionIngress(
 
   const readRuntimeVersion = async (
     sessionId: string,
-  ): Promise<number | undefined> => {
+  ): Promise<number> => {
     const response = await app.request(
       `/v1/sessions/${encodeURIComponent(sessionId)}`,
       { headers: auth },
     );
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      throw new Error(
+        `read runtime failed (${response.status}): ${await response.text()}`,
+      );
+    }
     const body = await response.json() as {
       runtime?: { version?: number };
     };
-    return body.runtime?.version;
+    if (typeof body.runtime?.version !== "number") {
+      throw new Error("runtime version missing in snapshot");
+    }
+    return body.runtime.version;
   };
 
   const submit = async (
@@ -187,42 +194,11 @@ export function createChannelSessionIngress(
     return (await response.json() as { completed?: boolean }).completed === true;
   };
 
-  const resumeProviderSession = async (
-    slot: ChannelSlot,
-    providerSessionId: string,
-  ): Promise<{ sessionId: string }> => {
-    const response = await app.request(
-      "/v1/sessions/resume-provider",
-      {
-        method: "POST",
-        headers: { ...auth, "content-type": "application/json" },
-        body: JSON.stringify({
-          slot: {
-            channel: slot.channel,
-            conversation_id: slot.conversationId,
-            agent_id: slot.agentId,
-            workspace_key: slot.workspaceKey,
-            generation: slot.generation,
-          },
-          provider_session_id: providerSessionId,
-        }),
-      },
-    );
-    if (!response.ok) {
-      throw new Error(
-        `resume provider session failed (${response.status}): ${await response.text()}`,
-      );
-    }
-    const body = await response.json() as { session_id: string };
-    return { sessionId: body.session_id };
-  };
-
   const cancelRun = async (
     sessionId: string,
     runId: string,
   ): Promise<boolean> => {
     const version = await readRuntimeVersion(sessionId);
-    if (version === undefined) return false;
     const response = await app.request(
       `/v1/runs/${encodeURIComponent(runId)}/cancel`,
       {
@@ -248,7 +224,6 @@ export function createChannelSessionIngress(
     sessionId: string,
   ): Promise<{ queueState: "ready" | "paused" }> => {
     const version = await readRuntimeVersion(sessionId);
-    if (version === undefined) return { queueState: "paused" };
     const response = await app.request(
       `/v1/sessions/${encodeURIComponent(sessionId)}/queue/resume`,
       {
@@ -317,7 +292,6 @@ export function createChannelSessionIngress(
     claimDelivery,
     ackDelivery,
     completeDelivery,
-    resumeProviderSession,
     cancelRun,
     resumeQueue,
     resetSlot,

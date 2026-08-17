@@ -116,32 +116,6 @@ describe("channel session ingress", () => {
     expect(deliveries).toEqual([{ turnId: "turn_1", status: "pending" }]);
   });
 
-  it("resumes a provider session into a slot", async () => {
-    const app = new Hono();
-    app.post("/v1/sessions/resume-provider", async (c) => {
-      expect(await c.req.json()).toEqual({
-        slot: {
-          channel: "feishu",
-          conversation_id: "chat",
-          agent_id: "pi",
-          workspace_key: "/tmp/p",
-          generation: 0,
-        },
-        provider_session_id: "provider-1",
-      });
-      return c.json({ session_id: "sess_1" }, 201);
-    });
-    const ingress = createChannelSessionIngress(app, "token");
-    const result = await ingress.resumeProviderSession({
-      channel: "feishu",
-      conversationId: "chat",
-      agentId: "pi",
-      workspaceKey: "/tmp/p",
-      generation: 0,
-    }, "provider-1");
-    expect(result).toEqual({ sessionId: "sess_1" });
-  });
-
   it("throws on a non-2xx delivery claim instead of returning false", async () => {
     const app = new Hono();
     app.post("/v1/deliveries/:turn/claim", () =>

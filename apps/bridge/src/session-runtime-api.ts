@@ -74,6 +74,10 @@ export function registerSessionRuntimeCommandRoutes(
         throw error;
       }
     }
+    const delivery = parseDelivery(body.delivery);
+    if (delivery === null) {
+      return c.json({ error: "invalid_delivery" }, 400);
+    }
     try {
       const result = options.coordinator.submitTurn({
         sessionId: session.id,
@@ -104,7 +108,7 @@ export function registerSessionRuntimeCommandRoutes(
           workspaceScope: session.cwd ? [session.cwd] : [],
           riskLevel: "read_only",
         },
-        delivery: parseDelivery(body.delivery),
+        delivery,
       });
       options.catalog.updateSession(session.id, {
         taskRecordId: result.workItemId,
@@ -406,15 +410,16 @@ function parseDelivery(value: unknown): {
   channel: string;
   conversationId: string;
   replyToMessageId: string;
-} | undefined {
-  if (!value || typeof value !== "object") return undefined;
+} | null | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object") return null;
   const delivery = value as Record<string, unknown>;
   if (
     typeof delivery.channel !== "string"
     || typeof delivery.conversation_id !== "string"
     || typeof delivery.reply_to_message_id !== "string"
   ) {
-    return undefined;
+    return null;
   }
   return {
     channel: delivery.channel,
