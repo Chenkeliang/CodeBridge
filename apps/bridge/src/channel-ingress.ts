@@ -338,17 +338,21 @@ export function createChannelSessionIngress(
     );
     if (!response.ok) {
       let message = `resume provider session failed (${response.status})`;
+      let detail: string | undefined;
       try {
         const body = await response.json() as {
           error?: string;
           detail?: string;
         };
-        message = body.error ?? message;
-        if (body.detail) message = `${message}: ${body.detail}`;
+        if (body.error) message = body.error;
+        detail = body.detail;
       } catch {
         // 非 JSON 错误体，保留默认消息
       }
-      throw new Error(message);
+      // 只 throw 错误码（detail 挂到 Error.detail），便于 bridge 按码精确匹配。
+      const error = new Error(message) as Error & { detail?: string };
+      if (detail) error.detail = detail;
+      throw error;
     }
     const body = await response.json() as { session_id: string };
     return { sessionId: body.session_id };

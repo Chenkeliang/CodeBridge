@@ -3,14 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConfigStore, canonicalWorkspaceKey } from "@codebridge/core";
+import { ConfigStore, canonicalWorkspaceKey, defaultConfig } from "@codebridge/core";
 import { AgentRegistry, projectSetupState, supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCoordinator } from "@codebridge/session-coordinator";
 import { SessionCatalogStore, type AgentProfile } from "@codebridge/session-catalog";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { CapabilityRegistry } from "@codebridge/policy";
+import { SessionRouter } from "@codebridge/router";
+import { FeishuBridge, type FeishuMessage } from "@codebridge/channel-feishu";
 import { createSessionApp } from "./session-api.js";
+import { createChannelSessionIngress } from "./channel-ingress.js";
 import type { RunnerClient } from "@codebridge/runner-client";
 
 const TOKEN = "session-token";
@@ -1055,6 +1058,130 @@ describe("session API", () => {
     expect(catalog.getChannelSession(slot)?.providerSessionId).toBe("provider_x");
     catalog.close();
     workItems.close();
+  });
+
+  it("resume rejects an unknown agent instead of falling back", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat%3Atopic/resume",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          agent_id: "ghost-agent",
+          workspace_key: canonicalWorkspaceKey("/tmp/project").key,
+          generation: 0,
+          provider_session_id: "provider_ghost",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "agent_id must reference a registered Agent",
+    });
+    // 未 fallback：没有任何绑定落到其他 agent 名下。
+    expect(catalog.getChannelSession({
+      channel: "feishu",
+      conversationId: "chat:topic",
+      agentId: "pi",
+      workspaceKey: canonicalWorkspaceKey("/tmp/project").key,
+      generation: 0,
+    })).toBeUndefined();
+    catalog.close();
+    workItems.close();
+  });
+
+  it("wires a real 409 busy response through ingress to the /resume busy reply", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    workItems.claimProviderSession({
+      agentId: "pi",
+      providerSessionId: "provider_busy",
+      runId: "run_old",
+      now: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const ingress = createChannelSessionIngress(app, TOKEN);
+
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-resume-wire-"));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "cb-resume-ws-"));
+    try {
+      const bridge = new FeishuBridge({
+        config: defaultConfig(),
+        dataDir,
+      }) as unknown as {
+        sessionIngress: unknown;
+        orchestrator: {
+          router: SessionRouter;
+          listSessions: (
+            _chatId: string,
+            _topicId: string | undefined,
+            _options?: { all?: boolean; limit?: number },
+          ) => Promise<Array<{
+            id: string;
+            backend: string;
+            cwd: string;
+            preview: string;
+            updatedAt: string;
+          }>>;
+        };
+        channel: {
+          send(
+            _chatId: string,
+            input: { markdown: string },
+            _options: unknown,
+          ): Promise<void>;
+        };
+        handleMessage(message: FeishuMessage): Promise<void>;
+        disconnect(): Promise<void>;
+      };
+      bridge.sessionIngress = ingress;
+      const router = new SessionRouter(dataDir);
+      router.initFromConfig(defaultConfig());
+      router.setBinding("chat-1", {
+        backendId: "pi",
+        cwd: workspace,
+      });
+      bridge.orchestrator = {
+        router,
+        listSessions: async () => [{
+          id: "provider_busy",
+          backend: "pi",
+          cwd: workspace,
+          preview: "busy session",
+          updatedAt: "2026-07-07T00:00:00Z",
+        }],
+      };
+      const replies: string[] = [];
+      bridge.channel = {
+        async send(_chatId, input) {
+          replies.push(input.markdown);
+        },
+      };
+
+      await bridge.handleMessage({
+        messageId: "m1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "/resume 1",
+      });
+
+      expect(replies.join("\n")).toContain("正被其他任务占用");
+    } finally {
+      catalog.close();
+      workItems.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("persists a channel delivery when a reply_to_message_id is provided", async () => {
