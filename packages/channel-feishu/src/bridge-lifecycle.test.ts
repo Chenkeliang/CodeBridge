@@ -200,11 +200,21 @@ describe("FeishuBridge stream lifecycle", () => {
     expect(submit).toHaveBeenCalledTimes(1);
     expect(events).toHaveBeenCalledWith(
       "sess_1",
-      expect.objectContaining({ afterSequence: 0 }),
+      expect.objectContaining({ afterSequence: 3 }),
     );
-    expect(claim).toHaveBeenCalledWith("turn_1", "feishu:run_1");
-    expect(ack).toHaveBeenCalledWith("turn_1", "feishu:run_1", "card-1");
-    expect(complete).toHaveBeenCalledWith("turn_1", "feishu:run_1");
+    expect(claim).toHaveBeenCalledWith(
+      "turn_1",
+      expect.stringMatching(/^feishu:.+:run_1$/),
+    );
+    expect(ack).toHaveBeenCalledWith(
+      "turn_1",
+      expect.stringMatching(/^feishu:.+:run_1$/),
+      "card-1",
+    );
+    expect(complete).toHaveBeenCalledWith(
+      "turn_1",
+      expect.stringMatching(/^feishu:.+:run_1$/),
+    );
     expect(rendered).toContain("own");
     expect(rendered).not.toContain("other");
   });

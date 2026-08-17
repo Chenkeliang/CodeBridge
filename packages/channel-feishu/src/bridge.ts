@@ -1,4 +1,5 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   createLarkChannel,
   LoggerLevel,
@@ -211,6 +212,7 @@ export class FeishuBridge {
   private readonly activeAborts = new Set<AbortController>();
   /** 每 Session 一个持久事件订阅，单订阅路由 Turn/Run/Delivery */
   private readonly sessionWatchers = new Map<string, FeishuSessionWatcher>();
+  private readonly instanceId = randomUUID();
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
 
@@ -330,6 +332,8 @@ export class FeishuBridge {
     this.disconnecting = true;
     for (const ac of this.activeAborts) ac.abort();
     this.activeAborts.clear();
+    for (const watcher of this.sessionWatchers.values()) watcher.abort();
+    this.sessionWatchers.clear();
     await this.channel?.disconnect();
   }
 
@@ -660,9 +664,9 @@ export class FeishuBridge {
       this.cardHost(),
       this.sessionIngress!,
       sessionId,
+      this.instanceId,
     );
     this.sessionWatchers.set(sessionId, watcher);
-    watcher.start();
     return watcher;
   }
 
@@ -670,21 +674,40 @@ export class FeishuBridge {
     if (!this.sessionIngress || !this.channel) return;
     try {
       const deliveries = await this.sessionIngress.listDeliveries("feishu");
+      const bySession = new Map<string, typeof deliveries>();
       for (const delivery of deliveries) {
-        const watcher = this.ensureSessionWatcher(delivery.sessionId);
-        const chatId =
-          delivery.conversationId.split("|")[0] ?? delivery.conversationId;
-        const turn = {
-          turnId: delivery.turnId,
-          chatId,
-          sourceMessageId: delivery.replyToMessageId,
-          showThinking: true,
-        };
-        if (delivery.runId) {
-          await watcher.openCardForRun(delivery.runId, turn);
-        } else {
-          watcher.registerPendingTurn(delivery.turnId, turn);
+        const list = bySession.get(delivery.sessionId) ?? [];
+        list.push(delivery);
+        bySession.set(delivery.sessionId, list);
+      }
+      for (const [sessionId, list] of bySession) {
+        const watcher = this.ensureSessionWatcher(sessionId);
+        const minAccepted = Math.min(
+          ...list.map((delivery) => delivery.acceptedSequence),
+        );
+        for (const delivery of list) {
+          const chatId =
+            delivery.conversationId.split("|")[0] ?? delivery.conversationId;
+          const turn = {
+            turnId: delivery.turnId,
+            chatId,
+            sourceMessageId: delivery.replyToMessageId,
+            showThinking: true,
+          };
+          if (delivery.runId && delivery.surfaceMessageId === null) {
+            await watcher.openCardForRun(delivery.runId, turn);
+          } else if (delivery.runId) {
+            // delivering：卡片/表面 ID 已存在，只登记终态完成映射
+            watcher.registerTerminalDelivery(
+              delivery.runId,
+              delivery.turnId,
+              delivery.claimOwner ?? "",
+            );
+          } else {
+            watcher.registerPendingTurn(delivery.turnId, turn);
+          }
         }
+        watcher.start(minAccepted);
       }
     } catch (err) {
       this.options.onLog?.(
@@ -732,6 +755,7 @@ export class FeishuBridge {
         msg.messageId,
       ).catch(() => {});
       watcher.registerPendingTurn(receipt.turnId, turn);
+      watcher.start(receipt.eventSequence);
       return;
     }
     if (!receipt.runId) {
@@ -740,6 +764,7 @@ export class FeishuBridge {
       );
     }
     await watcher.openCardForRun(receipt.runId, turn);
+    watcher.start(receipt.eventSequence);
   }
 
   private async streamAgentReply(
