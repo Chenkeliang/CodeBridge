@@ -230,13 +230,6 @@ export class TelegramBridge {
           };
         }
       },
-      resetSession: async () => {
-        if (this.sessionIngress) {
-          await this.sessionIngress.resetSlot(
-            this.buildFullSlot(chatId, topicId),
-          );
-        }
-      },
       closeSession: (sessionId) =>
         this.orchestrator.closeSession(chatId, topicId, sessionId),
       deleteSession: (sessionId) =>
@@ -253,11 +246,18 @@ export class TelegramBridge {
         if (!ctx.sessionId || !ctx.activeRunId) return false;
         return this.sessionIngress.cancelRun(ctx.sessionId, ctx.activeRunId);
       },
-      hasActiveRun: () => this.orchestrator.hasActiveRun(chatId, topicId),
-      activeRunElapsedMs: () =>
-        this.orchestrator.activeRunElapsedMs(chatId, topicId),
-      activeRunStatus: () =>
-        this.orchestrator.activeRunStatus(chatId, topicId),
+      getSlotCommandContext: async () => {
+        if (!this.sessionIngress) {
+          return { sessionId: null, activeRunId: null };
+        }
+        return this.sessionIngress.getSlotCommandContext(
+          this.buildFullSlot(chatId, topicId),
+        );
+      },
+      resumeQueue: async (sessionId) => {
+        if (!this.sessionIngress) return { queueState: "paused" };
+        return this.sessionIngress.resumeQueue(sessionId);
+      },
       steerActiveRun: (prompt) =>
         this.orchestrator.steerActiveForChat(chatId, topicId, prompt),
       resolvePermission: async (approve) => {

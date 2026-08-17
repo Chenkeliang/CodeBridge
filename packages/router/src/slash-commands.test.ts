@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   defaultConfig,
   type BackendConfigOption,
@@ -38,6 +38,8 @@ function makeCtx(overrides: {
   };
   closeSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   deleteSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
+  slotContext?: { sessionId: string | null; activeRunId: string | null };
+  resumedSessions?: string[];
 }): SlashContext {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-slash-"));
   tmpDirs.push(dataDir);
@@ -46,6 +48,11 @@ function makeCtx(overrides: {
   router.initFromConfig(config);
   const bound = overrides.bound ?? [];
   const resumed = overrides.resumed ?? [];
+  const resumedSessions = overrides.resumedSessions ?? [];
+  const slotContext = overrides.slotContext ?? {
+    sessionId: null,
+    activeRunId: null,
+  };
   // resumeListCache 按 chatId 缓存，每个用例用独立 chatId 避免互相污染
   chatCounter += 1;
   return {
@@ -59,10 +66,21 @@ function makeCtx(overrides: {
     bindSession: (sessionId) => bound.push(sessionId),
     resumeProviderSession: async (providerSessionId) => {
       resumed.push(providerSessionId);
-      return overrides.resumeResult ?? {
+      const result = overrides.resumeResult ?? {
         ok: true,
         sessionId: `sess_${providerSessionId}`,
       };
+      if (result.ok && result.sessionId) {
+        resumedSessions.push(result.sessionId);
+        // /resume 成功后槽位即绑定该 session。
+        slotContext.sessionId = result.sessionId;
+      }
+      return result;
+    },
+    getSlotCommandContext: async () => ({ ...slotContext }),
+    resumeQueue: async (sessionId) => {
+      resumedSessions.push(`resume:${sessionId}`);
+      return { queueState: "ready" };
     },
     closeSession: overrides.closeSession,
     deleteSession: overrides.deleteSession,
@@ -667,6 +685,10 @@ describe("/root additional directories", () => {
 describe("/steer", () => {
   it("forwards an in-flight steering prompt to Runner", async () => {
     const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    ctx.getSlotCommandContext = async () => ({
+      sessionId: "sess_1",
+      activeRunId: "run_1",
+    });
     const prompts: string[] = [];
     ctx.steerActiveRun = async (prompt) => {
       prompts.push(prompt);
@@ -744,23 +766,105 @@ describe("/thinking", () => {
     expect((status as { text: string }).text).toContain("保留进度与最终答案");
   });
 
-  it("/status reports the latest real activity and checkpoint", async () => {
+  it("/status reports the current slot session and active run from the catalog", async () => {
     const ctx = baseCtx();
-    const now = Date.now();
-    ctx.activeRunStatus = () => ({
-      runId: "r1",
-      startedAt: now - 20 * 60_000,
-      lastActivityAt: now - 2 * 60_000,
-      currentPhase: "任务检查点",
-      lastCheckpoint: "P3 正在接入板块成分股 Web 下钻",
+    ctx.getSlotCommandContext = async () => ({
+      sessionId: "sess_resumed",
+      activeRunId: "run_42",
     });
 
     const status = await handleSlashCommand({ ...ctx, text: "/status" });
     const text = (status as { text: string }).text;
-    expect(text).toContain("**currentPhase**: 任务检查点");
-    expect(text).toContain("**lastRealActivity**: 2 分 0 秒之前");
-    expect(text).toContain(
-      "**lastCheckpoint**: P3 正在接入板块成分股 Web 下钻",
+    expect(text).toContain("**sessionId**: sess_resumed");
+    expect(text).toContain("**activeRun**: run_42");
+    expect(text).toContain("**runnerActive**: 是");
+  });
+
+  it("/status shows no bound session when the slot is unbound", async () => {
+    const ctx = baseCtx();
+    ctx.getSlotCommandContext = async () => ({
+      sessionId: null,
+      activeRunId: null,
+    });
+
+    const status = await handleSlashCommand({ ...ctx, text: "/status" });
+    const text = (status as { text: string }).text;
+    expect(text).toContain("**sessionId**: (none)");
+    expect(text).toContain("**runnerActive**: 否");
+  });
+
+  it("/resume success is visible in /status via the catalog binding", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-resume-status-"));
+    tmpDirs.push(cwd);
+    const ctx = baseCtx();
+    ctx.listSessions = async () => [
+      makeSession("provider_old", cwd, "old work"),
+    ];
+
+    await handleSlashCommand({ ...ctx, text: "/resume 1" });
+    const status = await handleSlashCommand({ ...ctx, text: "/status" });
+
+    expect((status as { text: string }).text).toContain(
+      "**sessionId**: sess_provider_old",
     );
+  });
+
+  it("/new bumps the slot generation and keeps the old binding", async () => {
+    const ctx = baseCtx();
+    const before = ctx.router.getSlotGeneration(ctx.chatId);
+
+    const result = await handleSlashCommand({ ...ctx, text: "/new" });
+
+    expect((result as { text: string }).text).toContain("已新建会话");
+    expect(ctx.router.getSlotGeneration(ctx.chatId)).toBe(before + 1);
+  });
+
+  it("/continue resumes only the current slot's session", async () => {
+    const ctx = baseCtx();
+    const resumedSessions: string[] = [];
+    ctx.resumeQueue = async (sessionId) => {
+      resumedSessions.push(sessionId);
+      return { queueState: "ready" };
+    };
+    ctx.getSlotCommandContext = async () => ({
+      sessionId: "sess_current",
+      activeRunId: null,
+    });
+
+    const result = await handleSlashCommand({ ...ctx, text: "/continue" });
+
+    expect((result as { text: string }).text).toContain("已恢复队列");
+    expect(resumedSessions).toEqual(["sess_current"]);
+  });
+
+  it("/continue with no bound session is a no-op", async () => {
+    const ctx = baseCtx();
+    const resumedSessions: string[] = [];
+    ctx.resumeQueue = async (sessionId) => {
+      resumedSessions.push(sessionId);
+      return { queueState: "ready" };
+    };
+
+    const result = await handleSlashCommand({ ...ctx, text: "/continue" });
+
+    expect((result as { text: string }).text).toContain("还没有 session");
+    expect(resumedSessions).toEqual([]);
+  });
+
+  it("/steer refuses without an active run in the slot", async () => {
+    const ctx = baseCtx();
+    ctx.getSlotCommandContext = async () => ({
+      sessionId: "sess_1",
+      activeRunId: null,
+    });
+    const steer = ctx.steerActiveRun = vi.fn();
+
+    const result = await handleSlashCommand({
+      ...ctx,
+      text: "/steer 继续查",
+    });
+
+    expect((result as { text: string }).text).toContain("没有运行中的任务");
+    expect(steer).not.toHaveBeenCalled();
   });
 });
