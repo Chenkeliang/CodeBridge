@@ -109,6 +109,7 @@ export class FeishuRunCard {
   private cardBroken = false;
   private streamMessageId?: string;
   private queueRender: (statusOnly: boolean) => void = () => {};
+  private done = false;
 
   constructor(
     private readonly host: FeishuCardHost,
@@ -300,6 +301,8 @@ export class FeishuRunCard {
 
   async finalize(): Promise<void> {
     await this.ready;
+    if (this.done) return;
+    this.done = true;
     for (const timer of this.timers) clearInterval(timer);
     this.timers = [];
     this.showLiveStatus = false;
@@ -312,7 +315,12 @@ export class FeishuRunCard {
   }
 
   abort(): void {
+    if (this.done) return;
+    this.done = true;
     this.abortController.abort();
+    for (const timer of this.timers) clearInterval(timer);
+    this.timers = [];
+    this.cardDoneResolve();
   }
 }
 
@@ -327,9 +335,10 @@ export interface PendingTurn {
 export class FeishuSessionWatcher {
   private readonly abortController = new AbortController();
   private afterSequence = 0;
+  private started = false;
   private readonly cards = new Map<string, FeishuRunCard>();
   private readonly pendingTurns = new Map<string, PendingTurn>();
-  private readonly cardDeliveries = new Map<
+  private readonly deliveries = new Map<
     string,
     { turnId: string; owner: string }
   >();
@@ -339,9 +348,14 @@ export class FeishuSessionWatcher {
     private readonly host: FeishuCardHost,
     private readonly ingress: ChannelSessionIngress,
     private readonly sessionId: string,
+    private readonly instanceId: string,
   ) {}
 
-  start(): void {
+  /** 注入初始 cursor 后再启动，避免启动后登记 pending Turn/开卡前消费事件。 */
+  start(afterSequence: number): void {
+    if (this.started) return;
+    this.started = true;
+    this.afterSequence = afterSequence;
     void this.run().catch((err) => {
       this.host.log(
         `session watcher 退出: ${err instanceof Error ? err.message : String(err)}`,
@@ -351,6 +365,15 @@ export class FeishuSessionWatcher {
 
   registerPendingTurn(turnId: string, turn: PendingTurn): void {
     this.pendingTurns.set(turnId, turn);
+  }
+
+  /** 恢复 delivering 状态：卡片已存在/表面 ID 已写，只登记 run→delivery 终态完成映射。 */
+  registerTerminalDelivery(
+    runId: string,
+    turnId: string,
+    owner: string,
+  ): void {
+    this.deliveries.set(runId, { turnId, owner });
   }
 
   async openCardForRun(runId: string, turn: PendingTurn): Promise<void> {
@@ -363,7 +386,7 @@ export class FeishuSessionWatcher {
       turn.showThinking,
     );
     this.cards.set(runId, card);
-    const owner = `feishu:${runId}`;
+    const owner = `feishu:${this.instanceId}:${runId}`;
     const claimed = await this.ingress.claimDelivery(turn.turnId, owner);
     if (!claimed) {
       this.cards.delete(runId);
@@ -375,7 +398,7 @@ export class FeishuSessionWatcher {
       if (cardId) {
         await this.ingress.ackDelivery(turn.turnId, owner, cardId);
       }
-      this.cardDeliveries.set(runId, { turnId: turn.turnId, owner });
+      this.deliveries.set(runId, { turnId: turn.turnId, owner });
     } catch (err) {
       this.cards.delete(runId);
       this.host.log(
@@ -391,8 +414,9 @@ export class FeishuSessionWatcher {
           afterSequence: this.afterSequence,
           signal: this.abortController.signal,
         })) {
-          this.afterSequence = event.sequence;
           await this.handle(event);
+          // 状态转换成功后才推进 cursor；失败会抛错并由外层按旧 cursor 重连重放。
+          this.afterSequence = event.sequence;
         }
       } catch (err) {
         if (this.abortController.signal.aborted) return;
@@ -447,13 +471,17 @@ export class FeishuSessionWatcher {
       if (card) {
         this.cards.delete(event.runId);
         await card.finalize();
-        const delivery = this.cardDeliveries.get(event.runId);
-        if (delivery) {
-          this.cardDeliveries.delete(event.runId);
-          await this.ingress
-            .completeDelivery(delivery.turnId, delivery.owner)
-            .catch(() => {});
-        }
+      }
+      const delivery = this.deliveries.get(event.runId);
+      if (delivery) {
+        this.deliveries.delete(event.runId);
+        await this.ingress
+          .completeDelivery(delivery.turnId, delivery.owner)
+          .catch((err) => {
+            this.host.log(
+              `complete delivery 失败: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
       }
     }
   }
@@ -461,5 +489,7 @@ export class FeishuSessionWatcher {
   abort(): void {
     this.abortController.abort();
     for (const card of this.cards.values()) card.abort();
+    this.cards.clear();
+    this.pendingTurns.clear();
   }
 }
