@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SqliteEventStore } from "./index.js";
+import { SqliteEventStore, type DomainEventType } from "./index.js";
 
 function setup() {
   const store = new SqliteEventStore(":memory:");
@@ -185,10 +185,10 @@ describe("Session projector", () => {
     expect(() => store.appendEvent({
       workItemId: item.id,
       runId: "run_1",
-      // 合法 DomainEventType 但未在投影器登记（模拟以后新加的事件忘了投影）。
-      type: "RUN_SNAPSHOT",
+      // union 之外的假类型：真正的未知（以后新增事件忘了投影才会命中）。
+      type: "NOT_A_REAL_TYPE" as DomainEventType,
       actor: "system",
-    })).toThrow("Unsupported session projection event type: RUN_SNAPSHOT");
+    })).toThrow("Unsupported session projection event type: NOT_A_REAL_TYPE");
     // 整笔回滚：事件未落库，cursor 停在旧 sequence。
     expect(store.listEvents(item.id)).toHaveLength(before);
     store.close();
@@ -236,6 +236,39 @@ describe("Session projector", () => {
       .listTimelineTurns("sess_1", { limit: 50 })
       .turns[0]!;
     expect(turn.status).toBe("succeeded");
+    store.close();
+  });
+
+  it("backfills pre-binding history events through the projector", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "Legacy Web",
+      mode: "auto",
+      conversationId: "conv_legacy",
+      riskLevel: "read_only",
+    });
+    // 绑定前写下的旧 Web 事件（当时 work item 无 session_id，不走投影）。
+    store.appendEvent({
+      workItemId: item.id,
+      type: "SESSION_HISTORY_HYDRATED",
+      actor: "system",
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      type: "RUN_SNAPSHOT",
+      actor: "system",
+    });
+
+    store.bindWorkItemToSession("sess_2", item.id);
+    const projected = store.backfillSessionProjection(
+      "sess_2",
+      item.id,
+      100,
+    );
+
+    // 历史类型显式 no-op：迁移不炸，cursor 前进（含 WORK_ITEM_CREATED 共 3 条）。
+    expect(projected).toBe(3);
+    expect(store.getProjectionCursor("sess_2")).toBe(3);
     store.close();
   });
 });

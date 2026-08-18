@@ -91,6 +91,15 @@ export function projectSessionEvent(
     case "APPROVAL_GRANTED":
     case "APPROVAL_REJECTED":
     case "WORK_ITEM_COMPLETED":
+    // 迁移/水合/学习信号事件：绑定前写下的历史事件会经 backfillSessionProjection
+    // 走投影，显式 no-op（否则回放命中 default 会打挂迁移）。
+    case "SESSION_HISTORY_HYDRATED":
+    case "PLAN_PROPOSED":
+    case "DISCOVERY_STARTED":
+    case "PARAM_RESOLVED":
+    case "FLOW_RECOMMENDED":
+    case "FLOW_REJECTED":
+    case "RUN_SNAPSHOT":
       break;
     default:
       // R2：未知事件不得静默跳过——抛错后 cursor 停在旧 sequence，
