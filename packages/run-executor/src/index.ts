@@ -87,6 +87,7 @@ export class RunExecutor {
   >();
   private readonly stepOutputs = new Map<string, Record<string, unknown>>();
   private currentForce = false;
+  private currentDryRun = false;
 
   constructor(
     private readonly store: SqliteEventStore,
@@ -187,8 +188,9 @@ export class RunExecutor {
     return { identical, original, replayed, diffs };
   }
 
-  async execute(runId: string, signal?: AbortSignal, options?: { force?: boolean }): Promise<Run> {
+  async execute(runId: string, signal?: AbortSignal, options?: { force?: boolean; dryRun?: boolean }): Promise<Run> {
     this.currentForce = options?.force ?? false;
+    this.currentDryRun = options?.dryRun ?? this.options.dryRun === true;
     const initial = this.store.getRun(runId);
     if (!initial) throw new Error(`Run not found: ${runId}`);
     if (initial.status !== "queued") return initial;
@@ -382,6 +384,7 @@ export class RunExecutor {
       this.fail(initial, failure);
       throw failure;
     } finally {
+      this.currentDryRun = false;
       heartbeat?.close();
       this.stepOutputs.delete(runId);
       this.activeAsyncErrors.delete(runId);
@@ -960,7 +963,7 @@ export class RunExecutor {
         runId: run.id,
         stepId: step.id,
         signal,
-        dry_run: this.options.dryRun === true,
+        dry_run: this.currentDryRun,
       },
     });
     this.throwIfCancellationRequested(run.id);

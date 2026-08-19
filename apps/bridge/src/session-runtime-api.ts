@@ -8,11 +8,12 @@ import {
   type SubmitTurnResult,
 } from "@codebridge/session-coordinator";
 import type { RunExecutor } from "@codebridge/run-executor";
-import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
+import type { FlowCatalogStore } from "@codebridge/flow-catalog";
 import type { CapabilityRegistry } from "@codebridge/policy";
 import {
-  compileWorkflow,
+  definitionHash,
   WorkflowValidationError,
+  type PlanIR,
 } from "@codebridge/workflow-engine";
 import { randomUUID } from "node:crypto";
 import {
@@ -21,6 +22,7 @@ import {
   toApiSessionTurn,
   toApiTimeline,
 } from "./session-runtime-types.js";
+import { compileCatalogFlow } from "./flow-compile.js";
 
 export interface SessionRuntimeApiOptions {
   catalog: SessionCatalogStore;
@@ -58,20 +60,35 @@ export function registerSessionRuntimeCommandRoutes(
     if (flow?.status === "deprecated") {
       return c.json({ error: "flow_deprecated", flow_id: flowId }, 409);
     }
-    let frozenPlan: ReturnType<typeof compileWorkflow> | null = null;
-    if (flow) {
+    const dryRun = body.dry_run === true;
+    let frozenPlan: PlanIR | null = null;
+    if (flow?.kind === "runbook") {
+      if (flow.status === "candidate" && !dryRun) {
+        return c.json({ error: "flow_not_executable", flow_id: flowId }, 409);
+      }
       try {
-        frozenPlan = compileWorkflow(flowDefinition(flow), {
-          source: flow.source === "agent_generated"
-            ? "agent_generated"
-            : "workflow",
-          definitionRevision: flow.definitionRevision,
-        });
+        frozenPlan = compileCatalogFlow(flow);
       } catch (error) {
         if (error instanceof WorkflowValidationError) {
           return c.json({ error: "invalid_flow", issues: error.issues }, 409);
         }
         throw error;
+      }
+      if (definitionHash(frozenPlan) !== flow.planIrHash) {
+        return c.json({ error: "plan_ir_drift", flow_id: flowId }, 409);
+      }
+      const provided = inputRecord(body.inputs);
+      const missing = flow.inputs
+        .filter((input) => input.required && input.source === "user")
+        .filter((input) => provided[input.id] === undefined || provided[input.id] === null)
+        .map((input) => ({
+          id: input.id,
+          type: input.type,
+          source: input.source,
+          reason: "required" as const,
+        }));
+      if (missing.length > 0) {
+        return c.json({ error: "missing_inputs", missing }, 409);
       }
     }
     const delivery = parseDelivery(body.delivery);
@@ -106,7 +123,7 @@ export function registerSessionRuntimeCommandRoutes(
           conversationId: `conv_${session.id.replace(/^sess_/, "")}`,
           agentId: session.agentId,
           workspaceScope: session.cwd ? [session.cwd] : [],
-          riskLevel: "read_only",
+          riskLevel: frozenPlan ? maxStepRisk(frozenPlan) : "read_only",
         },
         delivery,
       });
@@ -119,7 +136,7 @@ export function registerSessionRuntimeCommandRoutes(
         title: session.title ?? body.message.slice(0, 80),
         status: "active",
       });
-      if (result.run) observeExecution(options, result.run.id);
+      if (result.run) observeExecution(options, result.run.id, dryRun);
       return c.json(toSubmitReceipt(options, result), 202);
     } catch (error) {
       return commandError(c, options, error);
@@ -535,32 +552,32 @@ function commandError(
 function observeExecution(
   options: SessionRuntimeApiOptions,
   runId: string,
+  dryRun?: boolean,
 ): void {
-  void options.executor?.execute(runId).catch(() => {});
+  void options.executor?.execute(runId, undefined, { dryRun }).catch(() => {});
 }
 
-function flowDefinition(flow: FlowRecord): Record<string, unknown> {
-  return {
-    schema_version: 1,
-    workflow_id: flow.flowId,
-    name: flow.name ?? flow.flowId,
-    kind: flow.kind === "runbook" ? "runbook" : "guide",
-    status: flow.status === "published" ? "published" : "draft",
-    inputs: [],
-    steps: flow.steps.map((step) => ({
-      id: step.id,
-      capability: step.capability,
-      purpose: step.purpose,
-      depends_on: step.dependsOn ?? [],
-      mode: step.mode,
-      approval: step.approval ?? "none",
-      branches: step.branches ?? [],
-      retry: step.retry
-        ? {
-            max_attempts: step.retry.maxAttempts,
-            delay_ms: step.retry.delayMs,
-          }
-        : undefined,
-    })),
+function inputRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function maxStepRisk(
+  plan: PlanIR,
+): "read_only" | "workspace_write" | "git_write" | "production_write" {
+  const rank: Record<string, number> = {
+    read_only: 0,
+    workspace_write: 1,
+    git_write: 2,
+    production_write: 3,
   };
+  let best: "read_only" | "workspace_write" | "git_write" | "production_write" =
+    "read_only";
+  for (const step of plan.steps) {
+    if ((rank[step.risk] ?? -1) > rank[best]!) {
+      best = step.risk as typeof best;
+    }
+  }
+  return best;
 }

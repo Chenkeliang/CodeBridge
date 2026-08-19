@@ -2,11 +2,20 @@ import { describe, expect, it } from "vitest";
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { SessionCoordinator } from "@codebridge/session-coordinator";
+import { FlowCatalogStore } from "@codebridge/flow-catalog";
+import { compileWorkflow, definitionHash } from "@codebridge/workflow-engine";
+import type { RunExecutor } from "@codebridge/run-executor";
+import type { CapabilityRegistry } from "@codebridge/policy";
 import { createSessionApp } from "./session-api.js";
+import { catalogPlanId } from "./flow-compile.js";
 
 const token = "runtime-token";
 
-function setup() {
+function setup(overrides: {
+  flows?: FlowCatalogStore;
+  executor?: RunExecutor;
+  capabilities?: CapabilityRegistry;
+} = {}) {
   const catalog = new SessionCatalogStore(":memory:");
   const workItems = new SqliteEventStore(":memory:");
   const coordinator = new SessionCoordinator(workItems, {
@@ -20,6 +29,9 @@ function setup() {
     catalog,
     workItems,
     coordinator,
+    flows: overrides.flows,
+    executor: overrides.executor,
+    capabilities: overrides.capabilities,
     agents: [{
       agentId: "pi",
       displayName: "Pi",
@@ -92,6 +104,151 @@ describe("Session runtime command API", () => {
       request("检查项目"),
     );
     expect(response.status).toBe(400);
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("rejects candidate runbook execution without dry_run", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    flows.save({
+      flowId: "flow_demo_echo",
+      name: "demo",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: "sha256:def",
+      planIrHash: "sha256:plan",
+      inputs: [{ id: "text", type: "string", source: "user", required: true }],
+      steps: [{ id: "echo", capability: "demo.echo", mode: "read_only", successWhen: "output.text exists" }],
+    });
+    const fixture = setup({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "k1",
+        },
+        body: JSON.stringify({ message: "run", inputs: { text: "hi" } }),
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "flow_not_executable" });
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("returns missing_inputs without creating a run", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const definition = {
+      schema_version: 1,
+      workflow_id: "flow_demo_echo",
+      name: "demo",
+      kind: "runbook",
+      status: "draft",
+      inputs: [{ id: "text", type: "string", source: "user", required: true }],
+      steps: [{ id: "echo", capability: "demo.echo", mode: "read_only", success_when: "output.text exists" }],
+    };
+    const plan = compileWorkflow(definition, {
+      source: "workflow",
+      definitionRevision: definitionHash(definition),
+      planId: catalogPlanId("flow_demo_echo"),
+    });
+    flows.save({
+      flowId: "flow_demo_echo",
+      name: "demo",
+      kind: "runbook",
+      status: "published",
+      source: "user_selected",
+      definitionRevision: definitionHash(definition),
+      planIrHash: definitionHash(plan),
+      inputs: plan.inputs,
+      steps: [{
+        id: "echo",
+        capability: "demo.echo",
+        mode: "read_only",
+        successWhen: "output.text exists",
+      }],
+    });
+    const fixture = setup({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "k2",
+        },
+        body: JSON.stringify({ message: "run" }),
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "missing_inputs",
+      missing: [{ id: "text", type: "string", source: "user", reason: "required" }],
+    });
+    expect(fixture.workItems.getSessionRuntime(fixture.session.id)?.activeRunId ?? null).toBeNull();
+    expect(fixture.catalog.getSession(fixture.session.id)?.taskRecordId ?? null).toBeNull();
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("rejects a published runbook when catalog steps drift from plan_ir_hash", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const definition = {
+      schema_version: 1,
+      workflow_id: "flow_demo_echo",
+      name: "demo",
+      kind: "runbook",
+      status: "draft",
+      inputs: [{ id: "text", type: "string", source: "user", required: true }],
+      steps: [{ id: "echo", capability: "demo.echo", mode: "read_only", success_when: "output.text exists" }],
+    };
+    const plan = compileWorkflow(definition, {
+      source: "workflow",
+      definitionRevision: definitionHash(definition),
+      planId: catalogPlanId("flow_demo_echo"),
+    });
+    flows.save({
+      flowId: "flow_demo_echo",
+      name: "demo",
+      kind: "runbook",
+      status: "published",
+      source: "user_selected",
+      definitionRevision: definitionHash(definition),
+      planIrHash: definitionHash(plan),
+      inputs: plan.inputs,
+      steps: [{
+        id: "echo",
+        capability: "demo.echo",
+        mode: "read_only",
+        successWhen: "output.missing exists",
+      }],
+    });
+    const fixture = setup({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "k3",
+        },
+        body: JSON.stringify({ message: "run", inputs: { text: "hi" } }),
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "plan_ir_drift" });
+    flows.close();
     fixture.catalog.close();
     fixture.workItems.close();
   });
