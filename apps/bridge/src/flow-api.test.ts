@@ -97,7 +97,7 @@ describe("flow API", () => {
       body: JSON.stringify({ decision: "approve", git_revision: "abc123" }),
     });
     expect(approved.status).toBe(200);
-    expect(await approved.json()).toMatchObject({ status: "published", review_status: "approved", git_revision: "abc123", definition_revision: "git:abc123" });
+    expect(await approved.json()).toMatchObject({ status: "published", review_status: "approved", git_revision: "abc123", definition_revision: "sha256:one" });
     catalog.close();
   });
 
@@ -210,6 +210,56 @@ describe("flow API", () => {
     expect(catalog.get("flow-hashed")?.definitionRevision).toBe(flow?.definitionRevision);
     expect(catalog.get("flow-hashed")?.planIrHash).toBe(flow?.planIrHash);
     sessions.close();
+    catalog.close();
+  });
+
+  it("persists success_when from the candidate body", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const app = createFlowApp(catalog, "token");
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: "sess_1",
+        flow: {
+          flow_id: "flow-when",
+          kind: "runbook",
+          steps: [{
+            id: "echo",
+            capability: "demo.echo",
+            mode: "read_only",
+            success_when: "output.text exists",
+          }],
+        },
+      }),
+    });
+    expect(response.status).toBe(201);
+    expect(catalog.get("flow-when")?.steps[0]?.successWhen).toBe("output.text exists");
+    const body = await response.json() as { steps: Array<{ success_when: string | null }> };
+    expect(body.steps[0]?.success_when).toBe("output.text exists");
+    catalog.close();
+  });
+
+  it("rejects publishing a runbook with a manual step", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    catalog.save({
+      flowId: "flow-manual",
+      name: "Manual",
+      kind: "runbook",
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision: "sha256:one",
+      steps: [{ id: "ask", mode: "manual", purpose: "confirm" }],
+    });
+    const app = createFlowApp(catalog, "token");
+    const approved = await app.request("/v1/flows/flow-manual/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "abc" }),
+    });
+    expect(approved.status).toBe(409);
+    expect(await approved.json()).toMatchObject({ error: "flow_not_publishable" });
+    expect(catalog.get("flow-manual")?.status).toBe("candidate");
     catalog.close();
   });
 });
