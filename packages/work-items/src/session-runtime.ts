@@ -132,6 +132,7 @@ export interface SessionRuntimeWorkItemInput {
   agentId: string | null;
   workspaceScope: string[];
   riskLevel: RiskLevel;
+  identifiers?: Record<string, unknown>;
 }
 
 export interface SessionEventInput {
@@ -393,6 +394,19 @@ export function createSqliteSessionRuntimeTransaction(
         .prepare("SELECT id FROM work_items WHERE session_id = ?")
         .get(sessionId) as { id?: string } | undefined;
       if (existing?.id) {
+        if (input.identifiers !== undefined) {
+          database
+            .prepare(
+              `UPDATE work_items
+               SET identifiers = ?, updated_at = ?
+               WHERE id = ?`,
+            )
+            .run(
+              JSON.stringify(input.identifiers),
+              new Date().toISOString(),
+              String(existing.id),
+            );
+        }
         transaction.ensureRuntime(sessionId);
         return String(existing.id);
       }
@@ -405,7 +419,7 @@ export function createSqliteSessionRuntimeTransaction(
             session_id, agent_id, workflow_id, workflow_revision,
             workspace_scope, identifiers, context_revision, risk_level,
             created_at, updated_at
-          ) VALUES (?, 1, ?, 'created', ?, ?, ?, ?, NULL, NULL, ?, '{}', 1, ?, ?, ?)`,
+          ) VALUES (?, 1, ?, 'created', ?, ?, ?, ?, NULL, NULL, ?, ?, 1, ?, ?, ?)`,
         )
         .run(
           workItemId,
@@ -415,6 +429,7 @@ export function createSqliteSessionRuntimeTransaction(
           sessionId,
           input.agentId,
           JSON.stringify(input.workspaceScope),
+          JSON.stringify(input.identifiers ?? {}),
           input.riskLevel,
           now,
           now,

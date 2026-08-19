@@ -8,7 +8,7 @@ import {
   type SubmitTurnResult,
 } from "@codebridge/session-coordinator";
 import type { RunExecutor } from "@codebridge/run-executor";
-import type { FlowCatalogStore } from "@codebridge/flow-catalog";
+import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
 import type { CapabilityRegistry } from "@codebridge/policy";
 import {
   definitionHash,
@@ -95,7 +95,12 @@ export function registerSessionRuntimeCommandRoutes(
     if (delivery === null) {
       return c.json({ error: "invalid_delivery" }, 400);
     }
+    const idempotencyNamespace = `session:message:${session.id}`;
+    const idempotencyReplay = Boolean(
+      options.workItems.getIdempotencyResponse(idempotencyNamespace, key),
+    );
     try {
+      const provided = frozenPlan ? inputRecord(body.inputs) : {};
       const result = options.coordinator.submitTurn({
         sessionId: session.id,
         idempotencyKey: key,
@@ -124,6 +129,7 @@ export function registerSessionRuntimeCommandRoutes(
           agentId: session.agentId,
           workspaceScope: session.cwd ? [session.cwd] : [],
           riskLevel: frozenPlan ? maxStepRisk(frozenPlan) : "read_only",
+          identifiers: frozenPlan ? provided : {},
         },
         delivery,
       });
@@ -136,6 +142,14 @@ export function registerSessionRuntimeCommandRoutes(
         title: session.title ?? body.message.slice(0, 80),
         status: "active",
       });
+      if (!idempotencyReplay && frozenPlan && flow) {
+        appendParamResolvedEvents(
+          options.workItems,
+          result.workItemId,
+          flow,
+          provided,
+        );
+      }
       if (result.run) observeExecution(options, result.run.id, dryRun);
       return c.json(toSubmitReceipt(options, result), 202);
     } catch (error) {
@@ -561,6 +575,47 @@ function inputRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function appendParamResolvedEvents(
+  workItems: SqliteEventStore,
+  workItemId: string,
+  flow: FlowRecord,
+  provided: Record<string, unknown>,
+): void {
+  const previousByField = new Map<string, unknown>();
+  for (const event of workItems.listEvents(workItemId)) {
+    if (event.type !== "PARAM_RESOLVED") continue;
+    const field = event.payload.field;
+    if (typeof field !== "string") continue;
+    previousByField.set(field, event.payload.final_value);
+  }
+  for (const input of flow.inputs) {
+    const value = provided[input.id];
+    if (value === undefined || value === null) continue;
+    const hadPrevious = previousByField.has(input.id);
+    const candidateValue = hadPrevious
+      ? previousByField.get(input.id) ?? null
+      : input.default ?? null;
+    workItems.appendEvent({
+      workItemId,
+      type: "PARAM_RESOLVED",
+      actor: "user",
+      target: input.id,
+      payload: {
+        flow_id: flow.flowId,
+        flow_revision: flow.planIrHash ?? "",
+        field: input.id,
+        candidate_value: candidateValue,
+        final_value: value,
+        resolution: value !== input.default && hadPrevious
+          ? "edited"
+          : "confirmed",
+        source: "user",
+        resolver_version: "v1",
+      },
+    });
+  }
 }
 
 function maxStepRisk(

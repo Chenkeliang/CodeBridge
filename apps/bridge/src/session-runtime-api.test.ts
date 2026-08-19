@@ -252,4 +252,162 @@ describe("Session runtime command API", () => {
     fixture.catalog.close();
     fixture.workItems.close();
   });
+
+  it("records confirmed PARAM_RESOLVED from explicit runbook inputs", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const flow = savePublishedDemoEcho(flows);
+    const fixture = setup({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "param_confirmed",
+        },
+        body: JSON.stringify({ message: "run", inputs: { text: "hi" } }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    const resolved = fixture.workItems.listEvents(workItemId)
+      .filter((event) => event.type === "PARAM_RESOLVED");
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.actor).toBe("user");
+    expect(resolved[0]?.payload).toMatchObject({
+      flow_id: "flow_demo_echo",
+      field: "text",
+      final_value: "hi",
+      resolution: "confirmed",
+      source: "user",
+      flow_revision: flow.planIrHash,
+      resolver_version: "v1",
+    });
+    expect(resolved[0]?.payload).toHaveProperty("candidate_value");
+    expect(resolved[0]?.payload.source).not.toBe("agent_extracted");
+    expect(fixture.workItems.getWorkItem(workItemId)?.identifiers).toEqual({ text: "hi" });
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("records edited PARAM_RESOLVED when a later turn changes a resolved input", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const flow = savePublishedDemoEcho(flows, { default: "hi" });
+    const fixture = setup({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const first = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "param_hi",
+        },
+        body: JSON.stringify({ message: "run", inputs: { text: "hi" } }),
+      },
+    );
+    expect(first.status).toBe(202);
+    const second = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "param_yo",
+        },
+        body: JSON.stringify({ message: "again", inputs: { text: "yo" } }),
+      },
+    );
+    expect(second.status).toBe(202);
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    const resolved = fixture.workItems.listEvents(workItemId)
+      .filter((event) => event.type === "PARAM_RESOLVED");
+    expect(resolved).toHaveLength(2);
+    expect(resolved[1]?.payload).toMatchObject({
+      flow_id: "flow_demo_echo",
+      field: "text",
+      candidate_value: "hi",
+      final_value: "yo",
+      resolution: "edited",
+      source: "user",
+      flow_revision: flow.planIrHash,
+      resolver_version: "v1",
+    });
+    expect(resolved[1]?.payload.source).not.toBe("agent_extracted");
+    expect(fixture.workItems.getWorkItem(workItemId)?.identifiers).toEqual({ text: "yo" });
+
+    const replay = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "param_yo",
+        },
+        body: JSON.stringify({ message: "again", inputs: { text: "yo" } }),
+      },
+    );
+    expect(replay.status).toBe(202);
+    expect(
+      fixture.workItems.listEvents(workItemId)
+        .filter((event) => event.type === "PARAM_RESOLVED"),
+    ).toHaveLength(2);
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
 });
+
+function savePublishedDemoEcho(
+  flows: FlowCatalogStore,
+  inputExtra: { default?: string } = {},
+) {
+  const definition = {
+    schema_version: 1,
+    workflow_id: "flow_demo_echo",
+    name: "demo",
+    kind: "runbook",
+    status: "draft",
+    inputs: [{
+      id: "text",
+      type: "string",
+      source: "user",
+      required: true,
+      ...(inputExtra.default === undefined ? {} : { default: inputExtra.default }),
+    }],
+    steps: [{
+      id: "echo",
+      capability: "demo.echo",
+      mode: "read_only",
+      success_when: "output.text exists",
+    }],
+  };
+  const plan = compileWorkflow(definition, {
+    source: "workflow",
+    definitionRevision: definitionHash(definition),
+    planId: catalogPlanId("flow_demo_echo"),
+  });
+  flows.save({
+    flowId: "flow_demo_echo",
+    name: "demo",
+    kind: "runbook",
+    status: "published",
+    source: "user_selected",
+    definitionRevision: definitionHash(definition),
+    planIrHash: definitionHash(plan),
+    inputs: plan.inputs,
+    steps: [{
+      id: "echo",
+      capability: "demo.echo",
+      mode: "read_only",
+      successWhen: "output.text exists",
+    }],
+  });
+  return flows.get("flow_demo_echo")!;
+}
