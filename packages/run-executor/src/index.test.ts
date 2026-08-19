@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, RunRequest } from "@codebridge/core";
 import { SqliteEventStore } from "@codebridge/work-items";
@@ -12,6 +13,7 @@ import {
   CapabilityExecutionError,
   FunctionCapabilityAdapter,
   PolicyEngine,
+  registerDemoCapabilities,
 } from "@codebridge/policy";
 import { RunExecutor } from "./index.js";
 
@@ -1117,6 +1119,14 @@ describe("RunExecutor", () => {
 
     await expect(executor.execute(run.id)).rejects.toThrow("unknown_capability");
     expect(store.getRun(run.id)?.status).toBe("failed");
+    const failed = store.listEvents(item.id).find((e) => e.type === "VERIFICATION_FAILED");
+    expect(failed?.payload).toMatchObject({
+      step_id: "inspect",
+      category: "policy",
+      postcondition: "unknown_capability",
+      actual: null,
+      truncated: false,
+    });
     capabilities.close();
     store.close();
   });
@@ -1575,10 +1585,12 @@ describe("RunExecutor", () => {
       }],
     });
     const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
+    const dryRuns: Array<boolean | undefined> = [];
     const runtime = new CapabilityRuntime([
-      new FunctionCapabilityAdapter("local.lookup", ({ input }) => ({
-        output: { id: String(input.id ?? "v") },
-      })),
+      new FunctionCapabilityAdapter("local.lookup", ({ input, context }) => {
+        dryRuns.push(context.dry_run);
+        return { output: { id: String(input.id ?? "v") } };
+      }),
     ]);
     const executor = new RunExecutor(store, new FakeRunner([]), {
       policy: new PolicyEngine(registry),
@@ -1593,6 +1605,7 @@ describe("RunExecutor", () => {
 
     const changed = await executor.replayPlan(plan, { id: "other" });
     expect(executor.diffTrace(trace1, changed).identical).toBe(false);
+    expect(dryRuns).toEqual([true, true, true]);
     registry.close();
     store.close();
   });
@@ -1665,6 +1678,233 @@ describe("RunExecutor", () => {
     });
     await executor.execute(run.id);
     expect(seen).toEqual([true]);
+    registry.close();
+    store.close();
+  });
+
+  it("truncates VERIFICATION_FAILED actual payloads to 4KB", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const huge = "x".repeat(5000);
+    const item = store.createWorkItem({
+      title: "deliver", mode: "change", conversationId: "web:pc-trunc", riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_pc_trunc", source: "workflow", workflowId: "pc-flow",
+      definitionRevision: "git:pc",
+      steps: [{
+        id: "deliver", capabilityId: "equity.deliver", risk: "read_only",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: null,
+        successWhen: "output.ok exists",
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const registry = new CapabilityRegistry([{ id: "equity.deliver", risk: "read_only", adapter: "local.deliver" }]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.deliver", () => ({ output: { text: huge } })),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: (_w, current) => ({
+        runId: current.id, sessionKey: { chatId: "web:pc-trunc", backendId: "pi", cwd: "/tmp" }, prompt: "unused",
+      }),
+    });
+
+    await expect(executor.execute(run.id)).rejects.toThrow(/Postcondition failed/);
+    const failed = store.listEvents(item.id).find((e) => e.type === "VERIFICATION_FAILED");
+    expect(failed?.payload).toMatchObject({ step_id: "deliver", category: "verification", truncated: true });
+    const actual = failed!.payload.actual;
+    const serialized = typeof actual === "string" ? actual : JSON.stringify(actual);
+    expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(4096);
+    registry.close();
+    store.close();
+  });
+
+  it("emits infrastructure VERIFICATION_FAILED after retryable errors are exhausted", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "retry lookup",
+      mode: "investigation",
+      conversationId: "web:retry-exhausted",
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_retry_exhausted",
+      source: "workflow",
+      workflowId: "retry-flow",
+      definitionRevision: "git:retry",
+      steps: [{
+        id: "lookup",
+        capabilityId: "catalog.lookup",
+        risk: "read_only",
+        dependsOn: [],
+        guard: null,
+        approval: "none",
+        branches: [],
+        purpose: null,
+        retry: { maxAttempts: 2, delayMs: 0 },
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
+    let attempts = 0;
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.lookup", () => {
+        attempts += 1;
+        throw new CapabilityExecutionError("temporary outage", { retryable: true });
+      }),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "unused",
+      }),
+    });
+
+    await expect(executor.execute(run.id)).rejects.toThrow("temporary outage");
+    expect(attempts).toBe(2);
+    const failed = store.listEvents(item.id).filter((e) => e.type === "VERIFICATION_FAILED");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.payload).toMatchObject({
+      step_id: "lookup",
+      category: "infrastructure",
+    });
+    expect(store.listEvents(item.id).filter((e) => e.type === "STEP_RETRYING")).toHaveLength(1);
+    registry.close();
+    store.close();
+  });
+
+  it("appends RUN_SNAPSHOT for IR-bound successful capability runs", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "echo",
+      mode: "auto",
+      conversationId: "web:snapshot",
+      identifiers: { text: "hi" },
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_snapshot",
+      source: "workflow",
+      workflowId: "flow_demo_echo",
+      definitionRevision: "sha256:def",
+      planIrHash: "sha256:plan",
+      steps: [{
+        id: "echo",
+        capabilityId: "demo.echo",
+        risk: "read_only",
+        dependsOn: [],
+        guard: null,
+        approval: "none",
+        branches: [],
+        purpose: null,
+        successWhen: "output.text exists",
+      }],
+    });
+    const run = store.createRun({
+      workItemId: item.id, mode: "auto", planId: plan.planId, planIrHash: "sha256:plan",
+    });
+    const registry = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    registerDemoCapabilities(registry, runtime);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: (_w, current) => ({
+        runId: current.id, sessionKey: { chatId: "web:snapshot", backendId: "pi", cwd: "/tmp" }, prompt: "unused",
+      }),
+    });
+
+    expect((await executor.execute(run.id)).status).toBe("succeeded");
+    const snapshot = store.listEvents(item.id).find((e) => e.type === "RUN_SNAPSHOT");
+    expect(snapshot?.payload).toMatchObject({
+      flow_id: "flow_demo_echo",
+      outcome: "succeeded",
+      resolved_inputs: [expect.objectContaining({ field: "text", value: "hi" })],
+      attribution: {
+        flow_revision: "sha256:plan",
+        prompt_revision: `sha256:${createHash("sha256").update("codebridge:unbound-prompt", "utf8").digest("hex")}`,
+        tool_schema_revision: `sha256:${createHash("sha256").update("codebridge:unbound-tools", "utf8").digest("hex")}`,
+        capability_revisions: { "demo.echo": "1" },
+        resolver_revision: "v1",
+      },
+    });
+    expect((snapshot?.payload.steps as Array<{ output_ref: string }>)[0]?.output_ref).toMatch(/^artifact:\/\//);
+    registry.close();
+    store.close();
+  });
+
+  it("re-invokes write steps after the idempotency validity window expires", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "deliver", mode: "change", conversationId: "web:deliver-window",
+      riskLevel: "workspace_write",
+      identifiers: { company_id: "8821" },
+    });
+    store.savePlan({
+      planId: "plan_deliver_window", source: "workflow", workflowId: "deliver-flow",
+      definitionRevision: "git:deliver",
+      steps: [{
+        id: "deliver", capabilityId: "equity.deliver", risk: "workspace_write",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: null,
+      }],
+    });
+    const registry = new CapabilityRegistry([{
+      id: "equity.deliver", risk: "workspace_write", adapter: "local.deliver",
+      idempotency: { key: ["company_id"], validity_window: "24h" },
+    }]);
+    let invocations = 0;
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.deliver", () => {
+        invocations += 1;
+        return { output: { order_id: "o1" } };
+      }),
+    ]);
+    let now = new Date("2026-08-01T00:00:00.000Z");
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      now: () => now,
+      resolveRequest: (_w, current) => ({
+        runId: current.id, sessionKey: { chatId: "web:deliver-window", backendId: "pi", cwd: "/tmp" }, prompt: "unused",
+      }),
+    });
+
+    const run1 = store.createRun({ workItemId: item.id, mode: item.mode, planId: "plan_deliver_window" });
+    await executor.execute(run1.id);
+    now = new Date("2026-08-02T01:00:00.000Z");
+    const run2 = store.createRun({ workItemId: item.id, mode: item.mode, planId: "plan_deliver_window" });
+    await executor.execute(run2.id);
+
+    expect(invocations).toBe(2);
+    registry.close();
+    store.close();
+  });
+
+  it("throws unknown_capability when replaying a plan with an unregistered capability", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const plan = store.savePlan({
+      planId: "plan_rp_missing", source: "workflow", workflowId: "rp-flow",
+      definitionRevision: "git:rp",
+      steps: [{
+        id: "lookup", capabilityId: "catalog.lookup", risk: "read_only",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: null,
+      }],
+    });
+    const registry = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: (_w, current) => ({
+        runId: current.id, sessionKey: { chatId: "c", backendId: "pi", cwd: "/tmp" }, prompt: "x",
+      }),
+    });
+
+    await expect(executor.replayPlan(plan, { id: "value" })).rejects.toThrow("unknown_capability");
     registry.close();
     store.close();
   });

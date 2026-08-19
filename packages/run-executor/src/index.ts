@@ -13,11 +13,15 @@ import type {
 import {
   SqliteEventStore,
   type AppendEventInput,
+  type Attribution,
   type ReplaySafety,
   type Run,
+  type RunSnapshotPayload,
   type WorkItem,
   type PersistedPlan,
   type PersistedPlanStep,
+  type DecisionTraceStep as SnapshotTraceStep,
+  type VerificationFailedPayload,
 } from "@codebridge/work-items";
 import { evaluatePostcondition } from "@codebridge/workflow-engine";
 import { AgentEventAggregator } from "./agent-event-aggregator.js";
@@ -61,6 +65,7 @@ export interface RunExecutorOptions {
   sessionCoordinator?: SessionCoordinator;
   sessionLeaseService?: SessionLeaseService;
   executorOwner?: string;
+  now?: () => Date;
 }
 
 export interface DecisionTraceStep {
@@ -77,6 +82,14 @@ export interface ReplayDiff {
   diffs: string[];
 }
 
+interface SnapshotStepDraft {
+  step_id: string;
+  capability_id: string;
+  capability_revision: string;
+  output: unknown;
+  verification_status: "passed" | "failed" | "skipped";
+}
+
 export class RunExecutor {
   private readonly activeControllers = new Map<string, AbortController>();
   private readonly activeCompletions = new Map<string, Promise<void>>();
@@ -86,6 +99,7 @@ export class RunExecutor {
     { agentId: string; providerSessionId: string }
   >();
   private readonly stepOutputs = new Map<string, Record<string, unknown>>();
+  private readonly snapshotDrafts = new Map<string, SnapshotStepDraft[]>();
   private currentForce = false;
   private currentDryRun = false;
 
@@ -155,7 +169,9 @@ export class RunExecutor {
     for (const step of orderSteps(plan.steps)) {
       if (!step.capabilityId) continue;
       const definition = this.options.policy?.getCapability(step.capabilityId);
-      if (!definition || !this.options.capabilities) continue;
+      if (!definition || !this.options.capabilities || !this.options.capabilities.has(definition.adapter)) {
+        throw new Error("unknown_capability");
+      }
       const result = await this.options.capabilities.execute(definition.adapter, {
         input: { ...inputs, step: { id: step.id, purpose: step.purpose } },
         context: { dry_run: true, environment: step.risk === "production_write" ? "production" : "local" },
@@ -387,6 +403,7 @@ export class RunExecutor {
       this.currentDryRun = false;
       heartbeat?.close();
       this.stepOutputs.delete(runId);
+      this.snapshotDrafts.delete(runId);
       this.activeAsyncErrors.delete(runId);
       this.activeProviderSessions.delete(runId);
       if (this.activeControllers.get(runId) === controller) this.activeControllers.delete(runId);
@@ -398,6 +415,7 @@ export class RunExecutor {
   }
 
   private succeed(run: Run): Run {
+    this.emitRunSnapshot(run, "succeeded");
     if (run.sessionId) {
       return this.options.sessionCoordinator!.finishRun({
         sessionId: run.sessionId,
@@ -424,6 +442,7 @@ export class RunExecutor {
   }
 
   private fail(run: Run, error: unknown): Run {
+    this.emitRunSnapshot(run, "failed");
     if (run.sessionId) {
       return this.options.sessionCoordinator!.finishRun({
         sessionId: run.sessionId,
@@ -600,7 +619,7 @@ export class RunExecutor {
         : undefined;
       if (policyDecision && !policyDecision.allowed && !policyDecision.requiresApproval) {
         if (policyDecision.reason === "unknown_capability") {
-          throw new Error("unknown_capability");
+          this.throwUnknownCapability(run, step);
         }
         throw new Error(`Capability is not allowed in this environment: ${step.capabilityId}`);
       }
@@ -690,7 +709,22 @@ export class RunExecutor {
         await this.executeStepOnce(workItem, run, step, signal);
         return;
       } catch (error) {
-        if (attempt >= maxAttempts || !isRetryableError(error)) throw error;
+        if (attempt >= maxAttempts || !isRetryableError(error)) {
+          if (step && isRetryableError(error) && attempt >= maxAttempts) {
+            const capped = capActual(error instanceof Error ? error.message : String(error));
+            this.appendVerificationFailed(run, step.id, {
+              category: "infrastructure",
+              postcondition: "",
+              actual: capped.actual,
+              truncated: capped.truncated,
+            });
+            this.recordSnapshotStep(run, step, {
+              output: { error: error instanceof Error ? error.message : String(error) },
+              verification_status: "failed",
+            });
+          }
+          throw error;
+        }
         this.store.appendEvent({
           workItemId: workItem.id,
           runId: run.id,
@@ -721,30 +755,31 @@ export class RunExecutor {
     this.throwIfCancellationRequested(run.id);
     if (step?.capabilityId) {
       if (!capabilityResult || capabilityResult.forwardToAgent) {
-        throw new Error("unknown_capability");
+        this.throwUnknownCapability(run, step);
       }
       if (step.successWhen) {
         const passed = evaluatePostcondition(step.successWhen, capabilityResult.output);
         if (!passed) {
-          this.appendRunEvent(run, {
-            workItemId: workItem.id,
-            runId: run.id,
-            type: "VERIFICATION_FAILED",
-            actor: "adapter",
-            target: step.id,
-            payload: {
-              step_id: step.id,
-              category: "verification",
-              postcondition: step.successWhen,
-              actual: capabilityResult.output ?? null,
-              truncated: false,
-            },
+          const capped = capActual(capabilityResult.output);
+          this.recordSnapshotStep(run, step, {
+            output: capabilityResult.output,
+            verification_status: "failed",
+          });
+          this.appendVerificationFailed(run, step.id, {
+            category: "verification",
+            postcondition: step.successWhen,
+            actual: capped.actual,
+            truncated: capped.truncated,
           });
           throw new Error(`Postcondition failed for step ${step.id}: ${step.successWhen}`);
         }
       }
       const outputs = this.stepOutputs.get(run.id) ?? {};
       this.stepOutputs.set(run.id, { ...outputs, [step.id]: capabilityResult.output });
+      this.recordSnapshotStep(run, step, {
+        output: capabilityResult.output,
+        verification_status: "passed",
+      });
       return;
     }
     let request = await this.options.resolveRequest(workItem, run, step ?? undefined);
@@ -927,13 +962,13 @@ export class RunExecutor {
     signal?: AbortSignal,
   ): Promise<CapabilityExecutionResult | undefined> {
     this.throwIfCancellationRequested(run.id);
-    if (!step?.capabilityId) return undefined;
+    if (!step || !step.capabilityId) return undefined;
     if (!this.options.capabilities || !this.options.policy) {
-      throw new Error("unknown_capability");
+      this.throwUnknownCapability(run, step);
     }
     const definition = this.options.policy.getCapability(step.capabilityId);
     if (!definition || !this.options.capabilities.has(definition.adapter)) {
-      throw new Error("unknown_capability");
+      this.throwUnknownCapability(run, step);
     }
     // namespace "flow-step" is deliberately separate from the HTTP idempotency
     // keys ("session:run:*") stored in the same idempotency_responses table.
@@ -941,9 +976,12 @@ export class RunExecutor {
     let idemKey: string | undefined;
     if (idem && !this.currentForce && step.risk !== "read_only") {
       idemKey = idempotencyKey(workItem, step, idem.key);
-      const prior = this.store.getIdempotencyResponse("flow-step", idemKey);
+      const prior = this.store.getIdempotencyRecord("flow-step", idemKey);
+      if (prior !== undefined && idempotencyRecordFresh(prior.createdAt, idem.validity_window, this.clock())) {
+        return prior.response as CapabilityExecutionResult;
+      }
       if (prior !== undefined) {
-        return prior as CapabilityExecutionResult;
+        this.store.deleteIdempotencyResponse("flow-step", idemKey);
       }
     }
     const capabilityBoundary: ReplaySafety =
@@ -968,7 +1006,7 @@ export class RunExecutor {
     });
     this.throwIfCancellationRequested(run.id);
     if (idem && idemKey && step.risk !== "read_only") {
-      this.store.putIdempotencyResponse("flow-step", idemKey, result);
+      this.store.putIdempotencyResponse("flow-step", idemKey, result, this.clock().toISOString());
     }
     const artifactIds = (result.artifacts ?? []).map((artifact) => this.store.createArtifact({
       workItemId: workItem.id,
@@ -1021,6 +1059,127 @@ export class RunExecutor {
       return;
     }
     this.store.appendEvent(input);
+  }
+
+  private clock(): Date {
+    return this.options.now?.() ?? new Date();
+  }
+
+  private capabilityRevision(capabilityId: string): string {
+    return this.options.policy?.getCapability(capabilityId)?.source?.version ?? "1";
+  }
+
+  private recordSnapshotStep(
+    run: Run,
+    step: PersistedPlanStep,
+    draft: Pick<SnapshotStepDraft, "output" | "verification_status">,
+  ): void {
+    if (!step.capabilityId) return;
+    const next: SnapshotStepDraft = {
+      step_id: step.id,
+      capability_id: step.capabilityId,
+      capability_revision: this.capabilityRevision(step.capabilityId),
+      output: draft.output,
+      verification_status: draft.verification_status,
+    };
+    const steps = this.snapshotDrafts.get(run.id) ?? [];
+    const index = steps.findIndex((item) => item.step_id === step.id);
+    if (index >= 0) steps[index] = next;
+    else steps.push(next);
+    this.snapshotDrafts.set(run.id, steps);
+  }
+
+  private appendVerificationFailed(
+    run: Run,
+    stepId: string,
+    payload: Omit<VerificationFailedPayload, "step_id">,
+  ): void {
+    this.appendRunEvent(run, {
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "VERIFICATION_FAILED",
+      actor: "adapter",
+      target: stepId,
+      payload: { step_id: stepId, ...payload },
+    });
+  }
+
+  private throwUnknownCapability(run: Run, step: PersistedPlanStep): never {
+    this.appendVerificationFailed(run, step.id, {
+      category: "policy",
+      postcondition: "unknown_capability",
+      actual: null,
+      truncated: false,
+    });
+    this.recordSnapshotStep(run, step, {
+      output: { error: "unknown_capability" },
+      verification_status: "failed",
+    });
+    throw new Error("unknown_capability");
+  }
+
+  private emitRunSnapshot(run: Run, outcome: "succeeded" | "failed"): void {
+    if (!runHasIr(run)) return;
+    const workItem = this.store.getWorkItem(run.workItemId);
+    if (!workItem) return;
+    const plan = run.planId ? this.store.getPlan(run.planId) : undefined;
+    const drafts = this.snapshotDrafts.get(run.id) ?? [];
+    const steps: SnapshotTraceStep[] = drafts.map((draft) => {
+      const artifact = this.store.createArtifact({
+        workItemId: workItem.id,
+        runId: run.id,
+        stepId: draft.step_id,
+        name: `${draft.step_id}.output.json`,
+        content: JSON.stringify(draft.output ?? null),
+        mimeType: "application/json",
+        kind: "output",
+        actor: "system",
+      });
+      return {
+        step_id: draft.step_id,
+        capability_id: draft.capability_id,
+        capability_revision: draft.capability_revision,
+        output_ref: `artifact://${artifact.id}`,
+        verification_status: draft.verification_status,
+      };
+    });
+    const capability_revisions: Record<string, string> = {};
+    for (const step of plan?.steps ?? []) {
+      if (!step.capabilityId) continue;
+      capability_revisions[step.capabilityId] = this.capabilityRevision(step.capabilityId);
+    }
+    for (const draft of drafts) {
+      capability_revisions[draft.capability_id] = draft.capability_revision;
+    }
+    const attribution: Attribution = {
+      flow_revision: plan?.planIrHash ?? run.planIrHash ?? "",
+      prompt_revision: sha256Utf8("codebridge:unbound-prompt"),
+      tool_schema_revision: sha256Utf8("codebridge:unbound-tools"),
+      capability_revisions,
+      resolver_revision: "v1",
+      authorization_revision: sha256Utf8("codebridge:unbound-auth"),
+    };
+    const payload: RunSnapshotPayload = {
+      flow_id: plan?.workflowId ?? workItem.workflowId ?? "",
+      flow_revision: attribution.flow_revision,
+      resolved_inputs: Object.entries(workItem.identifiers).map(([field, value]) => ({
+        field,
+        value,
+        source: "user",
+        resolver_version: "v1",
+      })),
+      steps,
+      outcome,
+      attribution,
+    };
+    this.appendRunEvent(run, {
+      workItemId: workItem.id,
+      runId: run.id,
+      type: "RUN_SNAPSHOT",
+      actor: "system",
+      target: run.id,
+      payload: payload as unknown as Record<string, unknown>,
+    });
   }
 
   private updateReplaySafety(
@@ -1250,6 +1409,42 @@ function isRetryableError(error: unknown): boolean {
 
 function runHasIr(run: Run): boolean {
   return run.planIrHash !== null && run.planIrHash !== undefined;
+}
+
+const ACTUAL_LIMIT = 4096;
+
+function capActual(value: unknown): { actual: unknown; truncated: boolean } {
+  const json = JSON.stringify(value) ?? "null";
+  if (Buffer.byteLength(json, "utf8") <= ACTUAL_LIMIT) return { actual: value, truncated: false };
+  let sliced = json.slice(0, ACTUAL_LIMIT);
+  while (sliced.length > 0 && Buffer.byteLength(sliced, "utf8") > ACTUAL_LIMIT) {
+    sliced = sliced.slice(0, -1);
+  }
+  return { actual: sliced, truncated: true };
+}
+
+function sha256Utf8(value: string): string {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+function validityWindowMs(window: string | undefined): number | null {
+  if (!window || window === "permanent") return null;
+  if (window === "24h") return 24 * 60 * 60 * 1000;
+  if (window === "7d") return 7 * 24 * 60 * 60 * 1000;
+  return null;
+}
+
+function idempotencyRecordFresh(
+  createdAt: string | undefined,
+  window: string | undefined,
+  now: Date,
+): boolean {
+  if (!createdAt) return true;
+  const limit = validityWindowMs(window);
+  if (limit === null) return true;
+  const created = Date.parse(createdAt);
+  if (Number.isNaN(created)) return true;
+  return now.getTime() - created <= limit;
 }
 
 function idempotencyKey(
