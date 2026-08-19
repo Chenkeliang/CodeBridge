@@ -2540,8 +2540,8 @@ describe("session API", () => {
       ],
     });
     expect(workItems.listEvents(taskId).map((event) => event.type)).toContain("PLAN_VALIDATED");
-    expect(capabilities.get("context.inspect")).toMatchObject({ adapter: "agent", risk: "read_only" });
-    expect(capabilities.get("workspace.change")).toMatchObject({ adapter: "agent", risk: "workspace_write" });
+    expect(capabilities.get("context.inspect")).toBeUndefined();
+    expect(capabilities.get("workspace.change")).toBeUndefined();
     capabilities.close();
     flows.close();
     catalog.close();

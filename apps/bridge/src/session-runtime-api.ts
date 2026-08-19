@@ -150,7 +150,14 @@ export function registerSessionRuntimeCommandRoutes(
           provided,
         );
       }
-      if (result.run) observeExecution(options, result.run.id, dryRun);
+      if (result.run) {
+        await observeExecution(
+          options,
+          result.run.id,
+          dryRun,
+          Boolean(frozenPlan),
+        );
+      }
       return c.json(toSubmitReceipt(options, result), 202);
     } catch (error) {
       return commandError(c, options, error);
@@ -563,12 +570,27 @@ function commandError(
   return c.json(payload, 422);
 }
 
-function observeExecution(
+async function observeExecution(
   options: SessionRuntimeApiOptions,
   runId: string,
   dryRun?: boolean,
-): void {
-  void options.executor?.execute(runId, undefined, { dryRun }).catch(() => {});
+  wait = false,
+): Promise<void> {
+  const execution = options.executor?.execute(runId, undefined, { dryRun });
+  if (!execution) return;
+  if (!wait) {
+    void execution.catch(() => {});
+    return;
+  }
+  try {
+    await execution;
+  } catch (error) {
+    const run = options.workItems.getRun(runId);
+    if (run && ["failed", "succeeded", "cancelled", "interrupted"].includes(run.status)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 function inputRecord(value: unknown): Record<string, unknown> {
