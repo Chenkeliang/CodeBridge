@@ -1865,6 +1865,117 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("emits infrastructure VF when an adapter throws a plain Error named unknown_capability", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "plain error",
+      mode: "investigation",
+      conversationId: "web:plain-unknown",
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_plain_unknown",
+      source: "workflow",
+      workflowId: "plain-flow",
+      definitionRevision: "git:plain",
+      steps: [{
+        id: "lookup",
+        capabilityId: "catalog.lookup",
+        risk: "read_only",
+        dependsOn: [],
+        guard: null,
+        approval: "none",
+        branches: [],
+        purpose: null,
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.lookup", () => {
+        // A plain Error whose message happens to equal our sentinel must NOT
+        // be mistaken for the executor's own unknown_capability failure.
+        throw new Error("unknown_capability");
+      }),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "unused",
+      }),
+    });
+
+    await expect(executor.execute(run.id)).rejects.toThrow("unknown_capability");
+    const failed = store.listEvents(item.id).filter((e) => e.type === "VERIFICATION_FAILED");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.payload).toMatchObject({
+      step_id: "lookup",
+      category: "infrastructure",
+    });
+    registry.close();
+    store.close();
+  });
+
+  it("emits RUN_SNAPSHOT at most once when the success path re-enters fail", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "echo",
+      mode: "auto",
+      conversationId: "web:double-snapshot",
+      identifiers: { text: "hi" },
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_double_snapshot",
+      source: "workflow",
+      workflowId: "flow_demo_echo",
+      definitionRevision: "sha256:def",
+      planIrHash: "sha256:plan",
+      steps: [{
+        id: "echo",
+        capabilityId: "demo.echo",
+        risk: "read_only",
+        dependsOn: [],
+        guard: null,
+        approval: "none",
+        branches: [],
+        purpose: null,
+        successWhen: "output.text exists",
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const registry = new CapabilityRegistry([{ id: "demo.echo", risk: "read_only", adapter: "demo.echo" }]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("demo.echo", ({ input }) => ({ output: { text: input.text } })),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "unused",
+      }),
+    });
+    const originalUpdate = store.updateRunStatus.bind(store);
+    const spy = vi.spyOn(store, "updateRunStatus").mockImplementation((runId, status) => {
+      // Fail only the terminal succeed() write so the run first completes its
+      // RUN_SNAPSHOT then re-enters through fail().
+      if (status === "succeeded") throw new Error("db down");
+      return originalUpdate(runId, status);
+    });
+
+    await expect(executor.execute(run.id)).rejects.toThrow("db down");
+    spy.mockRestore();
+    const snapshots = store.listEvents(item.id).filter((e) => e.type === "RUN_SNAPSHOT");
+    expect(snapshots).toHaveLength(1);
+    registry.close();
+    store.close();
+  });
+
   it("appends RUN_SNAPSHOT for IR-bound successful capability runs", async () => {
     const store = new SqliteEventStore(":memory:");
     const item = store.createWorkItem({
