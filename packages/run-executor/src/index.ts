@@ -57,6 +57,7 @@ export interface RunExecutorOptions {
   approvals?: ApprovalService;
   policy?: PolicyEngine;
   capabilities?: CapabilityRuntime;
+  dryRun?: boolean;
   sessionCoordinator?: SessionCoordinator;
   sessionLeaseService?: SessionLeaseService;
   executorOwner?: string;
@@ -84,6 +85,7 @@ export class RunExecutor {
     string,
     { agentId: string; providerSessionId: string }
   >();
+  private readonly stepOutputs = new Map<string, Record<string, unknown>>();
   private currentForce = false;
 
   constructor(
@@ -381,6 +383,7 @@ export class RunExecutor {
       throw failure;
     } finally {
       heartbeat?.close();
+      this.stepOutputs.delete(runId);
       this.activeAsyncErrors.delete(runId);
       this.activeProviderSessions.delete(runId);
       if (this.activeControllers.get(runId) === controller) this.activeControllers.delete(runId);
@@ -594,7 +597,7 @@ export class RunExecutor {
         : undefined;
       if (policyDecision && !policyDecision.allowed && !policyDecision.requiresApproval) {
         if (policyDecision.reason === "unknown_capability") {
-          throw new Error(`Unknown capability: ${step.capabilityId}`);
+          throw new Error("unknown_capability");
         }
         throw new Error(`Capability is not allowed in this environment: ${step.capabilityId}`);
       }
@@ -713,25 +716,33 @@ export class RunExecutor {
     this.throwIfCancellationRequested(run.id);
     const capabilityResult = await this.executeCapability(workItem, run, step, signal);
     this.throwIfCancellationRequested(run.id);
-    if (step?.successWhen && capabilityResult && !capabilityResult.forwardToAgent) {
-      const passed = evaluatePostcondition(step.successWhen, capabilityResult.output);
-      if (!passed) {
-        this.appendRunEvent(run, {
-          workItemId: workItem.id,
-          runId: run.id,
-          type: "VERIFICATION_FAILED",
-          actor: "adapter",
-          target: step.id,
-          payload: {
-            step_id: step.id,
-            category: "verification",
-            postcondition: step.successWhen,
-            actual: capabilityResult.output ?? null,
-            truncated: false,
-          },
-        });
-        throw new Error(`Postcondition failed for step ${step.id}: ${step.successWhen}`);
+    if (step?.capabilityId) {
+      if (!capabilityResult || capabilityResult.forwardToAgent) {
+        throw new Error("unknown_capability");
       }
+      if (step.successWhen) {
+        const passed = evaluatePostcondition(step.successWhen, capabilityResult.output);
+        if (!passed) {
+          this.appendRunEvent(run, {
+            workItemId: workItem.id,
+            runId: run.id,
+            type: "VERIFICATION_FAILED",
+            actor: "adapter",
+            target: step.id,
+            payload: {
+              step_id: step.id,
+              category: "verification",
+              postcondition: step.successWhen,
+              actual: capabilityResult.output ?? null,
+              truncated: false,
+            },
+          });
+          throw new Error(`Postcondition failed for step ${step.id}: ${step.successWhen}`);
+        }
+      }
+      const outputs = this.stepOutputs.get(run.id) ?? {};
+      this.stepOutputs.set(run.id, { ...outputs, [step.id]: capabilityResult.output });
+      return;
     }
     let request = await this.options.resolveRequest(workItem, run, step ?? undefined);
     const latestMessage = this.store
@@ -748,16 +759,6 @@ export class RunExecutor {
     }));
     if (messageAttachments.length) {
       request = { ...request, attachments: [...(request.attachments ?? []), ...messageAttachments] };
-    }
-    if (capabilityResult?.forwardToAgent) {
-      const instructions = capabilityResult.output && typeof capabilityResult.output === "object"
-        ? (capabilityResult.output as Record<string, unknown>).instructions
-        : undefined;
-      if (typeof instructions === "string" && instructions.trim()) {
-        request = { ...request, prompt: `${instructions}\n\n${request.prompt}` };
-      }
-    } else if (capabilityResult) {
-      return;
     }
     this.throwIfCancellationRequested(run.id);
     let replaySafety =
@@ -923,9 +924,14 @@ export class RunExecutor {
     signal?: AbortSignal,
   ): Promise<CapabilityExecutionResult | undefined> {
     this.throwIfCancellationRequested(run.id);
-    if (!step?.capabilityId || !this.options.capabilities || !this.options.policy) return undefined;
+    if (!step?.capabilityId) return undefined;
+    if (!this.options.capabilities || !this.options.policy) {
+      throw new Error("unknown_capability");
+    }
     const definition = this.options.policy.getCapability(step.capabilityId);
-    if (!definition || !this.options.capabilities.has(definition.adapter)) return undefined;
+    if (!definition || !this.options.capabilities.has(definition.adapter)) {
+      throw new Error("unknown_capability");
+    }
     // namespace "flow-step" is deliberately separate from the HTTP idempotency
     // keys ("session:run:*") stored in the same idempotency_responses table.
     const idem = definition.idempotency;
@@ -944,9 +950,8 @@ export class RunExecutor {
     this.updateReplaySafety(run, capabilityBoundary);
     const result = await this.options.capabilities.execute(definition.adapter, {
       input: {
-        title: workItem.title,
-        identifiers: workItem.identifiers,
-        workspaceScope: workItem.workspaceScope,
+        ...this.resolvedValues(workItem),
+        step_outputs: this.stepOutputs.get(run.id) ?? {},
         step: { id: step.id, purpose: step.purpose },
       },
       context: {
@@ -955,6 +960,7 @@ export class RunExecutor {
         runId: run.id,
         stepId: step.id,
         signal,
+        dry_run: this.options.dryRun === true,
       },
     });
     this.throwIfCancellationRequested(run.id);
@@ -1045,6 +1051,10 @@ export class RunExecutor {
     if (this.store.getRun(runId)?.cancelRequestedAt) {
       throw new RunCancellationRequested();
     }
+  }
+
+  private resolvedValues(workItem: WorkItem): Record<string, unknown> {
+    return workItem.identifiers;
   }
 
   private hasRunEvent(workItemId: string, runId: string, type: string): boolean {
