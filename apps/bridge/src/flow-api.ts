@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
 import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
-import { compileWorkflow, definitionHash, WorkflowValidationError } from "@codebridge/workflow-engine";
+import { compileWorkflow, definitionHash, validatePostcondition, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import type { SqliteEventStore } from "@codebridge/work-items";
 
@@ -220,6 +220,15 @@ function publishIssues(flow: FlowRecord, options: FlowApiOptions): string[] {
   }
   for (const step of flow.steps) {
     if (isBranchOnlyStep(step) || isManualStep(step)) continue;
+    if (flow.kind === "runbook") {
+      const successWhen = step.successWhen?.trim();
+      if (!successWhen) {
+        issues.push(`success_when required: ${step.id}`);
+      } else {
+        const invalid = validatePostcondition(successWhen);
+        if (invalid) issues.push(`invalid success_when for ${step.id}: ${invalid}`);
+      }
+    }
     const capabilityId = step.capability;
     if (!capabilityId) continue;
     const definition = capabilities.get(capabilityId);

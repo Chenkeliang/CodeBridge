@@ -628,9 +628,18 @@ export function createSqliteSessionRuntimeTransaction(
           existingPlan?.run_id
           && existingPlan.run_id !== input.id
         ) {
-          throw new Error(
-            `Plan ${frozenPlan.planId} is bound to another Run`,
-          );
+          const prior = transaction.getRun(String(existingPlan.run_id));
+          const terminal = prior && [
+            "succeeded",
+            "failed",
+            "cancelled",
+            "interrupted",
+          ].includes(prior.status);
+          if (!terminal) {
+            throw new Error(
+              `Plan ${frozenPlan.planId} is bound to another Run`,
+            );
+          }
         }
         database
           .prepare(

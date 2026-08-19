@@ -710,7 +710,7 @@ export class RunExecutor {
         return;
       } catch (error) {
         if (attempt >= maxAttempts || !isRetryableError(error)) {
-          if (step && isRetryableError(error) && attempt >= maxAttempts) {
+          if (step && shouldEmitInfrastructureFailure(error)) {
             const capped = capActual(error instanceof Error ? error.message : String(error));
             this.appendVerificationFailed(run, step.id, {
               category: "infrastructure",
@@ -751,6 +751,9 @@ export class RunExecutor {
     signal?: AbortSignal,
   ): Promise<void> {
     this.throwIfCancellationRequested(run.id);
+    if (step && runHasIr(run) && !step.capabilityId) {
+      this.throwUnknownCapability(run, step);
+    }
     const capabilityResult = await this.executeCapability(workItem, run, step, signal);
     this.throwIfCancellationRequested(run.id);
     if (step?.capabilityId) {
@@ -1405,6 +1408,12 @@ function parseLiteral(value: string): unknown {
 
 function isRetryableError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && (error as { retryable?: unknown }).retryable === true);
+}
+
+function shouldEmitInfrastructureFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return true;
+  return error.message !== "unknown_capability"
+    && !error.message.startsWith("Postcondition failed");
 }
 
 function runHasIr(run: Run): boolean {
