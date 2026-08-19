@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
+import {
+  CapabilityRegistry,
+  CapabilityRuntime,
+  SkillCapabilityAdapter,
+  registerDemoCapabilities,
+} from "@codebridge/policy";
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { createFlowApp } from "./flow-api.js";
@@ -260,6 +266,116 @@ describe("flow API", () => {
     expect(approved.status).toBe(409);
     expect(await approved.json()).toMatchObject({ error: "flow_not_publishable" });
     expect(catalog.get("flow-manual")?.status).toBe("candidate");
+    catalog.close();
+  });
+
+  it("publishes a runbook whose demo capabilities are registered", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    registerDemoCapabilities(capabilities, runtime);
+    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const created = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: "sess_1",
+        flow: {
+          flow_id: "flow_demo_echo",
+          kind: "runbook",
+          inputs: [{ id: "text", type: "string", source: "user", required: true }],
+          steps: [
+            {
+              id: "echo",
+              capability: "demo.echo",
+              mode: "read_only",
+              success_when: "output.text exists",
+            },
+            {
+              id: "concat",
+              capability: "demo.concat",
+              mode: "read_only",
+              depends_on: ["echo"],
+              success_when: "output.result exists",
+            },
+          ],
+        },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const approved = await app.request("/v1/flows/flow_demo_echo/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "abc" }),
+    });
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toMatchObject({ status: "published" });
+    capabilities.close();
+    catalog.close();
+  });
+
+  it("rejects publishing a runbook whose capability is not registered", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    catalog.save({
+      flowId: "flow-equity",
+      name: "Equity",
+      kind: "runbook",
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision: "sha256:one",
+      steps: [{ id: "deliver", capability: "equity.deliver", mode: "read_only" }],
+    });
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const approved = await app.request("/v1/flows/flow-equity/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "abc" }),
+    });
+    expect(approved.status).toBe(409);
+    expect(await approved.json()).toMatchObject({ error: "flow_not_publishable" });
+    expect(catalog.get("flow-equity")?.status).toBe("candidate");
+    capabilities.close();
+    catalog.close();
+  });
+
+  it("rejects publishing a guide whose step uses a skill adapter", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    catalog.save({
+      flowId: "flow-skill-guide",
+      name: "Skill guide",
+      kind: "guide",
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision: "sha256:one",
+      steps: [{ id: "investigate", capability: "skill.investigate", mode: "read_only" }],
+    });
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    capabilities.register({
+      id: "skill.investigate",
+      risk: "read_only",
+      adapter: "skill.investigate",
+      side_effects: false,
+      source: { kind: "skill", ref: "investigate" },
+    });
+    runtime.register(new SkillCapabilityAdapter("skill.investigate", {
+      id: "investigate",
+      directory: "/tmp",
+      file: "/tmp/SKILL.md",
+      content: "investigate",
+    }));
+    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const approved = await app.request("/v1/flows/flow-skill-guide/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "abc" }),
+    });
+    expect(approved.status).toBe(409);
+    expect(await approved.json()).toMatchObject({ error: "flow_not_publishable" });
+    expect(catalog.get("flow-skill-guide")?.status).toBe("candidate");
+    capabilities.close();
     catalog.close();
   });
 });

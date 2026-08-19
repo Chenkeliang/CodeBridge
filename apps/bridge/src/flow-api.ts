@@ -213,24 +213,28 @@ function publishIssues(flow: FlowRecord, options: FlowApiOptions): string[] {
   if (flow.steps.some(isManualStep)) {
     issues.push("manual steps cannot be published");
   }
-  if (flow.kind !== "runbook" || !options.capabilities || !options.runtime) {
+  const capabilities = options.capabilities;
+  const runtime = options.runtime;
+  if (!capabilities || !runtime) {
     return issues;
   }
   for (const step of flow.steps) {
     if (isBranchOnlyStep(step) || isManualStep(step)) continue;
-    const capabilityId = step.capability!;
-    const definition = options.capabilities.get(capabilityId);
+    const capabilityId = step.capability;
+    if (!capabilityId) continue;
+    const definition = capabilities.get(capabilityId);
     if (!definition) {
-      issues.push(`capability not registered: ${capabilityId}`);
+      if (flow.kind === "runbook") {
+        issues.push(`capability not registered: ${capabilityId}`);
+      }
       continue;
     }
-    if (!options.runtime.has(definition.adapter)) {
-      issues.push(`adapter not registered: ${definition.adapter}`);
-      continue;
-    }
-    const adapter = options.runtime.get(definition.adapter);
+    const adapter = runtime.get(definition.adapter);
     if (definition.source?.kind === "skill" || adapter?.kind === "skill") {
       issues.push(`skill adapters cannot be published: ${capabilityId}`);
+    }
+    if (flow.kind === "runbook" && !adapter) {
+      issues.push(`adapter not registered: ${definition.adapter}`);
     }
   }
   return issues;

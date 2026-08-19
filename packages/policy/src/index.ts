@@ -6,6 +6,7 @@ import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import type { SqliteEventStore } from "@codebridge/work-items";
 
 export * from "./capability-runtime.js";
+export { registerDemoCapabilities } from "./demo-capabilities.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
   typeof import("node:sqlite");
