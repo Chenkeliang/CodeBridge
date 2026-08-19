@@ -1816,20 +1816,33 @@ export class SqliteEventStore {
     return this.updateRunStatus(runId, "queued");
   }
 
-  putIdempotencyResponse(namespace: string, key: string, response: unknown): void {
+  putIdempotencyResponse(namespace: string, key: string, response: unknown, createdAt?: string): void {
     this.database
       .prepare(
         `INSERT OR IGNORE INTO idempotency_responses
          (namespace, idempotency_key, response, created_at) VALUES (?, ?, ?, ?)`,
       )
-      .run(namespace, key, JSON.stringify(response), new Date().toISOString());
+      .run(namespace, key, JSON.stringify(response), createdAt ?? new Date().toISOString());
+  }
+
+  getIdempotencyRecord(namespace: string, key: string): { response: unknown; createdAt: string } | undefined {
+    const row = this.database
+      .prepare(
+        "SELECT response, created_at FROM idempotency_responses WHERE namespace = ? AND idempotency_key = ?",
+      )
+      .get(namespace, key) as { response?: string; created_at?: string } | undefined;
+    if (!row?.response) return undefined;
+    return { response: JSON.parse(row.response), createdAt: row.created_at ?? "" };
   }
 
   getIdempotencyResponse(namespace: string, key: string): unknown | undefined {
-    const row = this.database
-      .prepare("SELECT response FROM idempotency_responses WHERE namespace = ? AND idempotency_key = ?")
-      .get(namespace, key) as { response?: string } | undefined;
-    return row?.response ? JSON.parse(row.response) : undefined;
+    return this.getIdempotencyRecord(namespace, key)?.response;
+  }
+
+  deleteIdempotencyResponse(namespace: string, key: string): void {
+    this.database
+      .prepare("DELETE FROM idempotency_responses WHERE namespace = ? AND idempotency_key = ?")
+      .run(namespace, key);
   }
 
   createMessageAttachment(input: CreateMessageAttachmentInput): MessageAttachmentRecord {

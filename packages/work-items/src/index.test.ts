@@ -286,6 +286,16 @@ describe("SqliteEventStore", () => {
     store.updateRunStatus(run.id, "running");
     store.putIdempotencyResponse("create-run", "key-1", { run_id: run.id });
     expect(store.getIdempotencyResponse("create-run", "key-1")).toEqual({ run_id: run.id });
+    expect(store.getIdempotencyRecord("create-run", "key-1")).toEqual({
+      response: { run_id: run.id },
+      createdAt: expect.stringMatching(/^\d{4}-/),
+    });
+    store.putIdempotencyResponse("create-run", "key-stamped", { run_id: run.id }, "2020-01-01T00:00:00.000Z");
+    expect(store.getIdempotencyResponse("create-run", "key-stamped")).toEqual({ run_id: run.id });
+    expect(store.getIdempotencyRecord("create-run", "key-stamped")).toEqual({
+      response: { run_id: run.id },
+      createdAt: "2020-01-01T00:00:00.000Z",
+    });
     expect(store.listRunsByStatus(["running"])).toHaveLength(1);
     expect(store.requeueRun(run.id).status).toBe("queued");
     store.close();
