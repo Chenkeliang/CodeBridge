@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { FlowCatalogStore } from "@codebridge/flow-catalog";
+import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
+import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
 import { compileWorkflow, definitionHash, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import type { SqliteEventStore } from "@codebridge/work-items";
@@ -8,6 +9,8 @@ import type { SqliteEventStore } from "@codebridge/work-items";
 export interface FlowApiOptions {
   sessions?: SessionCatalogStore;
   events?: SqliteEventStore;
+  capabilities?: CapabilityRegistry;
+  runtime?: CapabilityRuntime;
 }
 
 export function createFlowApp(catalog: FlowCatalogStore, token: string, options: FlowApiOptions = {}) {
@@ -61,11 +64,20 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     if (decision === "approve" && (typeof body?.git_revision !== "string" || !body.git_revision.trim())) {
       return c.json({ error: "git_revision is required when approving a Flow" }, 400);
     }
+    if (decision === "approve") {
+      const issues = publishIssues(flow, options);
+      if (issues.length > 0) {
+        return c.json({ error: "flow_not_publishable", issues }, 409);
+      }
+      if (flow.kind === "runbook" && (!options.capabilities || !options.runtime)) {
+        return c.json({ error: "capability_registry_unavailable" }, 409);
+      }
+    }
     const reviewed = catalog.save({
       ...flow,
       status: decision === "approve" ? "published" : "candidate",
       source: decision === "approve" ? "git" : flow.source,
-      definitionRevision: decision === "approve" ? `git:${body!.git_revision}` : flow.definitionRevision,
+      definitionRevision: flow.definitionRevision,
       reviewStatus: decision === "approve" ? "approved" : "rejected",
       gitRevision: decision === "approve" ? String(body!.git_revision) : flow.gitRevision,
     });
@@ -119,6 +131,7 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       approval: step.approval,
       branches: step.branches,
       retry: step.retry ?? undefined,
+      successWhen: step.successWhen ?? undefined,
     }));
     const flow = catalog.save({
       flowId,
@@ -162,6 +175,8 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
     status: flow.status,
     source: flow.source,
     definition_revision: flow.definitionRevision,
+    plan_ir_hash: flow.planIrHash,
+    inputs: flow.inputs,
     review_status: flow.reviewStatus,
     git_revision: flow.gitRevision,
     validation_issues: flow.validationIssues,
@@ -176,8 +191,47 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
       retry: step.retry
         ? { max_attempts: step.retry.maxAttempts, delay_ms: step.retry.delayMs }
         : null,
+      success_when: step.successWhen ?? null,
     })),
     created_at: flow.createdAt,
     updated_at: flow.updatedAt,
   };
+}
+
+function isManualStep(step: FlowRecord["steps"][number]): boolean {
+  if (step.mode === "manual") return true;
+  const hasBranches = (step.branches?.length ?? 0) > 0;
+  return !step.capability && !hasBranches;
+}
+
+function isBranchOnlyStep(step: FlowRecord["steps"][number]): boolean {
+  return (step.branches?.length ?? 0) > 0 && !step.capability;
+}
+
+function publishIssues(flow: FlowRecord, options: FlowApiOptions): string[] {
+  const issues: string[] = [];
+  if (flow.steps.some(isManualStep)) {
+    issues.push("manual steps cannot be published");
+  }
+  if (flow.kind !== "runbook" || !options.capabilities || !options.runtime) {
+    return issues;
+  }
+  for (const step of flow.steps) {
+    if (isBranchOnlyStep(step) || isManualStep(step)) continue;
+    const capabilityId = step.capability!;
+    const definition = options.capabilities.get(capabilityId);
+    if (!definition) {
+      issues.push(`capability not registered: ${capabilityId}`);
+      continue;
+    }
+    if (!options.runtime.has(definition.adapter)) {
+      issues.push(`adapter not registered: ${definition.adapter}`);
+      continue;
+    }
+    const adapter = options.runtime.get(definition.adapter);
+    if (definition.source?.kind === "skill" || adapter?.kind === "skill") {
+      issues.push(`skill adapters cannot be published: ${capabilityId}`);
+    }
+  }
+  return issues;
 }
