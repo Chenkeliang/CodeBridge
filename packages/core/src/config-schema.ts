@@ -16,6 +16,16 @@ export const FeishuPolicySchema = z.object({
   scenarios: z.array(PolicyScenarioSchema).optional(),
 });
 
+/** Web Rail / 飞书 `/backend` 共用的五家 Agent，不再扩张。 */
+export const SUPPORTED_AGENT_IDS = [
+  "cursor",
+  "claude",
+  "codex",
+  "pi",
+  "opencode",
+] as const;
+export type SupportedAgentId = (typeof SUPPORTED_AGENT_IDS)[number];
+
 export const BackendProfileSchema = z.object({
   type: z.enum(["cursor-cli", "claude-code", "codex", "generic-spawn", "pi-sdk"]),
   // 兼容旧配置里的显式 `transport: acp`；CLI transport 已移除；pi-sdk 不读取该字段。
@@ -36,6 +46,40 @@ export const BackendProfileSchema = z.object({
     ])
     .optional(),
 });
+
+export const DEFAULT_BACKEND_PROFILES: Record<
+  SupportedAgentId,
+  z.infer<typeof BackendProfileSchema>
+> = {
+  cursor: {
+    type: "cursor-cli",
+    acpCommand: "cursor-agent",
+    acpArgs: ["acp"],
+  },
+  claude: {
+    type: "claude-code",
+    acpCommand: "npx",
+    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.64.2"],
+    claudePermissionMode: "bypassPermissions",
+  },
+  codex: {
+    type: "codex",
+    acpCommand: "npx",
+    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.14"],
+  },
+  pi: { type: "pi-sdk" },
+  opencode: {
+    type: "generic-spawn",
+    acpCommand: "opencode",
+    acpArgs: ["acp"],
+  },
+};
+
+function mergeDefaultBackends(
+  backends: Record<string, z.infer<typeof BackendProfileSchema>>,
+): Record<string, z.infer<typeof BackendProfileSchema>> {
+  return { ...DEFAULT_BACKEND_PROFILES, ...backends };
+}
 
 export const AccessConfigSchema = z.object({
   allowedUsers: z.array(z.string()).optional(),
@@ -113,8 +157,8 @@ export const ConfigSchema = z.object({
     })
     .default({ enabled: false }),
   defaultAgent: z.string().min(1).optional(),
-  defaultBackend: z.enum(["cursor", "claude", "codex", "pi"]).default("cursor"),
-  backends: z.record(BackendProfileSchema),
+  defaultBackend: z.enum(SUPPORTED_AGENT_IDS).default("cursor"),
+  backends: z.record(BackendProfileSchema).transform(mergeDefaultBackends),
   access: AccessConfigSchema.optional(),
   workspaces: WorkspacesConfigSchema.optional(),
   orchestration: OrchestrationConfigSchema.optional(),
@@ -180,6 +224,25 @@ export const ConfigSchema = z.object({
 export type AppConfig = z.infer<typeof ConfigSchema>;
 export type FeishuPolicy = z.infer<typeof FeishuPolicySchema>;
 
+/** Web 设置页的 defaultAgent 优先；没有再回退到 defaultBackend。 */
+export function resolveDefaultAgentId(
+  config: Pick<AppConfig, "defaultAgent" | "defaultBackend" | "backends">,
+): string {
+  const preferred = config.defaultAgent?.trim();
+  if (preferred && config.backends[preferred]) return preferred;
+  if (config.defaultBackend && config.backends[config.defaultBackend]) {
+    return config.defaultBackend;
+  }
+  for (const id of SUPPORTED_AGENT_IDS) {
+    if (config.backends[id]) return id;
+  }
+  return Object.keys(config.backends)[0] ?? "cursor";
+}
+
+export function isSupportedAgentId(id: string): id is SupportedAgentId {
+  return (SUPPORTED_AGENT_IDS as readonly string[]).includes(id);
+}
+
 export function defaultConfig(): AppConfig {
   return ConfigSchema.parse({
     feishu: {
@@ -201,25 +264,7 @@ export function defaultConfig(): AppConfig {
     },
     defaultAgent: undefined,
     defaultBackend: "cursor",
-    backends: {
-      cursor: {
-        type: "cursor-cli",
-        acpCommand: "cursor-agent",
-        acpArgs: ["acp"],
-      },
-      claude: {
-        type: "claude-code",
-        acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.64.2"],
-        claudePermissionMode: "bypassPermissions",
-      },
-      codex: {
-        type: "codex",
-        acpCommand: "npx",
-        acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.14"],
-        // 不钉 model：OpenAI 轮换模型名很快，钉了必过期；用适配器默认，会话内 /model 切
-      },
-    },
+    backends: DEFAULT_BACKEND_PROFILES,
     workspaces: {
       root: `${process.env.HOME ?? ""}/Projects`,
     },

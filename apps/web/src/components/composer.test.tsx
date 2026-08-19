@@ -175,6 +175,16 @@ describe("Composer", () => {
     expect(view.props.onRemoveAttachment).toHaveBeenCalledWith(1);
     expect(view.props.onStop).toHaveBeenCalledOnce();
     expect(view.props.onSubmit).toHaveBeenCalledOnce();
+    expect(view.props.onDraft).toHaveBeenCalledWith("");
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
+
+  it("clears the composer draft as soon as send is pressed", () => {
+    const view = renderComposer({ draft: "股市里的离散会用于什么" });
+    click(view.host.querySelector('button[aria-label="发送"]'));
+    expect(view.props.onSubmit).toHaveBeenCalledOnce();
+    expect(view.props.onDraft).toHaveBeenCalledWith("");
     act(() => view.root.unmount());
     view.host.remove();
   });
@@ -198,6 +208,22 @@ describe("Composer", () => {
     expect(document.body.textContent).toContain("Model");
     expect(document.body.textContent).toContain("推理强度");
     expect(document.body.textContent).toContain("速度");
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
+
+  it("opens slash suggestions even before Agent commands have loaded", () => {
+    const view = renderComposer({ commands: [], commandOpen: false, draft: "" });
+    const editor = view.host.querySelector("[contenteditable=true]")!;
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? "/sta" : "",
+      },
+    });
+    act(() => editor.dispatchEvent(event));
+    expect(view.props.onCommandOpen).toHaveBeenCalledWith(true);
     act(() => view.root.unmount());
     view.host.remove();
   });

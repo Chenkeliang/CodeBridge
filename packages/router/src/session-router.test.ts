@@ -123,6 +123,18 @@ describe("SessionRouter resolveRunOptions", () => {
     expect(router.getBinding("chat1").backendId).toBe("claude");
   });
 
+  it("uses Web defaultAgent for a new chat binding", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
+    tmpDirs.push(dataDir);
+    const router = new SessionRouter(dataDir);
+    router.initFromConfig({
+      ...defaultConfig(),
+      defaultAgent: "pi",
+      defaultBackend: "cursor",
+    });
+    expect(router.getBinding("fresh-chat").backendId).toBe("pi");
+  });
+
   it("tracks slot generation per backend+cwd", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-router-"));
     tmpDirs.push(dataDir);

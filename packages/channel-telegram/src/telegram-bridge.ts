@@ -25,8 +25,13 @@ import { TelegramSessionWatcher } from "./telegram-session-watcher.js";
 export const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "menu", description: "打开手机快捷菜单" },
   { command: "help", description: "查看帮助；加 full 查看全部" },
+  { command: "s", description: "查看当前会话状态（/status）" },
+  { command: "c", description: "恢复暂停队列（/continue）" },
+  { command: "r", description: "列出或恢复本机会话（/resume）" },
+  { command: "x", description: "停止当前任务（/stop）" },
   { command: "status", description: "查看当前会话状态" },
   { command: "resume", description: "列出或恢复本机会话" },
+  { command: "continue", description: "恢复暂停队列" },
   { command: "new", description: "新建会话" },
   { command: "stop", description: "停止当前任务" },
   { command: "backend", description: "切换 Cursor、Claude 或 Codex" },
@@ -246,7 +251,11 @@ export class TelegramBridge {
       },
       getSlotCommandContext: async () => {
         if (!this.sessionIngress) {
-          return { sessionId: null, activeRunId: null };
+          return {
+            sessionId: null,
+            activeRunId: null,
+            providerSessionId: null,
+          };
         }
         return this.sessionIngress.getSlotCommandContext(
           this.buildFullSlot(chatId, topicId),
@@ -509,7 +518,7 @@ export class TelegramBridge {
       await this.sendText(
         chatId,
         receipt.queueState === "paused"
-          ? "⏸ 当前 Session 已暂停，消息已排队。发送 /continue 恢复队列，或 /new 新建会话。"
+          ? "⏸ 当前 Session 已暂停，消息已排队。发送 /c 恢复队列，或 /new 新建会话。"
           : `⏳ 当前任务进行中，消息已排队（turn ${receipt.turnId.slice(0, 8)}）。`,
         topicId,
       );

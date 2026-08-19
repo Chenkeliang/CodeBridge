@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { afterEach } from "vitest";
 import type { AgentEvent, RunContext } from "@codebridge/core";
 import {
@@ -68,6 +68,8 @@ class FakePiSession implements PiSession {
   readonly sessionId = "pi-session-1";
   private listener?: (event: unknown) => void;
   aborted = false;
+  abortBashCalls = 0;
+  hangAbort = false;
   disposed = false;
   prompts: string[] = [];
   promptCalls: Array<{ text: string; options?: { images?: unknown[] } }> = [];
@@ -98,8 +100,13 @@ class FakePiSession implements PiSession {
     });
   }
 
+  abortBash(): void {
+    this.abortBashCalls += 1;
+  }
+
   async abort(): Promise<void> {
     this.aborted = true;
+    if (this.hangAbort) await new Promise(() => {});
   }
 
   dispose(): void {
@@ -453,9 +460,34 @@ describe("Pi session runner", () => {
     await run.next();
     expect(handle.current).toBeDefined();
     await handle.current!.cancel();
+    expect(session.abortBashCalls).toBe(1);
     expect(session.aborted).toBe(true);
     await run.return(undefined);
     expect(session.disposed).toBe(true);
+  });
+
+  it("kills bash and unblocks even if abort never becomes idle", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new FakePiSession();
+      session.hangAbort = true;
+      const handle: PiRunHandleRef = {};
+      const run = runPiSession(context(), {
+        createSession: async () => session,
+        isAborted: () => false,
+        handleRef: handle,
+      });
+      await run.next();
+      const cancelled = handle.current!.cancel();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await cancelled;
+      expect(session.abortBashCalls).toBe(1);
+      expect(session.aborted).toBe(true);
+      await run.return(undefined);
+      expect(session.disposed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -184,6 +184,7 @@ describe("workbench logic", () => {
     if (!composerTrigger) return;
 
     expect(composerTrigger("/sta")).toEqual({ kind: "command", query: "sta" });
+    expect(composerTrigger("/sta\n")).toEqual({ kind: "command", query: "sta" });
     expect(composerTrigger("检查 @src/lib")).toEqual({ kind: "context", query: "src/lib" });
     expect(composerTrigger("普通消息")).toBeNull();
     expect(composerTrigger("/status ready")).toBeNull();
@@ -210,6 +211,7 @@ describe("workbench logic", () => {
     expect(filterCommands(commands, "available").map((command) => command.name)).toEqual(["skills"]);
     expect(applyComposerSuggestion("检查 @src/li", "@/workspace/src/lib.ts ")).toBe("检查 @/workspace/src/lib.ts ");
     expect(applyComposerSuggestion("/sta", "/status ")).toBe("/status ");
+    expect(applyComposerSuggestion("/sta\n", "/status ")).toBe("/status ");
   });
 
   it("creates inline previews only for image attachments", () => {

@@ -251,6 +251,7 @@ export function DesignPreview() {
         panelOpen={panelOpen}
         renameDraft=""
         session={session}
+        runState="running"
         onDelete={noop}
         onMenu={noop}
         onMenuView={noop}

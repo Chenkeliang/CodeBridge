@@ -8,6 +8,7 @@ import {
 } from "@codebridge/core";
 import type { CliSessionSummary } from "@codebridge/runner-client";
 import { handleSlashCommand, type SlashContext } from "./slash-commands.js";
+import { SLASH_COMMANDS } from "./command-help.js";
 import { SessionRouter } from "./session-router.js";
 
 const tmpDirs: string[] = [];
@@ -37,7 +38,11 @@ function makeCtx(overrides: {
   };
   closeSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
   deleteSession?: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
-  slotContext?: { sessionId: string | null; activeRunId: string | null };
+  slotContext?: {
+    sessionId: string | null;
+    activeRunId: string | null;
+    providerSessionId: string | null;
+  };
   resumedSessions?: string[];
 }): SlashContext {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-slash-"));
@@ -50,6 +55,7 @@ function makeCtx(overrides: {
   const slotContext = overrides.slotContext ?? {
     sessionId: null,
     activeRunId: null,
+    providerSessionId: null,
   };
   // resumeListCache 按 chatId 缓存，每个用例用独立 chatId 避免互相污染
   chatCounter += 1;
@@ -109,6 +115,9 @@ describe("help commands", () => {
       text: expect.stringContaining("**文件与 Git**"),
     });
     expect((result as { text: string }).text).toContain("/session delete");
+    expect((result as { text: string }).text).toContain(
+      "/backend <cursor|claude|codex|pi|opencode|default>",
+    );
   });
 
   it("uses plain help rendering when requested by the channel", async () => {
@@ -147,6 +156,94 @@ describe("/session lifecycle", () => {
       text: "已关闭 ACP session：`s1`",
     });
     expect(closed).toEqual(["s1"]);
+  });
+
+  it("rotates the slot generation after closing the bound provider session", async () => {
+    const ctx = makeCtx({
+      scopedSessions: [],
+      allSessions: [],
+      closeSession: async () => ({ ok: true }),
+      slotContext: {
+        sessionId: "sess_bound",
+        activeRunId: null,
+        providerSessionId: "s1",
+      },
+    });
+    const before = ctx.router.getSlotGeneration(ctx.chatId);
+
+    await expect(
+      handleSlashCommand({ ...ctx, text: "/session close s1" }),
+    ).resolves.toEqual({
+      type: "reply",
+      text: "已关闭 ACP session：`s1`\n下一条消息将开启新对话。",
+    });
+    expect(ctx.router.getSlotGeneration(ctx.chatId)).toBe(before + 1);
+  });
+
+  it("does not rotate generation when closing an unbound provider session", async () => {
+    const ctx = makeCtx({
+      scopedSessions: [],
+      allSessions: [],
+      closeSession: async () => ({ ok: true }),
+      slotContext: {
+        sessionId: "sess_bound",
+        activeRunId: null,
+        providerSessionId: "s-current",
+      },
+    });
+    const before = ctx.router.getSlotGeneration(ctx.chatId);
+
+    await expect(
+      handleSlashCommand({ ...ctx, text: "/session close s-other" }),
+    ).resolves.toEqual({
+      type: "reply",
+      text: "已关闭 ACP session：`s-other`",
+    });
+    expect(ctx.router.getSlotGeneration(ctx.chatId)).toBe(before);
+  });
+
+  it("rotates generation after deleting the catalog session id shown in /status", async () => {
+    const ctx = makeCtx({
+      scopedSessions: [],
+      allSessions: [],
+      deleteSession: async () => ({ ok: true }),
+      slotContext: {
+        sessionId: "sess_bound",
+        activeRunId: null,
+        providerSessionId: "provider-1",
+      },
+    });
+    const before = ctx.router.getSlotGeneration(ctx.chatId);
+
+    await expect(
+      handleSlashCommand({ ...ctx, text: "/session delete sess_bound" }),
+    ).resolves.toEqual({
+      type: "reply",
+      text: "已删除 ACP session：`sess_bound`\n下一条消息将开启新对话。",
+    });
+    expect(ctx.router.getSlotGeneration(ctx.chatId)).toBe(before + 1);
+  });
+
+  it("does not rotate generation when close fails", async () => {
+    const ctx = makeCtx({
+      scopedSessions: [],
+      allSessions: [],
+      closeSession: async () => ({ ok: false, error: "busy" }),
+      slotContext: {
+        sessionId: "sess_bound",
+        activeRunId: null,
+        providerSessionId: "s1",
+      },
+    });
+    const before = ctx.router.getSlotGeneration(ctx.chatId);
+
+    await expect(
+      handleSlashCommand({ ...ctx, text: "/session close s1" }),
+    ).resolves.toEqual({
+      type: "reply",
+      text: "关闭 ACP session 失败：busy",
+    });
+    expect(ctx.router.getSlotGeneration(ctx.chatId)).toBe(before);
   });
 
   it("deletes an explicit id and reports adapter failures", async () => {
@@ -685,6 +782,7 @@ describe("/steer", () => {
     ctx.getSlotCommandContext = async () => ({
       sessionId: "sess_1",
       activeRunId: "run_1",
+      providerSessionId: null,
     });
     const steered: Array<{ runId: string; prompt: string }> = [];
     ctx.steerActiveRun = async (runId, prompt) => {
@@ -768,6 +866,7 @@ describe("/thinking", () => {
     ctx.getSlotCommandContext = async () => ({
       sessionId: "sess_resumed",
       activeRunId: "run_42",
+      providerSessionId: null,
     });
 
     const status = await handleSlashCommand({ ...ctx, text: "/status" });
@@ -782,6 +881,7 @@ describe("/thinking", () => {
     ctx.getSlotCommandContext = async () => ({
       sessionId: null,
       activeRunId: null,
+      providerSessionId: null,
     });
 
     const status = await handleSlashCommand({ ...ctx, text: "/status" });
@@ -826,12 +926,66 @@ describe("/thinking", () => {
     ctx.getSlotCommandContext = async () => ({
       sessionId: "sess_current",
       activeRunId: null,
+      providerSessionId: null,
     });
 
     const result = await handleSlashCommand({ ...ctx, text: "/continue" });
 
     expect((result as { text: string }).text).toContain("已恢复队列");
     expect(resumedSessions).toEqual(["sess_current"]);
+  });
+
+  it("short aliases /c /r /s /x /b /a /d match the full commands", async () => {
+    const ctx = baseCtx();
+    const resumedSessions: string[] = [];
+    ctx.resumeQueue = async (sessionId) => {
+      resumedSessions.push(sessionId);
+      return { queueState: "ready" };
+    };
+    ctx.getSlotCommandContext = async () => ({
+      sessionId: "sess_current",
+      activeRunId: "run_1",
+      providerSessionId: null,
+    });
+    ctx.cancelActiveRun = async () => true;
+    ctx.resolvePermission = async () => true;
+    ctx.listSessions = async () => [
+      makeSession("provider_old", "/tmp", "old work"),
+    ];
+
+    const continued = await handleSlashCommand({ ...ctx, text: "/c" });
+    const status = await handleSlashCommand({ ...ctx, text: "/s" });
+    const stopped = await handleSlashCommand({ ...ctx, text: "/x" });
+    const backend = await handleSlashCommand({ ...ctx, text: "/b cursor" });
+    const approved = await handleSlashCommand({ ...ctx, text: "/a" });
+    const denied = await handleSlashCommand({ ...ctx, text: "/d" });
+    const resumed = await handleSlashCommand({ ...ctx, text: "/r" });
+
+    expect((continued as { text: string }).text).toContain("已恢复队列");
+    expect(resumedSessions).toEqual(["sess_current"]);
+    expect((status as { text: string }).text).toContain("**sessionId**: sess_current");
+    expect((stopped as { text: string }).text).toContain("已停止");
+    expect((backend as { text: string }).text).toContain("已切换 backend: cursor");
+    expect((approved as { text: string }).text).toContain("已允许");
+    expect((denied as { text: string }).text).toContain("已拒绝");
+    expect((resumed as { text: string }).text).toContain("本地 session");
+  });
+
+  it("switches /backend among the five supported Agents and uses Web defaultAgent", async () => {
+    const ctx = baseCtx();
+    ctx.config = {
+      ...ctx.config,
+      defaultAgent: "pi",
+      defaultBackend: "cursor",
+    };
+
+    const opencode = await handleSlashCommand({ ...ctx, text: "/backend opencode" });
+    expect((opencode as { text: string }).text).toContain("已切换 backend: opencode");
+    expect(ctx.router.getBinding(ctx.chatId).backendId).toBe("opencode");
+
+    const reset = await handleSlashCommand({ ...ctx, text: "/backend default" });
+    expect((reset as { text: string }).text).toContain("已切换 backend: pi");
+    expect(ctx.router.getBinding(ctx.chatId).backendId).toBe("pi");
   });
 
   it("/continue with no bound session is a no-op", async () => {
@@ -853,6 +1007,7 @@ describe("/thinking", () => {
     ctx.getSlotCommandContext = async () => ({
       sessionId: "sess_1",
       activeRunId: null,
+      providerSessionId: null,
     });
     const steer = ctx.steerActiveRun = vi.fn();
 
@@ -863,5 +1018,67 @@ describe("/thinking", () => {
 
     expect((result as { text: string }).text).toContain("没有运行中的任务");
     expect(steer).not.toHaveBeenCalled();
+  });
+});
+
+describe("channel slash catalog", () => {
+  function sample(command: string): string {
+    return command.replace(/\s*\[.*$/, "").replace(/\s*<.*$/, "").trim();
+  }
+
+  it("intercepts every documented 码桥 command instead of forwarding to the Agent", async () => {
+    const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-ws-"));
+    tmpDirs.push(workspace);
+    ctx.config = {
+      ...ctx.config,
+      workspaces: { root: workspace, default: workspace },
+    };
+    ctx.router.initFromConfig(ctx.config);
+    ctx.cancelActiveRun = async () => false;
+    ctx.resolvePermission = async () => false;
+    ctx.listConfigOptions = async () => [];
+
+    const samples = [
+      ...SLASH_COMMANDS.map((item) => sample(item.command)),
+      "/s",
+      "/c",
+      "/r",
+      "/x",
+      "/b",
+      "/a",
+      "/d",
+      "/perm",
+      "/think",
+      "/menu",
+      "/ws list",
+      "/help full",
+      "/resume last",
+      "/backend pi",
+      "/backend opencode",
+    ];
+    const leaked: string[] = [];
+    const rows: Array<{ text: string; type: string }> = [];
+    for (const text of [...new Set(samples)]) {
+      const result = await handleSlashCommand({ ...ctx, text });
+      const type = result?.type ?? "null";
+      rows.push({ text, type });
+      if (type === "agent" || type === "null") leaked.push(`${text} → ${type}`);
+    }
+
+    expect(leaked, JSON.stringify(rows, null, 2)).toEqual([]);
+
+    const ws = await handleSlashCommand({ ...ctx, text: "/ws list" });
+    expect(ws?.type).toBe("reply");
+    expect((ws as { text: string }).text).toMatch(/工作区|暂无命名/);
+
+    const unknown = await handleSlashCommand({
+      ...ctx,
+      text: "/skill:project-review",
+    });
+    expect(unknown).toEqual({
+      type: "agent",
+      prompt: "/skill:project-review",
+    });
   });
 });

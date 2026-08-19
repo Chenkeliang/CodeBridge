@@ -40,6 +40,7 @@ describe("SessionQueue", () => {
     act(() => [...host.querySelectorAll("button")].find((button) => button.textContent === "继续队列")?.click());
     expect(onCancel).toHaveBeenCalledWith("turn-1", 2);
     expect(onResume).toHaveBeenCalledWith(3);
+    expect(host.textContent).toContain("上一轮失败，队列暂停。");
     act(() => root.unmount());
     host.remove();
   });

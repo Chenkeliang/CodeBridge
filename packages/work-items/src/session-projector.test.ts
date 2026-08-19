@@ -91,6 +91,146 @@ describe("Session projector", () => {
     store.close();
   });
 
+  it("records ended_at on open process blocks when a Run completes", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "RUN_STARTED",
+      actor: "system",
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "AGENT_EVENT",
+      actor: "agent",
+      payload: {
+        event: {
+          type: "thought_delta",
+          blockId: "thought_1",
+          text: "推理中",
+        },
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "RUN_SUCCEEDED",
+      actor: "system",
+    });
+
+    const turn = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!;
+    const work = turn.blocks.find((block) => block.kind === "work");
+    const thought = turn.blocks.find((block) => block.kind === "thought");
+    expect(typeof work?.metadata.started_at).toBe("string");
+    expect(typeof work?.metadata.ended_at).toBe("string");
+    expect(typeof thought?.metadata.started_at).toBe("string");
+    expect(typeof thought?.metadata.ended_at).toBe("string");
+    expect(work?.status).toBe("completed");
+    expect(thought?.status).toBe("completed");
+    store.close();
+  });
+
+  it("seals thought when the answer starts and keeps later thought above the Agent", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "RUN_STARTED",
+      actor: "system",
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "AGENT_EVENT",
+      actor: "agent",
+      payload: {
+        event: { type: "thought_delta", text: "先看配置" },
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "AGENT_EVENT",
+      actor: "agent",
+      payload: {
+        event: {
+          type: "text_delta",
+          phase: "final_answer",
+          text: "部分回复",
+        },
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "AGENT_EVENT",
+      actor: "agent",
+      payload: {
+        event: { type: "thought_delta", text: "再想一遍" },
+      },
+    });
+
+    const turn = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!;
+    const kinds = turn.blocks.map((block) => block.kind);
+    const assistantIndex = kinds.indexOf("assistant");
+    const thoughtIndexes = kinds.flatMap((kind, index) => kind === "thought" ? [index] : []);
+    expect(thoughtIndexes).toHaveLength(2);
+    expect(assistantIndex).toBeGreaterThan(thoughtIndexes[1]!);
+    expect(thoughtIndexes.every((index) => index < assistantIndex)).toBe(true);
+
+    const thoughts = turn.blocks.filter((block) => block.kind === "thought");
+    expect(thoughts[0]?.status).toBe("completed");
+    expect(typeof thoughts[0]?.metadata.ended_at).toBe("string");
+    expect(thoughts[1]?.status).toBe("running");
+    expect(thoughts[1]?.metadata.ended_at).toBeUndefined();
+    expect(thoughts[0]?.segments.map((segment) => segment.content).join("")).toBe("先看配置");
+    expect(thoughts[1]?.segments.map((segment) => segment.content).join("")).toBe("再想一遍");
+    store.close();
+  });
+
+  it("seals thought when a tool starts", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "RUN_STARTED",
+      actor: "system",
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "AGENT_EVENT",
+      actor: "agent",
+      payload: {
+        event: { type: "thought_delta", text: "准备执行" },
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "AGENT_EVENT",
+      actor: "agent",
+      payload: {
+        event: {
+          type: "tool_start",
+          toolCallId: "bash-1",
+          toolName: "bash",
+          args: { command: "ls" },
+        },
+      },
+    });
+
+    const thought = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.find((block) => block.kind === "thought");
+    expect(thought?.status).toBe("completed");
+    expect(typeof thought?.metadata.ended_at).toBe("string");
+    store.close();
+  });
+
   it("updates command read models without scanning events", () => {
     const { store, item } = setup();
     store.appendEvent({
@@ -236,6 +376,31 @@ describe("Session projector", () => {
       .listTimelineTurns("sess_1", { limit: 50 })
       .turns[0]!;
     expect(turn.status).toBe("succeeded");
+    store.close();
+  });
+
+  it("projects fatal Runner errors onto the timeline", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "AGENT_EVENT",
+      actor: "adapter",
+      payload: {
+        event: {
+          type: "error",
+          message: "ACP session x 已被另一个 Runner 任务占用",
+          fatal: true,
+        },
+      },
+    });
+    const turn = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!;
+    const errorBlock = turn.blocks.find((block) => block.kind === "error");
+    expect(errorBlock?.status).toBe("failed");
+    expect(errorBlock?.segments.map((segment) => segment.content).join("")).toContain(
+      "已被另一个 Runner 任务占用",
+    );
     store.close();
   });
 

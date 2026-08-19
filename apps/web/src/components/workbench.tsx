@@ -90,6 +90,11 @@ export function Workbench() {
   const activeSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && !session.archived_at).length;
   const archivedSessionCount = sessions.filter((session) => session.agent_id === selectedAgentId && session.archived_at).length;
   const sessionRunning = Boolean(sessionView?.snapshot.runtime.active_run);
+  const runState = sessionRunning
+    ? "running" as const
+    : sessionView?.snapshot.runtime.queue_state === "paused"
+      ? "paused" as const
+      : "idle" as const;
   const modelOption = useMemo(() => configOptions.find(isModelOption), [configOptions]);
   const thoughtLevelOption = useMemo(() => configOptions.find(isThoughtLevelOption), [configOptions]);
   const speedOption = useMemo(() => configOptions.find(isSpeedOption), [configOptions]);
@@ -180,7 +185,13 @@ export function Workbench() {
         const { session } = snapshot;
         setSessions((current) => current.map((value) => value.session_id === session.session_id ? session : value));
         setCommands(snapshot.commands);
-        setConfigOptions(await api.configOptions(sessionId));
+        const [options, discovered] = await Promise.all([
+          api.configOptions(sessionId),
+          api.commands(sessionId).catch(() => snapshot.commands),
+        ]);
+        if (!active) return;
+        setConfigOptions(options);
+        setCommands(discovered);
         setModel(session.model ?? "");
         setEffort(session.effort ?? "");
         setConfigOverrides(session.config_overrides ?? {});
@@ -202,6 +213,7 @@ export function Workbench() {
 
   const [stuckToBottom, setStuckToBottom] = useState(true);
   const sessionSwitch = useRef(true);
+  const ignoreConversationScroll = useRef(false);
 
   useEffect(() => {
     sessionSwitch.current = true;
@@ -211,18 +223,27 @@ export function Workbench() {
   useEffect(() => {
     if (loadingSession || !selectedSessionId || !conversationViewport.current) return;
     if (!sessionSwitch.current && !stuckToBottom) return;
+    const viewport = conversationViewport.current;
+    const snapToLatest = () => {
+      ignoreConversationScroll.current = true;
+      viewport.scrollTop = viewport.scrollHeight;
+      window.requestAnimationFrame(() => {
+        ignoreConversationScroll.current = false;
+      });
+    };
+    snapToLatest();
     const frame = window.requestAnimationFrame(() => {
-      const viewport = conversationViewport.current;
-      if (viewport) {
-        viewport.scrollTop = viewport.scrollHeight;
+      snapToLatest();
+      if (sessionSwitch.current) {
         sessionSwitch.current = false;
         setStuckToBottom(true);
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [sessionView, selectedSessionId, loadingSession, sending, stuckToBottom]);
+  }, [sessionView, selectedSessionId, loadingSession, stuckToBottom]);
 
   function handleConversationScroll() {
+    if (ignoreConversationScroll.current) return;
     const viewport = conversationViewport.current;
     if (!viewport) return;
     setStuckToBottom(viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 80);
@@ -331,9 +352,14 @@ export function Workbench() {
     if (!message || sending) return;
     setSending(true);
     setError(null);
+    const pendingAttachments = attachments;
+    setDraft("");
+    setAttachments([]);
     let sessionId = selectedSessionId;
     if (!sessionId) {
       if (!selectedAgent || selectedAgent.status !== "healthy") {
+        setDraft(message);
+        setAttachments(pendingAttachments);
         setError(selectedAgent
           ? `${selectedAgent.display_name} 当前不可用（${statusLabel[selectedAgent.status] ?? selectedAgent.status}），请先在设置中完成安装/配置`
           : "请选择一个可用的 Agent");
@@ -343,12 +369,11 @@ export function Workbench() {
       sessionId = (await createSession(selectedAgent.agent_id))?.session_id ?? null;
     }
     if (!sessionId) {
+      setDraft(message);
+      setAttachments(pendingAttachments);
       setSending(false);
       return;
     }
-    const pendingAttachments = attachments;
-    setDraft("");
-    setAttachments([]);
     const idempotencyKey = pendingSubmissionKey.current ?? crypto.randomUUID();
     pendingSubmissionKey.current = idempotencyKey;
     const result = await submitSessionMessage({
@@ -358,23 +383,35 @@ export function Workbench() {
       idempotencyKey,
       input: { message, flowId: flowId || null, model: model || null, attachments: pendingAttachments, permissionMode: permissionMode || null, effort: effort || null },
     });
-    try {
-      if (result.kind === "rejected") throw result.error;
-      if (result.kind === "unknown") {
-        setDraft(message);
-        setAttachments(pendingAttachments);
-        setError(`发送结果未知。重试时将使用请求 ${result.idempotencyKey}`);
-        return;
-      }
+    if (result.kind === "unknown") {
+      setDraft(message);
+      setAttachments(pendingAttachments);
+      setError(`发送结果未知。重试时将使用请求 ${result.idempotencyKey}`);
+      setSending(false);
+      return;
+    }
+    if (result.kind === "rejected") {
       pendingSubmissionKey.current = null;
+      setDraft(message);
+      setAttachments(pendingAttachments);
+      setError(messageOf(result.error));
+      setSending(false);
+      return;
+    }
+    pendingSubmissionKey.current = null;
+    try {
+      if (
+        result.receipt.acceptance === "queued"
+        && result.receipt.runtime.queue_state === "paused"
+        && !result.receipt.runtime.active_run
+      ) {
+        await api.resumeQueue(sessionId, result.receipt.runtime.version, crypto.randomUUID());
+      }
       await sessionConnection.refresh(sessionId);
       setSessions((current) => current.map((session) => session.session_id === sessionId
         ? { ...session, status: "active", title: session.title ?? message.slice(0, 60), updated_at: new Date().toISOString() }
         : session));
     } catch (caught) {
-      pendingSubmissionKey.current = null;
-      setDraft(message);
-      setAttachments(pendingAttachments);
       setError(messageOf(caught));
     } finally {
       setSending(false);
@@ -519,7 +556,7 @@ export function Workbench() {
 
   function handleDraftChange(value: string) {
     const nextTrigger = composerTrigger(value);
-    setCommandOpen(nextTrigger?.kind === "command" && commands.length > 0);
+    setCommandOpen(nextTrigger?.kind === "command");
     // Opening the context popup via typing "@" must also load the listing;
     // previously only the toolbar "@" button fetched it, leaving an empty panel.
     const openContext = nextTrigger?.kind === "context" && workspacePaths(selectedSession).length > 0;
@@ -630,6 +667,7 @@ export function Workbench() {
         {area !== "settings" && <SessionHeader
           agent={selectedAgent}
           session={selectedSession}
+          runState={runState}
           menuOpen={menuOpen}
           menuView={menuView}
           panelOpen={panelOpen}

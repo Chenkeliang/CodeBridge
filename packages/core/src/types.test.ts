@@ -8,6 +8,7 @@ import {
 import {
   ConfigSchema,
   defaultConfig,
+  resolveDefaultAgentId,
   resolveRequireMention,
 } from "./config-schema.js";
 
@@ -102,6 +103,19 @@ describe("ACP-only backend configuration", () => {
     expect(config.backends.cursor?.model).toBeUndefined();
     expect(config.backends.claude?.model).toBeUndefined();
     expect(config.backends.claude?.effort).toBeUndefined();
+    expect(Object.keys(config.backends).sort()).toEqual([
+      "claude",
+      "codex",
+      "cursor",
+      "opencode",
+      "pi",
+    ]);
+    expect(config.backends.pi?.type).toBe("pi-sdk");
+    expect(config.backends.opencode).toMatchObject({
+      type: "generic-spawn",
+      acpCommand: "opencode",
+      acpArgs: ["acp"],
+    });
   });
 
   it("accepts optional Telegram and arbitrary ACP config overrides", () => {
@@ -170,5 +184,30 @@ describe("ACP-only backend configuration", () => {
       env: ["LOGS_MCP_TOKEN"],
     });
     expect(config.orchestration?.mcpServers?.catalog.transport).toBe("http");
+  });
+});
+
+describe("resolveDefaultAgentId", () => {
+  it("prefers Web defaultAgent over defaultBackend", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      defaultAgent: "pi",
+      defaultBackend: "cursor",
+    });
+    expect(resolveDefaultAgentId(config)).toBe("pi");
+  });
+
+  it("fills missing supported backends so /backend can switch to all five", () => {
+    const config = ConfigSchema.parse({
+      ...defaultConfig(),
+      backends: {
+        cursor: { type: "cursor-cli" },
+      },
+    });
+    expect(config.backends.opencode?.acpCommand).toBe("opencode");
+    expect(resolveDefaultAgentId({
+      ...config,
+      defaultAgent: "opencode",
+    })).toBe("opencode");
   });
 });

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   JsonMapStore,
   canonicalWorkspaceKey,
+  resolveDefaultAgentId,
   serializeSessionKey,
   type AppConfig,
   type BackendProfile,
@@ -99,7 +100,9 @@ export class SessionRouter {
     // 不落盘，话题内显式 setBinding 时才写入话题级覆盖
     if (topicId) return this.getBinding(chatId);
     const config: ChatBinding = {
-      backendId: this.config?.defaultBackend ?? "cursor",
+      backendId: this.config
+        ? resolveDefaultAgentId(this.config)
+        : "cursor",
       cwd: this.defaultCwd,
     };
     this.bindings.update((all) => ({ ...all, [key]: config }));

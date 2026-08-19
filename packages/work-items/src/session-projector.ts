@@ -207,14 +207,21 @@ function projectAgentEvent(
     const phase = agentEvent.phase === "commentary"
       ? "commentary"
       : "final_answer";
-    const blockId = stringValue(agentEvent.blockId)
-      ?? stringValue(agentEvent.messageId)
-      ?? `${runId}:${type === "thought_delta" ? "thought" : phase}`;
     const kind = type === "thought_delta"
       ? "thought"
       : phase === "commentary"
         ? "work"
         : "assistant";
+    if (kind !== "thought") {
+      completeOpenThoughtBlocks(database, runId, event.occurredAt);
+    }
+    const turn = findTimelineTurn(database, runId);
+    if (!turn) throw new Error(`Timeline Turn not found for Run: ${runId}`);
+    const blockId = kind === "thought"
+      ? resolveThoughtBlockId(database, runId, event, agentEvent)
+      : stringValue(agentEvent.blockId)
+        ?? stringValue(agentEvent.messageId)
+        ?? `${runId}:${phase}`;
     ensureBlock(
       database,
       sessionId,
@@ -223,6 +230,9 @@ function projectAgentEvent(
       kind,
       "running",
       { phase },
+      kind === "thought"
+        ? thoughtInsertIndex(database, String(turn.turn_id))
+        : undefined,
     );
     appendSegment(
       database,
@@ -243,6 +253,7 @@ function projectAgentEvent(
       ?? `${runId}:tool:${event.sequence}`;
     const blockId = `tool:${toolCallId}`;
     if (type === "tool_start") {
+      completeOpenThoughtBlocks(database, runId, event.occurredAt);
       sealOpenSegmentsForRun(database, runId);
       ensureBlock(
         database,
@@ -256,6 +267,25 @@ function projectAgentEvent(
       return;
     }
     updateToolBlock(database, blockId, agentEvent, type === "tool_end");
+    return;
+  }
+
+  if (type === "error") {
+    const runId = requireRunId(event);
+    const message = typeof agentEvent.message === "string"
+      ? agentEvent.message
+      : "";
+    if (!message) return;
+    const blockId = `error:${runId}:${event.sequence}`;
+    ensureBlock(
+      database,
+      sessionId,
+      event,
+      blockId,
+      "error",
+      "failed",
+    );
+    appendSegment(database, blockId, message, true);
   }
 }
 
@@ -322,6 +352,7 @@ function ensureBlock(
   kind: string,
   status: string,
   metadata: Record<string, unknown> = {},
+  insertIndex?: number,
 ): void {
   const existing = database
     .prepare(
@@ -332,15 +363,19 @@ function ensureBlock(
   const runId = requireRunId(event);
   const turn = findTimelineTurn(database, runId);
   if (!turn) throw new Error(`Timeline Turn not found for Run: ${runId}`);
+  const turnId = String(turn.turn_id);
   const row = database
     .prepare(
       `SELECT COALESCE(MAX(block_index), -1) + 1 AS next_index
        FROM session_timeline_blocks
        WHERE turn_id = ?`,
     )
-    .get(String(turn.turn_id)) as
+    .get(turnId) as
       | { next_index?: number }
       | undefined;
+  const appendIndex = Number(row?.next_index ?? 0);
+  const blockIndex = insertIndex ?? appendIndex;
+  if (blockIndex < appendIndex) shiftBlockIndices(database, turnId, blockIndex);
   database
     .prepare(
       `INSERT INTO session_timeline_blocks (
@@ -351,13 +386,116 @@ function ensureBlock(
     .run(
       blockId,
       sessionId,
-      String(turn.turn_id),
+      turnId,
       runId,
-      Number(row?.next_index ?? 0),
+      blockIndex,
       kind,
       status,
-      JSON.stringify(boundMetadata(metadata)),
+      JSON.stringify(boundMetadata({
+        ...metadata,
+        started_at: event.occurredAt,
+      })),
     );
+}
+
+function resolveThoughtBlockId(
+  database: DatabaseSync,
+  runId: string,
+  event: DomainEvent,
+  agentEvent: Record<string, unknown>,
+): string {
+  const running = database
+    .prepare(
+      `SELECT block_id FROM session_timeline_blocks
+       WHERE run_id = ? AND kind = 'thought' AND status = 'running'
+       ORDER BY block_index DESC
+       LIMIT 1`,
+    )
+    .get(runId) as { block_id?: string } | undefined;
+  if (running?.block_id) return String(running.block_id);
+
+  const explicit = stringValue(agentEvent.blockId)
+    ?? stringValue(agentEvent.messageId);
+  if (explicit) {
+    const existing = database
+      .prepare(
+        "SELECT status FROM session_timeline_blocks WHERE block_id = ?",
+      )
+      .get(explicit) as { status?: string } | undefined;
+    if (!existing || existing.status === "running") return explicit;
+  }
+  return `${runId}:thought:${event.sequence}`;
+}
+
+function thoughtInsertIndex(database: DatabaseSync, turnId: string): number {
+  const lastThought = database
+    .prepare(
+      `SELECT MAX(block_index) AS idx FROM session_timeline_blocks
+       WHERE turn_id = ? AND kind = 'thought'`,
+    )
+    .get(turnId) as { idx?: number | null } | undefined;
+  if (lastThought?.idx != null) return Number(lastThought.idx) + 1;
+  const append = database
+    .prepare(
+      `SELECT COALESCE(MAX(block_index), -1) + 1 AS next_index
+       FROM session_timeline_blocks
+       WHERE turn_id = ?`,
+    )
+    .get(turnId) as { next_index?: number } | undefined;
+  return Number(append?.next_index ?? 0);
+}
+
+function shiftBlockIndices(
+  database: DatabaseSync,
+  turnId: string,
+  fromIndex: number,
+): void {
+  const rows = database
+    .prepare(
+      `SELECT block_id, block_index FROM session_timeline_blocks
+       WHERE turn_id = ? AND block_index >= ?
+       ORDER BY block_index DESC`,
+    )
+    .all(turnId, fromIndex) as Array<{ block_id: string; block_index: number }>;
+  const update = database.prepare(
+    "UPDATE session_timeline_blocks SET block_index = ? WHERE block_id = ?",
+  );
+  for (const row of rows) {
+    update.run(Number(row.block_index) + 1, row.block_id);
+  }
+}
+
+function completeOpenThoughtBlocks(
+  database: DatabaseSync,
+  runId: string,
+  endedAt: string,
+): void {
+  const rows = database
+    .prepare(
+      `SELECT block_id, metadata_json FROM session_timeline_blocks
+       WHERE run_id = ? AND kind = 'thought' AND status = 'running'`,
+    )
+    .all(runId) as Array<{ block_id: string; metadata_json?: string }>;
+  const update = database.prepare(
+    `UPDATE session_timeline_blocks
+     SET status = ?, metadata_json = ?
+     WHERE block_id = ?`,
+  );
+  for (const row of rows) {
+    const metadata = JSON.parse(row.metadata_json ?? "{}") as Record<string, unknown>;
+    update.run(
+      "completed",
+      JSON.stringify(boundMetadata({ ...metadata, ended_at: endedAt })),
+      row.block_id,
+    );
+    database
+      .prepare(
+        `UPDATE session_output_segments
+         SET sealed = 1
+         WHERE block_id = ? AND sealed = 0`,
+      )
+      .run(row.block_id);
+  }
 }
 
 function appendSegment(
@@ -461,6 +599,7 @@ function closeRun(
   status: "succeeded" | "failed" | "cancelled" | "interrupted",
 ): void {
   const runId = requireRunId(event);
+  const nextStatus = status === "succeeded" ? "completed" : status;
   database
     .prepare(
       `UPDATE session_timeline_turns
@@ -468,13 +607,25 @@ function closeRun(
        WHERE run_id = ?`,
     )
     .run(status, event.sequence, event.occurredAt, runId);
-  database
+  const openBlocks = database
     .prepare(
-      `UPDATE session_timeline_blocks
-       SET status = ?
+      `SELECT block_id, metadata_json FROM session_timeline_blocks
        WHERE run_id = ? AND status IN ('running', 'waiting')`,
     )
-    .run(status === "succeeded" ? "completed" : status, runId);
+    .all(runId) as Array<{ block_id: string; metadata_json?: string }>;
+  const updateBlock = database.prepare(
+    `UPDATE session_timeline_blocks
+     SET status = ?, metadata_json = ?
+     WHERE block_id = ?`,
+  );
+  for (const block of openBlocks) {
+    const metadata = JSON.parse(block.metadata_json ?? "{}") as Record<string, unknown>;
+    updateBlock.run(
+      nextStatus,
+      JSON.stringify(boundMetadata({ ...metadata, ended_at: event.occurredAt })),
+      block.block_id,
+    );
+  }
   sealOpenSegmentsForRun(database, runId);
 }
 

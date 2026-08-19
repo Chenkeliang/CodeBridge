@@ -200,7 +200,7 @@ export function Composer({
   }
 
   function handleTrigger(next: ComposerTrigger) {
-    onCommandOpen(next?.kind === "command" && commands.length > 0);
+    onCommandOpen(next?.kind === "command");
     onContextOpen(next?.kind === "context" && hasWorkspace);
   }
 
@@ -213,6 +213,7 @@ export function Composer({
   function submitWithSweep() {
     if (disabled || sending || !draft.trim() || serializationError) return;
     setSweepKey((value) => value + 1);
+    onDraft("");
     onSubmit();
   }
 
@@ -227,6 +228,7 @@ export function Composer({
     <ComposerAttachments attachments={attachments} onRemove={onRemoveAttachment} />
     <MarkdownComposer
       disabled={disabled || sending}
+      key={`composer-editor-${sweepKey}`}
       onChange={onDraft}
       onFiles={(files) => onAddFiles(files)}
       onPickerKey={handlePickerKey}

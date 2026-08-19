@@ -205,7 +205,7 @@ export class FeishuBridge {
   private readonly lastInboundMessageId = new Map<string, string>();
   /** 普通群回复串 → 会话 topic 映射 */
   private readonly chainTopics = new ChainTopicTracker();
-  /** bot 已参与过的话题（内存；重启后由 sessions.json 续上） */
+  /** bot 已参与过的话题（内存；重启后由 Catalog 槽位绑定续上） */
   private readonly botParticipatedTopics = new Set<string>();
   private readonly mentionRegistry = new MentionRegistry();
   private readonly pendingStreams: JsonMapStore<PendingFeishuStream>;
@@ -537,7 +537,11 @@ export class FeishuBridge {
       },
       getSlotCommandContext: async () => {
         if (!this.sessionIngress) {
-          return { sessionId: null, activeRunId: null };
+          return {
+            sessionId: null,
+            activeRunId: null,
+            providerSessionId: null,
+          };
         }
         return this.sessionIngress.getSlotCommandContext(
           this.buildFullSlot(msg.chatId, topicId),
@@ -816,7 +820,7 @@ export class FeishuBridge {
       await this.sendMarkdown(
         msg.chatId,
         receipt.queueState === "paused"
-          ? "⏸ 当前 Session 已暂停，消息已排队。发送 /continue 恢复队列，或 /new 新建会话。"
+          ? "⏸ 当前 Session 已暂停，消息已排队。发送 /c 恢复队列，或 /new 新建会话。"
           : `⏳ 当前任务进行中，消息已排队（turn ${receipt.turnId.slice(0, 8)}）。`,
         msg.messageId,
       ).catch(() => {});

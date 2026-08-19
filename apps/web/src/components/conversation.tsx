@@ -24,7 +24,7 @@ export function ProjectionItem({ approvals, cwd, item, onApproval }: { approvals
   if (item.kind === "error") return <section className={cn("flex max-w-[760px] items-start gap-2 rounded-lg border p-3.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")}><X className="mt-0.5 size-3.5 shrink-0" /><div><p className="font-semibold">{item.fatal ? "Run 失败" : "Agent 错误"}</p><p className="mt-1 leading-5">{item.content}</p></div></section>;
 }
 
-function LiveElapsed({ startedAt }: { startedAt: string }) {
+export function LiveElapsed({ startedAt }: { startedAt: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -63,7 +63,7 @@ function WorkActivity({ cwd, item }: { cwd: string | null; item: WorkProjection 
   </details>;
 }
 
-function WorkMarkdown({ content }: { content: string }) {
+export function WorkMarkdown({ content }: { content: string }) {
   return <div className={cn("max-w-full break-words text-xs font-normal leading-5", "text-ink-soft")}><ReactMarkdown components={{
     code: ({ children }) => <code className={cn("rounded px-1 py-0.5 font-mono text-[0.92em]", "bg-surface-soft", "text-ink")}>{children}</code>,
     h1: ({ children }) => <h1 className="mb-1 text-xs font-medium leading-5">{children}</h1>,
@@ -71,8 +71,22 @@ function WorkMarkdown({ content }: { content: string }) {
     h3: ({ children }) => <h3 className="mb-1 text-xs font-medium leading-5">{children}</h3>,
     ol: ({ children }) => <ol className="my-1 list-decimal space-y-0.5 pl-4">{children}</ol>,
     p: ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
+    table: MarkdownTable,
     ul: ({ children }) => <ul className="my-1 list-disc space-y-0.5 pl-4">{children}</ul>,
   }} remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown></div>;
+}
+
+function MarkdownTable({ children }: { children?: ReactNode }) {
+  return <div className={cn("my-3 overflow-auto rounded-lg border", "border-line")}>
+    <table className={cn(
+      "w-full border-collapse text-left text-xs",
+      "[&_th]:bg-surface-soft [&_th]:px-3 [&_th]:py-2 [&_th]:font-medium [&_th]:text-muted",
+      "[&_th]:border-b [&_th]:border-line-strong",
+      "[&_td]:px-3 [&_td]:py-2 [&_td]:align-top [&_td]:text-ink-soft",
+      "[&_td:first-child]:text-ink",
+      "[&_tbody_tr:not(:last-child)_td]:border-b [&_tbody_tr:not(:last-child)_td]:border-line",
+    )}>{children}</table>
+  </div>;
 }
 
 function editPair(input: unknown): { oldText: string; newText: string } | null {
@@ -138,7 +152,7 @@ export const Markdown = memo(function Markdown({ content }: { content: string })
     pre: ({ children }) => isValidElement(children) && children.type === MermaidDiagram
       ? children
       : <pre className={cn("my-3 max-w-full overflow-auto rounded-lg border p-3 font-mono text-xs leading-6", "bg-surface-tint", "border-line")}>{children}</pre>,
-    table: ({ children }) => <div className="my-3 overflow-auto"><table className={cn("w-full border-collapse text-left text-xs [&_td]:border-b [&_td]:p-2 [&_th]:border-b [&_th]:p-2", "border-line")}>{children}</table></div>,
+    table: MarkdownTable,
     ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>,
   }} rehypePlugins={[rehypeKatex]} remarkPlugins={[remarkGfm, remarkMath]}>{content}</ReactMarkdown></div>;
 });

@@ -31,8 +31,12 @@ export function projectionKey(item: ConversationProjection, index: number): stri
 
 export function formatElapsed(startedAt: string, endedAt: string): string {
   const seconds = Math.max(1, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000));
-  const minutes = Math.floor(seconds / 60);
-  return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${rest}s`;
+  if (minutes > 0) return `${minutes}m ${rest}s`;
+  return `${seconds}s`;
 }
 
 export function workspaceLabel(session: AgentSession | null): string {

@@ -7,6 +7,7 @@ import { Plugin } from "@tiptap/pm/state";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useMemo, useState } from "react";
+import { composerTrigger } from "@/lib/workbench-logic";
 import { createMarkdownCodec } from "./markdown-codec";
 import { SourceBlock } from "./source-block";
 
@@ -34,6 +35,7 @@ type MarkdownComposerProps = {
 type MarkdownComposerCallbacks = Omit<MarkdownComposerProps, "disabled" | "value">;
 type MarkdownCodec = ReturnType<typeof createMarkdownCodec>;
 type ComposerEventsStorage = {
+  blockedMarkdown: string | null;
   callbacks: MarkdownComposerCallbacks | null;
   codec: MarkdownCodec | null;
   initialized: boolean;
@@ -63,6 +65,7 @@ const ComposerEvents = Extension.create<Record<string, never>, ComposerEventsSto
 
   addStorage() {
     return {
+      blockedMarkdown: null,
       callbacks: null,
       codec: null,
       initialized: false,
@@ -75,12 +78,17 @@ const ComposerEvents = Extension.create<Record<string, never>, ComposerEventsSto
       syncComposerRuntime: (runtime) => ({ commands }) => {
         this.storage.callbacks = runtime.callbacks;
         this.storage.codec = runtime.codec;
+        const current = runtime.codec.serialize(this.editor.getJSON());
+        const aligned = current.trim() === runtime.value.trim();
         if (!this.storage.initialized) {
           this.storage.initialized = true;
           this.storage.lastEmitted = runtime.value;
+          if (aligned) return true;
+        } else if (runtime.value === this.storage.lastEmitted && aligned) {
           return true;
         }
-        if (runtime.value === this.storage.lastEmitted) return true;
+        if (!runtime.value.trim()) this.storage.blockedMarkdown = current;
+        else this.storage.blockedMarkdown = null;
         const parsed = runtime.codec.parseSafely(runtime.value);
         commands.setContent(parsed.document, { emitUpdate: false });
         this.storage.lastEmitted = runtime.value;
@@ -169,6 +177,11 @@ export function MarkdownComposer({
       try {
         const document = current.getJSON();
         const markdown = storage.codec.serialize(document);
+        if (
+          storage.blockedMarkdown !== null
+          && markdown.trim() === storage.blockedMarkdown.trim()
+        ) return;
+        storage.blockedMarkdown = null;
         storage.lastEmitted = markdown;
         storage.callbacks.onSerializationError(null);
         storage.callbacks.onChange(markdown);
@@ -223,12 +236,7 @@ function isPickerKey(key: string): key is ComposerPickerKey["key"] {
 }
 
 function triggerAtEnd(markdown: string): ComposerTrigger {
-  const match = markdown.match(/(?:^|\s)([/@])([^\s]*)$/);
-  if (!match) return null;
-  return {
-    kind: match[1] === "/" ? "command" : "context",
-    query: match[2] ?? "",
-  };
+  return composerTrigger(markdown);
 }
 
 function triggerFromDocument(document: JSONContent, markdown: string): ComposerTrigger {

@@ -47,13 +47,23 @@ export class SessionConnection {
 
   refresh(sessionId: string): Promise<void> {
     const existing = this.refreshPromises.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      const queued = existing.catch(() => {}).then(() => {
+        if (this.refreshPromises.get(sessionId) !== queued) return;
+        this.refreshPromises.delete(sessionId);
+        return this.refresh(sessionId);
+      });
+      this.refreshPromises.set(sessionId, queued);
+      return queued;
+    }
     const refresh = this.dependencies.openSession(sessionId)
       .then((snapshot: SessionSnapshot) => {
         this.dependencies.store.hydrate(snapshot);
       })
       .finally(() => {
-        this.refreshPromises.delete(sessionId);
+        if (this.refreshPromises.get(sessionId) === refresh) {
+          this.refreshPromises.delete(sessionId);
+        }
       });
     this.refreshPromises.set(sessionId, refresh);
     return refresh;

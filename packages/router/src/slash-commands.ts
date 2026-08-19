@@ -1,9 +1,11 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  AppConfig,
-  BackendConfigOption,
+import {
+  resolveDefaultAgentId,
+  type AppConfig,
+  type BackendConfigOption,
+  type ChannelCommandContext,
 } from "@codebridge/core";
 import type { CliSessionSummary } from "@codebridge/runner-client";
 import {
@@ -44,11 +46,8 @@ export interface SlashContext {
     conflict?: boolean;
     error?: string;
   }>;
-  /** /status /steer /continue：读取当前槽位 Catalog 绑定 + runtime 活跃 run。 */
-  getSlotCommandContext?: () => Promise<{
-    sessionId: string | null;
-    activeRunId: string | null;
-  }>;
+  /** /status /steer /continue /session：读取当前槽位 Catalog 绑定 + runtime 活跃 run。 */
+  getSlotCommandContext?: () => Promise<ChannelCommandContext>;
   /** /continue：恢复当前槽位 session 的队列。 */
   resumeQueue?: (sessionId: string) => Promise<{
     queueState: "ready" | "paused";
@@ -136,6 +135,7 @@ export async function handleSlashCommand(
 
     case "/stop":
     case "/cancel":
+    case "/x":
       if (!ctx.cancelActiveRun) {
         return {
           type: "reply",
@@ -152,7 +152,8 @@ export async function handleSlashCommand(
         };
       }
 
-    case "/continue": {
+    case "/continue":
+    case "/c": {
       if (!ctx.getSlotCommandContext || !ctx.resumeQueue) {
         return { type: "reply", text: "Runner 未就绪，无法恢复队列。" };
       }
@@ -196,11 +197,13 @@ export async function handleSlashCommand(
     }
 
     case "/approve":
-    case "/deny": {
+    case "/a":
+    case "/deny":
+    case "/d": {
       if (!ctx.resolvePermission) {
         return { type: "reply", text: "Runner 未就绪，无法回应权限请求。" };
       }
-      const approve = lower === "/approve";
+      const approve = lower === "/approve" || lower === "/a";
       const resolved = await ctx.resolvePermission(approve);
       return {
         type: "reply",
@@ -213,6 +216,7 @@ export async function handleSlashCommand(
     }
 
     case "/resume":
+    case "/r":
       try {
         return await handleResume(ctx, arg);
       } catch (err) {
@@ -248,9 +252,21 @@ export async function handleSlashCommand(
           text: `${action === "close" ? "关闭" : "删除"} ACP session 失败：${result.error ?? "未知错误"}`,
         };
       }
+      const slot = await ctx.getSlotCommandContext?.();
+      const closedCurrent =
+        slot?.sessionId === sessionId
+        || (slot?.providerSessionId != null
+          && slot.providerSessionId === sessionId);
+      if (closedCurrent) {
+        ctx.router.incrementSlotGeneration(ctx.chatId, ctx.topicId);
+      }
+      const closedLine =
+        `已${action === "close" ? "关闭" : "删除"} ACP session：\`${sessionId}\``;
       return {
         type: "reply",
-        text: `已${action === "close" ? "关闭" : "删除"} ACP session：\`${sessionId}\``,
+        text: closedCurrent
+          ? `${closedLine}\n下一条消息将开启新对话。`
+          : closedLine,
       };
     }
 
@@ -263,7 +279,8 @@ export async function handleSlashCommand(
       }
       return { type: "send_file", path: arg };
 
-    case "/status": {
+    case "/status":
+    case "/s": {
       const key = ctx.router.buildSessionKey(ctx.chatId, ctx.topicId);
       const runOpts = ctx.router.resolveRunOptions(
         ctx.chatId,
@@ -333,8 +350,11 @@ export async function handleSlashCommand(
     case "/config":
       return handleAcpConfig(ctx, arg);
 
-    case "/backend": {
-      const id = arg === "default" || !arg ? ctx.config.defaultBackend : arg;
+    case "/backend":
+    case "/b": {
+      const id = arg === "default" || !arg
+        ? resolveDefaultAgentId(ctx.config)
+        : arg;
       if (!ctx.config.backends[id]) {
         return {
           type: "reply",
@@ -365,10 +385,10 @@ export async function handleSlashCommand(
       }
     }
 
+    case "/ws":
+      return handleWs(ctx, rest);
+
     default:
-      if (lower === "/ws" || lower.startsWith("/ws")) {
-        return handleWs(ctx, rest);
-      }
       if (lower === "/clone") {
         return handleClone(ctx, rest);
       }
