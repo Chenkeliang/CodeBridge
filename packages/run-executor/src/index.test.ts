@@ -1054,7 +1054,17 @@ describe("RunExecutor", () => {
     });
     const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
     const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const registry = new CapabilityRegistry([
+      { id: "context.inspect", risk: "read_only", adapter: "context.inspect" },
+      { id: "workspace.change", risk: "workspace_write", adapter: "workspace.change" },
+    ]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("context.inspect", () => ({ output: { inspected: true } })),
+      new FunctionCapabilityAdapter("workspace.change", () => ({ output: { changed: true } })),
+    ]);
     const executor = new RunExecutor(store, runner, {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
       resolveRequest: (_workItem, _run, step) => ({
         runId: run.id,
         sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
@@ -1063,9 +1073,10 @@ describe("RunExecutor", () => {
     });
 
     expect((await executor.execute(run.id)).status).toBe("succeeded");
-    expect(runner.prompts).toEqual(["step:inspect", "step:change"]);
+    expect(runner.requests).toHaveLength(0);
     expect(store.listEvents(item.id).filter((event) => event.type === "STEP_STARTED").map((event) => event.target)).toEqual(["inspect", "change"]);
     expect(store.listEvents(item.id).filter((event) => event.type === "STEP_SUCCEEDED").map((event) => event.target)).toEqual(["inspect", "change"]);
+    registry.close();
     store.close();
   });
 
@@ -1104,7 +1115,7 @@ describe("RunExecutor", () => {
       }),
     });
 
-    await expect(executor.execute(run.id)).rejects.toThrow("Unknown capability: missing.inspect");
+    await expect(executor.execute(run.id)).rejects.toThrow("unknown_capability");
     expect(store.getRun(run.id)?.status).toBe("failed");
     capabilities.close();
     store.close();
@@ -1140,11 +1151,11 @@ describe("RunExecutor", () => {
     const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
     const runtime = new CapabilityRuntime([
       new FunctionCapabilityAdapter("local.lookup", ({ input }) => ({
-        output: input.identifiers,
+        output: { id: input.id },
         artifacts: [{
           name: "lookup.json",
           mimeType: "application/json",
-          content: JSON.stringify(input.identifiers),
+          content: JSON.stringify({ id: input.id }),
           kind: "output",
         }],
         verification: {
@@ -1344,7 +1355,17 @@ describe("RunExecutor", () => {
     });
     const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
     const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const registry = new CapabilityRegistry([
+      { id: "fallback.inspect", risk: "read_only", adapter: "fallback.inspect" },
+      { id: "ready.inspect", risk: "read_only", adapter: "ready.inspect" },
+    ]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("fallback.inspect", () => ({ output: { path: "fallback" } })),
+      new FunctionCapabilityAdapter("ready.inspect", () => ({ output: { path: "ready" } })),
+    ]);
     const executor = new RunExecutor(store, runner, {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
       resolveRequest: (_workItem, _run, step) => ({
         runId: run.id,
         sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
@@ -1353,7 +1374,7 @@ describe("RunExecutor", () => {
     });
 
     expect((await executor.execute(run.id)).status).toBe("succeeded");
-    expect(runner.prompts).toEqual(["step:ready-path"]);
+    expect(runner.requests).toHaveLength(0);
     expect(store.listEvents(item.id).find((event) => event.type === "BRANCH_SELECTED")).toMatchObject({
       target: "decision",
       payload: { when: "ready == true", next: "ready-path" },
@@ -1361,6 +1382,7 @@ describe("RunExecutor", () => {
     expect(store.listEvents(item.id).find((event) => event.type === "STEP_SKIPPED")).toMatchObject({
       target: "fallback-path",
     });
+    registry.close();
     store.close();
   });
 
@@ -1571,6 +1593,78 @@ describe("RunExecutor", () => {
 
     const changed = await executor.replayPlan(plan, { id: "other" });
     expect(executor.diffTrace(trace1, changed).identical).toBe(false);
+    registry.close();
+    store.close();
+  });
+
+  it("fails a plan step when the capability adapter is missing instead of calling the runner", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "t", mode: "auto", conversationId: "c", riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_missing", source: "workflow", workflowId: "flow_1",
+      definitionRevision: "sha256:def", planIrHash: "sha256:plan",
+      steps: [{
+        id: "echo", capabilityId: "demo.echo", risk: "read_only",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: null,
+      }],
+    });
+    const run = store.createRun({
+      workItemId: item.id, mode: "auto", planId: plan.planId, planIrHash: "sha256:plan",
+    });
+    const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const registry = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    const executor = new RunExecutor(store, runner, {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: (_w, current) => ({
+        runId: current.id, sessionKey: { chatId: "c", backendId: "pi", cwd: "/tmp" }, prompt: "nope",
+      }),
+    });
+    await expect(executor.execute(run.id)).rejects.toThrow(/unknown_capability/);
+    expect(runner.requests).toHaveLength(0);
+    registry.close();
+    store.close();
+  });
+
+  it("passes dry_run into executeCapability and does not skip missing adapters during preview", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "t", mode: "auto", conversationId: "c", riskLevel: "read_only",
+      identifiers: { text: "hi" },
+    });
+    const plan = store.savePlan({
+      planId: "plan_dry", source: "workflow", workflowId: "flow_1",
+      definitionRevision: "sha256:def",
+      steps: [{
+        id: "echo", capabilityId: "demo.echo", risk: "read_only",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: null,
+        successWhen: "output.text exists",
+      }],
+    });
+    const seen: Array<boolean | undefined> = [];
+    const registry = new CapabilityRegistry([{
+      id: "demo.echo", risk: "read_only", adapter: "demo.echo", side_effects: false,
+    }]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("demo.echo", ({ input, context }) => {
+        seen.push(context.dry_run);
+        return { output: { text: input.text } };
+      }),
+    ]);
+    const run = store.createRun({ workItemId: item.id, mode: "auto", planId: plan.planId });
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      dryRun: true,
+      resolveRequest: (_w, current) => ({
+        runId: current.id, sessionKey: { chatId: "c", backendId: "pi", cwd: "/tmp" }, prompt: "x",
+      }),
+    });
+    await executor.execute(run.id);
+    expect(seen).toEqual([true]);
     registry.close();
     store.close();
   });
