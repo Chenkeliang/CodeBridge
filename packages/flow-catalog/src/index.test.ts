@@ -43,4 +43,27 @@ describe("flow catalog", () => {
     expect(loaded?.inputs[0]).toMatchObject({ pattern: "^\\d{4,}$" });
     store.close();
   });
+
+  it("persists successWhen on steps", () => {
+    const store = new FlowCatalogStore(":memory:");
+    const flow = store.save({
+      flowId: "flow-pc",
+      name: "PC",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: "sha256:def",
+      planIrHash: "sha256:plan",
+      inputs: [{ id: "text", type: "string", source: "user", required: true }],
+      steps: [{
+        id: "echo",
+        capability: "demo.echo",
+        mode: "read_only",
+        successWhen: "output.text exists",
+      }],
+    });
+    expect(store.get("flow-pc")?.steps[0]?.successWhen).toBe("output.text exists");
+    expect(flow.steps[0]?.successWhen).toBe("output.text exists");
+    store.close();
+  });
 });

@@ -19,6 +19,7 @@ export interface FlowStep {
   approval?: "none" | "required";
   branches?: Array<{ when: string; next: string }>;
   retry?: { maxAttempts: number; delayMs: number };
+  successWhen?: string;
 }
 export interface FlowInput {
   id: string;
