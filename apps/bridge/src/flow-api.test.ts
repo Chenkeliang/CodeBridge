@@ -269,6 +269,70 @@ describe("flow API", () => {
     catalog.close();
   });
 
+  it("rejects publishing a runbook step without success_when", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    registerDemoCapabilities(capabilities, runtime);
+    catalog.save({
+      flowId: "flow-no-when",
+      name: "No when",
+      kind: "runbook",
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision: "sha256:one",
+      steps: [{ id: "echo", capability: "demo.echo", mode: "read_only" }],
+    });
+    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const approved = await app.request("/v1/flows/flow-no-when/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "abc" }),
+    });
+    expect(approved.status).toBe(409);
+    expect(await approved.json()).toMatchObject({
+      error: "flow_not_publishable",
+      issues: expect.arrayContaining(["success_when required: echo"]),
+    });
+    expect(catalog.get("flow-no-when")?.status).toBe("candidate");
+    capabilities.close();
+    catalog.close();
+  });
+
+  it("rejects publishing a runbook whose success_when fails static validation", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    registerDemoCapabilities(capabilities, runtime);
+    catalog.save({
+      flowId: "flow-bad-when",
+      name: "Bad when",
+      kind: "runbook",
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision: "sha256:one",
+      steps: [{
+        id: "echo",
+        capability: "demo.echo",
+        mode: "read_only",
+        successWhen: "output.a ===",
+      }],
+    });
+    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const approved = await app.request("/v1/flows/flow-bad-when/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "abc" }),
+    });
+    expect(approved.status).toBe(409);
+    const body = await approved.json() as { error: string; issues: string[] };
+    expect(body.error).toBe("flow_not_publishable");
+    expect(body.issues.some((issue) => issue.includes("invalid success_when for echo"))).toBe(true);
+    expect(catalog.get("flow-bad-when")?.status).toBe("candidate");
+    capabilities.close();
+    catalog.close();
+  });
+
   it("publishes a runbook whose demo capabilities are registered", async () => {
     const catalog = new FlowCatalogStore(":memory:");
     const capabilities = new CapabilityRegistry();

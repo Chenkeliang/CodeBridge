@@ -1642,6 +1642,42 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("fails an IR-bound manual step instead of calling the runner", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "t", mode: "auto", conversationId: "c", riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_manual", source: "workflow", workflowId: "flow_manual",
+      definitionRevision: "sha256:def", planIrHash: "sha256:plan",
+      steps: [{
+        id: "ask", capabilityId: null, risk: "manual",
+        dependsOn: [], guard: null, approval: "none", branches: [], purpose: "confirm",
+      }],
+    });
+    const run = store.createRun({
+      workItemId: item.id, mode: "auto", planId: plan.planId, planIrHash: "sha256:plan",
+    });
+    const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+    const registry = new CapabilityRegistry();
+    const executor = new RunExecutor(store, runner, {
+      policy: new PolicyEngine(registry),
+      capabilities: new CapabilityRuntime(),
+      resolveRequest: (_w, current) => ({
+        runId: current.id, sessionKey: { chatId: "c", backendId: "pi", cwd: "/tmp" }, prompt: "nope",
+      }),
+    });
+    await expect(executor.execute(run.id)).rejects.toThrow(/unknown_capability/);
+    expect(runner.requests).toHaveLength(0);
+    expect(
+      store.listEvents(item.id).some((event) =>
+        event.type === "VERIFICATION_FAILED" && event.payload.category === "policy"
+      ),
+    ).toBe(true);
+    registry.close();
+    store.close();
+  });
+
   it("passes dry_run into executeCapability and does not skip missing adapters during preview", async () => {
     const store = new SqliteEventStore(":memory:");
     const item = store.createWorkItem({
@@ -1773,6 +1809,58 @@ describe("RunExecutor", () => {
       category: "infrastructure",
     });
     expect(store.listEvents(item.id).filter((e) => e.type === "STEP_RETRYING")).toHaveLength(1);
+    registry.close();
+    store.close();
+  });
+
+  it("emits infrastructure VERIFICATION_FAILED for a non-retryable adapter error", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "hard fail",
+      mode: "investigation",
+      conversationId: "web:hard-fail",
+      riskLevel: "read_only",
+    });
+    const plan = store.savePlan({
+      planId: "plan_hard_fail",
+      source: "workflow",
+      workflowId: "hard-flow",
+      definitionRevision: "git:hard",
+      steps: [{
+        id: "lookup",
+        capabilityId: "catalog.lookup",
+        risk: "read_only",
+        dependsOn: [],
+        guard: null,
+        approval: "none",
+        branches: [],
+        purpose: null,
+      }],
+    });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
+    const runtime = new CapabilityRuntime([
+      new FunctionCapabilityAdapter("local.lookup", () => {
+        throw new CapabilityExecutionError("adapter exploded", { retryable: false });
+      }),
+    ]);
+    const executor = new RunExecutor(store, new FakeRunner([]), {
+      policy: new PolicyEngine(registry),
+      capabilities: runtime,
+      resolveRequest: () => ({
+        runId: run.id,
+        sessionKey: { chatId: item.conversationId, backendId: "pi", cwd: "/tmp/project" },
+        prompt: "unused",
+      }),
+    });
+
+    await expect(executor.execute(run.id)).rejects.toThrow("adapter exploded");
+    const failed = store.listEvents(item.id).filter((e) => e.type === "VERIFICATION_FAILED");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.payload).toMatchObject({
+      step_id: "lookup",
+      category: "infrastructure",
+    });
     registry.close();
     store.close();
   });

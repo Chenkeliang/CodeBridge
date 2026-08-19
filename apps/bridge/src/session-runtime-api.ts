@@ -630,7 +630,7 @@ function appendParamResolvedEvents(
         field: input.id,
         candidate_value: candidateValue,
         final_value: value,
-        resolution: value !== input.default && hadPrevious
+        resolution: hadPrevious && value !== candidateValue
           ? "edited"
           : "confirmed",
         source: "user",

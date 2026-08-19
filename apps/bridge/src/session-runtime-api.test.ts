@@ -425,6 +425,53 @@ describe("Session runtime command API", () => {
     fixture.workItems.close();
   });
 
+  it("confirms PARAM_RESOLVED when a later turn repeats the same resolved value", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const flow = savePublishedDemoEcho(flows);
+    const fixture = setup({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const first = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "param_same_1",
+        },
+        body: JSON.stringify({ message: "run", inputs: { text: "hi" } }),
+      },
+    );
+    expect(first.status).toBe(202);
+    const second = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "param_same_2",
+        },
+        body: JSON.stringify({ message: "again", inputs: { text: "hi" } }),
+      },
+    );
+    expect(second.status).toBe(202);
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    const resolved = fixture.workItems.listEvents(workItemId)
+      .filter((event) => event.type === "PARAM_RESOLVED");
+    expect(resolved).toHaveLength(2);
+    expect(resolved[1]?.payload).toMatchObject({
+      field: "text",
+      candidate_value: "hi",
+      final_value: "hi",
+      resolution: "confirmed",
+      flow_revision: flow.planIrHash,
+    });
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
   it("does not wipe identifiers when a later unbound message reuses the work item", async () => {
     const flows = new FlowCatalogStore(":memory:");
     savePublishedDemoEcho(flows);
@@ -540,11 +587,132 @@ describe("Session runtime command API", () => {
     fixture.catalog.close();
     fixture.workItems.close();
   });
+
+  it("fails closed on candidate dry-run when a manual step would otherwise call the Agent", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const definition = {
+      schema_version: 1,
+      workflow_id: "flow_manual_preview",
+      name: "manual preview",
+      kind: "runbook",
+      status: "draft",
+      inputs: [],
+      steps: [{ id: "ask", mode: "manual", purpose: "confirm" }],
+    };
+    const plan = compileWorkflow(definition, {
+      source: "workflow",
+      definitionRevision: definitionHash(definition),
+      planId: catalogPlanId("flow_manual_preview"),
+    });
+    flows.save({
+      flowId: "flow_manual_preview",
+      name: "manual preview",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: definitionHash(definition),
+      planIrHash: definitionHash(plan),
+      inputs: plan.inputs,
+      steps: [{ id: "ask", mode: "manual", purpose: "confirm" }],
+    });
+    const fixture = setupRuntimeLoop({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_manual_preview" });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "loop_manual_dry",
+        },
+        body: JSON.stringify({ message: "preview", dry_run: true }),
+      },
+    );
+    expect(response.status).toBe(202);
+    expect(fixture.runner.requests).toHaveLength(0);
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    expect(fixture.workItems.listRuns(workItemId)[0]?.status).toBe("failed");
+    expect(
+      fixture.workItems.listEvents(workItemId).some((event) =>
+        event.type === "VERIFICATION_FAILED" && event.payload.category === "policy"
+      ),
+    ).toBe(true);
+    flows.close();
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("promotes a candidate dry-run to a published run without re-extracting inputs", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    savePublishedDemoEcho(flows, { status: "candidate" });
+    const fixture = setupRuntimeLoop({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const preview = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "loop_promote_dry",
+        },
+        body: JSON.stringify({ message: "preview", dry_run: true, inputs: { text: "hi" } }),
+      },
+    );
+    expect(preview.status).toBe(202);
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    expect(fixture.workItems.getWorkItem(workItemId)?.identifiers).toEqual({ text: "hi" });
+    expect(fixture.runner.requests).toHaveLength(0);
+
+    const current = flows.get("flow_demo_echo")!;
+    flows.save({
+      flowId: current.flowId,
+      name: current.name ?? "demo",
+      kind: current.kind,
+      status: "published",
+      source: current.source,
+      definitionRevision: current.definitionRevision,
+      planIrHash: current.planIrHash,
+      inputs: current.inputs,
+      steps: current.steps,
+    });
+
+    const live = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "loop_promote_live",
+        },
+        body: JSON.stringify({ message: "run", inputs: { text: "hi" } }),
+      },
+    );
+    expect(live.status).toBe(202);
+    expect(fixture.runner.requests).toHaveLength(0);
+    expect(fixture.workItems.getWorkItem(workItemId)?.identifiers).toEqual({ text: "hi" });
+    expect(fixture.workItems.listRuns(workItemId).every((run) => run.status === "succeeded")).toBe(true);
+    const resolved = fixture.workItems.listEvents(workItemId)
+      .filter((event) => event.type === "PARAM_RESOLVED");
+    expect(resolved.at(-1)?.payload).toMatchObject({
+      field: "text",
+      candidate_value: "hi",
+      final_value: "hi",
+      resolution: "confirmed",
+    });
+    flows.close();
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
 });
 
 function savePublishedDemoEcho(
   flows: FlowCatalogStore,
-  inputExtra: { default?: string } = {},
+  inputExtra: { default?: string; status?: "candidate" | "published" } = {},
 ) {
   const definition = {
     schema_version: 1,
@@ -575,7 +743,7 @@ function savePublishedDemoEcho(
     flowId: "flow_demo_echo",
     name: "demo",
     kind: "runbook",
-    status: "published",
+    status: inputExtra.status ?? "published",
     source: "user_selected",
     definitionRevision: definitionHash(definition),
     planIrHash: definitionHash(plan),
