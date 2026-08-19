@@ -1,13 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { AgentEvent, RunRequest } from "@codebridge/core";
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore } from "@codebridge/work-items";
-import { SessionCoordinator } from "@codebridge/session-coordinator";
+import { SessionCoordinator, SessionLeaseService } from "@codebridge/session-coordinator";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { compileWorkflow, definitionHash } from "@codebridge/workflow-engine";
-import type { RunExecutor } from "@codebridge/run-executor";
-import type { CapabilityRegistry } from "@codebridge/policy";
+import { RunExecutor } from "@codebridge/run-executor";
+import {
+  CapabilityRegistry,
+  CapabilityRuntime,
+  PolicyEngine,
+  registerDemoCapabilities,
+} from "@codebridge/policy";
 import { createSessionApp } from "./session-api.js";
 import { catalogPlanId } from "./flow-compile.js";
+
+class FakeRunner {
+  readonly requests: RunRequest[] = [];
+  constructor(private readonly events: AgentEvent[]) {}
+
+  async *run(request: RunRequest): AsyncGenerator<AgentEvent> {
+    this.requests.push(request);
+    for (const event of this.events) yield event;
+  }
+}
 
 const token = "runtime-token";
 
@@ -43,6 +59,52 @@ function setup(overrides: {
     }],
   }, token);
   return { app, catalog, workItems, coordinator, session };
+}
+
+function setupRuntimeLoop(overrides: { flows?: FlowCatalogStore } = {}) {
+  const catalog = new SessionCatalogStore(":memory:");
+  const workItems = new SqliteEventStore(":memory:");
+  const coordinator = new SessionCoordinator(workItems, {
+    maxQueuedTurns: 100,
+  });
+  const session = catalog.createSession({
+    agentId: "pi",
+    cwd: "/workspace",
+  });
+  const registry = new CapabilityRegistry();
+  const runtime = new CapabilityRuntime();
+  registerDemoCapabilities(registry, runtime);
+  const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+  const executor = new RunExecutor(workItems, runner, {
+    policy: new PolicyEngine(registry),
+    capabilities: runtime,
+    sessionCoordinator: coordinator,
+    sessionLeaseService: new SessionLeaseService(workItems),
+    executorOwner: "test:bridge",
+    resolveRequest: (workItem, run) => ({
+      runId: run.id,
+      sessionKey: { chatId: workItem.conversationId, backendId: "pi", cwd: "/workspace" },
+      prompt: "unused",
+    }),
+  });
+  const app = createSessionApp({
+    catalog,
+    workItems,
+    coordinator,
+    executor,
+    flows: overrides.flows,
+    capabilities: registry,
+    agents: [{
+      agentId: "pi",
+      displayName: "Pi",
+      adapter: "sdk",
+      status: "healthy",
+      capabilities: ["session"],
+      models: [],
+      sessionFeatures: ["resume"],
+    }],
+  }, token);
+  return { app, catalog, workItems, coordinator, session, runner, registry };
 }
 
 function request(message: string, key?: string) {
@@ -398,6 +460,83 @@ describe("Session runtime command API", () => {
     const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
     expect(fixture.workItems.getWorkItem(workItemId)?.identifiers).toEqual({ text: "hi" });
     flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("executes a published demo runbook on the session message path without calling the Agent runner", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    savePublishedDemoEcho(flows);
+    const fixture = setupRuntimeLoop({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "loop_echo",
+        },
+        body: JSON.stringify({ message: "run", inputs: { text: "hi" } }),
+      },
+    );
+    expect(response.status).toBe(202);
+    expect(fixture.runner.requests).toHaveLength(0);
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    const events = fixture.workItems.listEvents(workItemId);
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["PARAM_RESOLVED", "RUN_SNAPSHOT"]),
+    );
+    expect(fixture.workItems.listRuns(workItemId)[0]?.status).toBe("succeeded");
+    const snapshot = events.find((event) => event.type === "RUN_SNAPSHOT");
+    expect((snapshot?.payload.steps as Array<{ output_ref: string }>)[0]?.output_ref)
+      .toMatch(/^artifact:\/\//);
+    flows.close();
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("rejects missing runbook inputs without calling FakeRunner or creating a run", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    savePublishedDemoEcho(flows);
+    const fixture = setupRuntimeLoop({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "loop_missing",
+        },
+        body: JSON.stringify({ message: "run" }),
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "missing_inputs" });
+    expect(fixture.runner.requests).toHaveLength(0);
+    expect(fixture.workItems.getSessionRuntime(fixture.session.id)?.activeRunId ?? null).toBeNull();
+    expect(fixture.catalog.getSession(fixture.session.id)?.taskRecordId ?? null).toBeNull();
+    flows.close();
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("still calls FakeRunner for an unbound Agent session", async () => {
+    const fixture = setupRuntimeLoop();
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      request("hello", "loop_unbound"),
+    );
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => {
+      expect(fixture.runner.requests.length).toBeGreaterThanOrEqual(1);
+    });
+    fixture.registry.close();
     fixture.catalog.close();
     fixture.workItems.close();
   });
