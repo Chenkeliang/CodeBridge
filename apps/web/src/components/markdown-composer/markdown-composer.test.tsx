@@ -128,6 +128,24 @@ describe("MarkdownComposer", () => {
     view.host.remove();
   });
 
+  it("clears typed content when the parent value becomes empty", () => {
+    const onChange = vi.fn();
+    const view = renderEditor({ value: "", onChange });
+    const editor = view.host.querySelector("[contenteditable=true]")!;
+    paste(editor, "离散分布呢");
+    const typed = String(onChange.mock.calls.at(-1)?.[0] ?? "");
+    expect(typed).toContain("离散分布呢");
+
+    act(() => view.root.render(<MarkdownComposer {...view.props} onChange={onChange} value={typed} />));
+    onChange.mockClear();
+    act(() => view.root.render(<MarkdownComposer {...view.props} onChange={onChange} value="" />));
+
+    expect(view.host.querySelector("[contenteditable=true]")?.textContent).toBe("");
+    expect(onChange).not.toHaveBeenCalled();
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
+
   it("retains StarterKit undo and redo history", () => {
     const view = renderEditor();
     const editor = view.host.querySelector("[contenteditable=true]")!;

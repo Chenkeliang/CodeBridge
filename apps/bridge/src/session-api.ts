@@ -9,7 +9,7 @@ import type {
 } from "@codebridge/session-catalog";
 import { AgentRegistry, cloneSetupManifest, projectAgentStatus, projectSetupState } from "@codebridge/agent-registry";
 import type { ConfigStore, ChannelSlot } from "@codebridge/core";
-import { canonicalWorkspaceKey } from "@codebridge/core";
+import { canonicalWorkspaceKey, isSupportedAgentId } from "@codebridge/core";
 import type { SqliteEventStore } from "@codebridge/work-items";
 import type { RunExecutor } from "@codebridge/run-executor";
 import type { RunnerClient } from "@codebridge/runner-client";
@@ -178,6 +178,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       options.configStore.update((current) => ({
         ...current,
         defaultAgent: agentId,
+        ...(isSupportedAgentId(agentId) ? { defaultBackend: agentId } : {}),
       }));
       return c.json(agentListPayload());
     } catch (error) {
@@ -1171,12 +1172,17 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!slot) return c.json({ error: "invalid_slot" }, 400);
     const session = options.catalog.getChannelSession(slot);
     if (!session) {
-      return c.json({ session_id: null, active_run_id: null });
+      return c.json({
+        session_id: null,
+        active_run_id: null,
+        provider_session_id: null,
+      });
     }
     const runtime = options.workItems.getSessionRuntime(session.id);
     return c.json({
       session_id: session.id,
       active_run_id: runtime?.activeRunId ?? null,
+      provider_session_id: session.providerSessionId,
     });
   });
 

@@ -8,8 +8,10 @@ const markdownRender = vi.hoisted(() => vi.fn());
 vi.mock("@/components/conversation", () => ({
   Markdown: ({ content }: { content: string }) => {
     markdownRender(content);
-    return <div>{content}</div>;
+    return <div data-answer-md>{content}</div>;
   },
+  WorkMarkdown: ({ content }: { content: string }) => <div data-work-md>{content}</div>,
+  LiveElapsed: ({ startedAt }: { startedAt: string }) => <span data-live-elapsed>{startedAt}</span>,
 }));
 
 import { SessionTimeline, TimelineSegment } from "./session-timeline.js";
@@ -154,7 +156,7 @@ describe("SessionTimeline", () => {
     act(() => root.render(<SessionTimeline {...timelineProps} turns={stale} />));
 
     expect(host.querySelector(".animate-spin")).toBeNull();
-    expect(host.querySelector("details")?.hasAttribute("open")).toBe(false);
+    expect(host.querySelector("details")?.hasAttribute("open")).toBe(true);
     expect(host.querySelector("[data-streaming-caret]")).toBeNull();
     act(() => root.unmount());
     host.remove();
@@ -173,6 +175,29 @@ describe("SessionTimeline", () => {
 
     expect(host.querySelector(".animate-spin")).not.toBeNull();
     expect(host.querySelector("details")?.hasAttribute("open")).toBe(true);
+    expect(host.textContent).toContain("工作中");
+    expect(host.querySelector("[data-live-elapsed]")).not.toBeNull();
+    expect(host.querySelector("[data-work-md]")?.textContent).toBe("正在推理");
+    expect(host.querySelector("[data-answer-md]")).toBeNull();
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("shows live work elapsed without mixing process copy into the Agent body", async () => {
+    const active = timelineTurn("work", [segment("live-work", "执行中", false)]);
+    active[0]!.blocks[0]!.metadata = { started_at: "2026-08-18T06:00:00.000Z" };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      activeRunId="run-1"
+      turns={active}
+    />));
+
+    expect(host.textContent).toContain("工作中");
+    expect(host.querySelector("[data-live-elapsed]")?.textContent).toBe("2026-08-18T06:00:00.000Z");
+    expect(host.querySelector("[data-work-md]")?.textContent).toBe("执行中");
     act(() => root.unmount());
     host.remove();
   });
@@ -213,6 +238,178 @@ describe("SessionTimeline", () => {
     />));
 
     expect(host.querySelector('[data-segment-id="session-b-live"]')?.classList.contains("assistant-reveal")).toBe(false);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("shows only one live process spinner when thought and empty work are both running", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      activeRunId="run-1"
+      turns={[{
+        timeline_index: 0,
+        turn_id: "turn-1",
+        run_id: "run-1",
+        status: "running",
+        blocks: [
+          {
+            block_id: "work-1",
+            block_index: 0,
+            kind: "work",
+            status: "running",
+            metadata: { started_at: "2026-08-18T06:00:00.000Z" },
+            segments: [],
+            next_segment_cursor: null,
+          },
+          {
+            block_id: "thought-1",
+            block_index: 1,
+            kind: "thought",
+            status: "running",
+            metadata: { started_at: "2026-08-18T06:00:01.000Z" },
+            segments: [segment("live-thought", "正在推理", false)],
+            next_segment_cursor: 1,
+          },
+        ],
+      }]}
+    />));
+
+    expect(host.querySelectorAll(".animate-spin")).toHaveLength(1);
+    expect(host.querySelectorAll("details")).toHaveLength(1);
+    expect(host.textContent).toContain("工作中");
+    expect(host.textContent).not.toContain("加载更多输出");
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("keeps earlier thought expanded while a later thought is still streaming", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      activeRunId="run-1"
+      turns={[{
+        timeline_index: 0,
+        turn_id: "turn-1",
+        run_id: "run-1",
+        status: "running",
+        blocks: [
+          {
+            block_id: "thought-1",
+            block_index: 0,
+            kind: "thought",
+            status: "completed",
+            metadata: {
+              started_at: "2026-08-18T06:00:00.000Z",
+              ended_at: "2026-08-18T06:00:04.000Z",
+            },
+            segments: [segment("earlier-thought", "先看本机有没有 FlClash")],
+            next_segment_cursor: null,
+          },
+          {
+            block_id: "thought-2",
+            block_index: 1,
+            kind: "thought",
+            status: "running",
+            metadata: { started_at: "2026-08-18T06:00:05.000Z" },
+            segments: [segment("later-thought", "接着搜配置文件", false)],
+            next_segment_cursor: null,
+          },
+        ],
+      }]}
+    />));
+
+    const details = [...host.querySelectorAll("details")];
+    expect(details).toHaveLength(1);
+    expect(details[0]?.hasAttribute("open")).toBe(true);
+    expect(host.textContent).toContain("工作中");
+    expect(host.textContent).toContain("推理 4s");
+    expect(host.textContent).toContain("先看本机有没有 FlClash");
+    expect(host.textContent).toContain("接着搜配置文件");
+    expect(host.querySelectorAll(".animate-spin")).toHaveLength(1);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("keeps elapsed after a process block completes", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={[{
+        timeline_index: 0,
+        turn_id: "turn-1",
+        run_id: "run-1",
+        status: "succeeded",
+        blocks: [{
+          block_id: "work-1",
+          block_index: 0,
+          kind: "work",
+          status: "completed",
+          metadata: {
+            started_at: "2026-08-18T06:00:00.000Z",
+            ended_at: "2026-08-18T06:00:12.000Z",
+          },
+          segments: [segment("done-work", "已完成")],
+          next_segment_cursor: null,
+        }],
+      }]}
+    />));
+
+    expect(host.querySelector(".animate-spin")).toBeNull();
+    expect(host.textContent).toContain("耗时 12s");
+    expect(host.querySelector("[data-live-elapsed]")).toBeNull();
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("folds consecutive thoughts into one worked-for summary", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={[{
+        timeline_index: 0,
+        turn_id: "turn-1",
+        run_id: "run-1",
+        status: "succeeded",
+        blocks: [
+          {
+            block_id: "thought-1",
+            block_index: 0,
+            kind: "thought",
+            status: "completed",
+            metadata: {
+              started_at: "2026-08-18T06:00:00.000Z",
+              ended_at: "2026-08-18T06:00:01.000Z",
+            },
+            segments: [segment("thought-a", "第一轮")],
+            next_segment_cursor: null,
+          },
+          {
+            block_id: "thought-2",
+            block_index: 1,
+            kind: "thought",
+            status: "completed",
+            metadata: {
+              started_at: "2026-08-18T06:00:01.000Z",
+              ended_at: "2026-08-18T06:00:04.000Z",
+            },
+            segments: [segment("thought-b", "第二轮")],
+            next_segment_cursor: null,
+          },
+        ],
+      }]}
+    />));
+
+    expect(host.querySelectorAll("details")).toHaveLength(1);
+    expect(host.textContent).toContain("耗时 4s");
+    expect(host.textContent).toContain("推理 1s");
+    expect(host.textContent).toContain("推理 3s");
+    expect(host.textContent).toContain("第一轮");
+    expect(host.textContent).toContain("第二轮");
     act(() => root.unmount());
     host.remove();
   });

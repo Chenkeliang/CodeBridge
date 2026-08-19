@@ -179,6 +179,8 @@ export interface ChannelSubmitReceipt {
 export interface ChannelCommandContext {
   sessionId: string | null;
   activeRunId: string | null;
+  /** Catalog / runtime 上当前槽位绑定的 ACP provider session；未学到则为 null。 */
+  providerSessionId: string | null;
 }
 
 export interface ChannelSessionEvent {

@@ -26,7 +26,22 @@ export interface PiSession {
   prompt(text: string, options?: { images?: unknown[] }): Promise<void>;
   steer(text: string): Promise<void>;
   abort(): Promise<void>;
+  /** Kill in-flight bash process groups. Native AgentSession has this; abort() does not call it. */
+  abortBash?: () => void;
   dispose(): void;
+}
+
+/** Match ACP's SIGKILL upgrade delay: abort() waits for idle and can hang on live bash. */
+const PI_ABORT_SETTLE_MS = 2_000;
+
+function abortPiSession(session: PiSession): Promise<void> {
+  session.abortBash?.();
+  return Promise.race([
+    session.abort().then(() => undefined, () => undefined),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, PI_ABORT_SETTLE_MS).unref();
+    }),
+  ]);
 }
 
 export interface PiRunHandle {
@@ -174,8 +189,12 @@ export async function* runPiSession(
     }
     notify();
   });
+  let aborting: Promise<void> | undefined;
   const handle: PiRunHandle = {
-    cancel: () => session.abort(),
+    cancel: () => {
+      aborting ??= abortPiSession(session);
+      return aborting;
+    },
     steer: (prompt) => session.steer(prompt),
   };
   if (handleRef) handleRef.current = handle;
@@ -223,7 +242,7 @@ export async function* runPiSession(
   } finally {
     unsubscribe();
     if (options.isAborted() && !finished) {
-      await session.abort().catch(() => {});
+      await (aborting ?? abortPiSession(session));
     }
     session.dispose();
     if (handleRef?.current === handle) handleRef.current = undefined;

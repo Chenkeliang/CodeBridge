@@ -128,6 +128,67 @@ describe("SessionViewStore", () => {
     expect(activeTail(store.get("sess_1")!)).toBe("ab");
   });
 
+  it("shows a new user message without blocking later thought deltas", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+    expect(store.receive("sess_1", {
+      event_id: "sess_1-user-11",
+      sequence: 11,
+      run_id: "sess_1-run-2",
+      type: "MESSAGE_RECEIVED",
+      occurred_at: "2026-08-14T00:00:11.000Z",
+      payload: { message: "离散分布呢" },
+    })).toBe("applied");
+    expect(store.receive("sess_1", {
+      event_id: "sess_1-run-12",
+      sequence: 12,
+      run_id: "sess_1-run-2",
+      type: "RUN_STARTED",
+      occurred_at: "2026-08-14T00:00:12.000Z",
+    })).toBe("refresh_required");
+    expect(store.receive("sess_1", {
+      event_id: "sess_1-thought-13",
+      sequence: 13,
+      run_id: "sess_1-run-2",
+      type: "AGENT_EVENT",
+      occurred_at: "2026-08-14T00:00:13.000Z",
+      payload: { event: { type: "thought_delta", text: "正在推理" } },
+    })).toBe("applied");
+
+    const turns = store.get("sess_1")!.snapshot.timeline.turns;
+    expect(turns.map((turn) => turn.run_id)).toEqual(["sess_1-run", "sess_1-run-2"]);
+    expect(turns[0]?.blocks).toHaveLength(1);
+    expect(turns[1]?.blocks.map((block) => block.kind)).toEqual(["user_message", "thought"]);
+    expect(turns[1]?.blocks[0]?.segments[0]?.content).toBe("离散分布呢");
+    expect(turns[1]?.blocks.at(-1)?.next_segment_cursor).toBeNull();
+    expect(store.get("sess_1")?.status).toBe("ready");
+  });
+
+  it("keeps resumed thought above Agent and freezes the previous thought clock", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+    expect(store.receive("sess_1", deltaEvent("sess_1", 11, "先推理", "thought_delta"))).toBe("applied");
+    expect(store.receive("sess_1", deltaEvent("sess_1", 12, "部分回复"))).toBe("applied");
+    expect(store.receive("sess_1", deltaEvent("sess_1", 13, "再推理", "thought_delta"))).toBe("applied");
+
+    const blocks = store.get("sess_1")!.snapshot.timeline.turns[0]!.blocks;
+    expect(blocks.map((block) => block.kind)).toEqual(["thought", "thought", "assistant"]);
+    expect(blocks[0]?.status).toBe("completed");
+    expect(blocks[0]?.metadata.ended_at).toBe("2026-08-14T00:00:12.000Z");
+    expect(blocks[0]?.segments[0]?.content).toBe("先推理");
+    expect(blocks[1]?.status).toBe("running");
+    expect(blocks[1]?.metadata.started_at).toBe("2026-08-14T00:00:13.000Z");
+    expect(blocks[1]?.segments[0]?.content).toBe("再推理");
+    expect(blocks[2]?.segments.map((segment) => segment.content).join("")).toBe("部分回复");
+  });
+
+  it("does not treat live output as truncated", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+    store.receive("sess_1", deltaEvent("sess_1", 11, "hello"));
+    expect(store.get("sess_1")?.snapshot.timeline.turns[0]?.blocks[0]?.next_segment_cursor).toBeNull();
+  });
+
   it("merges earlier Timeline pages without duplicating Turns", () => {
     const store = new SessionViewStore({ schedule: (flush) => flush() });
     store.hydrate(snapshot("sess_1", 10));

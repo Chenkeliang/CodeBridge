@@ -465,7 +465,13 @@ describe("RunnerHost session lifecycle", () => {
         if (sessionCount > 1) {
           return {
             sessionId: "pi-second",
-            subscribe: () => () => {},
+            subscribe(listener) {
+              listener({
+                type: "message_update",
+                assistantMessageEvent: { type: "text_delta", delta: "ok" },
+              });
+              return () => {};
+            },
             async prompt() {},
             async steer() {},
             async abort() {},

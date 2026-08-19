@@ -517,6 +517,86 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("retries without resume when the Runner says the ACP session is occupied", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, {
+      maxQueuedTurns: 100,
+    });
+    store.withSessionTransaction((tx) => {
+      tx.ensureRuntime("sess_1");
+      tx.setSessionProviderSessionId("sess_1", "prov_poisoned");
+    });
+    const submitted = coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "message_1",
+      message: {
+        text: "继续",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      },
+      workItem: {
+        title: "Session",
+        mode: "investigation",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: ["/tmp/project"],
+        riskLevel: "read_only",
+      },
+    });
+    const run = submitted.run!;
+    expect(run.providerSessionId).toBe("prov_poisoned");
+
+    const runner = {
+      requests: [] as RunRequest[],
+      async *run(request: RunRequest): AsyncGenerator<AgentEvent> {
+        this.requests.push(request);
+        if (request.resumeSessionId) {
+          yield {
+            type: "error",
+            message: `ACP session ${request.resumeSessionId} 已被另一个 Runner 任务占用`,
+            fatal: true,
+          };
+          yield { type: "done", exitCode: 1 };
+          return;
+        }
+        yield { type: "session", sessionId: "prov_fresh" };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+    const executor = new RunExecutor(store, runner, {
+      sessionCoordinator: coordinator,
+      sessionLeaseService: new SessionLeaseService(store),
+      executorOwner: "bridge:123",
+      resolveRequest: (_workItem, current) => ({
+        runId: current.id,
+        sessionKey: {
+          chatId: "conv_sess_1",
+          backendId: "pi",
+          cwd: "/tmp/project",
+        },
+        prompt: "继续",
+        resumeSessionId: current.providerSessionId ?? undefined,
+      }),
+    });
+
+    const result = await executor.execute(run.id);
+    expect(result.status).toBe("succeeded");
+    expect(runner.requests).toHaveLength(2);
+    expect(runner.requests[0]?.resumeSessionId).toBe("prov_poisoned");
+    expect(runner.requests[1]?.resumeSessionId).toBeUndefined();
+    expect(store.getRun(run.id)?.providerSessionId).toBe("prov_fresh");
+    let runtimeId: string | null = null;
+    store.withSessionTransaction((tx) => {
+      runtimeId = tx.getSessionProviderSessionId("sess_1");
+    });
+    expect(runtimeId).toBe("prov_fresh");
+    store.close();
+  });
+
   it("interrupts before the Runner when a resume provider session is busy", async () => {
     const store = new SqliteEventStore(":memory:");
     const coordinator = new SessionCoordinator(store, {

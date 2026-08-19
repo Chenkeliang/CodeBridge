@@ -221,10 +221,12 @@ export function createChannelSessionIngress(
     const body = await response.json() as {
       session_id: string | null;
       active_run_id: string | null;
+      provider_session_id: string | null;
     };
     return {
       sessionId: body.session_id,
       activeRunId: body.active_run_id,
+      providerSessionId: body.provider_session_id ?? null,
     };
   };
 

@@ -8,6 +8,7 @@ import {
   DEFAULT_DATA_DIR,
   VERSION,
   defaultConfig,
+  resolveDefaultAgentId,
 } from "@codebridge/core";
 import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
 import { TelegramBridge } from "@codebridge/channel-telegram";
@@ -201,10 +202,10 @@ program
           config.workspaces?.root ??
           process.cwd();
         const requestedBackend = linkedSession?.agentId ?? workItem.agentId;
-        const backendId =
+          const backendId =
           requestedBackend && config.backends[requestedBackend]
             ? requestedBackend
-            : config.defaultBackend;
+            : resolveDefaultAgentId(config);
         const basePrompt =
           typeof latestMessage === "string" ? latestMessage : workItem.title;
         const prompt = step
@@ -231,7 +232,7 @@ program
           effort: linkedSession?.effort ?? undefined,
           acpConfig: linkedSession?.configOverrides,
           mode: linkedSession?.permissionMode ?? undefined,
-          resumeSessionId: linkedSession?.providerSessionId ?? undefined,
+          resumeSessionId: run.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
         };
       },

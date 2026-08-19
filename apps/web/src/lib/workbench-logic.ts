@@ -69,7 +69,7 @@ export function workspacePaths(session: AgentSession | null): string[] {
 }
 
 export function composerTrigger(draft: string): { kind: "command" | "context"; query: string } | null {
-  const match = draft.match(/(?:^|\s)([/@])([^\s]*)$/);
+  const match = draft.trimEnd().match(/(?:^|\s)([/@])([^\s]*)$/);
   if (!match) return null;
   return { kind: match[1] === "/" ? "command" : "context", query: match[2] ?? "" };
 }
@@ -83,7 +83,7 @@ export function filterCommands(commands: AgentCommand[], query: string): AgentCo
 }
 
 export function applyComposerSuggestion(draft: string, replacement: string): string {
-  return draft.replace(/([/@])[^\s]*$/, replacement);
+  return draft.trimEnd().replace(/([/@])[^\s]*$/, replacement);
 }
 
 export function attachmentPreviewUrl(attachment: MessageAttachmentInput): string | null {

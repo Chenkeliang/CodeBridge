@@ -148,4 +148,30 @@ describe("SessionConnection", () => {
     connection.close();
     await pending;
   });
+
+  it("refreshes again after an in-flight refresh when another refresh is requested", async () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    let finishFirst!: (snapshot: SessionSnapshot) => void;
+    const firstOpen = new Promise<SessionSnapshot>((resolve) => {
+      finishFirst = resolve;
+    });
+    const openSession = vi.fn()
+      .mockImplementationOnce(() => firstOpen)
+      .mockResolvedValueOnce(snapshot("sess_1", 12));
+    const connection = new SessionConnection({
+      store,
+      openSession: openSession as typeof api.openSession,
+      stream: async (_sessionId, _after, signal) => waitForAbort(signal),
+    });
+
+    const pending = connection.open("sess_1");
+    await Promise.resolve();
+    const second = connection.refresh("sess_1");
+    finishFirst(snapshot("sess_1", 10));
+    await second;
+    expect(openSession).toHaveBeenCalledTimes(2);
+    expect(store.get("sess_1")?.snapshot.runtime.last_event_sequence).toBe(12);
+    connection.close();
+    await pending;
+  });
 });

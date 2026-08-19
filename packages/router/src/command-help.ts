@@ -16,23 +16,24 @@ const COMMAND_HELP_GROUPS: CommandHelpGroup[] = [
     items: [
       { command: "/help [full]", summary: "查看快捷菜单或全部命令" },
       { command: "/menu", summary: "查看手机快捷菜单" },
-      { command: "/status", summary: "查看 backend、目录、模型和任务状态" },
+      { command: "/status", summary: "查看 backend、目录、模型和任务状态（别名 /s）" },
     ],
   },
   {
     title: "任务控制",
     items: [
-      { command: "/stop", summary: "停止当前 Agent 任务（别名 /cancel）" },
+      { command: "/stop", summary: "停止当前 Agent 任务（别名 /cancel、/x）" },
+      { command: "/continue", summary: "恢复暂停队列（别名 /c）" },
       { command: "/steer <指令>", summary: "向运行中的 ACP turn 注入补充指令" },
-      { command: "/approve", summary: "允许当前挂起的权限请求" },
-      { command: "/deny", summary: "拒绝当前挂起的权限请求" },
+      { command: "/approve", summary: "允许当前挂起的权限请求（别名 /a）" },
+      { command: "/deny", summary: "拒绝当前挂起的权限请求（别名 /d）" },
     ],
   },
   {
     title: "会话管理",
     items: [
       { command: "/new", summary: "新建会话（别名 /reset）" },
-      { command: "/resume", summary: "列出当前目录的本机 session" },
+      { command: "/resume", summary: "列出当前目录的本机 session（别名 /r）" },
       { command: "/resume <N>", summary: "绑定列表中第 N 条 session" },
       { command: "/resume last", summary: "绑定最近一条 session" },
       { command: "/resume all", summary: "列出全部目录的本机 session" },
@@ -43,7 +44,7 @@ const COMMAND_HELP_GROUPS: CommandHelpGroup[] = [
   {
     title: "Agent 与模型",
     items: [
-      { command: "/backend <cursor|claude|codex|default>", summary: "切换 Agent" },
+      { command: "/backend <cursor|claude|codex|pi|opencode|default>", summary: "切换 Agent（别名 /b）" },
       { command: "/transport", summary: "兼容命令；当前仅支持 ACP，无需切换" },
       { command: "/model [list|名称|default]", summary: "列出或切换实时模型" },
       { command: "/effort [list|级别|default]", summary: "列出或切换实时推理强度" },
@@ -82,11 +83,12 @@ export const SLASH_COMMANDS: CommandHelpItem[] = COMMAND_HELP_GROUPS.flatMap(
 );
 
 const COMPACT_COMMANDS: CommandHelpItem[] = [
-  { command: "/status", summary: "查看当前状态" },
-  { command: "/resume last", summary: "续聊最近会话" },
+  { command: "/s", summary: "查看当前状态（/status）" },
+  { command: "/c", summary: "恢复暂停队列（/continue）" },
+  { command: "/r last", summary: "续聊最近会话（/resume last）" },
   { command: "/new", summary: "新建会话" },
-  { command: "/stop", summary: "停止当前任务" },
-  { command: "/backend claude", summary: "切换到 Claude" },
+  { command: "/x", summary: "停止当前任务（/stop）" },
+  { command: "/b", summary: "切换 Agent（cursor / claude / codex / pi / opencode）" },
   { command: "/model", summary: "查看或切换模型" },
   { command: "/permission", summary: "查看或切换权限" },
   { command: "/ws list", summary: "查看工作区" },
@@ -151,15 +153,15 @@ export function formatFullCommandHelp(
 
 export function formatWelcomeMessage(botName = "CodeBridge"): string {
   const quick = [
-    "`/status` 查看状态",
-    "`/resume last` 续聊最近 session",
-    "`/backend claude` 切换 Agent",
+    "`/s` 查看状态（`/status`）",
+    "`/r last` 续聊最近 session（`/resume last`）",
+    "`/b` 切换 Agent（`/backend`：cursor / claude / codex / pi / opencode）",
     "`/menu` 快捷菜单",
   ];
   return [
     `👋 欢迎使用 **${botName}**`,
     "",
-    "在飞书里远程驱动本机 Cursor / Claude Code / Codex。",
+    "在飞书里远程驱动本机 Cursor / Claude Code / Codex / Pi / OpenCode。",
     "直接发消息开始；也可用斜杠命令：",
     "",
     ...quick.map((line) => `- ${line}`),
@@ -171,7 +173,7 @@ export function formatWelcomeMessage(botName = "CodeBridge"): string {
 }
 
 export function formatCompactCommandHint(): string {
-  return "快捷：`/menu` · `/status` · `/resume last` · `/stop` · `/new` · `/backend`";
+  return "快捷：`/menu` · `/s` · `/c` · `/r last` · `/x` · `/new` · `/b`";
 }
 
 export function formatBotMenuSetupGuide(): string[] {

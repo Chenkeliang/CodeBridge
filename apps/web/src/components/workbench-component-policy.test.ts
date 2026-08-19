@@ -104,6 +104,15 @@ describe("Workbench component policy", () => {
     expect(source).toContain("const Markdown = memo(function Markdown");
   });
 
+  it("renders conversation tables as framed rows instead of a full grid", () => {
+    const source = readFileSync(new URL("./conversation.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("function MarkdownTable");
+    expect(source).toContain("rounded-lg border");
+    expect(source).toContain("[&_tbody_tr:not(:last-child)_td]:border-b");
+    expect(source).not.toContain("[&_td]:border-b [&_td]:p-2 [&_th]:border-b");
+  });
+
   it("keeps Agent-native model, reasoning, and permission controls in the Composer", () => {
     const source = readSource();
     const controls = readFileSync(new URL("./composer-controls.tsx", import.meta.url), "utf8");
@@ -121,8 +130,8 @@ describe("Workbench component policy", () => {
     expect(controls).toContain('onClick={() => onValue("")}');
     expect(controls).toContain('label="Agent 默认"');
     expect(controls).toContain("<SelectValue>{triggerLabel}</SelectValue>");
-    expect(source).toContain('session.status === "active" ? "bg-success" : "bg-faint"');
-    expect(source).toContain('session.status !== "idle"');
+    expect(source).toContain('runState === "running" ? "bg-success" : "bg-warning"');
+    expect(source).toContain("runState !== \"idle\"");
   });
 
   it("uses reduced-motion-safe feedback for the discrete reasoning slider", () => {
@@ -191,7 +200,8 @@ describe("Workbench component policy", () => {
 
     expect(source).toContain("viewport.scrollTop = viewport.scrollHeight");
     expect(source).toContain("stuckToBottom");
-    expect(source).toContain("[sessionView, selectedSessionId, loadingSession, sending, stuckToBottom]");
+    expect(source).toContain("[sessionView, selectedSessionId, loadingSession, stuckToBottom]");
+    expect(source).toContain("if (!sessionSwitch.current && !stuckToBottom) return");
     expect(source).toContain("requestAnimationFrame");
   });
 
@@ -348,5 +358,14 @@ describe("Workbench component policy", () => {
     expect(source).toContain("重命名");
     expect(source).toContain("归档");
     expect(source).toContain("删除");
+    expect(source).toContain("function useDismissOnOutside");
+    expect(source).toContain('document.addEventListener("pointerdown"');
+  });
+
+  it("loads Agent-native commands for Web slash suggestions", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(workbench).toContain("api.commands(");
+    expect(workbench).toContain("setCommandOpen(nextTrigger?.kind === \"command\")");
   });
 });

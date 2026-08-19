@@ -39,9 +39,12 @@ backends:
     type: codex
     acpCommand: npx
     acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.9"]
-  # 可选；Pi 通过 Node SDK 在 Runner 内执行，不启动 pi --mode rpc
-  # pi:
-  #   type: pi-sdk
+  pi:
+    type: pi-sdk
+  opencode:
+    type: generic-spawn
+    acpCommand: opencode
+    acpArgs: ["acp"]
 
 workspaces:
   root: ~/Projects

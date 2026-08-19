@@ -9,11 +9,15 @@ import {
 describe("command-help", () => {
   it("renders a compact mobile menu with only frequent commands", () => {
     const text = formatCompactCommandHelp();
+    expect(text).toContain("/s");
+    expect(text).toContain("/c");
+    expect(text).toContain("/r last");
     expect(text).toContain("/status");
     expect(text).toContain("/resume last");
     expect(text).toContain("/help full");
     expect(text).not.toContain("/session delete");
     expect(text).not.toContain("/clone");
+    expect(text).toContain("cursor / claude / codex / pi / opencode");
   });
 
   it("groups the full help and shows the actual command syntax", () => {
@@ -24,6 +28,10 @@ describe("command-help", () => {
     expect(text).toContain("**Agent 与模型**");
     expect(text).toContain("**目录与工作区**");
     expect(text).toContain("**文件与 Git**");
+    expect(text).toContain("/continue");
+    expect(text).toContain("别名 /c");
+    expect(text).toContain("别名 /s");
+    expect(text).toContain("别名 /r");
     expect(text).toContain("/session close <sessionId>");
     expect(text).toContain("/session delete <sessionId>");
     expect(text).toContain("/model [list|名称|default]");
@@ -34,6 +42,7 @@ describe("command-help", () => {
     expect(text).toContain("/root add|remove|rm <绝对路径>");
     expect(text).toContain("/clone <git-url> [目录名]");
     expect(text).toContain("/send <文件路径>");
+    expect(text).toContain("/backend <cursor|claude|codex|pi|opencode|default>");
   });
 
   it("renders Telegram help as plain text", () => {

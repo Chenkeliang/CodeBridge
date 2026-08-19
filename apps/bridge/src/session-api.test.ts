@@ -295,6 +295,8 @@ describe("session API agent setup routing", () => {
       default_agent_id: "codex",
       effective_default_agent_id: "codex",
     });
+    expect(fixture.configStore.get().defaultAgent).toBe("codex");
+    expect(fixture.configStore.get().defaultBackend).toBe("codex");
 
     fixture.registry.close();
     fixture.catalog.close();
@@ -1375,7 +1377,11 @@ describe("session API", () => {
         headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
         body: JSON.stringify({ slot: slotFor(agentId) }),
       });
-      return await response.json() as { session_id: string; active_run_id: string | null };
+      return await response.json() as {
+        session_id: string;
+        active_run_id: string | null;
+        provider_session_id: string | null;
+      };
     };
 
     const piCtx = await ctx("pi");
@@ -1401,7 +1407,45 @@ describe("session API", () => {
         slot: { channel: "feishu", conversation_id: "chat", agent_id: "pi", workspace_key: "/tmp/p", generation: 0 },
       }),
     });
-    expect(await response.json()).toEqual({ session_id: null, active_run_id: null });
+    expect(await response.json()).toEqual({
+      session_id: null,
+      active_run_id: null,
+      provider_session_id: null,
+    });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("returns the catalog provider session id in command context", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const slot = {
+      channel: "feishu",
+      conversationId: "chat",
+      agentId: "pi",
+      workspaceKey: "/tmp/p",
+      generation: 0,
+    };
+    const session = catalog.createAndBindHistoricalSession(slot, "provider-1");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const response = await app.request("/v1/channels/command-context", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        slot: {
+          channel: slot.channel,
+          conversation_id: slot.conversationId,
+          agent_id: slot.agentId,
+          workspace_key: slot.workspaceKey,
+          generation: slot.generation,
+        },
+      }),
+    });
+    expect(await response.json()).toEqual({
+      session_id: session.id,
+      active_run_id: null,
+      provider_session_id: "provider-1",
+    });
     catalog.close();
     workItems.close();
   });

@@ -55,7 +55,6 @@ export class SessionViewStore {
     const current = this.entries.get(sessionId);
     if (!current) return "refresh_required";
     if (event.sequence <= current.snapshot.runtime.last_event_sequence) return "duplicate";
-    if (current.status === "recovering") return "gap";
     if (event.sequence !== current.snapshot.runtime.last_event_sequence + 1) {
       this.entries.set(sessionId, {
         snapshot: current.snapshot,
@@ -64,50 +63,42 @@ export class SessionViewStore {
       this.notify(sessionId);
       return "gap";
     }
+    if (current.status === "recovering") return "gap";
+
+    if (event.type === "MESSAGE_RECEIVED") {
+      this.entries.set(sessionId, {
+        snapshot: applyUserMessage(current.snapshot, event),
+        status: "ready",
+      });
+      this.notify(sessionId);
+      return "applied";
+    }
 
     const payload = extractAgentEvent(event);
-    if (!payload) {
+    if (payload?.type === "text_delta" || payload?.type === "thought_delta") {
+      const text = typeof payload.text === "string" ? payload.text : "";
+      if (!text) return "duplicate";
+      const committed = applyCommittedEvent(current.snapshot, event, payload.type, text);
       this.entries.set(sessionId, {
-        snapshot: {
-          ...current.snapshot,
-          runtime: {
-            ...current.snapshot.runtime,
-            last_event_sequence: event.sequence,
-          },
-        },
-        status: "recovering",
+        snapshot: committed.snapshot,
+        status: committed.refreshRequired ? "recovering" : "ready",
       });
       this.notify(sessionId);
-      return "refresh_required";
+      return committed.refreshRequired ? "refresh_required" : "applied";
     }
 
-    if (payload.type !== "text_delta" && payload.type !== "thought_delta") {
-      this.entries.set(sessionId, {
-        snapshot: {
-          ...current.snapshot,
-          runtime: {
-            ...current.snapshot.runtime,
-            last_event_sequence: event.sequence,
-          },
-        },
-        status: "recovering",
-      });
-      this.notify(sessionId);
-      return "refresh_required";
-    }
-
-    const text = typeof payload.text === "string" ? payload.text : "";
-    if (!text) {
-      return "duplicate";
-    }
-
-    const committed = applyCommittedEvent(current.snapshot, event, payload.type, text);
     this.entries.set(sessionId, {
-      snapshot: committed.snapshot,
-      status: committed.refreshRequired ? "recovering" : "ready",
+      snapshot: {
+        ...current.snapshot,
+        runtime: {
+          ...current.snapshot.runtime,
+          last_event_sequence: event.sequence,
+        },
+      },
+      status: "ready",
     });
     this.notify(sessionId);
-    return committed.refreshRequired ? "refresh_required" : "applied";
+    return "refresh_required";
   }
 
   mergeTimelinePage(sessionId: string, page: SessionTimelinePage): void {
@@ -234,8 +225,12 @@ function applyCommittedEvent(
   kind: "text_delta" | "thought_delta",
   text: string,
 ): { snapshot: SessionSnapshot; refreshRequired: boolean } {
-  const timeline = snapshot.timeline.turns.length ? snapshot.timeline.turns : [createTimelineTurn(snapshot, event, kind)];
-  const turnIndex = findTurnIndex(timeline, event);
+  const timeline = [...snapshot.timeline.turns];
+  let turnIndex = findTurnIndex(timeline, event);
+  if (turnIndex < 0) {
+    timeline.push(createTimelineTurn(snapshot, event, kind));
+    turnIndex = timeline.length - 1;
+  }
   const turns = timeline.map((turn, index) => index === turnIndex ? appendTextToTurn(turn, kind, text, event) : turn);
   return {
     snapshot: {
@@ -253,12 +248,66 @@ function applyCommittedEvent(
   };
 }
 
+function applyUserMessage(snapshot: SessionSnapshot, event: SessionEvent): SessionSnapshot {
+  const message = typeof event.payload?.message === "string" ? event.payload.message : "";
+  const runId = event.run_id ?? snapshot.session.session_id;
+  const turns = [...snapshot.timeline.turns];
+  let turnIndex = turns.findIndex((turn) => turn.run_id === runId);
+  if (turnIndex < 0) {
+    turns.push({
+      turn_id: runId,
+      status: "running",
+      timeline_index: (turns.at(-1)?.timeline_index ?? 0) + 1,
+      run_id: runId,
+      blocks: [],
+    });
+    turnIndex = turns.length - 1;
+  }
+  const turn = turns[turnIndex]!;
+  if (turn.blocks.some((block) => block.kind === "user_message")) {
+    return {
+      ...snapshot,
+      runtime: {
+        ...snapshot.runtime,
+        last_event_sequence: event.sequence,
+      },
+      timeline: { ...snapshot.timeline, turns },
+    };
+  }
+  const userBlock: TimelineBlockView = {
+    block_id: `user:${turn.turn_id}`,
+    block_index: 0,
+    kind: "user_message",
+    status: "completed",
+    metadata: { started_at: event.occurred_at },
+    segments: [{
+      segment_id: `user:${turn.turn_id}:0`,
+      segment_index: 0,
+      content: message,
+      byte_length: byteLength(message),
+      sealed: true,
+    }],
+    next_segment_cursor: null,
+  };
+  turns[turnIndex] = {
+    ...turn,
+    blocks: [userBlock, ...turn.blocks.map((block, index) => ({ ...block, block_index: index + 1 }))],
+  };
+  return {
+    ...snapshot,
+    runtime: {
+      ...snapshot.runtime,
+      last_event_sequence: event.sequence,
+    },
+    timeline: { ...snapshot.timeline, turns },
+  };
+}
+
 function findTurnIndex(turns: SessionSnapshot["timeline"]["turns"], event: SessionEvent): number {
   if (event.run_id) {
-    const byRun = turns.findIndex((turn) => turn.run_id === event.run_id);
-    if (byRun >= 0) return byRun;
+    return turns.findIndex((turn) => turn.run_id === event.run_id);
   }
-  return turns.length ? turns.length - 1 : 0;
+  return turns.length ? turns.length - 1 : -1;
 }
 
 function createTimelineTurn(snapshot: SessionSnapshot, event: SessionEvent, kind: "text_delta" | "thought_delta"): TimelineTurnView {
@@ -278,24 +327,50 @@ function appendTextToTurn(
   event: SessionEvent,
 ): TimelineTurnView {
   const blocks = [...turn.blocks];
-  const desiredKind: TimelineBlockView["kind"] = kind === "text_delta" ? "assistant" : "thought";
-  const lastBlock = blocks.at(-1);
-  const targetBlock = lastBlock?.kind === desiredKind ? lastBlock : createBlock(desiredKind, event);
-
-  const nextBlock = targetBlock === lastBlock
-    ? {
-      ...targetBlock,
-      segments: appendTextToSegments(targetBlock.segments, text),
+  if (kind === "thought_delta") {
+    const lastThoughtIndex = lastIndexOfKind(blocks, "thought");
+    const lastThought = lastThoughtIndex >= 0 ? blocks[lastThoughtIndex] : undefined;
+    if (lastThought?.status === "running") {
+      blocks[lastThoughtIndex] = {
+        ...lastThought,
+        segments: appendTextToSegments(lastThought.segments, text),
+        next_segment_cursor: null,
+      };
+    } else {
+      const created = createBlock("thought", event);
+      blocks.splice(thoughtInsertIndex(blocks), 0, {
+        ...created,
+        segments: appendTextToSegments(created.segments, text),
+        next_segment_cursor: null,
+      });
     }
-    : {
-      ...targetBlock,
-      segments: appendTextToSegments(targetBlock.segments, text),
-    };
-
-  if (lastBlock === targetBlock) {
-    blocks[blocks.length - 1] = nextBlock;
   } else {
-    blocks.push(nextBlock);
+    for (const [index, block] of blocks.entries()) {
+      if (block.kind !== "thought" || block.status !== "running") continue;
+      blocks[index] = {
+        ...block,
+        status: "completed",
+        metadata: {
+          ...block.metadata,
+          ended_at: event.occurred_at,
+        },
+      };
+    }
+    const lastBlock = blocks.at(-1);
+    if (lastBlock?.kind === "assistant") {
+      blocks[blocks.length - 1] = {
+        ...lastBlock,
+        segments: appendTextToSegments(lastBlock.segments, text),
+        next_segment_cursor: null,
+      };
+    } else {
+      const created = createBlock("assistant", event);
+      blocks.push({
+        ...created,
+        segments: appendTextToSegments(created.segments, text),
+        next_segment_cursor: null,
+      });
+    }
   }
 
   return {
@@ -307,9 +382,25 @@ function appendTextToTurn(
         ...segment,
         segment_index: segmentIndex,
       })),
-      next_segment_cursor: block.segments.length,
     })),
   };
+}
+
+function lastIndexOfKind(
+  blocks: TimelineBlockView[],
+  kind: TimelineBlockView["kind"],
+): number {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (blocks[index]?.kind === kind) return index;
+  }
+  return -1;
+}
+
+function thoughtInsertIndex(blocks: TimelineBlockView[]): number {
+  const lastThought = lastIndexOfKind(blocks, "thought");
+  if (lastThought >= 0) return lastThought + 1;
+  const firstAgent = blocks.findIndex((block) => block.kind === "assistant" || block.kind === "tool");
+  return firstAgent >= 0 ? firstAgent : blocks.length;
 }
 
 function createBlock(kind: TimelineBlockView["kind"], event: SessionEvent): TimelineBlockView {
@@ -318,9 +409,9 @@ function createBlock(kind: TimelineBlockView["kind"], event: SessionEvent): Time
     block_index: 0,
     kind,
     status: "running",
-    metadata: {},
+    metadata: { started_at: event.occurred_at },
     segments: [createSegment("")],
-    next_segment_cursor: 1,
+    next_segment_cursor: null,
   };
 }
 
