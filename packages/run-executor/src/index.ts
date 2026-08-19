@@ -43,6 +43,20 @@ class ProviderSessionOccupiedError extends Error {
   }
 }
 
+class UnknownCapabilityError extends Error {
+  constructor() {
+    super("unknown_capability");
+    this.name = "UnknownCapabilityError";
+  }
+}
+
+class PostconditionFailedError extends Error {
+  constructor(stepId: string, postcondition: string) {
+    super(`Postcondition failed for step ${stepId}: ${postcondition}`);
+    this.name = "PostconditionFailedError";
+  }
+}
+
 function isProviderSessionOccupiedMessage(message: string): boolean {
   return message.includes("已被另一个 Runner 任务占用")
     || message.includes("正在运行；请等待当前任务结束");
@@ -170,7 +184,7 @@ export class RunExecutor {
       if (!step.capabilityId) continue;
       const definition = this.options.policy?.getCapability(step.capabilityId);
       if (!definition || !this.options.capabilities || !this.options.capabilities.has(definition.adapter)) {
-        throw new Error("unknown_capability");
+        throw new UnknownCapabilityError();
       }
       const result = await this.options.capabilities.execute(definition.adapter, {
         input: { ...inputs, step: { id: step.id, purpose: step.purpose } },
@@ -774,7 +788,7 @@ export class RunExecutor {
             actual: capped.actual,
             truncated: capped.truncated,
           });
-          throw new Error(`Postcondition failed for step ${step.id}: ${step.successWhen}`);
+          throw new PostconditionFailedError(step.id, step.successWhen);
         }
       }
       const outputs = this.stepOutputs.get(run.id) ?? {};
@@ -1118,11 +1132,12 @@ export class RunExecutor {
       output: { error: "unknown_capability" },
       verification_status: "failed",
     });
-    throw new Error("unknown_capability");
+    throw new UnknownCapabilityError();
   }
 
   private emitRunSnapshot(run: Run, outcome: "succeeded" | "failed"): void {
     if (!runHasIr(run)) return;
+    if (this.hasRunEvent(run.workItemId, run.id, "RUN_SNAPSHOT")) return;
     const workItem = this.store.getWorkItem(run.workItemId);
     if (!workItem) return;
     const plan = run.planId ? this.store.getPlan(run.planId) : undefined;
@@ -1411,9 +1426,9 @@ function isRetryableError(error: unknown): boolean {
 }
 
 function shouldEmitInfrastructureFailure(error: unknown): boolean {
-  if (!(error instanceof Error)) return true;
-  return error.message !== "unknown_capability"
-    && !error.message.startsWith("Postcondition failed");
+  if (error instanceof UnknownCapabilityError) return false;
+  if (error instanceof PostconditionFailedError) return false;
+  return true;
 }
 
 function runHasIr(run: Run): boolean {
