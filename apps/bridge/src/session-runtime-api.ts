@@ -129,7 +129,7 @@ export function registerSessionRuntimeCommandRoutes(
           agentId: session.agentId,
           workspaceScope: session.cwd ? [session.cwd] : [],
           riskLevel: frozenPlan ? maxStepRisk(frozenPlan) : "read_only",
-          identifiers: frozenPlan ? provided : {},
+          identifiers: frozenPlan ? provided : undefined,
         },
         delivery,
       });

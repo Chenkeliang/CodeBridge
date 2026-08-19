@@ -362,6 +362,45 @@ describe("Session runtime command API", () => {
     fixture.catalog.close();
     fixture.workItems.close();
   });
+
+  it("does not wipe identifiers when a later unbound message reuses the work item", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    savePublishedDemoEcho(flows);
+    const fixture = setup({ flows });
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const bound = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "param_keep",
+        },
+        body: JSON.stringify({ message: "run", inputs: { text: "hi" } }),
+      },
+    );
+    expect(bound.status).toBe(202);
+    fixture.catalog.updateSession(fixture.session.id, { flowId: null });
+    const unbound = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "param_keep_unbound",
+        },
+        body: JSON.stringify({ message: "freeform" }),
+      },
+    );
+    expect(unbound.status).toBe(202);
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    expect(fixture.workItems.getWorkItem(workItemId)?.identifiers).toEqual({ text: "hi" });
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
 });
 
 function savePublishedDemoEcho(
