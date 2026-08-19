@@ -18,6 +18,7 @@ import {
   CapabilityRegistry,
   CapabilityRuntime,
   PolicyEngine,
+  registerDemoCapabilities,
 } from "@codebridge/policy";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
@@ -129,6 +130,7 @@ program
       databasePath: path.join(dataDir, "capabilities.sqlite"),
     });
     const capabilityRuntime = new CapabilityRuntime();
+    registerDemoCapabilities(capabilityRegistry, capabilityRuntime);
     const policyEngine = new PolicyEngine(capabilityRegistry);
     const mcpRegistry = new McpServerRegistry(path.join(dataDir, "mcp.sqlite"));
     for (const [id, definition] of Object.entries(config.orchestration?.mcpServers ?? {})) {
@@ -394,6 +396,8 @@ program
     const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token, {
       sessions: sessionCatalog,
       events: workItemStore,
+      capabilities: capabilityRegistry,
+      runtime: capabilityRuntime,
     });
 
     store.onChange((c) => {
