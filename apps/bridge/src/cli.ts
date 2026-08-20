@@ -19,6 +19,7 @@ import {
   CapabilityRuntime,
   PolicyEngine,
   registerDemoCapabilities,
+  registerEquityCapabilities,
 } from "@codebridge/policy";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
@@ -132,6 +133,7 @@ program
     });
     const capabilityRuntime = new CapabilityRuntime();
     registerDemoCapabilities(capabilityRegistry, capabilityRuntime);
+    registerEquityCapabilities(capabilityRegistry, capabilityRuntime);
     const policyEngine = new PolicyEngine(capabilityRegistry);
     const mcpRegistry = new McpServerRegistry(path.join(dataDir, "mcp.sqlite"));
     for (const [id, definition] of Object.entries(config.orchestration?.mcpServers ?? {})) {
