@@ -28,6 +28,8 @@ function pauseReasonLabel(reason: SessionRuntimeView["queue_pause_reason"]): str
       return "上一轮被中断，队列暂停。";
     case "failed":
       return "上一轮失败，队列暂停。";
+    case "stale":
+      return "排队已过期，未自动执行。";
     default:
       return "队列已暂停。";
   }

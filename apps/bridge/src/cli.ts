@@ -26,6 +26,7 @@ import {
   SessionCoordinator,
   SessionLeaseService,
   SessionRecoveryService,
+  reclaimQueuedRuns,
 } from "@codebridge/session-coordinator";
 import {
   ProjectCatalogGitRepository,
@@ -241,6 +242,22 @@ program
     });
     sessionRecovery.scanExpired();
     sessionRecovery.scanCancellationDeadlines();
+    const reclaimQueued = (): void => {
+      try {
+        reclaimQueuedRuns({
+          store: workItemStore,
+          coordinator: sessionCoordinator,
+          execute: (runId) => {
+            void runExecutor.execute(runId).catch(() => {});
+          },
+        });
+      } catch (error) {
+        console.error(
+          "Queued run reclaim failed:",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    };
     const recoveryInterval = setInterval(() => {
       try {
         sessionRecovery.scanExpired();
@@ -250,6 +267,7 @@ program
           error instanceof Error ? error.message : String(error),
         );
       }
+      reclaimQueued();
     }, 15_000);
     const cancellationInterval = setInterval(() => {
       try {
@@ -261,9 +279,7 @@ program
         );
       }
     }, 1_000);
-    for (const queuedRun of workItemStore.listRunsByStatus(["queued"])) {
-      void runExecutor.execute(queuedRun.id).catch(() => {});
-    }
+    reclaimQueued();
     const projectCatalog = new ProjectCatalogStore(
       path.join(dataDir, "project-catalog.sqlite"),
     );

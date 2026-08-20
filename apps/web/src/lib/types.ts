@@ -190,7 +190,7 @@ export type SessionRunStatus =
 export interface SessionRuntimeView {
   active_run: RunRecord | null;
   queue_state: "ready" | "paused";
-  queue_pause_reason: "failed" | "cancelled" | "interrupted" | null;
+  queue_pause_reason: "failed" | "cancelled" | "interrupted" | "stale" | null;
   queue: {
     turns: SessionTurnView[];
     total: number;

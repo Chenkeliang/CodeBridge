@@ -57,7 +57,8 @@ describe("flow-compile", () => {
     const flow = store.get("flow_demo_echo")!;
     const again = compileCatalogFlow(flow);
     expect(definitionHash(again)).toBe(flow.planIrHash);
-    expect(flowRecordToDefinition(flow).steps[0]).toMatchObject({
+    const steps = flowRecordToDefinition(flow).steps as Array<Record<string, unknown>>;
+    expect(steps[0]).toMatchObject({
       success_when: "output.text exists",
     });
     store.close();

@@ -210,6 +210,7 @@ test("published runbook main path and candidate dry-run", async ({ page }) => {
   await page.getByRole("button", { name: "Flows" }).click();
   await page.getByText("候选").click();
   await page.getByRole("button", { name: /Demo Echo Candidate/ }).click();
+  await expect(page.getByRole("button", { name: "运行" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /预演/ })).toBeVisible();
   await page.getByRole("button", { name: /预演/ }).click();
   await expect.poll(() => lastBody).toMatchObject({ flow_id: "flow_demo_echo_cand", dry_run: true });

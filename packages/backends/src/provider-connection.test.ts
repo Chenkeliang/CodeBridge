@@ -39,8 +39,12 @@ describe("testProviderConnection", () => {
   });
 
   it("probes /chat/completions for openai-completions providers", async () => {
-    const fetchMock = vi.fn(async (url: string | URL) =>
-      String(url).endsWith("/models") ? Response.json({ data: [] }) : Response.json({ choices: [] }));
+    let completionsBody = "";
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith("/models")) return Response.json({ data: [] });
+      completionsBody = String(init?.body ?? "");
+      return Response.json({ choices: [] });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await testProviderConnection({
@@ -53,6 +57,8 @@ describe("testProviderConnection", () => {
     expect(result.detail).toContain("Chat Completions API 可用");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[1]![0])).toContain("/chat/completions");
+    // Reasoning-model gateways reject max_tokens <= 2.
+    expect(JSON.parse(completionsBody).max_tokens).toBeGreaterThan(2);
   });
 
   it("detects developer-role rejection and suggests the compat fix", async () => {

@@ -114,14 +114,14 @@ function sendMessage(
   permissionMode?: string | null,
   effort?: string | null,
 ): Promise<SessionMessageReceipt> {
-  const input = typeof messageOrInput === "string"
+  const input: SendMessageInput = typeof messageOrInput === "string"
     ? {
       message: messageOrInput,
-      flowId,
-      model,
+      flowId: flowId ?? null,
+      model: model ?? null,
       attachments,
-      permissionMode,
-      effort,
+      permissionMode: permissionMode ?? null,
+      effort: effort ?? null,
       idempotencyKey: "",
     }
     : messageOrInput;

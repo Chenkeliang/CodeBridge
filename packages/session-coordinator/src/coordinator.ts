@@ -1,5 +1,6 @@
 import type {
   ChannelDeliveryInput,
+  QueuePauseReason,
   Run,
   SessionRuntime,
   SessionRuntimeTransaction,
@@ -244,11 +245,21 @@ export class SessionCoordinator {
           409,
         );
       }
+      const activeRun = runtime.activeRunId
+        ? tx.getRun(runtime.activeRunId)
+        : undefined;
       tx.updateRuntime(input.sessionId, {
         queueState: "ready",
         queuePauseReason: null,
       });
-      const dispatched = tx.dispatchNextTurn(input.sessionId);
+      let dispatched: { turn: SessionTurn; run: Run } | null = null;
+      if (activeRun?.status === "queued" && activeRun.turnId) {
+        const turn = tx.getTurn(activeRun.turnId);
+        if (turn) dispatched = { turn, run: activeRun };
+      }
+      if (!dispatched) {
+        dispatched = tx.dispatchNextTurn(input.sessionId);
+      }
       const result = {
         runtime: tx.getRuntime(input.sessionId)!,
         dispatched,
@@ -391,12 +402,7 @@ export class SessionCoordinator {
       });
       let dispatched: { turn: SessionTurn; run: Run } | null = null;
       if (input.status === "succeeded") {
-        tx.updateRuntime(input.sessionId, {
-          activeRunId: null,
-          queueState: "ready",
-          queuePauseReason: null,
-        });
-        dispatched = tx.dispatchNextTurn(input.sessionId);
+        dispatched = this.advanceQueueAfterSuccess(tx, input.sessionId, runtime);
       } else {
         tx.updateRuntime(input.sessionId, {
           activeRunId: null,
@@ -409,6 +415,20 @@ export class SessionCoordinator {
         run,
         dispatched,
       };
+    });
+  }
+
+  pauseQueue(input: {
+    sessionId: string;
+    reason: Exclude<QueuePauseReason, null>;
+  }): SessionRuntime {
+    return this.store.withSessionTransaction((tx) => {
+      const runtime = tx.ensureRuntime(input.sessionId);
+      if (runtime.queueState === "paused") return runtime;
+      return tx.updateRuntime(input.sessionId, {
+        queueState: "paused",
+        queuePauseReason: input.reason,
+      });
     });
   }
 
@@ -467,12 +487,7 @@ export class SessionCoordinator {
 
     let dispatched: { turn: SessionTurn; run: Run } | null = null;
     if (input.status === "succeeded") {
-      tx.updateRuntime(input.sessionId, {
-        activeRunId: null,
-        queueState: "ready",
-        queuePauseReason: null,
-      });
-      dispatched = tx.dispatchNextTurn(input.sessionId);
+      dispatched = this.advanceQueueAfterSuccess(tx, input.sessionId, runtime);
     } else {
       tx.updateRuntime(input.sessionId, {
         activeRunId: null,
@@ -485,5 +500,22 @@ export class SessionCoordinator {
       run,
       dispatched,
     };
+  }
+
+  private advanceQueueAfterSuccess(
+    tx: SessionRuntimeTransaction,
+    sessionId: string,
+    runtime: SessionRuntime,
+  ): { turn: SessionTurn; run: Run } | null {
+    if (runtime.queueState === "paused") {
+      tx.updateRuntime(sessionId, { activeRunId: null });
+      return null;
+    }
+    tx.updateRuntime(sessionId, {
+      activeRunId: null,
+      queueState: "ready",
+      queuePauseReason: null,
+    });
+    return tx.dispatchNextTurn(sessionId);
   }
 }

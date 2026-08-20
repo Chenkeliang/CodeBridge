@@ -221,6 +221,7 @@ export class RunExecutor {
   async execute(runId: string, signal?: AbortSignal, options?: { force?: boolean; dryRun?: boolean }): Promise<Run> {
     this.currentForce = options?.force ?? false;
     this.currentDryRun = options?.dryRun ?? this.options.dryRun === true;
+    let nextRunId: string | null = null;
     const initial = this.store.getRun(runId);
     if (!initial) throw new Error(`Run not found: ${runId}`);
     if (initial.status !== "queued") return initial;
@@ -362,7 +363,9 @@ export class RunExecutor {
         return this.cancel(initial);
       }
       this.throwIfCancellationRequested(runId);
-      return this.succeed(initial);
+      const succeeded = this.succeed(initial);
+      nextRunId = succeeded.nextRunId;
+      return succeeded.run;
     } catch (error) {
       const failure = this.activeAsyncErrors.get(runId) ?? error;
       if (providerLeaseLost) {
@@ -425,17 +428,24 @@ export class RunExecutor {
       if (this.activeCompletions.get(runId) === completion) {
         this.activeCompletions.delete(runId);
       }
+      if (nextRunId) {
+        void this.execute(nextRunId).catch(() => {});
+      }
     }
   }
 
-  private succeed(run: Run): Run {
+  private succeed(run: Run): { run: Run; nextRunId: string | null } {
     this.emitRunSnapshot(run, "succeeded");
     if (run.sessionId) {
-      return this.options.sessionCoordinator!.finishRun({
+      const finished = this.options.sessionCoordinator!.finishRun({
         sessionId: run.sessionId,
         runId: run.id,
         status: "succeeded",
-      }).run;
+      });
+      return {
+        run: finished.run,
+        nextRunId: finished.dispatched?.run.id ?? null,
+      };
     }
     this.store.updateRunStatus(run.id, "succeeded");
     this.appendRunEvent(run, {
@@ -452,7 +462,7 @@ export class RunExecutor {
       actor: "system",
       target: run.id,
     });
-    return this.store.getRun(run.id)!;
+    return { run: this.store.getRun(run.id)!, nextRunId: null };
   }
 
   private fail(run: Run, error: unknown): Run {

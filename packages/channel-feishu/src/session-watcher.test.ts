@@ -4,6 +4,7 @@ import type {
   ChannelSessionIngress,
 } from "@codebridge/core";
 import {
+  FeishuRunCard,
   FeishuSessionWatcher,
   type FeishuCardHost,
   type PendingTurn,
@@ -354,5 +355,48 @@ describe("FeishuSessionWatcher", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(ingress.events).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FeishuRunCard", () => {
+  it("refreshes live status when thinking is hidden but tools are running", async () => {
+    const contents: string[] = [];
+    const host: FeishuCardHost = {
+      channel: {
+        stream: async (
+          _chatId: string,
+          input: {
+            markdown(controller: {
+              messageId: string;
+              setContent(full: string): Promise<void>;
+            }): Promise<void>;
+          },
+        ) => {
+          void input.markdown({
+            messageId: "card-1",
+            setContent: async (full) => {
+              contents.push(full);
+            },
+          }).catch(() => {});
+        },
+      } as never,
+      sendMarkdown: async () => {},
+      updateCard: async () => {},
+      registerPendingStream: () => {},
+      clearPendingStream: () => {},
+      log: () => {},
+      isDisconnecting: () => false,
+    };
+    const card = new FeishuRunCard(host, "chat", "src", "run_1", false);
+    await card.open();
+    await card.onAgentEvent({
+      type: "tool_start",
+      name: "Bash",
+      toolCallId: "tool-1",
+    });
+    expect(contents.at(-1)).toContain("工具执行：Bash");
+    expect(contents.at(-1)).toContain("执行中");
+    expect(contents.join("")).not.toContain("- `Bash`");
+    card.abort();
   });
 });

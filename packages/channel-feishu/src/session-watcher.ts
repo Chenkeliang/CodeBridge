@@ -11,8 +11,9 @@ import {
 } from "@codebridge/router";
 import { CoalescingCardWriter } from "./coalescing-card-writer.js";
 
-const FEISHU_LIVE_STATUS_INTERVAL_MS = 5 * 60_000;
-const FEISHU_PROGRESS_NOTICE_INTERVAL_MS = 10 * 60_000;
+export const FEISHU_LIVE_STATUS_TICK_MS = 15_000;
+export const FEISHU_LIVE_STATUS_QUIET_MS = 5 * 60_000;
+export const FEISHU_PROGRESS_NOTICE_INTERVAL_MS = 10 * 60_000;
 const FEISHU_LIVE_PROGRESS_CHARS = 1200;
 
 export interface FeishuLiveStatus {
@@ -86,7 +87,7 @@ function recordLiveActivity(
 
 function renderLiveStatus(status: FeishuLiveStatus, now = Date.now()): string {
   const sinceActivity = Math.max(0, now - status.lastActivityAt);
-  const quiet = sinceActivity >= FEISHU_LIVE_STATUS_INTERVAL_MS;
+  const quiet = sinceActivity >= FEISHU_LIVE_STATUS_QUIET_MS;
   return [
     `${quiet ? "🟠 **任务连接保持**" : "🟢 **执行中**"} · 已运行 ${formatElapsed(now - status.startedAt)}`,
     `最近确认活动：${formatElapsed(sinceActivity)}前`,
@@ -214,7 +215,7 @@ export class FeishuRunCard {
           const statusTimer = setInterval(() => {
             if (this.abortController.signal.aborted) return;
             this.queueRender(true);
-          }, FEISHU_LIVE_STATUS_INTERVAL_MS);
+          }, FEISHU_LIVE_STATUS_TICK_MS);
           this.timers.push(statusTimer);
 
           const noticeTimer = setInterval(() => {
@@ -274,7 +275,8 @@ export class FeishuRunCard {
   async onAgentEvent(event: AgentEvent): Promise<void> {
     await this.ready;
     if (this.abortController.signal.aborted) return;
-    if (recordLiveActivity(this.liveStatus, event)) this.activityVersion += 1;
+    const recorded = recordLiveActivity(this.liveStatus, event);
+    if (recorded) this.activityVersion += 1;
     if (event.type === "permission_request") {
       void this.host
         .sendMarkdown(
@@ -283,10 +285,14 @@ export class FeishuRunCard {
           this.sourceMessageId,
         )
         .catch(() => {});
+      if (recorded) this.queueRender(true);
       return;
     }
     const part = this.present(event);
-    if (!part) return;
+    if (!part) {
+      if (recorded) this.queueRender(true);
+      return;
+    }
     if (part.zone === "thinking") {
       this.thinkingContent += part.text;
       this.queueRender(false);
@@ -358,6 +364,8 @@ export class FeishuSessionWatcher {
       surfaceMessageId: string;
       content: string;
       present: (event: AgentEvent) => FeishuStreamPart | null;
+      liveStatus: FeishuLiveStatus;
+      timer: NodeJS.Timeout;
     }
   >();
   private readonly fatalAgentErrorRuns = new Set<string>();
@@ -393,12 +401,47 @@ export class FeishuSessionWatcher {
     owner: string,
     showThinking: boolean,
   ): void {
+    const now = Date.now();
+    const liveStatus: FeishuLiveStatus = {
+      startedAt: now,
+      lastActivityAt: now,
+      phase: "任务启动",
+    };
+    const timer = setInterval(() => {
+      const resumed = this.resumedCards.get(runId);
+      if (!resumed || this.abortController.signal.aborted) return;
+      void this.host
+        .updateCard(resumed.surfaceMessageId, this.resumedCardBody(resumed, true))
+        .catch((err) => {
+          this.host.log(
+            `飞书任务状态刷新失败（不影响 Agent 运行）：${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    }, FEISHU_LIVE_STATUS_TICK_MS);
+    timer.unref?.();
     this.resumedCards.set(runId, {
       surfaceMessageId,
       content: "",
       present: createFeishuStreamPresenter({ showThinking }).present,
+      liveStatus,
+      timer,
     });
     this.deliveries.set(runId, { turnId, owner });
+  }
+
+  private resumedCardBody(
+    resumed: {
+      content: string;
+      liveStatus: FeishuLiveStatus;
+    },
+    showLiveStatus: boolean,
+  ): object {
+    const status = showLiveStatus ? renderLiveStatus(resumed.liveStatus) : "";
+    const body = resumed.content;
+    const markdown = status && body
+      ? `${status}\n\n---\n\n${body}`
+      : status || body || "（运行中）";
+    return markdownCard(markdown);
   }
 
   async openCardForRun(runId: string, turn: PendingTurn): Promise<void> {
@@ -479,6 +522,7 @@ export class FeishuSessionWatcher {
         this.fatalAgentErrorRuns.add(event.runId);
       }
       if (resumed && agentEvent) {
+        recordLiveActivity(resumed.liveStatus, agentEvent);
         const part = resumed.present(agentEvent);
         if (part?.zone === "result") resumed.content += part.text;
       }
@@ -513,6 +557,7 @@ export class FeishuSessionWatcher {
       }
       const resumed = this.resumedCards.get(event.runId);
       if (resumed) {
+        clearInterval(resumed.timer);
         await this.host.updateCard(
           resumed.surfaceMessageId,
           markdownCard(resumed.content || "（本次无输出）"),
@@ -539,7 +584,9 @@ export class FeishuSessionWatcher {
   abort(): void {
     this.abortController.abort();
     for (const card of this.cards.values()) card.abort();
+    for (const resumed of this.resumedCards.values()) clearInterval(resumed.timer);
     this.cards.clear();
+    this.resumedCards.clear();
     this.pendingTurns.clear();
   }
 }

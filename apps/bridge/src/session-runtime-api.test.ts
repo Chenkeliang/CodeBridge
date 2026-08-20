@@ -644,6 +644,87 @@ describe("Session runtime command API", () => {
     fixture.workItems.close();
   });
 
+  it("does not persist a candidate flowId onto the session after dry-run", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    savePublishedDemoEcho(flows);
+    savePublishedDemoEcho(flows, { status: "candidate", flowId: "flow_demo_echo_cand" });
+    const fixture = setupRuntimeLoop({ flows });
+    expect(fixture.catalog.getSession(fixture.session.id)?.flowId ?? null).toBeNull();
+    const unbound = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "loop_cand_dry_unbound",
+        },
+        body: JSON.stringify({
+          message: "preview",
+          dry_run: true,
+          flow_id: "flow_demo_echo_cand",
+          inputs: { text: "hi" },
+        }),
+      },
+    );
+    expect(unbound.status).toBe(202);
+    expect(fixture.catalog.getSession(fixture.session.id)?.flowId ?? null).toBeNull();
+
+    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    const overlay = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "loop_cand_dry_overlay",
+        },
+        body: JSON.stringify({
+          message: "preview",
+          dry_run: true,
+          flow_id: "flow_demo_echo_cand",
+          inputs: { text: "hi" },
+        }),
+      },
+    );
+    expect(overlay.status).toBe(202);
+    expect(fixture.catalog.getSession(fixture.session.id)?.flowId).toBe("flow_demo_echo");
+    flows.close();
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("binds a published flowId onto an unbound session after a live run", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    savePublishedDemoEcho(flows);
+    const fixture = setupRuntimeLoop({ flows });
+    expect(fixture.catalog.getSession(fixture.session.id)?.flowId ?? null).toBeNull();
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "loop_pub_bind",
+        },
+        body: JSON.stringify({
+          message: "run",
+          flow_id: "flow_demo_echo",
+          inputs: { text: "hi" },
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    expect(fixture.catalog.getSession(fixture.session.id)?.flowId).toBe("flow_demo_echo");
+    flows.close();
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
   it("promotes a candidate dry-run to a published run without re-extracting inputs", async () => {
     const flows = new FlowCatalogStore(":memory:");
     savePublishedDemoEcho(flows, { status: "candidate" });
@@ -712,11 +793,12 @@ describe("Session runtime command API", () => {
 
 function savePublishedDemoEcho(
   flows: FlowCatalogStore,
-  inputExtra: { default?: string; status?: "candidate" | "published" } = {},
+  inputExtra: { default?: string; status?: "candidate" | "published"; flowId?: string } = {},
 ) {
+  const flowId = inputExtra.flowId ?? "flow_demo_echo";
   const definition = {
     schema_version: 1,
-    workflow_id: "flow_demo_echo",
+    workflow_id: flowId,
     name: "demo",
     kind: "runbook",
     status: "draft",
@@ -737,10 +819,10 @@ function savePublishedDemoEcho(
   const plan = compileWorkflow(definition, {
     source: "workflow",
     definitionRevision: definitionHash(definition),
-    planId: catalogPlanId("flow_demo_echo"),
+    planId: catalogPlanId(flowId),
   });
   flows.save({
-    flowId: "flow_demo_echo",
+    flowId,
     name: "demo",
     kind: "runbook",
     status: inputExtra.status ?? "published",
@@ -755,5 +837,5 @@ function savePublishedDemoEcho(
       successWhen: "output.text exists",
     }],
   });
-  return flows.get("flow_demo_echo")!;
+  return flows.get(flowId)!;
 }

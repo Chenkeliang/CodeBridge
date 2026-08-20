@@ -135,7 +135,12 @@ export function registerSessionRuntimeCommandRoutes(
       });
       options.catalog.updateSession(session.id, {
         taskRecordId: result.workItemId,
-        flowId: result.turn.message.flowId,
+        flowId: persistedSessionFlowId(
+          session.flowId,
+          result.turn.message.flowId,
+          dryRun,
+          flow,
+        ),
         model: result.turn.message.model,
         effort: result.turn.message.effort,
         permissionMode: result.turn.message.permissionMode,
@@ -591,6 +596,18 @@ async function observeExecution(
     }
     throw error;
   }
+}
+
+function persistedSessionFlowId(
+  current: string | null | undefined,
+  requested: string | null | undefined,
+  dryRun: boolean,
+  flow: FlowRecord | undefined,
+): string | null {
+  if (dryRun || (flow != null && flow.status !== "published")) {
+    return current ?? null;
+  }
+  return requested ?? current ?? null;
 }
 
 function inputRecord(value: unknown): Record<string, unknown> {
