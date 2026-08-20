@@ -428,4 +428,92 @@ describe("SessionTimeline", () => {
     act(() => root.unmount());
     host.remove();
   });
+
+  it("renders a passed flow_step with capability id", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={[{
+        timeline_index: 0,
+        turn_id: "turn-1",
+        run_id: "run-1",
+        status: "succeeded",
+        blocks: [{
+          block_id: "flow_step:run-1:echo",
+          block_index: 0,
+          kind: "flow_step",
+          status: "passed",
+          metadata: { step_id: "echo", capability_id: "demo.echo" },
+          segments: [],
+          next_segment_cursor: null,
+        }],
+      }]}
+    />));
+    expect(host.textContent).toContain("demo.echo");
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("renders a verification failure with category and truncated mark", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={[{
+        timeline_index: 0,
+        turn_id: "turn-1",
+        run_id: "run-1",
+        status: "succeeded",
+        blocks: [{
+          block_id: "flow_failure:run-1:concat",
+          block_index: 0,
+          kind: "flow_failure",
+          status: "failed",
+          metadata: { step_id: "concat", category: "verification", truncated: true },
+          segments: [],
+          next_segment_cursor: null,
+        }],
+      }]}
+    />));
+    expect(host.textContent).toContain("verification");
+    expect(host.textContent).toContain("已截断");
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("renders a run snapshot with step count, revision tail, and output_ref", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={[{
+        timeline_index: 0,
+        turn_id: "turn-1",
+        run_id: "run-1",
+        status: "succeeded",
+        blocks: [{
+          block_id: "flow_run:run-1:snapshot",
+          block_index: 0,
+          kind: "flow_run",
+          status: "succeeded",
+          metadata: {
+            flow_id: "flow_demo_echo",
+            flow_revision: "sha256:abcdef0123456789",
+            steps: [
+              { step_id: "echo", capability_id: "demo.echo", output_ref: "artifact://a1", verification_status: "passed" },
+              { step_id: "concat", capability_id: "demo.concat", output_ref: "artifact://a2", verification_status: "passed" },
+            ],
+          },
+          segments: [],
+          next_segment_cursor: null,
+        }],
+      }]}
+    />));
+    expect(host.textContent).toContain("2 / 2");
+    expect(host.textContent).toContain("artifact://a1");
+    expect(host.textContent).toContain("23456789");
+    act(() => root.unmount());
+    host.remove();
+  });
 });

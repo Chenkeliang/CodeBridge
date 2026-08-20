@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ChevronDown, LoaderCircle } from "lucide-react";
+import { ChevronDown, LoaderCircle, Workflow, X } from "lucide-react";
 import {
   LiveElapsed,
   Markdown,
@@ -7,6 +7,7 @@ import {
 } from "@/components/conversation";
 import { Button } from "@/components/ui/button";
 import { formatElapsed } from "@/components/workbench-shared";
+import { revisionTail } from "@/lib/revision-tail";
 import type {
   TimelineBlockView,
   TimelineSegmentView,
@@ -121,6 +122,9 @@ const TimelineBlock = memo(function TimelineBlock(props: {
       </div>
       {more}
     </div>;
+  }
+  if (block.kind === "flow_param" || block.kind === "flow_step" || block.kind === "flow_run" || block.kind === "flow_failure") {
+    return <FlowBlock block={block} />;
   }
   return <ProcessBlock
     blocks={[block]}
@@ -304,5 +308,85 @@ function blockLabel(kind: TimelineBlockView["kind"]): string {
     case "tool": return "工具调用";
     case "approval": return "等待批准";
     case "error": return "错误";
+    case "flow_step": return "流程步骤";
+    case "flow_param": return "参数";
+    case "flow_run": return "Run 快照";
+    case "flow_failure": return "验证失败";
   }
+}
+
+function flowStepLabel(status: string): string {
+  switch (status) {
+    case "running": return "执行中";
+    case "passed": return "完成";
+    case "failed": return "失败";
+    case "retrying": return "重试中";
+    case "skipped": return "跳过";
+    default: return "步骤";
+  }
+}
+
+function flowStepDot(status: string): string {
+  switch (status) {
+    case "running": return "bg-control-accent animate-pulse";
+    case "passed": return "bg-success";
+    case "failed": return "bg-danger";
+    case "retrying": return "bg-warning";
+    default: return "bg-faint";
+  }
+}
+
+function FlowBlock({ block }: { block: TimelineBlockView }) {
+  const meta = block.metadata as Record<string, unknown>;
+  if (block.kind === "flow_step") {
+    const label = flowStepLabel(block.status);
+    const tone = block.status === "failed" ? "text-danger" : block.status === "retrying" ? "text-warning" : block.status === "passed" ? "text-success" : "text-ink-soft";
+    return <div className="grid max-w-[780px] gap-1.5">
+      <p className="flex items-center gap-2 font-mono text-xs">
+        <span className={cn("size-2 rounded-full", flowStepDot(block.status))} />
+        <span className={tone}>{label}</span>
+        <span className="text-muted">{String(meta.capability_id ?? meta.step_id ?? "")}</span>
+        {block.status === "retrying" && meta.error != null && <span className="truncate text-muted">{String(meta.error)}</span>}
+      </p>
+      {block.segments[0]?.content ? <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-surface-tint px-3 py-2 font-mono text-xs text-ink-soft">{block.segments[0].content}</pre> : null}
+    </div>;
+  }
+  if (block.kind === "flow_param") {
+    const resolution = meta.resolution === "edited" ? "edited" : "confirmed";
+    return <div className="flex max-w-[780px] flex-wrap items-center gap-2 font-mono text-xs text-muted">
+      <span className={cn("rounded px-1.5 py-0.5", resolution === "edited" ? "bg-warning-soft text-warning" : "bg-surface-tint text-success")}>{resolution}</span>
+      <span>参数 {String(meta.field)} = {JSON.stringify(meta.final_value)}</span>
+      {meta.candidate_value != null && <span className="text-faint">候选 {JSON.stringify(meta.candidate_value)}</span>}
+    </div>;
+  }
+  if (block.kind === "flow_failure") {
+    const category = String(meta.category ?? "verification");
+    return <div className="grid max-w-[780px] gap-1.5 rounded-lg border border-danger/40 bg-danger-soft p-3.5 text-xs">
+      <p className="flex items-center gap-2 font-semibold text-danger">
+        <X className="size-3.5" />
+        <span>验证失败 · {category}</span>
+        {meta.truncated === true && <span className="rounded bg-surface-tint px-1.5 py-0.5 font-mono text-faint">actual 已截断</span>}
+      </p>
+      <p className="font-mono text-danger/80">步骤 {String(meta.step_id)} · {String(meta.postcondition ?? "")}</p>
+    </div>;
+  }
+  const steps = Array.isArray(meta.steps) ? meta.steps as Array<Record<string, unknown>> : [];
+  const passed = steps.filter((step) => step.verification_status === "passed").length;
+  return <div className="grid max-w-[780px] gap-2 rounded-lg border border-line bg-surface p-3.5 shadow-card">
+    <p className="flex items-center justify-between gap-2 text-xs">
+      <span className="flex items-center gap-2 font-semibold text-ink"><Workflow className="size-3.5" />Run 快照</span>
+      <span className={cn("font-mono", block.status === "succeeded" ? "text-success" : "text-danger")}>{block.status === "succeeded" ? "成功" : "失败"}</span>
+    </p>
+    <p className="font-mono text-xs text-muted">Flow {String(meta.flow_id ?? "")} · rev {revisionTail(String(meta.flow_revision ?? ""))}</p>
+    <ol className="grid gap-1">
+      {steps.map((step, index) => (
+        <li className="flex items-center gap-2 font-mono text-xs" key={String(step.step_id ?? index)}>
+          <span className={step.verification_status === "passed" ? "text-success" : "text-danger"}>{step.verification_status === "passed" ? "✓" : "✗"}</span>
+          <span className="text-ink-soft">{String(step.capability_id ?? step.step_id)}</span>
+          {typeof step.output_ref === "string" && <span className="truncate text-faint">{step.output_ref}</span>}
+        </li>
+      ))}
+    </ol>
+    <p className="text-xs text-faint">{passed} / {steps.length} 步通过</p>
+  </div>;
 }
