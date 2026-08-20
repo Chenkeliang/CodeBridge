@@ -6,6 +6,7 @@ import { Composer } from "@/components/composer";
 import { LoadingConversation } from "@/components/conversation";
 import { SessionQueue } from "@/components/session-queue";
 import { SessionTimeline } from "@/components/session-timeline";
+import { FlowDetail } from "@/components/flow-detail";
 import { SettingsPage } from "@/components/settings-page";
 import { PixelMark } from "@/components/pixel-mark";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
@@ -44,6 +45,11 @@ export function Workbench() {
   const [configOverrides, setConfigOverrides] = useState<Record<string, string | boolean>>({});
   const [permissionMode, setPermissionMode] = useState("");
   const [flowId, setFlowId] = useState("");
+  const [detailFlow, setDetailFlow] = useState<FlowRecord | null>(null);
+  const [paramValues, setParamValues] = useState<Record<string, unknown>>({});
+  const [missingInputs, setMissingInputs] = useState<Array<{
+    id: string; type: string; source: string; reason: string;
+  }>>([]);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
@@ -347,6 +353,69 @@ export function Workbench() {
     }
   }
 
+  async function openFlow(id: string) {
+    setArea("agents");
+    setMissingInputs([]);
+    try {
+      const flow = await api.fetchFlow(id);
+      setDetailFlow(flow);
+      setParamValues(defaultsFromFlow(flow));
+      if (flow.status === "published") setFlowId(id);
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  async function ensureSession(): Promise<string | null> {
+    if (selectedSessionId) return selectedSessionId;
+    if (!selectedAgent || selectedAgent.status !== "healthy") return null;
+    return (await createSession(selectedAgent.agent_id))?.session_id ?? null;
+  }
+
+  async function runFlow(flow: FlowRecord, values: Record<string, unknown>, dryRun: boolean) {
+    if (sending) return;
+    setParamValues(values);
+    setMissingInputs([]);
+    setSending(true);
+    setError(null);
+    const message = flowRunMessage(draft, flow);
+    const idempotencyKey = crypto.randomUUID();
+    const sessionId = selectedSessionId ?? (await ensureSession());
+    if (!sessionId) {
+      setError("请选择一个可用的 Agent");
+      setSending(false);
+      return;
+    }
+    const result = await submitSessionMessage({
+      send: api.sendMessage,
+      lookup: api.submission,
+      sessionId,
+      idempotencyKey,
+      input: {
+        message,
+        flowId: flow.flow_id,
+        model: model || null,
+        attachments,
+        permissionMode: permissionMode || null,
+        effort: effort || null,
+        inputs: values,
+        dryRun,
+      },
+    });
+    if (result.kind === "rejected" && result.error.code === "missing_inputs" && Array.isArray(result.error.body?.missing)) {
+      setMissingInputs(result.error.body.missing as Array<{ id: string; type: string; source: string; reason: string }>);
+      setSending(false);
+      return;
+    }
+    if (result.kind === "rejected" || result.kind === "unknown") {
+      setError(messageOf(result.kind === "rejected" ? result.error : result.idempotencyKey));
+      setSending(false);
+      return;
+    }
+    await sessionConnection.refresh(sessionId).catch(() => {});
+    setSending(false);
+  }
+
   async function submit() {
     const message = draft.trim();
     if (!message || sending) return;
@@ -381,7 +450,7 @@ export function Workbench() {
       lookup: api.submission,
       sessionId,
       idempotencyKey,
-      input: { message, flowId: flowId || null, model: model || null, attachments: pendingAttachments, permissionMode: permissionMode || null, effort: effort || null },
+      input: { message, flowId: flowId || null, model: model || null, attachments: pendingAttachments, permissionMode: permissionMode || null, effort: effort || null, inputs: flowId ? paramValues : undefined },
     });
     if (result.kind === "unknown") {
       setDraft(message);
@@ -652,7 +721,7 @@ export function Workbench() {
         sessions={agentSessions}
         selectedSessionId={selectedSessionId}
         onCreate={() => selectedAgent && void createSession(selectedAgent.agent_id)}
-        onFlow={(id) => { setFlowId(id); setArea("agents"); }}
+        onFlow={(id) => { void openFlow(id); }}
         onQuery={setQuery}
         onRefresh={() => void reload(true)}
         onSession={selectSession}
@@ -798,6 +867,14 @@ export function Workbench() {
           <div className="flex min-h-0 flex-1 flex-col">
             <section aria-label="Session conversation" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7" onScroll={handleConversationScroll} ref={conversationViewport}>
               <div className="mx-auto w-full max-w-[880px] pb-7">
+                {detailFlow && <div className="mb-4"><FlowDetail
+                  flow={detailFlow}
+                  missing={missingInputs}
+                  onClose={() => { setDetailFlow(null); setMissingInputs([]); }}
+                  onSubmit={(values, dryRun) => { void runFlow(detailFlow, values, dryRun); }}
+                  onValues={setParamValues}
+                  values={paramValues}
+                /></div>}
                 {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
                   <SessionTimeline
                     activeRunId={sessionView.snapshot.runtime.active_run?.run_id ?? null}

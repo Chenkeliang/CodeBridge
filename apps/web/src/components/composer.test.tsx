@@ -84,6 +84,11 @@ const flow: FlowRecord = {
   status: "published",
   source: "test",
   definition_revision: "1",
+  plan_ir_hash: null,
+  inputs: [],
+  steps: [],
+  review_status: null,
+  validation_issues: [],
 };
 
 function composerProps(): ComponentProps<typeof Composer> {
@@ -286,6 +291,19 @@ describe("Composer", () => {
 
     expect(view.props.onContextNavigate).toHaveBeenCalledWith("src", "/workspace/app");
     expect(view.props.onSubmit).not.toHaveBeenCalled();
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
+
+  it("shows a bound runbook badge with the plan hash tail", () => {
+    const runbook: FlowRecord = {
+      flow_id: "flow_demo_echo", name: "Demo Echo", kind: "runbook", status: "published",
+      source: "test", definition_revision: "sha256:def", plan_ir_hash: "sha256:abcdef0123456789",
+      review_status: "approved", validation_issues: [], inputs: [], steps: [],
+    };
+    const view = renderComposer({ flowId: "flow_demo_echo", flows: [runbook] });
+    expect(view.host.textContent).toContain("runbook");
+    expect(view.host.textContent).toContain("23456789");
     act(() => view.root.unmount());
     view.host.remove();
   });
