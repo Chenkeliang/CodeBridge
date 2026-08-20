@@ -5,6 +5,7 @@ import {
   CapabilityRuntime,
   SkillCapabilityAdapter,
   registerDemoCapabilities,
+  registerEquityCapabilities,
 } from "@codebridge/policy";
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore } from "@codebridge/work-items";
@@ -374,6 +375,44 @@ describe("flow API", () => {
     });
     expect(approved.status).toBe(200);
     expect(await approved.json()).toMatchObject({ status: "published" });
+    capabilities.close();
+    catalog.close();
+  });
+
+  it("publishes a runbook whose equity capability is registered", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    registerEquityCapabilities(capabilities, runtime);
+    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const created = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: "sess_1",
+        flow: {
+          flow_id: "flow_equity_balance",
+          name: "Equity Balance",
+          kind: "runbook",
+          inputs: [{ id: "user_id", type: "string", source: "user", required: true }],
+          steps: [{
+            id: "lookup",
+            capability: "equity.balance",
+            mode: "read_only",
+            success_when: "output.balance exists",
+          }],
+        },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const approved = await app.request("/v1/flows/flow_equity_balance/review", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "abc" }),
+    });
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toMatchObject({ status: "published" });
+    expect(catalog.get("flow_equity_balance")?.status).toBe("published");
     capabilities.close();
     catalog.close();
   });
