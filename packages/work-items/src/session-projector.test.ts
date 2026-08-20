@@ -436,4 +436,97 @@ describe("Session projector", () => {
     expect(store.getProjectionCursor("sess_2")).toBe(3);
     store.close();
   });
+
+  it("projects STEP_* onto one flow_step block and keeps capability_id after success", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "STEP_STARTED",
+      actor: "system",
+      target: "echo",
+      payload: { capability_id: "demo.echo", risk: "read_only" },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "STEP_SUCCEEDED",
+      actor: "system",
+      target: "echo",
+    });
+    const block = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!.blocks
+      .find((entry) => entry.kind === "flow_step");
+    expect(block).toMatchObject({
+      kind: "flow_step",
+      status: "passed",
+      metadata: expect.objectContaining({
+        step_id: "echo",
+        capability_id: "demo.echo",
+      }),
+    });
+    store.close();
+  });
+
+  it("projects PARAM_RESOLVED, RUN_SNAPSHOT, and VERIFICATION_FAILED", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      type: "PARAM_RESOLVED",
+      actor: "user",
+      target: "text",
+      payload: {
+        field: "text",
+        final_value: "hi",
+        resolution: "confirmed",
+        source: "user",
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "VERIFICATION_FAILED",
+      actor: "adapter",
+      target: "concat",
+      payload: {
+        step_id: "concat",
+        category: "verification",
+        postcondition: "output.result exists",
+        actual: null,
+        truncated: false,
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "RUN_SNAPSHOT",
+      actor: "system",
+      payload: {
+        flow_id: "flow_demo_echo",
+        outcome: "succeeded",
+        resolved_inputs: [{ field: "text", value: "hi" }],
+        steps: [{
+          step_id: "echo",
+          capability_id: "demo.echo",
+          output_ref: "artifact://a1",
+          verification_status: "passed",
+        }],
+      },
+    });
+    const kinds = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!.blocks
+      .map((block) => block.kind);
+    expect(kinds).toEqual(expect.arrayContaining([
+      "flow_param",
+      "flow_failure",
+      "flow_run",
+    ]));
+    const failure = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!.blocks
+      .find((block) => block.kind === "flow_failure");
+    expect(failure?.metadata).toMatchObject({
+      category: "verification",
+      truncated: false,
+    });
+    store.close();
+  });
 });

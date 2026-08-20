@@ -69,17 +69,88 @@ export function projectSessionEvent(
     case "TURN_CANCELLED":
       assertQueuedTurnHasNoTimeline(database, String(event.target));
       break;
+    case "STEP_STARTED": {
+      upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "running", {
+        step_id: targetOf(event),
+        capability_id: asRecord(event.payload).capability_id ?? null,
+        risk: asRecord(event.payload).risk ?? null,
+      });
+      break;
+    }
+    case "STEP_RETRYING": {
+      upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "retrying", {
+        step_id: targetOf(event),
+        attempt: asRecord(event.payload).attempt ?? null,
+        max_attempts: asRecord(event.payload).max_attempts ?? null,
+        error: asRecord(event.payload).error ?? null,
+      });
+      break;
+    }
+    case "STEP_SUCCEEDED": {
+      upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "passed", {
+        step_id: targetOf(event),
+        ended_at: event.occurredAt,
+      });
+      break;
+    }
+    case "STEP_FAILED": {
+      upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "failed", {
+        step_id: targetOf(event),
+        error: asRecord(event.payload).error ?? null,
+        ended_at: event.occurredAt,
+      });
+      break;
+    }
+    case "STEP_SKIPPED": {
+      upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "skipped", {
+        step_id: targetOf(event),
+      });
+      break;
+    }
+    case "PARAM_RESOLVED": {
+      const field = typeof asRecord(event.payload).field === "string"
+        ? String(asRecord(event.payload).field)
+        : targetOf(event) || "?";
+      upsertFlowBlock(database, sessionId, event, `flow_param:${event.runId ?? "session"}:${field}`, "flow_param", "confirmed", {
+        field,
+        candidate_value: asRecord(event.payload).candidate_value ?? null,
+        final_value: asRecord(event.payload).final_value ?? null,
+        resolution: asRecord(event.payload).resolution ?? "confirmed",
+        source: asRecord(event.payload).source ?? "user",
+        flow_revision: asRecord(event.payload).flow_revision ?? null,
+      });
+      break;
+    }
+    case "RUN_SNAPSHOT": {
+      const outcome = asRecord(event.payload).outcome === "failed" ? "failed" : "succeeded";
+      upsertFlowBlock(database, sessionId, event, `flow_run:${event.runId ?? "run"}:snapshot`, "flow_run", outcome, {
+        flow_id: asRecord(event.payload).flow_id ?? null,
+        flow_revision: asRecord(event.payload).flow_revision ?? null,
+        outcome,
+        resolved_inputs: asRecord(event.payload).resolved_inputs ?? [],
+        steps: asRecord(event.payload).steps ?? [],
+        attribution: asRecord(event.payload).attribution ?? null,
+      });
+      break;
+    }
+    case "VERIFICATION_FAILED": {
+      const stepId = typeof asRecord(event.payload).step_id === "string"
+        ? String(asRecord(event.payload).step_id)
+        : targetOf(event);
+      upsertFlowBlock(database, sessionId, event, `flow_failure:${event.runId ?? "run"}:${stepId}`, "flow_failure", "failed", {
+        step_id: stepId,
+        category: asRecord(event.payload).category ?? "verification",
+        postcondition: asRecord(event.payload).postcondition ?? null,
+        truncated: asRecord(event.payload).truncated === true,
+      });
+      break;
+    }
     // 已知但有意不进时间线的类型：显式 no-op（cursor 正常前进）。
     case "WORK_ITEM_CREATED":
     case "TURN_QUEUED":
     case "RUN_CREATED":
     case "PLAN_VALIDATED":
     case "RUN_CANCEL_REQUESTED":
-    case "STEP_STARTED":
-    case "STEP_SUCCEEDED":
-    case "STEP_SKIPPED":
-    case "STEP_RETRYING":
-    case "STEP_FAILED":
     case "BRANCH_SELECTED":
     case "FLOW_PROPOSED":
     case "FLOW_SELECTED":
@@ -87,7 +158,6 @@ export function projectSessionEvent(
     case "PROJECT_CANDIDATE_FOUND":
     case "ARTIFACT_CREATED":
     case "VERIFICATION_COMPLETED":
-    case "VERIFICATION_FAILED":
     case "APPROVAL_GRANTED":
     case "APPROVAL_REJECTED":
     case "WORK_ITEM_COMPLETED":
@@ -96,10 +166,8 @@ export function projectSessionEvent(
     case "SESSION_HISTORY_HYDRATED":
     case "PLAN_PROPOSED":
     case "DISCOVERY_STARTED":
-    case "PARAM_RESOLVED":
     case "FLOW_RECOMMENDED":
     case "FLOW_REJECTED":
-    case "RUN_SNAPSHOT":
       break;
     default:
       // R2：未知事件不得静默跳过——抛错后 cursor 停在旧 sequence，
@@ -642,6 +710,98 @@ function sealOpenSegmentsForRun(
        )`,
     )
     .run(runId);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function targetOf(event: DomainEvent): string {
+  return typeof event.target === "string" ? event.target : "";
+}
+
+function resolveFlowTurn(
+  database: DatabaseSync,
+  sessionId: string,
+  event: DomainEvent,
+): { turnId: string; runId: string } | undefined {
+  if (event.runId) {
+    const turn = findTimelineTurn(database, event.runId);
+    if (!turn) return undefined;
+    return { turnId: String(turn.turn_id), runId: event.runId };
+  }
+  const latest = database
+    .prepare(
+      `SELECT turn_id, run_id FROM session_timeline_turns
+       WHERE session_id = ?
+       ORDER BY timeline_index DESC
+       LIMIT 1`,
+    )
+    .get(sessionId) as { turn_id?: string; run_id?: string } | undefined;
+  if (!latest?.turn_id || !latest.run_id) return undefined;
+  return { turnId: String(latest.turn_id), runId: String(latest.run_id) };
+}
+
+function upsertFlowBlock(
+  database: DatabaseSync,
+  sessionId: string,
+  event: DomainEvent,
+  blockId: string,
+  kind: string,
+  status: string,
+  metadata: Record<string, unknown>,
+): void {
+  const turn = resolveFlowTurn(database, sessionId, event);
+  if (!turn) return;
+  const existing = database
+    .prepare(
+      `SELECT metadata_json FROM session_timeline_blocks WHERE block_id = ?`,
+    )
+    .get(blockId) as { metadata_json?: string } | undefined;
+  if (existing) {
+    const current = JSON.parse(existing.metadata_json ?? "{}") as Record<string, unknown>;
+    database
+      .prepare(
+        `UPDATE session_timeline_blocks
+         SET status = ?, metadata_json = ?
+         WHERE block_id = ?`,
+      )
+      .run(
+        status,
+        JSON.stringify(boundMetadata({ ...current, ...metadata })),
+        blockId,
+      );
+    return;
+  }
+  const row = database
+    .prepare(
+      `SELECT COALESCE(MAX(block_index), -1) + 1 AS next_index
+       FROM session_timeline_blocks
+       WHERE turn_id = ?`,
+    )
+    .get(turn.turnId) as { next_index?: number } | undefined;
+  database
+    .prepare(
+      `INSERT INTO session_timeline_blocks (
+        block_id, session_id, turn_id, run_id, block_index, kind, status,
+        metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      blockId,
+      sessionId,
+      turn.turnId,
+      turn.runId,
+      Number(row?.next_index ?? 0),
+      kind,
+      status,
+      JSON.stringify(boundMetadata({
+        ...metadata,
+        started_at: event.occurredAt,
+      })),
+    );
 }
 
 function assertQueuedTurnHasNoTimeline(
