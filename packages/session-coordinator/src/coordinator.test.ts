@@ -436,4 +436,36 @@ describe("SessionCoordinator submit", () => {
       run: { status: "succeeded" },
     });
   });
+
+  it("resumes a stale pause by returning the already-dispatched queued Run", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    coordinator.pauseQueue({ sessionId: "sess_1", reason: "stale" });
+    const resumed = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "resume_stale",
+    });
+    expect(resumed.dispatched?.run.id).toBe(first.run!.id);
+    expect(resumed.dispatched?.run.status).toBe("queued");
+    expect(resumed.runtime.queueState).toBe("ready");
+  });
+
+  it("does not auto-dispatch the next turn when the queue was paused mid-run", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    submit(coordinator, "second", "二");
+    coordinator.pauseQueue({ sessionId: "sess_1", reason: "stale" });
+    const finished = coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "succeeded",
+    });
+    expect(finished.dispatched).toBeNull();
+    expect(store.getSessionRuntime("sess_1")).toMatchObject({
+      queueState: "paused",
+      queuePauseReason: "stale",
+      activeRunId: null,
+    });
+  });
 });

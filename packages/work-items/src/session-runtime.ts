@@ -23,6 +23,7 @@ export type QueuePauseReason =
   | "failed"
   | "cancelled"
   | "interrupted"
+  | "stale"
   | null;
 export type SessionTurnStatus = "queued" | "dispatched" | "cancelled";
 export type ReplaySafety =

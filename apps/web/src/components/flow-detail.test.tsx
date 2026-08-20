@@ -83,4 +83,13 @@ describe("FlowDetail", () => {
     clickButton(view.host, /dry-run|预演/);
     expect(onSubmit).toHaveBeenCalledWith({}, true);
   });
+
+  it("does not offer a live run for candidate flows", () => {
+    const onSubmit = vi.fn();
+    const view = renderDetail({ flow: { ...echoFlow, status: "candidate" }, values: { text: "hi" }, missing: [], onValues: () => {}, onSubmit, onClose: () => {} });
+    const labels = [...view.host.querySelectorAll("button")].map((node) => node.textContent ?? "");
+    expect(labels.some((label) => label.includes("运行"))).toBe(false);
+    expect(labels.some((label) => /dry-run|预演/i.test(label))).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

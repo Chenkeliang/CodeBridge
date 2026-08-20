@@ -355,6 +355,15 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       cwd: slot.workspaceKey || null,
       title: asNullableString(body.title),
     });
+    if (options.coordinator && typeof options.catalog.listChannelBindings === "function") {
+      for (const binding of options.catalog.listChannelBindings(channel, conversationId)) {
+        if (binding.sessionId === session.id) continue;
+        options.coordinator.pauseQueue({
+          sessionId: binding.sessionId,
+          reason: "stale",
+        });
+      }
+    }
     if (session.providerSessionId) {
       options.workItems.setSessionProviderSessionId(
         session.id,

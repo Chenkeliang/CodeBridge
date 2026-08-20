@@ -391,6 +391,84 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("executes the auto-dispatched next Run after the current execute finishes", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, { maxQueuedTurns: 100 });
+    const submit = (key: string, text: string) =>
+      coordinator.submitTurn({
+        sessionId: "sess_1",
+        idempotencyKey: key,
+        message: {
+          text,
+          attachmentIds: [],
+          flowId: null,
+          model: null,
+          effort: null,
+          permissionMode: null,
+          plan: null,
+        },
+        workItem: {
+          title: "Session",
+          mode: "investigation",
+          conversationId: "conv_sess_1",
+          agentId: "pi",
+          workspaceScope: ["/tmp/project"],
+          riskLevel: "read_only",
+        },
+      });
+    const first = submit("message_1", "一");
+    const second = submit("message_2", "二");
+    let releaseSecond!: () => void;
+    let secondStarted!: () => void;
+    const secondGate = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    const secondHold = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const prompts: string[] = [];
+    const executor = new RunExecutor(
+      store,
+      {
+        async *run(request) {
+          prompts.push(request.prompt);
+          if (request.prompt === "二") {
+            secondStarted();
+            await secondHold;
+          }
+          yield { type: "text_delta", text: "ok" };
+          yield { type: "done", exitCode: 0 };
+        },
+      },
+      {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: new SessionLeaseService(store),
+        executorOwner: "bridge:123",
+        resolveRequest: (_workItem, run) => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: store.getTurn(run.turnId ?? "")?.message.text ?? "",
+        }),
+      },
+    );
+
+    const result = await executor.execute(first.run!.id);
+    expect(result.status).toBe("succeeded");
+    await secondGate;
+    const nextRunId = store.getTurn(second.turn.turnId)?.dispatchedRunId;
+    expect(store.getRun(nextRunId!)?.status).toBe("running");
+    releaseSecond();
+    await vi.waitFor(() => {
+      expect(store.getRun(nextRunId!)?.status).toBe("succeeded");
+    });
+    expect(prompts).toEqual(["一", "二"]);
+    store.close();
+  });
+
   it("interrupts exactly once when the provider lease renew fails", async () => {
     vi.useFakeTimers();
     try {

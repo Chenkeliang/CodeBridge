@@ -466,6 +466,16 @@ export class SessionCatalogStore {
     return binding ? this.getSession(binding.sessionId) : undefined;
   }
 
+  listChannelBindings(channel: string, conversationId: string): ChannelSessionBinding[] {
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM channel_session_bindings
+         WHERE channel = ? AND conversation_id = ?`,
+      )
+      .all(channel, conversationId) as SqliteRow[];
+    return rows.map(toChannelBinding);
+  }
+
   unbindChannelConversation(slot: ChannelSlot): boolean {
     const result = this.database
       .prepare(

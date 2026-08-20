@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, type AgentEvent, type ChannelSessionIngress } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "./bridge.js";
+import {
+  FEISHU_LIVE_STATUS_QUIET_MS,
+  FEISHU_LIVE_STATUS_TICK_MS,
+} from "./session-watcher.js";
 
 type StreamController = {
   readonly messageId: string;
@@ -491,10 +495,10 @@ describe("FeishuBridge streaming", () => {
     await waiting;
 
     expect(rendered).toContain("执行中");
+    expect(rendered).toContain("工具执行：Bash");
     expect(rendered).not.toContain("内部思考内容不能展示");
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await vi.advanceTimersByTimeAsync(FEISHU_LIVE_STATUS_QUIET_MS);
     expect(rendered).toContain("任务连接保持");
-    expect(rendered).toContain("Bash");
     expect(rendered).not.toContain("内部思考内容不能展示");
 
     releaseAgent();
@@ -561,7 +565,7 @@ describe("FeishuBridge streaming", () => {
       "test",
     );
     await waiting;
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await vi.advanceTimersByTimeAsync(FEISHU_LIVE_STATUS_TICK_MS);
     releaseAgent();
     await running;
 
@@ -635,7 +639,7 @@ describe("FeishuBridge streaming", () => {
       runSettled = true;
     });
     await waiting;
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await vi.advanceTimersByTimeAsync(FEISHU_LIVE_STATUS_TICK_MS);
     releaseAgent();
     await vi.advanceTimersByTimeAsync(0);
 

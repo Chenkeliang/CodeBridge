@@ -18,7 +18,8 @@ const PROTOCOL_PROBE: Record<string, (baseUrl: string, headers: Record<string, s
     const post = (messages: unknown[]) => fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ model, messages, max_tokens: 1 }),
+      // Some reasoning-model gateways reject max_tokens <= 2.
+      body: JSON.stringify({ model, messages, max_tokens: 16 }),
       signal: AbortSignal.timeout(30_000),
     });
     // Pi sends the system prompt as a `developer` role message; probe that first.

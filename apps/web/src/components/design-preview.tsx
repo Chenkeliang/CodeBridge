@@ -52,8 +52,8 @@ const sessions: AgentSession[] = [
 ];
 
 const flows: FlowRecord[] = [
-  { flow_id: "f1", name: "仓库巡检", kind: "runbook", status: "published", source: "catalog", definition_revision: "3" },
-  { flow_id: "f2", name: "发布验证", kind: "guide", status: "published", source: "catalog", definition_revision: "1" },
+  { flow_id: "f1", name: "仓库巡检", kind: "runbook", status: "published", source: "catalog", definition_revision: "3", plan_ir_hash: null, inputs: [], steps: [], review_status: null, validation_issues: [] },
+  { flow_id: "f2", name: "发布验证", kind: "guide", status: "published", source: "catalog", definition_revision: "1", plan_ir_hash: null, inputs: [], steps: [], review_status: null, validation_issues: [] },
 ];
 
 const commands: AgentCommand[] = [

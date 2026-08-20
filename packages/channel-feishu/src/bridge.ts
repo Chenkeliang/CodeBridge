@@ -31,6 +31,9 @@ import { registerFeishuExtraEvents } from "./feishu-extra-events.js";
 import { ChainTopicTracker } from "./chain-topics.js";
 import {
   FeishuSessionWatcher,
+  FEISHU_LIVE_STATUS_TICK_MS,
+  FEISHU_LIVE_STATUS_QUIET_MS,
+  FEISHU_PROGRESS_NOTICE_INTERVAL_MS,
   type FeishuCardHost,
 } from "./session-watcher.js";
 import {
@@ -78,12 +81,6 @@ export interface FeishuBridgeOptions {
 
 /** 降级时单条普通消息的最大字符数；结果超过就用 chunkMarkdown 分条发，避免撞飞书消息长度上限 */
 const FEISHU_MSG_CHUNK_CHARS = 12000;
-
-/** 运行状态只在飞书展示层刷新；不进入 Runner，也不参与 ACP 活跃计时。 */
-const FEISHU_LIVE_STATUS_INTERVAL_MS = 5 * 60_000;
-
-/** 发送新消息而非只改卡片；有真实 Agent 活动时每 10 分钟最多一条。 */
-const FEISHU_PROGRESS_NOTICE_INTERVAL_MS = 10 * 60_000;
 
 /** 只在卡片保留最新进度，避免长任务把数百条 commentary 累积成超长卡片。 */
 const FEISHU_LIVE_PROGRESS_CHARS = 1200;
@@ -144,7 +141,7 @@ function recordLiveActivity(
 
 function renderLiveStatus(status: FeishuLiveStatus, now = Date.now()): string {
   const sinceActivity = Math.max(0, now - status.lastActivityAt);
-  const quiet = sinceActivity >= FEISHU_LIVE_STATUS_INTERVAL_MS;
+  const quiet = sinceActivity >= FEISHU_LIVE_STATUS_QUIET_MS;
   return [
     `${quiet ? "🟠 **任务连接保持**" : "🟢 **执行中**"} · 已运行 ${formatElapsed(now - status.startedAt)}`,
     `最近确认活动：${formatElapsed(sinceActivity)}前`,
@@ -1000,7 +997,7 @@ export class FeishuBridge {
             const statusTimer = setInterval(() => {
               if (cardBroken || streamAbort.signal.aborted) return;
               queueRender(true);
-            }, FEISHU_LIVE_STATUS_INTERVAL_MS);
+            }, FEISHU_LIVE_STATUS_TICK_MS);
             statusTimer.unref?.();
 
             const noticeTimer = setInterval(() => {
@@ -1051,7 +1048,10 @@ export class FeishuBridge {
             try {
               await consumeAgent(
                 (event) => {
-                  if (recordLiveActivity(liveStatus, event)) activityVersion += 1;
+                  if (recordLiveActivity(liveStatus, event)) {
+                    activityVersion += 1;
+                    queueRender(true);
+                  }
                 },
                 (text) => {
                   thinkingContent += text;

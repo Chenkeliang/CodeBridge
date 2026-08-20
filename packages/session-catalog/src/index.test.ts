@@ -149,6 +149,9 @@ describe("session catalog", () => {
 
     expect(store.getChannelSession(slot("pi", key))?.id).toBe(pi.id);
     expect(store.getChannelSession(slot("cursor", key))?.id).toBe(cursor.id);
+    expect(store.listChannelBindings("feishu", "chat:topic").map((row) => row.sessionId).sort()).toEqual(
+      [cursor.id, pi.id].sort(),
+    );
     store.close();
   });
 

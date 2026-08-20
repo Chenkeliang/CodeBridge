@@ -51,7 +51,7 @@ export function FlowDetail(props: {
       className="grid gap-2"
       onSubmit={(event) => {
         event.preventDefault();
-        props.onSubmit(values, false);
+        props.onSubmit(values, flow.status === "candidate");
       }}
     >
       {flow.inputs.map((input) => (
@@ -74,9 +74,11 @@ export function FlowDetail(props: {
         </label>
       ))}
       <div className="flex gap-2">
-        <Button className="h-8 text-xs" size="sm" type="submit">运行</Button>
+        {flow.status === "published" && (
+          <Button className="h-8 text-xs" size="sm" type="submit">运行</Button>
+        )}
         {flow.status === "candidate" && (
-          <Button className="h-8 text-xs" onClick={() => props.onSubmit(values, true)} size="sm" type="button" variant="outline">Dry-run 预演</Button>
+          <Button className="h-8 text-xs" size="sm" type="submit" variant="outline">Dry-run 预演</Button>
         )}
       </div>
     </form>}
