@@ -77,6 +77,27 @@ export interface AgentSession {
   updated_at: string;
 }
 
+export interface FlowInputRecord {
+  id: string;
+  type: string;
+  source: string;
+  required: boolean;
+  default?: unknown;
+  description?: string | null;
+}
+
+export interface FlowStepRecord {
+  id: string;
+  capability: string | null;
+  purpose: string | null;
+  depends_on: string[];
+  mode: string | null;
+  approval: "none" | "required";
+  branches: Array<{ when: string; next: string }>;
+  retry: { max_attempts: number; delay_ms: number } | null;
+  success_when: string | null;
+}
+
 export interface FlowRecord {
   flow_id: string;
   name: string | null;
@@ -84,6 +105,11 @@ export interface FlowRecord {
   status: "draft" | "candidate" | "published" | "deprecated";
   source: string;
   definition_revision: string;
+  plan_ir_hash: string | null;
+  inputs: FlowInputRecord[];
+  steps: FlowStepRecord[];
+  review_status: string | null;
+  validation_issues: string[];
 }
 
 export interface ConfigOptionValue {
@@ -197,7 +223,7 @@ export interface TimelineSegmentView {
 export interface TimelineBlockView {
   block_id: string;
   block_index: number;
-  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error";
+  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error" | "flow_param" | "flow_step" | "flow_run" | "flow_failure";
   status: string;
   metadata: Record<string, unknown>;
   segments: TimelineSegmentView[];
@@ -260,6 +286,8 @@ export interface SendMessageInput {
   permissionMode: string | null;
   effort: string | null;
   idempotencyKey: string;
+  inputs?: Record<string, unknown>;
+  dryRun?: boolean;
 }
 
 export interface PiProviderModel {
