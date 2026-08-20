@@ -35,6 +35,7 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly code: string,
     message: string,
+    public readonly body: ErrorPayload | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -47,6 +48,7 @@ type ErrorPayload = {
   details?: string;
   message?: string;
   issues?: string[];
+  missing?: Array<{ id: string; type: string; source: string; reason: string }>;
 } | null;
 
 type SessionEventsPage = {
@@ -77,7 +79,7 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     const message = [payload?.message, payload?.detail ?? payload?.details ?? issueText]
       .filter((part): part is string => Boolean(part))
       .join(" · ") || `HTTP ${response.status}`;
-    throw new ApiError(response.status, payload?.error ?? "http_error", message);
+    throw new ApiError(response.status, payload?.error ?? "http_error", message, payload);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -135,6 +137,8 @@ function sendMessage(
       permission_mode: input.permissionMode,
       effort: input.effort,
       attachments: input.attachments,
+      inputs: input.inputs,
+      dry_run: input.dryRun === true,
     }),
   });
 }
@@ -218,6 +222,8 @@ async function startRun(id: string, flowId: string | null, model: string | null,
 
 export const api = {
   agents: () => request<AgentListResponse>("/v1/agents"),
+  fetchFlow: (flowId: string) =>
+    request<FlowRecord>("/v1/flows/" + encodeURIComponent(flowId)),
   detectAgent: (agentId: string) =>
     request<AgentProfile>(`/v1/agents/${encodeURIComponent(agentId)}/detect`, {
       method: "POST",

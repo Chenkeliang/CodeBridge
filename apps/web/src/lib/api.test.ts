@@ -129,6 +129,7 @@ describe("workbench API client", () => {
         permission_mode: null,
         effort: null,
         attachments: [],
+        dry_run: false,
       }),
     }));
   });
@@ -156,5 +157,40 @@ describe("workbench API client", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 400, code: "bad_request" });
     expect((error as Error).message).toBe("missing");
+  });
+
+  it("carries inputs and dry_run on sendMessage", async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json(receipt()));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.sendMessage("sess_1", {
+      message: "run", flowId: "flow_demo_echo", model: null,
+      attachments: [], permissionMode: null, effort: null, idempotencyKey: "k",
+      inputs: { text: "hi" }, dryRun: true,
+    });
+
+    const body = JSON.parse(String((fetch.mock.calls.at(-1)?.[1] as RequestInit).body));
+    expect(body).toMatchObject({ flow_id: "flow_demo_echo", inputs: { text: "hi" }, dry_run: true });
+  });
+
+  it("exposes the response body on ApiError for missing_inputs", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "missing_inputs",
+      missing: [{ id: "text", type: "string", source: "user", reason: "required" }],
+    }), { status: 409, headers: { "content-type": "application/json" } })));
+    const error = await api.sendMessage("sess_1", {
+      message: "run", flowId: "flow_demo_echo", model: null,
+      attachments: [], permissionMode: null, effort: null, idempotencyKey: "k2",
+    }).catch((caught) => caught) as ApiError;
+    expect(error.code).toBe("missing_inputs");
+    expect(error.body).toMatchObject({ missing: [{ id: "text" }] });
+  });
+
+  it("fetches a flow by id", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      flow_id: "flow_demo_echo", plan_ir_hash: "sha256:plan",
+    })));
+    const flow = await api.fetchFlow("flow_demo_echo");
+    expect(flow).toMatchObject({ flow_id: "flow_demo_echo", plan_ir_hash: "sha256:plan" });
   });
 });
