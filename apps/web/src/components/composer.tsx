@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, LoaderCircle, Send, Square } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, FolderOpen, LoaderCircle, Send, Square, Workflow } from "lucide-react";
 import { ComposerAttachments } from "@/components/composer-attachments";
 import { ComposerActions, ModelControls, PermissionControl } from "@/components/composer-controls";
 import {
@@ -16,12 +16,8 @@ import type {
   MessageAttachmentInput,
   WorkspaceListing,
 } from "@/lib/types";
-import {
-  applyComposerSuggestion,
-  composerTrigger,
-  filterCommands,
-  workspacePaths,
-} from "@/lib/workbench-logic";
+import { applyComposerSuggestion, composerTrigger, filterCommands, workspacePaths } from "@/lib/workbench-logic";
+import { revisionTail } from "@/lib/revision-tail";
 import { cn } from "@/lib/utils";
 
 type ComposerProps = {
@@ -111,6 +107,7 @@ export function Composer({
     (entry) => !contextQuery || `${entry.name} ${entry.path}`.toLowerCase().includes(contextQuery),
   );
   const hasWorkspace = workspacePaths(session).length > 0;
+  const boundFlow = flows.find((flow) => flow.flow_id === flowId);
   const commandSelectionKey = `${commandOpen}:${commandQuery}`;
   const contextSelectionKey = `${contextOpen}:${contextQuery}:${workspaceListing?.path ?? ""}`;
   const [commandSelection, setCommandSelection] = useState({ key: commandSelectionKey, index: 0 });
@@ -226,6 +223,14 @@ export function Composer({
     data-composer-running={running || undefined}
   >
     <ComposerAttachments attachments={attachments} onRemove={onRemoveAttachment} />
+    {boundFlow && boundFlow.status === "published" && (
+      <div className="flex items-center gap-2 border-b border-line px-3 py-1.5 font-mono text-xs text-muted">
+        <Workflow className="size-3.5" />
+        <span>{boundFlow.name || boundFlow.flow_id}</span>
+        <span className="text-faint">{boundFlow.kind}</span>
+        {boundFlow.plan_ir_hash && <span className="text-faint">{revisionTail(boundFlow.plan_ir_hash)}</span>}
+      </div>
+    )}
     <MarkdownComposer
       disabled={disabled || sending}
       key={`composer-editor-${sweepKey}`}
