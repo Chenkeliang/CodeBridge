@@ -174,4 +174,70 @@ describe("Session runtime schema", () => {
     });
     store.close();
   });
+
+  it("rejects rebinding a plan while the prior Run is still queued", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "Session",
+      mode: "auto",
+      conversationId: "conv_session_1",
+      sessionId: "sess_1",
+      agentId: "pi",
+      riskLevel: "read_only",
+    });
+    const plan = {
+      planId: "plan_flow_demo",
+      source: "workflow" as const,
+      workflowId: "flow_demo",
+      definitionRevision: "sha256:def",
+      planIrHash: "sha256:plan",
+      steps: [{
+        id: "echo",
+        capabilityId: "demo.echo",
+        risk: "read_only" as const,
+        dependsOn: [],
+        guard: null,
+        approval: "none" as const,
+        branches: [],
+        purpose: null,
+      }],
+    };
+    store.withSessionTransaction((tx) => {
+      tx.ensureRuntime("sess_1");
+      const first = tx.insertTurn("sess_1", {
+        text: "run",
+        attachmentIds: [],
+        flowId: "flow_demo",
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan,
+      });
+      tx.dispatchTurn(first.turnId, {
+        id: "run_1",
+        workItemId: item.id,
+        sessionId: "sess_1",
+        turnId: first.turnId,
+        mode: "auto",
+        agentId: "pi",
+        planId: plan.planId,
+        planIrHash: plan.planIrHash,
+        workflowRevision: plan.definitionRevision,
+      });
+      tx.insertTurn("sess_1", {
+        text: "again",
+        attachmentIds: [],
+        flowId: "flow_demo",
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan,
+      });
+      expect(() => tx.dispatchNextTurn("sess_1")).toThrow(
+        "Plan plan_flow_demo is bound to another Run",
+      );
+    });
+    expect(store.getRun("run_1")?.status).toBe("queued");
+    store.close();
+  });
 });
