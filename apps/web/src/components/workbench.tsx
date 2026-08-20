@@ -14,6 +14,7 @@ import { api } from "@/lib/api";
 import { SessionConnection } from "@/lib/session-connection";
 import { sessionViewStore, useSessionView } from "@/lib/session-store";
 import { submitSessionMessage } from "@/lib/submit-session-message";
+import { defaultsFromFlow, flowRunMessage } from "@/lib/flow-run-submit";
 import type {
   AgentCommand,
   AgentProfile,
@@ -872,7 +873,13 @@ export function Workbench() {
                   missing={missingInputs}
                   onClose={() => { setDetailFlow(null); setMissingInputs([]); }}
                   onSubmit={(values, dryRun) => { void runFlow(detailFlow, values, dryRun); }}
-                  onValues={setParamValues}
+                  onValues={(values) => {
+                    setParamValues(values);
+                    setMissingInputs((current) => current.filter((entry) => {
+                      const value = values[entry.id];
+                      return value === undefined || value === null || value === "";
+                    }));
+                  }}
                   values={paramValues}
                 /></div>}
                 {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
