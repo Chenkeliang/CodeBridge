@@ -81,6 +81,7 @@ const permissionOption: ConfigOption = {
 const flow: FlowRecord = {
   flow_id: "flow-1",
   name: "Review Flow",
+  description: null,
   kind: "runbook",
   status: "published",
   source: "test",
@@ -89,7 +90,10 @@ const flow: FlowRecord = {
   inputs: [],
   steps: [],
   review_status: null,
+  git_revision: null,
   validation_issues: [],
+  lineage_root_flow_id: "flow-1", parent_flow_id: null, provenance: null, publication_sequence: 1,
+  created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z",
 };
 
 function composerProps(): ComponentProps<typeof Composer> {
@@ -299,8 +303,11 @@ describe("Composer", () => {
   it("shows a bound runbook badge with the plan hash tail", () => {
     const runbook: FlowRecord = {
       flow_id: "flow_demo_echo", name: "Demo Echo", kind: "runbook", status: "published",
+      description: null,
       source: "test", definition_revision: "sha256:def", plan_ir_hash: "sha256:abcdef0123456789",
-      review_status: "approved", validation_issues: [], inputs: [], steps: [],
+      review_status: "approved", git_revision: null, validation_issues: [], inputs: [], steps: [],
+      lineage_root_flow_id: "flow_demo_echo", parent_flow_id: null, provenance: null, publication_sequence: 1,
+      created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z",
     };
     const view = renderComposer({ flowId: "flow_demo_echo", flows: [runbook] });
     expect(view.host.textContent).toContain("runbook");

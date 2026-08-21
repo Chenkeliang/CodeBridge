@@ -11,6 +11,7 @@ import type {
 import { SessionQueue } from "@/components/session-queue";
 import { SessionTimeline } from "@/components/session-timeline";
 import { FlowDetail } from "@/components/flow-detail";
+import { FlowControlPanel } from "@/components/flow-control-panel";
 import { SettingsPage } from "@/components/settings-page";
 import { PixelMark } from "@/components/pixel-mark";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
@@ -25,6 +26,8 @@ import type {
   AgentSession,
   ConfigOption,
   FlowRecord,
+  FlowCapability,
+  FlowReviewContext,
   MessageAttachmentInput,
   WorkspaceListing,
 } from "@/lib/types";
@@ -59,6 +62,11 @@ export function Workbench() {
   const [permissionMode, setPermissionMode] = useState("");
   const [pendingFlowId, setPendingFlowId] = useState("");
   const [detailFlow, setDetailFlow] = useState<FlowRecord | null>(null);
+  const [flowCapabilities, setFlowCapabilities] = useState<FlowCapability[]>([]);
+  const [flowReviewContext, setFlowReviewContext] = useState<FlowReviewContext | null>(null);
+  const [flowControlBusy, setFlowControlBusy] = useState(false);
+  const [flowControlError, setFlowControlError] = useState<string | null>(null);
+  const [savingCandidateRunId, setSavingCandidateRunId] = useState<string | null>(null);
   const [flowMismatch, setFlowMismatch] = useState<FlowRevisionMismatch | null>(null);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
   const [approvalStatusOverrides, setApprovalStatusOverrides] = useState<Record<string, RuntimeApprovalStatus>>({});
@@ -134,6 +142,16 @@ export function Workbench() {
       }),
     ) ?? [],
   [sessionView?.snapshot.timeline.turns]);
+  const detailCandidateFlowId = detailFlow?.status === "candidate" ? detailFlow.flow_id : null;
+  const detailEvidenceKey = useMemo(() => {
+    if (!detailCandidateFlowId) return "";
+    return sessionView?.snapshot.timeline.turns.flatMap((turn) =>
+      turn.blocks
+        .filter((block) => block.kind === "flow_run" && block.status === "succeeded")
+        .filter((block) => block.metadata.flow_id === detailCandidateFlowId)
+        .map(() => turn.run_id),
+    ).join(":") ?? "";
+  }, [detailCandidateFlowId, sessionView?.snapshot.timeline.turns]);
   const notify = useCallback((message: string, kind: "info" | "error" = "info") => {
     setNotice({ text: message, kind });
     window.setTimeout(() => setNotice((current) => current?.text === message ? null : current), 4000);
@@ -144,11 +162,12 @@ export function Workbench() {
     if (!silent) setError(null);
     try {
       if (importProvider) await api.importSessions();
-      const [agentList, nextSessions, nextFlows, nextConsumableFlows] = await Promise.all([
+      const [agentList, nextSessions, nextFlows, nextConsumableFlows, nextFlowCapabilities] = await Promise.all([
         api.agents(),
         api.sessions(false, true),
         api.flows("manage"),
         api.flows("consume"),
+        api.flowCapabilities(),
       ]);
       const nextAgents = agentList.agents;
       setAgents(nextAgents);
@@ -157,6 +176,7 @@ export function Workbench() {
       setSessions(nextSessions);
       setFlows(nextFlows);
       setConsumableFlows(nextConsumableFlows);
+      setFlowCapabilities(nextFlowCapabilities);
       const nextAgentId = selectedAgentRef.current && nextAgents.some((agent) => agent.agent_id === selectedAgentRef.current)
         ? selectedAgentRef.current
         : selectInitialAgent(nextAgents, agentList.effective_default_agent_id);
@@ -180,6 +200,17 @@ export function Workbench() {
 
   useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
   useEffect(() => { selectedSessionRef.current = selectedSessionId; }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!detailCandidateFlowId || !detailEvidenceKey) return;
+    let active = true;
+    void api.flowReviewContext(detailCandidateFlowId).then((context) => {
+      if (!active) return;
+      setFlowReviewContext(context);
+      setDetailFlow(context.flow);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [detailCandidateFlowId, detailEvidenceKey]);
 
   useEffect(() => {
     let active = true;
@@ -441,14 +472,93 @@ export function Workbench() {
   }
 
   async function openFlow(id: string) {
-    setArea("agents");
     setMissingInputs([]);
+    setFlowControlError(null);
     try {
-      const flow = await api.fetchFlow(id);
-      setDetailFlow(flow);
-      setParamValues(defaultsFromFlow(flow));
+      const context = await api.flowReviewContext(id);
+      setFlowReviewContext(context);
+      setDetailFlow(context.flow);
+      setParamValues(defaultsFromFlow(context.flow));
     } catch (caught) {
       setError(messageOf(caught));
+    }
+  }
+
+  async function refreshFlowCatalog(flowId?: string): Promise<FlowReviewContext | null> {
+    const [nextFlows, nextConsumableFlows] = await Promise.all([
+      api.flows("manage"),
+      api.flows("consume"),
+    ]);
+    setFlows(nextFlows);
+    setConsumableFlows(nextConsumableFlows);
+    if (!flowId) return null;
+    const context = await api.flowReviewContext(flowId);
+    setFlowReviewContext(context);
+    setDetailFlow(context.flow);
+    setParamValues((current) => ({ ...defaultsFromFlow(context.flow), ...current }));
+    return context;
+  }
+
+  async function createCandidateFromRun(runId: string): Promise<void> {
+    if (!selectedSessionId || savingCandidateRunId) return;
+    setSavingCandidateRunId(runId);
+    setFlowControlError(null);
+    try {
+      const candidate = await api.createCandidate(selectedSessionId, runId);
+      await refreshFlowCatalog(candidate.flow_id);
+      notify(`已生成 Candidate · ${candidate.name || candidate.flow_id}`);
+    } catch (caught) {
+      notify(messageOf(caught), "error");
+    } finally {
+      setSavingCandidateRunId(null);
+    }
+  }
+
+  async function saveCandidate(flow: FlowRecord): Promise<void> {
+    if (!selectedSessionId || flowControlBusy) {
+      if (!selectedSessionId) setFlowControlError("请选择来源 Session 后再保存 Candidate");
+      return;
+    }
+    setFlowControlBusy(true);
+    setFlowControlError(null);
+    try {
+      const saved = await api.saveCandidate(selectedSessionId, flow);
+      await refreshFlowCatalog(saved.flow_id);
+      notify("Candidate 已保存；revision 已由服务端重新计算");
+    } catch (caught) {
+      setFlowControlError(messageOf(caught));
+    } finally {
+      setFlowControlBusy(false);
+    }
+  }
+
+  async function reviewDefinition(decision: "approve" | "reject", gitRevision?: string): Promise<void> {
+    if (!detailFlow || flowControlBusy) return;
+    setFlowControlBusy(true);
+    setFlowControlError(null);
+    try {
+      const reviewed = await api.reviewFlow(detailFlow.flow_id, decision, gitRevision);
+      await refreshFlowCatalog(reviewed.flow_id);
+      notify(decision === "approve" ? "Flow 已批准并发布" : "Candidate 已打回");
+    } catch (caught) {
+      setFlowControlError(messageOf(caught));
+    } finally {
+      setFlowControlBusy(false);
+    }
+  }
+
+  async function deprecateDefinition(): Promise<void> {
+    if (!detailFlow || flowControlBusy) return;
+    setFlowControlBusy(true);
+    setFlowControlError(null);
+    try {
+      const deprecated = await api.deprecateFlow(detailFlow.flow_id);
+      await refreshFlowCatalog(deprecated.flow_id);
+      notify("Flow 已废弃，历史证据仍保留");
+    } catch (caught) {
+      setFlowControlError(messageOf(caught));
+    } finally {
+      setFlowControlBusy(false);
     }
   }
 
@@ -873,6 +983,32 @@ export function Workbench() {
     }
   }
 
+  const flowDetailSurface = detailFlow ? <div className="mb-4"><FlowDetail
+    flow={detailFlow}
+    management={flowReviewContext?.flow.flow_id === detailFlow.flow_id ? <FlowControlPanel
+      busy={flowControlBusy}
+      capabilities={flowCapabilities}
+      context={flowReviewContext}
+      error={flowControlError}
+      key={`${flowReviewContext.flow.flow_id}:${flowReviewContext.flow.definition_revision}:${flowReviewContext.flow.status}`}
+      onDeprecate={() => { void deprecateDefinition(); }}
+      onReview={(decision, gitRevision) => { void reviewDefinition(decision, gitRevision); }}
+      onSave={(flow) => { void saveCandidate(flow); }}
+    /> : undefined}
+    missing={missingInputs}
+    onBind={(flow) => { void bindFlowToSession(flow); }}
+    onClose={() => { setDetailFlow(null); setFlowReviewContext(null); setFlowControlError(null); setMissingInputs([]); }}
+    onSubmit={(values, dryRun) => { void runFlow(detailFlow, values, dryRun); }}
+    onValues={(values) => {
+      setParamValues(values);
+      setMissingInputs((current) => current.filter((entry) => {
+        const value = values[entry.id];
+        return value === undefined || value === null || value === "";
+      }));
+    }}
+    values={paramValues}
+  /></div> : null;
+
   return (
     <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && area !== "settings" ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
       <AgentRail
@@ -952,6 +1088,10 @@ export function Workbench() {
               }}
               onReading={setReading}
             />
+          </section>
+        ) : !selectedSession && detailFlow ? (
+          <section aria-label="Flow 管理" className="min-h-0 flex-1 overflow-y-auto px-8 py-7">
+            <div className="mx-auto w-full max-w-[880px]">{flowDetailSurface}</div>
           </section>
         ) : !selectedSession ? selectedAgentNeedsSetup || selectedAgentUnavailable ? (
           <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">
@@ -1053,21 +1193,7 @@ export function Workbench() {
                   <span className="min-w-0 flex-1 truncate">已绑定 Flow · {selectedSession.flow_id}</span>
                   <button className="text-ink hover:opacity-80" onClick={() => void unbindSelectedFlow()} type="button">解绑</button>
                 </div>}
-                {detailFlow && <div className="mb-4"><FlowDetail
-                  flow={detailFlow}
-                  missing={missingInputs}
-                  onBind={(flow) => { void bindFlowToSession(flow); }}
-                  onClose={() => { setDetailFlow(null); setMissingInputs([]); }}
-                  onSubmit={(values, dryRun) => { void runFlow(detailFlow, values, dryRun); }}
-                  onValues={(values) => {
-                    setParamValues(values);
-                    setMissingInputs((current) => current.filter((entry) => {
-                      const value = values[entry.id];
-                      return value === undefined || value === null || value === "";
-                    }));
-                  }}
-                  values={paramValues}
-                /></div>}
+                {flowDetailSurface}
                 {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
                   <SessionTimeline
                     activeRunId={sessionView.snapshot.runtime.active_run?.run_id ?? null}
@@ -1078,8 +1204,13 @@ export function Workbench() {
                     loadingEarlier={loadingEarlier}
                     onLoadEarlier={() => void loadEarlierTimeline()}
                     onLoadSegments={(blockId, after) => void loadBlockSegments(blockId, after)}
+                    onCreateCandidate={(runId) => { void createCandidateFromRun(runId); }}
                     onResolveApproval={(action, approve) => void resolveRuntimeApproval(action, approve)}
                     resolvingApprovalId={resolvingApprovalId}
+                    savingCandidateRunId={savingCandidateRunId}
+                    solidifiableFlowIds={flows
+                      .filter((flow) => flow.kind === "runbook" && flow.status === "published")
+                      .map((flow) => flow.flow_id)}
                     turns={sessionView.snapshot.timeline.turns}
                   />
                 ) : <div aria-label="Empty Session" className="flex min-h-[42vh] flex-col items-center justify-center text-center">

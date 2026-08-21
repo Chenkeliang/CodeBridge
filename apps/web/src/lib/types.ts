@@ -102,6 +102,7 @@ export interface FlowStepRecord {
 export interface FlowRecord {
   flow_id: string;
   name: string | null;
+  description: string | null;
   kind: "ephemeral" | "guide" | "runbook";
   status: "draft" | "candidate" | "published" | "deprecated";
   source: string;
@@ -110,7 +111,64 @@ export interface FlowRecord {
   inputs: FlowInputRecord[];
   steps: FlowStepRecord[];
   review_status: string | null;
+  git_revision: string | null;
   validation_issues: string[];
+  lineage_root_flow_id: string;
+  parent_flow_id: string | null;
+  provenance: FlowProvenance | null;
+  publication_sequence: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FlowProvenance {
+  source_run_id: string;
+  source_session_id: string;
+  source_flow_id: string;
+  source_definition_revision: string;
+}
+
+export interface FlowEvidence {
+  run_id: string;
+  session_id: string | null;
+  status: "succeeded";
+  definition_revision: string;
+  plan_ir_hash: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FlowSemanticDiff {
+  name_changed: boolean;
+  description_changed: boolean;
+  inputs: { added: string[]; removed: string[]; changed: string[] };
+  steps: { added: string[]; removed: string[]; changed: string[]; reordered: boolean };
+}
+
+export interface FlowHistoryEntry {
+  id: number;
+  flow_id: string;
+  definition_revision: string;
+  action: "created" | "definition_updated" | "review_approved" | "review_rejected" | "deprecated";
+  snapshot: FlowRecord;
+  created_at: string;
+}
+
+export interface FlowReviewContext {
+  flow: FlowRecord;
+  base: FlowRecord | null;
+  diff: FlowSemanticDiff;
+  provenance: FlowProvenance | null;
+  evidence: FlowEvidence[];
+  history: FlowHistoryEntry[];
+}
+
+export interface FlowCapability {
+  id: string;
+  adapter: string;
+  risk: "read_only" | "workspace_write" | "git_write" | "production_write";
+  description: string | null;
+  side_effects: boolean | null;
 }
 
 export interface ConfigOptionValue {

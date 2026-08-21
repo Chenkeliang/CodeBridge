@@ -53,8 +53,8 @@ const sessions: AgentSession[] = [
 ];
 
 const flows: FlowRecord[] = [
-  { flow_id: "f1", name: "仓库巡检", kind: "runbook", status: "published", source: "catalog", definition_revision: "3", plan_ir_hash: null, inputs: [], steps: [], review_status: null, validation_issues: [] },
-  { flow_id: "f2", name: "发布验证", kind: "guide", status: "draft", source: "catalog", definition_revision: "1", plan_ir_hash: null, inputs: [], steps: [], review_status: null, validation_issues: [] },
+  { flow_id: "f1", name: "仓库巡检", description: null, kind: "runbook", status: "published", source: "catalog", definition_revision: "3", plan_ir_hash: null, inputs: [], steps: [], review_status: null, git_revision: null, validation_issues: [], lineage_root_flow_id: "f1", parent_flow_id: null, provenance: null, publication_sequence: 1, created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z" },
+  { flow_id: "f2", name: "发布验证", description: null, kind: "guide", status: "draft", source: "catalog", definition_revision: "1", plan_ir_hash: null, inputs: [], steps: [], review_status: null, git_revision: null, validation_issues: [], lineage_root_flow_id: "f2", parent_flow_id: null, provenance: null, publication_sequence: 0, created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z" },
 ];
 
 const commands: AgentCommand[] = [

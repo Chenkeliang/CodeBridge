@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { revisionTail } from "@/lib/revision-tail";
 import type { FlowRecord } from "@/lib/types";
@@ -18,6 +19,7 @@ export function FlowDetail(props: {
   onValues: (values: Record<string, unknown>) => void;
   onSubmit: (values: Record<string, unknown>, dryRun: boolean) => void;
   onBind?: (flow: FlowRecord) => void;
+  management?: ReactNode;
   onClose: () => void;
 }) {
   const { flow, values } = props;
@@ -37,6 +39,8 @@ export function FlowDetail(props: {
       </div>
       <Button aria-label="关闭" onClick={props.onClose} size="sm" variant="ghost"><X className="size-3.5" /></Button>
     </header>
+
+    {props.management}
 
     <ol className="grid gap-1">
       {flow.steps.map((step) => (
