@@ -163,14 +163,14 @@ describe("channel session ingress", () => {
     expect(thrown?.detail).toContain("正被 run r 使用");
   });
 
-  it("streams raw channel session events", async () => {
+  it("normalizes production SSE fields into channel session events", async () => {
     const app = new Hono();
     app.get("/v1/sessions/:session/events", (c) => {
       expect(c.req.query("after_sequence")).toBe("3");
       expect(c.req.query("live")).toBe("true");
       return sse([
-        '{"type":"AGENT_EVENT","sequence":4,"runId":"run_1","target":null,"payload":{"event":{"type":"text_delta","text":"ok"}}}',
-        '{"type":"RUN_SUCCEEDED","sequence":5,"runId":"run_1","target":null,"payload":{}}',
+        '{"type":"ARTIFACT_CREATED","sequence":4,"run_id":"run_1","occurred_at":"2026-08-21T10:00:00.000Z","target":"artifact_1","result_ref":"artifact://artifact_1","payload":{"artifact_id":"artifact_1","step_id":"deploy","name":"deploy.output.json","mime_type":"application/json"}}',
+        '{"type":"RUN_SUCCEEDED","sequence":5,"run_id":"run_1","occurred_at":"2026-08-21T10:00:01.000Z","target":null,"result_ref":null,"payload":{}}',
       ]);
     });
     const ingress = createChannelSessionIngress(app, "token");
@@ -183,17 +183,26 @@ describe("channel session ingress", () => {
     }
     expect(events).toEqual([
       {
-        type: "AGENT_EVENT",
+        type: "ARTIFACT_CREATED",
         sequence: 4,
         runId: "run_1",
-        target: null,
-        payload: { event: { type: "text_delta", text: "ok" } },
+        occurredAt: "2026-08-21T10:00:00.000Z",
+        target: "artifact_1",
+        resultRef: "artifact://artifact_1",
+        payload: {
+          artifact_id: "artifact_1",
+          step_id: "deploy",
+          name: "deploy.output.json",
+          mime_type: "application/json",
+        },
       },
       {
         type: "RUN_SUCCEEDED",
         sequence: 5,
         runId: "run_1",
+        occurredAt: "2026-08-21T10:00:01.000Z",
         target: null,
+        resultRef: null,
         payload: {},
       },
     ]);

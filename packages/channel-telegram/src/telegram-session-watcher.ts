@@ -4,9 +4,14 @@ import type {
   ChannelSessionIngress,
 } from "@codebridge/core";
 import {
+  createChannelFlowProjector,
   createChannelStreamProjector,
+  renderChannelFlowFinal,
+  renderChannelFlowLive,
+  type ChannelFlowProjector,
   type ChannelStreamProjector,
 } from "@codebridge/router";
+import { CoalescingMessageWriter } from "./coalescing-message-writer.js";
 import { chunkTelegramText } from "./telegram-api.js";
 
 interface TelegramTransport {
@@ -31,6 +36,8 @@ export interface PendingTurn {
 
 class TelegramRunRenderer {
   private readonly projector: ChannelStreamProjector;
+  private readonly flowProjector: ChannelFlowProjector;
+  private readonly liveWriter: CoalescingMessageWriter;
 
   constructor(
     private readonly api: TelegramTransport,
@@ -38,12 +45,33 @@ class TelegramRunRenderer {
     private readonly topicId: string | undefined,
     private readonly pendingMessageId: number,
     showThinking: boolean,
+    onLog: (message: string) => void,
   ) {
     this.projector = createChannelStreamProjector({ showThinking });
+    this.flowProjector = createChannelFlowProjector();
+    this.liveWriter = new CoalescingMessageWriter(
+      async (text) => {
+        await this.api.editMessage(this.chatId, this.pendingMessageId, text);
+      },
+      (error) => onLog(
+        `telegram Flow 实时消息更新失败，将由终态覆盖：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
   }
 
   onAgentEvent(event: AgentEvent): void {
     this.projector.apply(event);
+  }
+
+  onDomainEvent(event: ChannelSessionEvent): void {
+    const flow = this.flowProjector.apply(event);
+    const text = composeTelegramRunBody(
+      this.projector.snapshot().liveText,
+      renderChannelFlowLive(flow),
+    );
+    if (text) this.liveWriter.enqueue(text);
   }
 
   async onPermissionRequest(title: string): Promise<void> {
@@ -59,7 +87,14 @@ class TelegramRunRenderer {
   }
 
   async finalize(): Promise<void> {
-    const chunks = chunkTelegramText(this.projector.snapshot().finalText);
+    await this.liveWriter.flush();
+    this.liveWriter.close();
+    const agent = this.projector.snapshot();
+    const flowText = renderChannelFlowFinal(this.flowProjector.snapshot());
+    const finalText = flowText
+      ? composeTelegramRunBody(agent.result, flowText)
+      : agent.finalText;
+    const chunks = chunkTelegramText(finalText);
     try {
       await this.api.editMessage(
         this.chatId,
@@ -73,6 +108,28 @@ class TelegramRunRenderer {
       await this.api.sendMessage(this.chatId, chunk, this.topicId);
     }
   }
+}
+
+const STRUCTURED_FLOW_EVENTS = new Set([
+  "STEP_STARTED",
+  "STEP_SUCCEEDED",
+  "STEP_FAILED",
+  "STEP_RETRYING",
+  "STEP_SKIPPED",
+  "ARTIFACT_CREATED",
+  "VERIFICATION_FAILED",
+  "APPROVAL_REQUESTED",
+  "APPROVAL_GRANTED",
+  "APPROVAL_REJECTED",
+  "RUN_SNAPSHOT",
+]);
+
+function isStructuredFlowEvent(event: ChannelSessionEvent): boolean {
+  return STRUCTURED_FLOW_EVENTS.has(event.type);
+}
+
+function composeTelegramRunBody(agentText: string, flowText: string): string {
+  return [agentText.trim(), flowText.trim()].filter(Boolean).join("\n\n---\n\n");
 }
 
 /** 每 Session 一个持久 events 订阅，单订阅路由 Turn / Run / Delivery。 */
@@ -126,6 +183,7 @@ export class TelegramSessionWatcher {
       topicId,
       pendingMessageId,
       showThinking,
+      this.onLog,
     );
     this.runs.set(runId, renderer);
     this.deliveries.set(runId, { turnId, owner });
@@ -147,6 +205,7 @@ export class TelegramSessionWatcher {
       turn.topicId,
       pending.message_id,
       turn.showThinking,
+      this.onLog,
     );
     this.runs.set(runId, renderer);
     const acked = await this.ingress.ackDelivery(
@@ -206,6 +265,9 @@ export class TelegramSessionWatcher {
         }
       }
       return;
+    }
+    if (isStructuredFlowEvent(event) && event.runId) {
+      this.runs.get(event.runId)?.onDomainEvent(event);
     }
     if (event.type === "STEP_FAILED" && event.runId) {
       if (!this.fatalAgentErrorRuns.has(event.runId)) {

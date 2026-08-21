@@ -6,6 +6,11 @@ import {
   WorkMarkdown,
 } from "@/components/conversation";
 import { Button } from "@/components/ui/button";
+import {
+  RuntimeApprovalCard,
+  type RuntimeApprovalAction,
+  type RuntimeApprovalStatus,
+} from "@/components/runtime-approval-card";
 import { formatElapsed } from "@/components/workbench-shared";
 import { revisionTail } from "@/lib/revision-tail";
 import type {
@@ -23,6 +28,9 @@ export function SessionTimeline(props: {
   onLoadEarlier: () => void;
   loadingBlockId: string | null;
   onLoadSegments: (blockId: string, after: number) => void;
+  resolvingApprovalId?: string | null;
+  approvalStatusOverrides?: Record<string, RuntimeApprovalStatus>;
+  onResolveApproval?: (action: RuntimeApprovalAction, approve: boolean) => void;
 }) {
   const timelineRoot = useRef<HTMLDivElement | null>(null);
   const seenSegmentIds = useRef<Set<string> | null>(null);
@@ -89,6 +97,10 @@ export function SessionTimeline(props: {
               key={item.block.block_id}
               loading={props.loadingBlockId === item.block.block_id}
               onLoadSegments={props.onLoadSegments}
+              onResolveApproval={props.onResolveApproval}
+              resolvingApprovalId={props.resolvingApprovalId ?? null}
+              approvalStatusOverrides={props.approvalStatusOverrides ?? {}}
+              runId={turn.run_id}
             />)}
       </article>;
     })}
@@ -101,6 +113,10 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   isLive: boolean;
   loading: boolean;
   onLoadSegments: (blockId: string, after: number) => void;
+  runId: string;
+  resolvingApprovalId: string | null;
+  approvalStatusOverrides: Record<string, RuntimeApprovalStatus>;
+  onResolveApproval?: (action: RuntimeApprovalAction, approve: boolean) => void;
 }) {
   const { block } = props;
   if (isEmptyProcessBlock(block) && !props.isLive) return null;
@@ -125,6 +141,18 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   }
   if (block.kind === "flow_param" || block.kind === "flow_step" || block.kind === "flow_run" || block.kind === "flow_failure") {
     return <FlowBlock block={block} />;
+  }
+  if (block.kind === "approval") {
+    const approvalId = typeof block.metadata.approval_id === "string"
+      ? block.metadata.approval_id
+      : null;
+    return <RuntimeApprovalCard
+      block={block}
+      busy={approvalId !== null && approvalId === props.resolvingApprovalId}
+      effectiveStatus={approvalId ? props.approvalStatusOverrides[approvalId] : undefined}
+      onResolve={props.onResolveApproval}
+      runId={props.runId}
+    />;
   }
   return <ProcessBlock
     blocks={[block]}

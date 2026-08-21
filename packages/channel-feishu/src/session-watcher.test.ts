@@ -76,8 +76,28 @@ function dispatchedEvent(sequence: number): ChannelSessionEvent {
     type: "TURN_DISPATCHED",
     sequence,
     runId: "run_1",
+    occurredAt: "2026-08-21T10:00:00.000Z",
     target: "turn_1",
+    resultRef: null,
     payload: {},
+  };
+}
+
+function flowEvent(
+  sequence: number,
+  type: string,
+  target: string | null,
+  payload: Record<string, unknown> = {},
+  resultRef: string | null = null,
+): ChannelSessionEvent {
+  return {
+    type,
+    sequence,
+    runId: "run_1",
+    occurredAt: `2026-08-21T10:00:${String(sequence).padStart(2, "0")}.000Z`,
+    target,
+    resultRef,
+    payload,
   };
 }
 
@@ -93,7 +113,9 @@ function terminalEvent(
     type,
     sequence,
     runId: "run_1",
+    occurredAt: "2026-08-21T10:01:00.000Z",
     target: null,
+    resultRef: null,
     payload: {},
   };
 }
@@ -199,7 +221,9 @@ describe("FeishuSessionWatcher", () => {
         type: "AGENT_EVENT",
         sequence: 7,
         runId: "run_1",
+        occurredAt: "2026-08-21T10:00:07.000Z",
         target: null,
+        resultRef: null,
         payload: { event: { type: "text_delta", text: "final answer" } },
       },
       terminalEvent(9),
@@ -230,6 +254,64 @@ describe("FeishuSessionWatcher", () => {
       "feishu:old:run_1",
     );
     expect(ingress.claimDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it("returns structured Flow progress, approval, artifacts, and snapshot on one recovered card", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    const step = flowEvent(7, "STEP_STARTED", "deploy", {
+      capability_id: "deploy.production",
+    });
+    const artifact = flowEvent(11, "ARTIFACT_CREATED", "artifact_1", {
+      artifact_id: "artifact_1",
+      step_id: "deploy",
+      name: "deploy.output.json",
+      mime_type: "application/json",
+    }, "artifact://artifact_1");
+    ingress.events = blockingEvents([
+      step,
+      step,
+      flowEvent(8, "APPROVAL_REQUESTED", "deploy.production", {
+        approval_id: "approval_1",
+        step_id: "deploy",
+      }),
+      flowEvent(9, "APPROVAL_GRANTED", "deploy.production", {
+        approval_id: "approval_1",
+        step_id: "deploy",
+      }),
+      flowEvent(10, "STEP_SUCCEEDED", "deploy"),
+      artifact,
+      artifact,
+      flowEvent(12, "RUN_SNAPSHOT", "run_1", {
+        flow_id: "flow_deploy",
+        flow_revision: "sha256:revision",
+        outcome: "succeeded",
+        steps: [{
+          step_id: "deploy",
+          capability_id: "deploy.production",
+          output_ref: "artifact://artifact_1",
+          verification_status: "passed",
+        }],
+      }),
+      terminalEvent(13),
+    ]);
+
+    const w = watcher(ingress, host);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+
+    const updates = vi.mocked(host.updateCard).mock.calls
+      .map((call) => JSON.stringify(call[1]));
+    expect(updates.some((content) => content.includes("请在 Web 打开当前 Session 完成审批"))).toBe(true);
+    const final = updates.at(-1)!;
+    expect(final).toContain("Flow 结果 · 成功");
+    expect(final).toContain("flow_deploy");
+    expect(final).toContain("deploy.output.json");
+    expect(final.match(/deploy.output.json/g)).toHaveLength(1);
+    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
     w.abort();
   });
 
@@ -315,7 +397,9 @@ describe("FeishuSessionWatcher", () => {
         type: "AGENT_EVENT",
         sequence: 7,
         runId: "run_1",
+        occurredAt: "2026-08-21T10:00:07.000Z",
         target: null,
+        resultRef: null,
         payload: { event: { type: "text_delta", text: "final" } },
       },
       terminalEvent(9),
@@ -345,7 +429,9 @@ describe("FeishuSessionWatcher", () => {
         type: "AGENT_EVENT",
         sequence: 7,
         runId: "run_1",
+        occurredAt: "2026-08-21T10:00:07.000Z",
         target: null,
+        resultRef: null,
         payload: {
           event: { type: "text_delta", phase: "commentary", text: "thinking…" },
         },
@@ -354,7 +440,9 @@ describe("FeishuSessionWatcher", () => {
         type: "AGENT_EVENT",
         sequence: 8,
         runId: "run_1",
+        occurredAt: "2026-08-21T10:00:08.000Z",
         target: null,
+        resultRef: null,
         payload: { event: { type: "text_delta", text: "final answer" } },
       },
       terminalEvent(9),

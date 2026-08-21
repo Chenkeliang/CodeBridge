@@ -9,12 +9,26 @@ import type {
   ChannelSubmitReceipt,
 } from "@codebridge/core";
 
-interface SessionEvent {
+interface SessionEventWire {
   type?: string;
   sequence?: number;
+  run_id?: string | null;
+  occurred_at?: string | null;
   target?: string | null;
-  runId?: string | null;
+  result_ref?: string | null;
   payload?: Record<string, unknown>;
+}
+
+function toChannelSessionEvent(event: SessionEventWire): ChannelSessionEvent {
+  return {
+    type: String(event.type ?? ""),
+    sequence: Number(event.sequence ?? 0),
+    runId: typeof event.run_id === "string" ? event.run_id : null,
+    occurredAt: typeof event.occurred_at === "string" ? event.occurred_at : null,
+    target: typeof event.target === "string" ? event.target : null,
+    resultRef: typeof event.result_ref === "string" ? event.result_ref : null,
+    payload: event.payload ?? {},
+  };
 }
 
 export function createChannelSessionIngress(
@@ -139,13 +153,7 @@ export function createChannelSessionIngress(
       throw new Error(`Channel event stream failed (${response.status})`);
     }
     for await (const event of readSessionEvents(response.body)) {
-      yield {
-        type: String(event.type ?? ""),
-        sequence: Number(event.sequence ?? 0),
-        runId: event.runId ?? null,
-        target: event.target ?? null,
-        payload: (event.payload ?? {}) as Record<string, unknown>,
-      };
+      yield toChannelSessionEvent(event);
     }
   };
 
@@ -439,7 +447,7 @@ export function createChannelSessionIngress(
 
 async function* readSessionEvents(
   body: ReadableStream<Uint8Array>,
-): AsyncGenerator<SessionEvent> {
+): AsyncGenerator<SessionEventWire> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -456,7 +464,7 @@ async function* readSessionEvents(
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice("data:".length).trimStart())
           .join("\n");
-        if (data) yield JSON.parse(data) as SessionEvent;
+        if (data) yield JSON.parse(data) as SessionEventWire;
         boundary = buffer.indexOf("\n\n");
       }
       if (done) return;
