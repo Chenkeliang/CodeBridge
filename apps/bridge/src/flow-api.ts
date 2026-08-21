@@ -33,9 +33,44 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     const predicate = view === "manage" ? isManageable : isConsumable;
     return c.json({ flows: catalog.list().filter(predicate).map(toApiFlow) });
   });
+  app.get("/v1/capabilities", (c) => {
+    const capabilities = options.capabilities?.list() ?? [];
+    return c.json({
+      capabilities: capabilities.map((capability) => ({
+        id: capability.id,
+        adapter: capability.adapter,
+        risk: capability.risk,
+        description: capability.description ?? null,
+        side_effects: capability.side_effects ?? null,
+      })),
+    });
+  });
   app.get("/v1/flows/:flow_id", (c) => {
     const flow = catalog.get(c.req.param("flow_id"));
     return flow ? c.json(toApiFlow(flow)) : c.json({ error: "flow_not_found" }, 404);
+  });
+  app.get("/v1/flows/:flow_id/review-context", (c) => {
+    const flow = catalog.get(c.req.param("flow_id"));
+    if (!flow) return c.json({ error: "flow_not_found" }, 404);
+    const provenance = flow.provenance;
+    const base = provenance
+      ? catalog.getRevision(provenance.sourceFlowId, provenance.sourceDefinitionRevision)
+      : flow.parentFlowId ? catalog.get(flow.parentFlowId) : undefined;
+    return c.json({
+      flow: toApiFlow(flow),
+      base: base ? toApiFlow(base) : null,
+      diff: semanticDiff(base, flow),
+      provenance: toApiProvenance(provenance),
+      evidence: flowEvidence(flow, options.events),
+      history: catalog.history(flow.flowId).map((entry) => ({
+        id: entry.id,
+        flow_id: entry.flowId,
+        definition_revision: entry.definitionRevision,
+        action: entry.action,
+        snapshot: toApiFlow(entry.snapshot),
+        created_at: entry.createdAt,
+      })),
+    });
   });
   app.post("/v1/flows/:flow_id/apply", async (c) => {
     if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
@@ -84,6 +119,9 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     }
     if (decision === "approve") {
       const issues = publishIssues(flow, options);
+      if (flowEvidence(flow, options.events).length === 0) {
+        issues.push("successful dry-run evidence required");
+      }
       if (issues.length > 0) {
         return c.json({ error: "flow_not_publishable", issues }, 409);
       }
@@ -91,6 +129,9 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
         return c.json({ error: "capability_registry_unavailable" }, 409);
       }
     }
+    const nextPublicationSequence = decision === "approve"
+      ? Math.max(0, ...catalog.listLineage(flow.lineageRootFlowId).map((entry) => entry.publicationSequence)) + 1
+      : flow.publicationSequence;
     const reviewed = catalog.save({
       ...flow,
       status: decision === "approve" ? "published" : "candidate",
@@ -98,8 +139,24 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       definitionRevision: flow.definitionRevision,
       reviewStatus: decision === "approve" ? "approved" : "rejected",
       gitRevision: decision === "approve" ? String(body!.git_revision) : flow.gitRevision,
+      publicationSequence: nextPublicationSequence,
     });
+    if (decision === "approve") {
+      for (const prior of catalog.listLineage(flow.lineageRootFlowId)) {
+        if (prior.flowId !== reviewed.flowId && prior.kind === "runbook" && prior.status === "published") {
+          catalog.save({ ...prior, status: "deprecated" });
+        }
+      }
+    }
     return c.json(toApiFlow(reviewed));
+  });
+  app.post("/v1/flows/:flow_id/deprecate", (c) => {
+    const flow = catalog.get(c.req.param("flow_id"));
+    if (!flow) return c.json({ error: "flow_not_found" }, 404);
+    if (flow.kind !== "runbook" || flow.status !== "published") {
+      return c.json({ error: "flow_not_deprecatable" }, 409);
+    }
+    return c.json(toApiFlow(catalog.save({ ...flow, status: "deprecated" })));
   });
   app.post("/v1/flows/candidates", async (c) => {
     if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
@@ -115,19 +172,61 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     if (input.kind !== undefined && input.kind !== "runbook") {
       return c.json({ error: "invalid_flow_state" }, 400);
     }
+    let derivedFrom: FlowRecord | undefined;
+    let provenance: FlowRecord["provenance"] = null;
+    if (body.run_id !== undefined) {
+      if (typeof body.run_id !== "string" || !body.run_id.trim()) {
+        return c.json({ error: "invalid_run_id" }, 400);
+      }
+      if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
+      const run = options.events.getRun(body.run_id);
+      if (!run || run.sessionId !== session.id) return c.json({ error: "run_not_found" }, 404);
+      if (run.status !== "succeeded") return c.json({ error: "run_not_succeeded" }, 409);
+      const plan = options.events.getPlanForRun(run.id);
+      const source = plan ? catalog.get(plan.workflowId) : undefined;
+      if (
+        !plan
+        || plan.source !== "workflow"
+        || !source
+        || source.kind !== "runbook"
+        || source.status !== "published"
+        || !source.planIrHash
+        || plan.definitionRevision !== source.definitionRevision
+        || plan.planIrHash !== source.planIrHash
+        || run.workflowRevision !== source.definitionRevision
+        || run.planIrHash !== source.planIrHash
+      ) {
+        return c.json({ error: "run_not_solidifiable" }, 409);
+      }
+      derivedFrom = source;
+      provenance = {
+        sourceRunId: run.id,
+        sourceSessionId: session.id,
+        sourceFlowId: source.flowId,
+        sourceDefinitionRevision: source.definitionRevision,
+      };
+    }
     const flowId = typeof input.flow_id === "string" ? input.flow_id : `flow_${randomUUID().replaceAll("-", "")}`;
     const existing = catalog.get(flowId);
     if (existing && (existing.kind !== "runbook" || existing.status !== "candidate")) {
       return c.json({ error: "flow_id_conflict", flow_id: flowId }, 409);
     }
-    const rawSteps = Array.isArray(input.steps) ? input.steps : [];
-    const rawInputs = Array.isArray(input.inputs) ? input.inputs : [];
+    const rawSteps = Array.isArray(input.steps)
+      ? input.steps
+      : derivedFrom ? derivedFrom.steps.map(toWorkflowStep) : [];
+    const rawInputs = Array.isArray(input.inputs) ? input.inputs : derivedFrom?.inputs ?? [];
+    const source: FlowRecord["source"] = "user_selected";
     const definition = {
       schema_version: 1,
       workflow_id: flowId,
-      name: typeof input.name === "string" && input.name.trim() ? input.name : flowId,
+      name: typeof input.name === "string" && input.name.trim()
+        ? input.name.trim()
+        : derivedFrom?.name ?? existing?.name ?? flowId,
       kind: "runbook" as const,
       status: "draft",
+      description: typeof input.description === "string"
+        ? input.description
+        : input.description === null ? undefined : derivedFrom?.description ?? existing?.description ?? undefined,
       inputs: rawInputs,
       steps: rawSteps,
     };
@@ -139,7 +238,7 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       // A stable planId keeps the compiled IR byte-identical across re-saves of
       // the same definition — the id is an identity, not contract content.
       plan = compileWorkflow(definition, {
-        source: "agent_generated",
+        source: source === "agent_generated" ? "agent_generated" : "workflow",
         definitionRevision,
         planId: `plan_${flowId}`,
       });
@@ -164,15 +263,21 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     const flow = catalog.save({
       flowId,
       name: definition.name,
+      description: definition.description ?? null,
       kind: definition.kind,
       status: "candidate",
-      source: "agent_generated",
+      source,
       definitionRevision,
       planIrHash,
       inputs: plan.inputs,
       reviewStatus: "pending",
+      gitRevision: null,
       validationIssues: [],
       steps,
+      lineageRootFlowId: existing?.lineageRootFlowId ?? derivedFrom?.lineageRootFlowId ?? flowId,
+      parentFlowId: existing?.parentFlowId ?? derivedFrom?.flowId ?? null,
+      provenance: existing?.provenance ?? provenance ?? null,
+      publicationSequence: existing?.publicationSequence ?? 0,
     });
     if (options.events && session?.taskRecordId) {
       options.events.appendEvent({
@@ -198,6 +303,7 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
     schema_version: flow.schemaVersion,
     flow_id: flow.flowId,
     name: flow.name,
+    description: flow.description,
     kind: flow.kind,
     status: flow.status,
     source: flow.source,
@@ -207,6 +313,10 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
     review_status: flow.reviewStatus,
     git_revision: flow.gitRevision,
     validation_issues: flow.validationIssues,
+    lineage_root_flow_id: flow.lineageRootFlowId,
+    parent_flow_id: flow.parentFlowId,
+    provenance: toApiProvenance(flow.provenance),
+    publication_sequence: flow.publicationSequence,
     steps: flow.steps.map((step) => ({
       id: step.id,
       capability: step.capability ?? null,
@@ -223,6 +333,94 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
     created_at: flow.createdAt,
     updated_at: flow.updatedAt,
   };
+}
+
+function toApiProvenance(provenance: FlowRecord["provenance"]): Record<string, string> | null {
+  return provenance ? {
+    source_run_id: provenance.sourceRunId,
+    source_session_id: provenance.sourceSessionId,
+    source_flow_id: provenance.sourceFlowId,
+    source_definition_revision: provenance.sourceDefinitionRevision,
+  } : null;
+}
+
+function toWorkflowStep(step: FlowRecord["steps"][number]): Record<string, unknown> {
+  return {
+    id: step.id,
+    capability: step.capability,
+    purpose: step.purpose,
+    depends_on: step.dependsOn ?? [],
+    mode: step.mode,
+    approval: step.approval ?? "none",
+    branches: step.branches ?? [],
+    retry: step.retry
+      ? { max_attempts: step.retry.maxAttempts, delay_ms: step.retry.delayMs }
+      : undefined,
+    success_when: step.successWhen,
+  };
+}
+
+function semanticDiff(base: FlowRecord | undefined, flow: FlowRecord): Record<string, unknown> {
+  const baseInputs = new Map((base?.inputs ?? []).map((input) => [input.id, input]));
+  const nextInputs = new Map(flow.inputs.map((input) => [input.id, input]));
+  const baseSteps = new Map((base?.steps ?? []).map((step) => [step.id, step]));
+  const nextSteps = new Map(flow.steps.map((step) => [step.id, step]));
+  const inputIds = new Set([...baseInputs.keys(), ...nextInputs.keys()]);
+  const stepIds = new Set([...baseSteps.keys(), ...nextSteps.keys()]);
+  const commonBaseOrder = (base?.steps ?? []).map((step) => step.id).filter((id) => nextSteps.has(id));
+  const commonNextOrder = flow.steps.map((step) => step.id).filter((id) => baseSteps.has(id));
+  return {
+    name_changed: (base?.name ?? null) !== flow.name,
+    description_changed: (base?.description ?? null) !== flow.description,
+    inputs: {
+      added: [...inputIds].filter((id) => !baseInputs.has(id)),
+      removed: [...inputIds].filter((id) => !nextInputs.has(id)),
+      changed: [...inputIds].filter((id) => {
+        const before = baseInputs.get(id);
+        const after = nextInputs.get(id);
+        return before !== undefined && after !== undefined && JSON.stringify(before) !== JSON.stringify(after);
+      }),
+    },
+    steps: {
+      added: [...stepIds].filter((id) => !baseSteps.has(id)),
+      removed: [...stepIds].filter((id) => !nextSteps.has(id)),
+      changed: [...stepIds].filter((id) => {
+        const before = baseSteps.get(id);
+        const after = nextSteps.get(id);
+        return before !== undefined && after !== undefined && JSON.stringify(before) !== JSON.stringify(after);
+      }),
+      reordered: JSON.stringify(commonBaseOrder) !== JSON.stringify(commonNextOrder),
+    },
+  };
+}
+
+function flowEvidence(flow: FlowRecord, events: SqliteEventStore | undefined): Array<Record<string, unknown>> {
+  if (!events || !flow.planIrHash) return [];
+  const evidence: Array<Record<string, unknown>> = [];
+  for (const workItem of events.listWorkItems()) {
+    for (const run of events.listRuns(workItem.id)) {
+      if (run.status !== "succeeded") continue;
+      const plan = events.getPlanForRun(run.id);
+      if (
+        plan?.source !== "workflow"
+        || plan.workflowId !== flow.flowId
+        || plan.definitionRevision !== flow.definitionRevision
+        || plan.planIrHash !== flow.planIrHash
+        || run.workflowRevision !== flow.definitionRevision
+        || run.planIrHash !== flow.planIrHash
+      ) continue;
+      evidence.push({
+        run_id: run.id,
+        session_id: run.sessionId,
+        status: run.status,
+        definition_revision: flow.definitionRevision,
+        plan_ir_hash: flow.planIrHash,
+        created_at: run.createdAt,
+        updated_at: run.updatedAt,
+      });
+    }
+  }
+  return evidence.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
 }
 
 function isManualStep(step: FlowRecord["steps"][number]): boolean {

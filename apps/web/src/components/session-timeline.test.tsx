@@ -571,4 +571,39 @@ describe("SessionTimeline", () => {
     act(() => root.unmount());
     host.remove();
   });
+
+  it("offers Candidate creation only for a successful solidifiable Runbook snapshot", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onCreateCandidate = vi.fn();
+    const flowBlock: TimelineBlockView = {
+      block_id: "flow_run:run-source:snapshot",
+      block_index: 0,
+      kind: "flow_run",
+      status: "succeeded",
+      metadata: { flow_id: "flow_published", flow_revision: "sha256:one", steps: [] },
+      segments: [],
+      next_segment_cursor: null,
+    };
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      onCreateCandidate={onCreateCandidate}
+      solidifiableFlowIds={["flow_published"]}
+      turns={[{ timeline_index: 0, turn_id: "turn-source", run_id: "run-source", status: "succeeded", blocks: [flowBlock] }]}
+    />));
+    const button = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("存为 Candidate"));
+    expect(button).toBeTruthy();
+    act(() => button!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onCreateCandidate).toHaveBeenCalledWith("run-source");
+
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      onCreateCandidate={onCreateCandidate}
+      solidifiableFlowIds={[]}
+      turns={[{ timeline_index: 0, turn_id: "turn-source", run_id: "run-source", status: "succeeded", blocks: [flowBlock] }]}
+    />));
+    expect(host.textContent).not.toContain("存为 Candidate");
+    act(() => root.unmount());
+    host.remove();
+  });
 });

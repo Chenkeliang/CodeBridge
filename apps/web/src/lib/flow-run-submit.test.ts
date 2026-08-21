@@ -4,8 +4,11 @@ import type { FlowRecord } from "./types";
 
 const flow: FlowRecord = {
   flow_id: "flow_demo_echo", name: "Demo Echo", kind: "runbook", status: "published",
+  description: null,
   source: "user", definition_revision: "sha256:def", plan_ir_hash: "sha256:abcdef0123456789",
-  review_status: "approved", validation_issues: [],
+  review_status: "approved", git_revision: null, validation_issues: [],
+  lineage_root_flow_id: "flow_demo_echo", parent_flow_id: null, provenance: null, publication_sequence: 1,
+  created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z",
   inputs: [{ id: "text", type: "string", source: "user", required: true, default: "hi" }],
   steps: [],
 };

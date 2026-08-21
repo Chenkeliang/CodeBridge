@@ -9,8 +9,11 @@ import { FlowDetail } from "./flow-detail";
 
 const echoFlow: FlowRecord = {
   flow_id: "flow_demo_echo", name: "Demo Echo", kind: "runbook", status: "published",
+  description: "Echo and concatenate text",
   source: "user_selected", definition_revision: "sha256:def", plan_ir_hash: "sha256:abcdef0123456789",
-  review_status: "approved", validation_issues: [],
+  review_status: "approved", git_revision: "git-abc", validation_issues: [],
+  lineage_root_flow_id: "flow_demo_echo", parent_flow_id: null, provenance: null, publication_sequence: 1,
+  created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z",
   inputs: [{ id: "text", type: "string", source: "user", required: true }],
   steps: [
     { id: "echo", capability: "demo.echo", purpose: null, depends_on: [], mode: "read_only", approval: "none", branches: [], retry: null, success_when: "output.text exists" },
@@ -41,6 +44,19 @@ describe("FlowDetail", () => {
     expect(view.host.textContent).toContain("demo.echo");
     expect(view.host.textContent).toContain("output.text exists");
     expect(view.host.textContent).toContain("23456789");
+  });
+
+  it("mounts the active management surface when supplied", () => {
+    const view = renderDetail({
+      flow: echoFlow,
+      values: {},
+      missing: [],
+      onValues: () => {},
+      onSubmit: () => {},
+      onClose: () => {},
+      management: <div>Definition Review active surface</div>,
+    });
+    expect(view.host.textContent).toContain("Definition Review active surface");
   });
 
   it("shows a parent-provided value", () => {

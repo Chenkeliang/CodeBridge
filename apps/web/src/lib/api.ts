@@ -6,7 +6,9 @@ import type {
   AgentSession,
   ApprovalRecord,
   ConfigOption,
+  FlowCapability,
   FlowRecord,
+  FlowReviewContext,
   MessageAttachmentInput,
   PiProvider,
   PiProviderPreset,
@@ -267,6 +269,43 @@ export const api = {
   deleteSession: (id: string) => request<void>(`/v1/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
   flows: async (view: "manage" | "consume") =>
     (await request<{ flows: FlowRecord[] }>(`/v1/flows?view=${view}`)).flows,
+  flowCapabilities: async () =>
+    (await request<{ capabilities: FlowCapability[] }>("/v1/capabilities")).capabilities,
+  flowReviewContext: (flowId: string) =>
+    request<FlowReviewContext>(`/v1/flows/${encodeURIComponent(flowId)}/review-context`),
+  createCandidate: (sessionId: string, runId: string) =>
+    request<FlowRecord>("/v1/flows/candidates", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, run_id: runId }),
+    }),
+  saveCandidate: (sessionId: string, flow: FlowRecord) =>
+    request<FlowRecord>("/v1/flows/candidates", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: sessionId,
+        flow: {
+          flow_id: flow.flow_id,
+          name: flow.name,
+          description: flow.description,
+          kind: flow.kind,
+          inputs: flow.inputs,
+          steps: flow.steps,
+        },
+      }),
+    }),
+  reviewFlow: (flowId: string, decision: "approve" | "reject", gitRevision?: string) =>
+    request<FlowRecord>(`/v1/flows/${encodeURIComponent(flowId)}/review`, {
+      method: "POST",
+      body: JSON.stringify({
+        decision,
+        ...(decision === "approve" ? { git_revision: gitRevision ?? "" } : {}),
+      }),
+    }),
+  deprecateFlow: (flowId: string) =>
+    request<FlowRecord>(`/v1/flows/${encodeURIComponent(flowId)}/deprecate`, {
+      method: "POST",
+      body: "{}",
+    }),
   applyFlow: (sessionId: string, flowId: string) =>
     request<{
       flow_id: string;

@@ -10,6 +10,60 @@ import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { createFlowApp } from "./flow-api.js";
 
+function seedWorkflowRun(
+  events: SqliteEventStore,
+  flow: ReturnType<FlowCatalogStore["get"]>,
+  sessionId: string,
+  status: "running" | "succeeded" | "failed" = "succeeded",
+) {
+  if (!flow) throw new Error("flow fixture is required");
+  const workItem = events.createWorkItem({
+    title: `Run ${flow.flowId}`,
+    mode: "auto",
+    conversationId: `conv_${flow.flowId}`,
+    sessionId,
+    workflowId: flow.flowId,
+    workflowRevision: flow.definitionRevision,
+    riskLevel: "read_only",
+  });
+  const runId = `run_${flow.flowId}_${events.listWorkItems().length}`;
+  const planId = `plan_${runId}`;
+  events.savePlan({
+    planId,
+    source: "workflow",
+    workflowId: flow.flowId,
+    definitionRevision: flow.definitionRevision,
+    planIrHash: flow.planIrHash,
+    sessionId,
+    runId,
+    steps: flow.steps.map((step) => ({
+      id: step.id,
+      capabilityId: step.capability ?? null,
+      risk: step.mode === "workspace_write" || step.mode === "git_write" || step.mode === "production_write" || step.mode === "manual"
+        ? step.mode
+        : "read_only",
+      dependsOn: step.dependsOn ?? [],
+      guard: null,
+      approval: step.approval ?? "none",
+      branches: step.branches ?? [],
+      purpose: step.purpose ?? null,
+      successWhen: step.successWhen ?? null,
+      retry: step.retry ?? null,
+    })),
+  });
+  const run = events.createRun({
+    id: runId,
+    workItemId: workItem.id,
+    sessionId,
+    mode: "auto",
+    planId,
+    planIrHash: flow.planIrHash,
+    workflowRevision: flow.definitionRevision,
+  });
+  events.updateRunStatus(run.id, status);
+  return events.getRun(run.id)!;
+}
+
 describe("flow API", () => {
   it("separates management and consumption views behind auth", async () => {
     const catalog = new FlowCatalogStore(":memory:");
@@ -200,18 +254,21 @@ describe("flow API", () => {
 
   it("requires a Git revision before publishing a candidate", async () => {
     const catalog = new FlowCatalogStore(":memory:");
-    catalog.save({
+    const events = new SqliteEventStore(":memory:");
+    const candidate = catalog.save({
       flowId: "flow-review",
       name: "Review me",
       kind: "runbook",
       status: "candidate",
       source: "agent_generated",
       definitionRevision: "sha256:one",
+      planIrHash: "sha256:review-plan",
       steps: [],
     });
+    seedWorkflowRun(events, candidate, "sess-review");
     const capabilities = new CapabilityRegistry();
     const runtime = new CapabilityRuntime();
-    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const app = createFlowApp(catalog, "token", { capabilities, runtime, events });
     const missingRevision = await app.request("/v1/flows/flow-review/review", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
@@ -226,6 +283,7 @@ describe("flow API", () => {
     });
     expect(approved.status).toBe(200);
     expect(await approved.json()).toMatchObject({ status: "published", review_status: "approved", git_revision: "abc123", definition_revision: "sha256:one" });
+    events.close();
     capabilities.close();
     catalog.close();
   });
@@ -501,8 +559,9 @@ describe("flow API", () => {
     const session = sessions.createSession({ agentId: "pi" });
     const capabilities = new CapabilityRegistry();
     const runtime = new CapabilityRuntime();
+    const events = new SqliteEventStore(":memory:");
     registerDemoCapabilities(capabilities, runtime);
-    const app = createFlowApp(catalog, "token", { capabilities, runtime, sessions });
+    const app = createFlowApp(catalog, "token", { capabilities, runtime, sessions, events });
     const created = await app.request("/v1/flows/candidates", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
@@ -531,6 +590,7 @@ describe("flow API", () => {
       }),
     });
     expect(created.status).toBe(201);
+    seedWorkflowRun(events, catalog.get("flow_demo_echo"), session.id);
     const approved = await app.request("/v1/flows/flow_demo_echo/review", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
@@ -538,6 +598,7 @@ describe("flow API", () => {
     });
     expect(approved.status).toBe(200);
     expect(await approved.json()).toMatchObject({ status: "published" });
+    events.close();
     capabilities.close();
     sessions.close();
     catalog.close();
@@ -549,8 +610,9 @@ describe("flow API", () => {
     const session = sessions.createSession({ agentId: "pi" });
     const capabilities = new CapabilityRegistry();
     const runtime = new CapabilityRuntime();
+    const events = new SqliteEventStore(":memory:");
     registerEquityCapabilities(capabilities, runtime);
-    const app = createFlowApp(catalog, "token", { capabilities, runtime, sessions });
+    const app = createFlowApp(catalog, "token", { capabilities, runtime, sessions, events });
     const created = await app.request("/v1/flows/candidates", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
@@ -571,6 +633,7 @@ describe("flow API", () => {
       }),
     });
     expect(created.status).toBe(201);
+    seedWorkflowRun(events, catalog.get("flow_equity_balance"), session.id);
     const approved = await app.request("/v1/flows/flow_equity_balance/review", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
@@ -579,6 +642,7 @@ describe("flow API", () => {
     expect(approved.status).toBe(200);
     expect(await approved.json()).toMatchObject({ status: "published" });
     expect(catalog.get("flow_equity_balance")?.status).toBe("published");
+    events.close();
     capabilities.close();
     sessions.close();
     catalog.close();
@@ -630,6 +694,390 @@ describe("flow API", () => {
     expect(approved.status).toBe(409);
     expect(await approved.json()).toMatchObject({ error: "flow_not_reviewable" });
     expect(catalog.get("flow-skill-guide")?.status).toBe("draft");
+    catalog.close();
+  });
+
+  it("derives a traceable Candidate from a succeeded Published Runbook Run", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    const source = catalog.save({
+      flowId: "flow-source-run",
+      name: "Source Runbook",
+      description: "A proven baseline",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:source-run",
+      planIrHash: "sha256:source-plan",
+      inputs: [{ id: "text", type: "string", source: "user", required: true }],
+      steps: [{
+        id: "echo",
+        capability: "demo.echo",
+        mode: "read_only",
+        successWhen: "output.text exists",
+      }],
+    });
+    const run = seedWorkflowRun(events, source, session.id);
+    const app = createFlowApp(catalog, "token", { sessions, events });
+
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ session_id: session.id, run_id: run.id }),
+    });
+
+    expect(response.status).toBe(201);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      name: "Source Runbook",
+      description: "A proven baseline",
+      lineage_root_flow_id: source.flowId,
+      parent_flow_id: source.flowId,
+      provenance: {
+        source_run_id: run.id,
+        source_session_id: session.id,
+        source_flow_id: source.flowId,
+        source_definition_revision: source.definitionRevision,
+      },
+      inputs: [expect.objectContaining({ id: "text" })],
+      steps: [expect.objectContaining({ id: "echo", capability: "demo.echo" })],
+    });
+    expect(body.flow_id).not.toBe(source.flowId);
+    events.close();
+    sessions.close();
+    catalog.close();
+  });
+
+  it.each([
+    ["running", "run_not_succeeded"],
+    ["failed", "run_not_succeeded"],
+  ] as const)("rejects deriving from a %s Run without writing a Candidate", async (status, error) => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    const source = catalog.save({
+      flowId: `flow-${status}`,
+      name: status,
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: `sha256:${status}`,
+      planIrHash: `sha256:plan-${status}`,
+      steps: [],
+    });
+    const run = seedWorkflowRun(events, source, session.id, status);
+    const before = catalog.list().length;
+    const app = createFlowApp(catalog, "token", { sessions, events });
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ session_id: session.id, run_id: run.id }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error });
+    expect(catalog.list()).toHaveLength(before);
+    events.close();
+    sessions.close();
+    catalog.close();
+  });
+
+  it("returns capability mappings and structured Candidate review context", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    registerDemoCapabilities(capabilities, runtime);
+    const source = catalog.save({
+      flowId: "flow-context-source",
+      name: "Before",
+      description: "Before description",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:before",
+      planIrHash: "sha256:before-plan",
+      steps: [{ id: "echo", capability: "demo.echo", mode: "read_only", successWhen: "output.text exists" }],
+    });
+    const candidate = catalog.save({
+      flowId: "flow-context-candidate",
+      name: "After",
+      description: "After description",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: "sha256:after",
+      planIrHash: "sha256:after-plan",
+      lineageRootFlowId: source.flowId,
+      parentFlowId: source.flowId,
+      provenance: {
+        sourceRunId: "run-source",
+        sourceSessionId: "sess-source",
+        sourceFlowId: source.flowId,
+        sourceDefinitionRevision: source.definitionRevision,
+      },
+      steps: [
+        { id: "echo", capability: "demo.echo", mode: "read_only", successWhen: "output.text exists" },
+        { id: "concat", capability: "demo.concat", mode: "read_only", successWhen: "output.result exists" },
+      ],
+    });
+    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+
+    const capabilityResponse = await app.request("/v1/capabilities", {
+      headers: { authorization: "Bearer token" },
+    });
+    expect(capabilityResponse.status).toBe(200);
+    expect(await capabilityResponse.json()).toMatchObject({
+      capabilities: expect.arrayContaining([
+        expect.objectContaining({ id: "demo.echo", adapter: "demo.echo", risk: "read_only" }),
+      ]),
+    });
+
+    const contextResponse = await app.request(`/v1/flows/${candidate.flowId}/review-context`, {
+      headers: { authorization: "Bearer token" },
+    });
+    expect(contextResponse.status).toBe(200);
+    expect(await contextResponse.json()).toMatchObject({
+      flow: { flow_id: candidate.flowId },
+      base: { flow_id: source.flowId, definition_revision: source.definitionRevision },
+      diff: {
+        name_changed: true,
+        description_changed: true,
+        steps: { added: ["concat"], removed: [], changed: [], reordered: false },
+      },
+      provenance: { source_run_id: "run-source" },
+      evidence: [],
+      history: expect.any(Array),
+    });
+    capabilities.close();
+    catalog.close();
+  });
+
+  it("requires exact successful Dry-run evidence before publishing and replaces the Published parent", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    registerDemoCapabilities(capabilities, runtime);
+    const parent = catalog.save({
+      flowId: "flow-review-parent",
+      name: "Review parent",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:review-parent",
+      planIrHash: "sha256:review-parent-plan",
+      publicationSequence: 1,
+      steps: [{ id: "echo", capability: "demo.echo", mode: "read_only", successWhen: "output.text exists" }],
+    });
+    const candidate = catalog.save({
+      flowId: "flow-review-candidate",
+      name: "Review candidate",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: "sha256:review-candidate",
+      planIrHash: "sha256:review-candidate-plan",
+      lineageRootFlowId: parent.flowId,
+      parentFlowId: parent.flowId,
+      provenance: {
+        sourceRunId: "run-parent",
+        sourceSessionId: "sess-review",
+        sourceFlowId: parent.flowId,
+        sourceDefinitionRevision: parent.definitionRevision,
+      },
+      steps: [{ id: "echo", capability: "demo.echo", mode: "read_only", successWhen: "output.text exists" }],
+    });
+    const app = createFlowApp(catalog, "token", { events, capabilities, runtime });
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
+
+    const withoutEvidence = await app.request(`/v1/flows/${candidate.flowId}/review`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "approve", git_revision: "abc123" }),
+    });
+    expect(withoutEvidence.status).toBe(409);
+    expect(await withoutEvidence.json()).toMatchObject({
+      error: "flow_not_publishable",
+      issues: expect.arrayContaining(["successful dry-run evidence required"]),
+    });
+
+    seedWorkflowRun(events, candidate, "sess-review");
+    const approved = await app.request(`/v1/flows/${candidate.flowId}/review`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "approve", git_revision: "abc123" }),
+    });
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toMatchObject({
+      status: "published",
+      review_status: "approved",
+      publication_sequence: 2,
+    });
+    expect(catalog.get(parent.flowId)?.status).toBe("deprecated");
+    expect(catalog.listLineage(parent.flowId).filter((flow) => flow.status === "published"))
+      .toHaveLength(1);
+    events.close();
+    capabilities.close();
+    catalog.close();
+  });
+
+  it("rejects a Candidate without evidence and supports explicit Published deprecation", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const candidate = catalog.save({
+      flowId: "flow-reject-candidate",
+      name: "Reject candidate",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: "sha256:reject",
+      planIrHash: "sha256:reject-plan",
+      steps: [],
+    });
+    const published = catalog.save({
+      flowId: "flow-explicit-deprecate",
+      name: "Deprecate",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:deprecate",
+      planIrHash: "sha256:deprecate-plan",
+      steps: [],
+    });
+    const app = createFlowApp(catalog, "token");
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
+    const rejected = await app.request(`/v1/flows/${candidate.flowId}/review`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "reject" }),
+    });
+    expect(rejected.status).toBe(200);
+    expect(await rejected.json()).toMatchObject({ status: "candidate", review_status: "rejected" });
+
+    const deprecated = await app.request(`/v1/flows/${published.flowId}/deprecate`, {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    expect(deprecated.status).toBe(200);
+    expect(await deprecated.json()).toMatchObject({ status: "deprecated" });
+    const again = await app.request(`/v1/flows/${published.flowId}/deprecate`, {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({ error: "flow_not_deprecatable" });
+    catalog.close();
+  });
+
+  it("rejects cross-Session and Agent-plan promotion attempts", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    const owner = sessions.createSession({ agentId: "pi" });
+    const attacker = sessions.createSession({ agentId: "pi" });
+    const agentSession = sessions.createSession({ agentId: "pi" });
+    const source = catalog.save({
+      flowId: "flow-promotion-source",
+      name: "Promotion source",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:promotion",
+      planIrHash: "sha256:promotion-plan",
+      steps: [],
+    });
+    const ownedRun = seedWorkflowRun(events, source, owner.id);
+    const app = createFlowApp(catalog, "token", { sessions, events });
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
+    const crossSession = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ session_id: attacker.id, run_id: ownedRun.id }),
+    });
+    expect(crossSession.status).toBe(404);
+    expect(await crossSession.json()).toEqual({ error: "run_not_found" });
+
+    const workItem = events.createWorkItem({
+      title: "Agent plan",
+      mode: "auto",
+      conversationId: "conv-agent-plan",
+      sessionId: agentSession.id,
+      riskLevel: "read_only",
+    });
+    events.savePlan({
+      planId: "plan-agent-generated",
+      source: "agent_generated",
+      workflowId: source.flowId,
+      definitionRevision: source.definitionRevision,
+      planIrHash: source.planIrHash,
+      sessionId: agentSession.id,
+      runId: "run-agent-generated",
+      steps: [],
+    });
+    events.createRun({
+      id: "run-agent-generated",
+      workItemId: workItem.id,
+      sessionId: agentSession.id,
+      mode: "auto",
+      planId: "plan-agent-generated",
+      planIrHash: source.planIrHash,
+      workflowRevision: source.definitionRevision,
+    });
+    events.updateRunStatus("run-agent-generated", "succeeded");
+    const agentPlan = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ session_id: agentSession.id, run_id: "run-agent-generated" }),
+    });
+    expect(agentPlan.status).toBe(409);
+    expect(await agentPlan.json()).toEqual({ error: "run_not_solidifiable" });
+    events.close();
+    sessions.close();
+    catalog.close();
+  });
+
+  it("does not let successful evidence from an old revision approve a changed Candidate", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    const candidate = catalog.save({
+      flowId: "flow-stale-evidence",
+      name: "Before",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: "sha256:before",
+      planIrHash: "sha256:before-plan",
+      steps: [],
+    });
+    seedWorkflowRun(events, candidate, "sess-stale");
+    catalog.save({
+      ...candidate,
+      name: "After",
+      definitionRevision: "sha256:after",
+      planIrHash: "sha256:after-plan",
+    });
+    const app = createFlowApp(catalog, "token", { events, capabilities, runtime });
+    const response = await app.request(`/v1/flows/${candidate.flowId}/review`, {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "approve", git_revision: "git-after" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "flow_not_publishable",
+      issues: expect.arrayContaining(["successful dry-run evidence required"]),
+    });
+    expect(catalog.get(candidate.flowId)?.status).toBe("candidate");
+    events.close();
+    capabilities.close();
     catalog.close();
   });
 });

@@ -124,6 +124,7 @@ function saveChannelRunbook(flows: FlowCatalogStore, flowId = "flow_channel") {
     schemaVersion: 1 as const,
     flowId,
     name: "Channel Flow",
+    description: null,
     kind: "runbook" as const,
     status: "published" as const,
     source: "git" as const,
@@ -133,6 +134,10 @@ function saveChannelRunbook(flows: FlowCatalogStore, flowId = "flow_channel") {
     reviewStatus: "approved" as const,
     gitRevision: "test",
     validationIssues: [],
+    lineageRootFlowId: flowId,
+    parentFlowId: null,
+    provenance: null,
+    publicationSequence: 1,
     steps: [{
       id: "echo",
       capability: "demo.echo",

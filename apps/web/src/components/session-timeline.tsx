@@ -31,6 +31,9 @@ export function SessionTimeline(props: {
   resolvingApprovalId?: string | null;
   approvalStatusOverrides?: Record<string, RuntimeApprovalStatus>;
   onResolveApproval?: (action: RuntimeApprovalAction, approve: boolean) => void;
+  solidifiableFlowIds?: string[];
+  savingCandidateRunId?: string | null;
+  onCreateCandidate?: (runId: string) => void;
 }) {
   const timelineRoot = useRef<HTMLDivElement | null>(null);
   const seenSegmentIds = useRef<Set<string> | null>(null);
@@ -100,6 +103,9 @@ export function SessionTimeline(props: {
               onResolveApproval={props.onResolveApproval}
               resolvingApprovalId={props.resolvingApprovalId ?? null}
               approvalStatusOverrides={props.approvalStatusOverrides ?? {}}
+              solidifiableFlowIds={props.solidifiableFlowIds ?? []}
+              savingCandidateRunId={props.savingCandidateRunId ?? null}
+              onCreateCandidate={props.onCreateCandidate}
               runId={turn.run_id}
             />)}
       </article>;
@@ -117,6 +123,9 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   resolvingApprovalId: string | null;
   approvalStatusOverrides: Record<string, RuntimeApprovalStatus>;
   onResolveApproval?: (action: RuntimeApprovalAction, approve: boolean) => void;
+  solidifiableFlowIds: string[];
+  savingCandidateRunId: string | null;
+  onCreateCandidate?: (runId: string) => void;
 }) {
   const { block } = props;
   if (isEmptyProcessBlock(block) && !props.isLive) return null;
@@ -140,7 +149,13 @@ const TimelineBlock = memo(function TimelineBlock(props: {
     </div>;
   }
   if (block.kind === "flow_param" || block.kind === "flow_step" || block.kind === "flow_run" || block.kind === "flow_failure") {
-    return <FlowBlock block={block} />;
+    return <FlowBlock
+      block={block}
+      onCreateCandidate={props.onCreateCandidate}
+      runId={props.runId}
+      savingCandidateRunId={props.savingCandidateRunId}
+      solidifiableFlowIds={props.solidifiableFlowIds}
+    />;
   }
   if (block.kind === "approval") {
     const approvalId = typeof block.metadata.approval_id === "string"
@@ -364,7 +379,13 @@ function flowStepDot(status: string): string {
   }
 }
 
-function FlowBlock({ block }: { block: TimelineBlockView }) {
+function FlowBlock({ block, runId, solidifiableFlowIds, savingCandidateRunId, onCreateCandidate }: {
+  block: TimelineBlockView;
+  runId: string;
+  solidifiableFlowIds: string[];
+  savingCandidateRunId: string | null;
+  onCreateCandidate?: (runId: string) => void;
+}) {
   const meta = block.metadata as Record<string, unknown>;
   if (block.kind === "flow_step") {
     const label = flowStepLabel(block.status);
@@ -400,12 +421,14 @@ function FlowBlock({ block }: { block: TimelineBlockView }) {
   }
   const steps = Array.isArray(meta.steps) ? meta.steps as Array<Record<string, unknown>> : [];
   const passed = steps.filter((step) => step.verification_status === "passed").length;
+  const flowId = String(meta.flow_id ?? "");
+  const canSolidify = block.status === "succeeded" && solidifiableFlowIds.includes(flowId);
   return <div className="grid max-w-[780px] gap-2 rounded-lg border border-line bg-surface p-3.5 shadow-card">
     <p className="flex items-center justify-between gap-2 text-xs">
       <span className="flex items-center gap-2 font-semibold text-ink"><Workflow className="size-3.5" />Run 快照</span>
       <span className={cn("font-mono", block.status === "succeeded" ? "text-success" : "text-danger")}>{block.status === "succeeded" ? "成功" : "失败"}</span>
     </p>
-    <p className="font-mono text-xs text-muted">Flow {String(meta.flow_id ?? "")} · rev {revisionTail(String(meta.flow_revision ?? ""))}</p>
+    <p className="font-mono text-xs text-muted">Flow {flowId} · rev {revisionTail(String(meta.flow_revision ?? ""))}</p>
     <ol className="grid gap-1">
       {steps.map((step, index) => (
         <li className="flex items-center gap-2 font-mono text-xs" key={String(step.step_id ?? index)}>
@@ -415,6 +438,15 @@ function FlowBlock({ block }: { block: TimelineBlockView }) {
         </li>
       ))}
     </ol>
-    <p className="text-xs text-faint">{passed} / {steps.length} 步通过</p>
+    <div className="flex items-center justify-between gap-3">
+      <p className="text-xs text-faint">{passed} / {steps.length} 步通过</p>
+      {canSolidify && <Button
+        className="h-7 text-xs"
+        disabled={savingCandidateRunId === runId}
+        onClick={() => onCreateCandidate?.(runId)}
+        size="sm"
+        variant="outline"
+      >{savingCandidateRunId === runId ? "正在保存…" : "存为 Candidate"}</Button>}
+    </div>
   </div>;
 }

@@ -96,4 +96,114 @@ describe("flow catalog", () => {
     expect(flow.steps[0]?.successWhen).toBe("output.text exists");
     store.close();
   });
+
+  it("persists lineage and provenance with append-only revision history", () => {
+    const store = new FlowCatalogStore(":memory:");
+    const source = store.save({
+      flowId: "flow-source",
+      name: "Source",
+      description: "Published baseline",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:source",
+      publicationSequence: 1,
+      steps: [],
+    });
+    const candidate = store.save({
+      flowId: "flow-candidate",
+      name: "Candidate",
+      description: "Derived definition",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: "sha256:candidate",
+      lineageRootFlowId: source.flowId,
+      parentFlowId: source.flowId,
+      provenance: {
+        sourceRunId: "run-1",
+        sourceSessionId: "sess-1",
+        sourceFlowId: source.flowId,
+        sourceDefinitionRevision: source.definitionRevision,
+      },
+      steps: [],
+    });
+
+    expect(store.get(candidate.flowId)).toMatchObject({
+      description: "Derived definition",
+      lineageRootFlowId: "flow-source",
+      parentFlowId: "flow-source",
+      publicationSequence: 0,
+      provenance: {
+        sourceRunId: "run-1",
+        sourceSessionId: "sess-1",
+        sourceFlowId: "flow-source",
+        sourceDefinitionRevision: "sha256:source",
+      },
+    });
+    expect(store.history(candidate.flowId)).toHaveLength(1);
+    expect(store.history(candidate.flowId)[0]).toMatchObject({
+      action: "created",
+      definitionRevision: "sha256:candidate",
+    });
+    expect(store.getRevision(candidate.flowId, candidate.definitionRevision)?.flowId)
+      .toBe(candidate.flowId);
+    expect(store.listLineage(source.lineageRootFlowId).map((flow) => flow.flowId).sort())
+      .toEqual(["flow-candidate", "flow-source"]);
+
+    store.save({ ...candidate });
+    expect(store.history(candidate.flowId)).toHaveLength(1);
+    store.save({ ...candidate, reviewStatus: "rejected" });
+    expect(store.history(candidate.flowId).map((entry) => entry.action)).toEqual([
+      "created",
+      "review_rejected",
+    ]);
+    store.close();
+  });
+
+  it("defaults legacy records to their own lineage root", () => {
+    const store = new FlowCatalogStore(":memory:");
+    const flow = store.save({
+      flowId: "flow-legacy",
+      name: "Legacy",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:legacy",
+      steps: [],
+    });
+
+    expect(flow).toMatchObject({
+      description: null,
+      lineageRootFlowId: "flow-legacy",
+      parentFlowId: null,
+      provenance: null,
+      publicationSequence: 1,
+    });
+    store.close();
+  });
+
+  it("clears stale review metadata when a Candidate definition is edited", () => {
+    const store = new FlowCatalogStore(":memory:");
+    const candidate = store.save({
+      flowId: "flow-review-reset",
+      name: "Before",
+      kind: "runbook",
+      status: "candidate",
+      source: "user_selected",
+      definitionRevision: "sha256:before",
+      reviewStatus: "rejected",
+      gitRevision: "stale-git-revision",
+      steps: [],
+    });
+    const edited = store.save({
+      ...candidate,
+      name: "After",
+      definitionRevision: "sha256:after",
+      reviewStatus: "pending",
+      gitRevision: null,
+    });
+    expect(edited).toMatchObject({ reviewStatus: "pending", gitRevision: null });
+    store.close();
+  });
 });

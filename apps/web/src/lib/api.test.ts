@@ -276,4 +276,74 @@ describe("workbench API client", () => {
     const flow = await api.fetchFlow("flow_demo_echo");
     expect(flow).toMatchObject({ flow_id: "flow_demo_echo", plan_ir_hash: "sha256:plan" });
   });
+
+  it("uses the shared Candidate and Definition Review contracts", async () => {
+    const flow = {
+      flow_id: "flow_candidate",
+      name: "Candidate",
+      description: "Derived",
+      kind: "runbook" as const,
+      status: "candidate" as const,
+      source: "user_selected",
+      definition_revision: "sha256:def",
+      plan_ir_hash: "sha256:plan",
+      inputs: [],
+      steps: [],
+      review_status: "pending",
+      validation_issues: [],
+      lineage_root_flow_id: "flow_source",
+      parent_flow_id: "flow_source",
+      provenance: null,
+      publication_sequence: 0,
+      git_revision: null,
+      created_at: "2026-08-21T00:00:00.000Z",
+      updated_at: "2026-08-21T00:00:00.000Z",
+    };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json(flow, { status: 201 }))
+      .mockResolvedValueOnce(Response.json(flow, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ flow, base: null, diff: {}, provenance: null, evidence: [], history: [] }))
+      .mockResolvedValueOnce(Response.json({ capabilities: [] }))
+      .mockResolvedValueOnce(Response.json({ ...flow, status: "published" }))
+      .mockResolvedValueOnce(Response.json({ ...flow, review_status: "rejected" }))
+      .mockResolvedValueOnce(Response.json({ ...flow, status: "deprecated" }));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.createCandidate("sess_1", "run_1");
+    await api.saveCandidate("sess_1", flow);
+    await api.flowReviewContext(flow.flow_id);
+    await api.flowCapabilities();
+    await api.reviewFlow(flow.flow_id, "approve", "git-abc");
+    await api.reviewFlow(flow.flow_id, "reject");
+    await api.deprecateFlow(flow.flow_id);
+
+    expect(fetch.mock.calls[0]).toEqual([
+      "/v1/flows/candidates",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ session_id: "sess_1", run_id: "run_1" }),
+      }),
+    ]);
+    expect(JSON.parse(String((fetch.mock.calls[1]?.[1] as RequestInit).body))).toMatchObject({
+      session_id: "sess_1",
+      flow: { flow_id: "flow_candidate", name: "Candidate", description: "Derived" },
+    });
+    expect(fetch.mock.calls[2]?.[0]).toBe("/v1/flows/flow_candidate/review-context");
+    expect(fetch.mock.calls[3]?.[0]).toBe("/v1/capabilities");
+    expect(fetch.mock.calls[4]).toEqual([
+      "/v1/flows/flow_candidate/review",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ decision: "approve", git_revision: "git-abc" }),
+      }),
+    ]);
+    expect(fetch.mock.calls[5]).toEqual([
+      "/v1/flows/flow_candidate/review",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "reject" }) }),
+    ]);
+    expect(fetch.mock.calls[6]).toEqual([
+      "/v1/flows/flow_candidate/deprecate",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    ]);
+  });
 });

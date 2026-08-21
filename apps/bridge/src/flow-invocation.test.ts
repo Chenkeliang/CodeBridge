@@ -14,6 +14,7 @@ function flow(
     schemaVersion: 1,
     flowId: `flow-${kind}-${status}`,
     name: "Flow",
+    description: null,
     kind,
     status,
     source: "git",
@@ -24,6 +25,10 @@ function flow(
     gitRevision: null,
     validationIssues: [],
     steps: [],
+    lineageRootFlowId: `flow-${kind}-${status}`,
+    parentFlowId: null,
+    provenance: null,
+    publicationSequence: status === "published" ? 1 : 0,
     createdAt: "2026-08-21T00:00:00.000Z",
     updatedAt: "2026-08-21T00:00:00.000Z",
   };
