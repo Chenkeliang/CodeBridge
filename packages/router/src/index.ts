@@ -6,3 +6,4 @@ export * from "./orchestrator.js";
 export * from "./feishu-stream-presenter.js";
 export * from "./channel-stream-projector.js";
 export * from "./channel-flow-projector.js";
+export * from "./channel-flow-controller.js";

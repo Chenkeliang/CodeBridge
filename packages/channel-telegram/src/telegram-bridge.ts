@@ -10,6 +10,7 @@ import {
 } from "@codebridge/core";
 import {
   RunOrchestrator,
+  ChannelFlowController,
   createChannelStreamProjector,
   handleSlashCommand,
 } from "@codebridge/router";
@@ -30,6 +31,7 @@ export const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "r", description: "列出或恢复本机会话（/resume）" },
   { command: "x", description: "停止当前任务（/stop）" },
   { command: "status", description: "查看当前会话状态" },
+  { command: "flow", description: "列出或运行已发布 Flow" },
   { command: "resume", description: "列出或恢复本机会话" },
   { command: "continue", description: "恢复暂停队列" },
   { command: "new", description: "新建会话" },
@@ -67,6 +69,13 @@ interface TelegramTransport {
   ): Promise<{ message_id: number }>;
 }
 
+interface ChannelFlowSubmission {
+  flowId: string;
+  definitionRevision: string;
+  inputs: Record<string, unknown>;
+  idempotencyKey: string;
+}
+
 export interface TelegramBridgeOptions {
   config: AppConfig;
   dataDir: string;
@@ -85,6 +94,7 @@ export class TelegramBridge {
   private readonly activeReplies = new Set<Promise<void>>();
   private readonly mentionRegistry = new MentionRegistry();
   private readonly sessionWatchers = new Map<string, TelegramSessionWatcher>();
+  private readonly flowController = new ChannelFlowController();
   private readonly instanceId = randomUUID();
   private offset = 0;
   private sessionIngress?: ChannelSessionIngress;
@@ -204,6 +214,46 @@ export class TelegramBridge {
       }
     }
     const normalized = text.replace(/^\/([^\s@]+)@[^\s]+/, "/$1");
+    const flowCommand = this.sessionIngress
+      ? await this.flowController.handle({
+          scopeKey: `telegram|${chatId}|${topicId ?? ""}|${senderId}`,
+          text: normalized,
+          listFlows: () => this.sessionIngress!.listConsumableFlows(),
+          getActiveRunId: async () => {
+            const context = await this.sessionIngress!.getSlotCommandContext(
+              this.buildFullSlot(chatId, topicId),
+            );
+            return context.activeRunId;
+          },
+          listApprovals: (runId) =>
+            this.sessionIngress!.listRuntimeApprovals?.(runId) ?? Promise.resolve([]),
+          resolveApproval: (runId, approvalId, decision) => {
+            const resolve = this.sessionIngress!.resolveRuntimeApproval;
+            if (!resolve) throw new Error("Runtime 审批入口未就绪");
+            return resolve(runId, approvalId, decision);
+          },
+        })
+      : null;
+    if (flowCommand?.type === "reply") {
+      await this.sendText(chatId, flowCommand.text, topicId);
+      return;
+    }
+    if (flowCommand?.type === "invoke") {
+      await this.submitAndStream(
+        chatId,
+        topicId,
+        `运行 Flow：${flowCommand.flow.name}`,
+        senderId,
+        {
+          flowId: flowCommand.flow.flowId,
+          definitionRevision: flowCommand.flow.definitionRevision,
+          inputs: flowCommand.inputs,
+          idempotencyKey: flowCommand.idempotencyKey,
+        },
+      );
+      return;
+    }
+
     const slash = await handleSlashCommand({
       chatId,
       topicId,
@@ -493,6 +543,7 @@ export class TelegramBridge {
     topicId: string | undefined,
     prompt: string,
     senderId: string,
+    flow?: ChannelFlowSubmission,
   ): Promise<void> {
     if (!this.sessionIngress) {
       await this.runLegacyAgent(chatId, topicId, prompt);
@@ -508,6 +559,14 @@ export class TelegramBridge {
       generation: slot.generation,
       message: prompt,
       model: binding.model,
+      ...(flow
+        ? {
+            flowId: flow.flowId,
+            flowDefinitionRevision: flow.definitionRevision,
+            inputs: flow.inputs,
+            idempotencyKey: flow.idempotencyKey,
+          }
+        : {}),
       actorRef: { channel: "telegram", id: senderId },
     });
     const turn = {

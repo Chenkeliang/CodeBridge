@@ -216,7 +216,7 @@ export function renderChannelFlowLive(snapshot: ChannelFlowSnapshot): string {
         "⏸ **Flow 等待步骤审批**",
         `步骤：${latestApproval.stepId}`,
         latestApproval.capabilityId ? `能力：${latestApproval.capabilityId}` : undefined,
-        "请在 Web 打开当前 Session 完成审批。",
+        "回复 /flow approve 批准，或 /flow reject 拒绝；也可在 Web Workbench 处理。",
       ]
     : latestApproval?.status === "granted"
       ? ["✅ **Flow 步骤审批已通过，继续执行**"]

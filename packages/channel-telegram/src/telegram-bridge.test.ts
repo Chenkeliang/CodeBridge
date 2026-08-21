@@ -15,6 +15,83 @@ afterEach(() => {
 });
 
 describe("TelegramBridge inbound commands", () => {
+  it("lists and invokes a Flow without forwarding /flow commands to Agent", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-flow-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const submit = vi.fn().mockResolvedValue({
+      sessionId: "sess_flow",
+      turnId: "turn_flow",
+      runId: null,
+      acceptance: "queued",
+      queueState: "ready",
+      eventSequence: 3,
+    });
+    const bridge = new TelegramBridge({
+      config,
+      dataDir,
+      api: { sendMessage } as never,
+      sessionIngress: {
+        listConsumableFlows: vi.fn().mockResolvedValue([{
+          flowId: "flow_order",
+          name: "订单排查",
+          definitionRevision: "sha256:one",
+          inputs: [{ id: "oid", type: "integer", source: "user", required: true }],
+          steps: [{ id: "lookup", purpose: "查订单", mode: "read_only", approval: "none" }],
+        }]),
+        submit,
+        getSlotCommandContext: vi.fn().mockResolvedValue({
+          sessionId: null,
+          activeRunId: null,
+          providerSessionId: null,
+        }),
+        listRuntimeApprovals: vi.fn().mockResolvedValue([]),
+        resolveRuntimeApproval: vi.fn(),
+        events: async function* () {
+          await new Promise(() => {});
+        },
+        claimDelivery: vi.fn(),
+        ackDelivery: vi.fn(),
+        completeDelivery: vi.fn(),
+        listDeliveries: vi.fn().mockResolvedValue([]),
+      } as unknown as ChannelSessionIngress,
+    });
+    const update = (updateId: number, text: string) => ({
+      update_id: updateId,
+      message: {
+        message_id: updateId,
+        chat: { id: 42, type: "private" as const },
+        from: { id: 99 },
+        text,
+      },
+    });
+
+    await bridge.handleUpdate(update(1, "/flow"));
+    await bridge.handleUpdate(update(2, "/flow 1"));
+    await bridge.handleUpdate(update(3, "/flow set oid=1644460"));
+    await bridge.handleUpdate(update(4, "/flow run"));
+    await bridge.handleUpdate(update(5, "/flow confirm"));
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "telegram:42",
+      expect.stringContaining("订单排查"),
+      undefined,
+    );
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      channel: "telegram",
+      conversationId: "telegram:42|",
+      message: "运行 Flow：订单排查",
+      flowId: "flow_order",
+      flowDefinitionRevision: "sha256:one",
+      inputs: { oid: 1644460 },
+      actorRef: { channel: "telegram", id: "99" },
+      idempotencyKey: expect.stringMatching(/^flow:/),
+    }));
+  });
+
   it("registers native commands before polling", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-"));
     tmpDirs.push(dataDir);

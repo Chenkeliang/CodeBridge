@@ -109,7 +109,8 @@ describe("createChannelFlowProjector", () => {
       approvalId: "approval_1",
       status: "requested",
     })]);
-    expect(renderChannelFlowLive(projector.snapshot())).toContain("请在 Web 打开当前 Session 完成审批");
+    expect(renderChannelFlowLive(projector.snapshot())).toContain("/flow approve");
+    expect(renderChannelFlowLive(projector.snapshot())).toContain("Web Workbench");
 
     projector.apply(event("APPROVAL_GRANTED", "deploy.production", {
       approval_id: "approval_1",

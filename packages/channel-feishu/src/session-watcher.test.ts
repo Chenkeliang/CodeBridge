@@ -305,7 +305,9 @@ describe("FeishuSessionWatcher", () => {
 
     const updates = vi.mocked(host.updateCard).mock.calls
       .map((call) => JSON.stringify(call[1]));
-    expect(updates.some((content) => content.includes("请在 Web 打开当前 Session 完成审批"))).toBe(true);
+    expect(updates.some((content) =>
+      content.includes("/flow approve") && content.includes("Web Workbench")
+    )).toBe(true);
     const final = updates.at(-1)!;
     expect(final).toContain("Flow 结果 · 成功");
     expect(final).toContain("flow_deploy");

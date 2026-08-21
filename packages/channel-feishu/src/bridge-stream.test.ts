@@ -180,6 +180,89 @@ async function renderAgentRun(
 }
 
 describe("FeishuBridge streaming", () => {
+  it("lists and invokes a Flow without forwarding /flow commands to Agent", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-feishu-flow-"));
+    const submit = vi.fn().mockResolvedValue({
+      sessionId: "sess_flow",
+      turnId: "turn_flow",
+      runId: null,
+      acceptance: "queued",
+      queueState: "ready",
+      eventSequence: 3,
+    });
+    const ingress = {
+      listConsumableFlows: vi.fn().mockResolvedValue([{
+        flowId: "flow_order",
+        name: "订单排查",
+        definitionRevision: "sha256:one",
+        inputs: [{ id: "oid", type: "integer", source: "user", required: true }],
+        steps: [{ id: "lookup", purpose: "查订单", mode: "read_only", approval: "none" }],
+      }]),
+      submit,
+      getSlotCommandContext: vi.fn().mockResolvedValue({
+        sessionId: null,
+        activeRunId: null,
+        providerSessionId: null,
+      }),
+      listRuntimeApprovals: vi.fn().mockResolvedValue([]),
+      resolveRuntimeApproval: vi.fn(),
+      events: async function* () {
+        await new Promise(() => {});
+      },
+      claimDelivery: vi.fn(),
+      ackDelivery: vi.fn(),
+      completeDelivery: vi.fn(),
+      listDeliveries: vi.fn().mockResolvedValue([]),
+    } as unknown as ChannelSessionIngress;
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir,
+      sessionIngress: ingress,
+    }) as unknown as MentionTestableBridge & {
+      channel: {
+        send(
+          chatId: string,
+          input: { markdown: string },
+          options: unknown,
+        ): Promise<void>;
+      };
+    };
+    const replies: string[] = [];
+    bridge.channel = {
+      async send(_chatId, input) {
+        replies.push(input.markdown);
+      },
+    };
+    const message = (messageId: string, content: string): FeishuMessage => ({
+      messageId,
+      chatId: "chat-flow",
+      chatType: "p2p",
+      senderId: "user-flow",
+      content,
+    });
+
+    await bridge.handleMessage(message("m1", "/flow"));
+    await bridge.handleMessage(message("m2", "/flow 1"));
+    await bridge.handleMessage(message("m3", "/flow set oid=1644460"));
+    await bridge.handleMessage(message("m4", "/flow run"));
+    await bridge.handleMessage(message("m5", "/flow confirm"));
+
+    expect(replies.join("\n")).toContain("订单排查");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      channel: "feishu",
+      conversationId: "chat-flow|",
+      message: "运行 Flow：订单排查",
+      flowId: "flow_order",
+      flowDefinitionRevision: "sha256:one",
+      inputs: { oid: 1644460 },
+      replyToMessageId: "m5",
+      actorRef: { channel: "feishu", id: "user-flow" },
+      idempotencyKey: expect.stringMatching(/^flow:/),
+    }));
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

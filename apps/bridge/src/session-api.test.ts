@@ -1042,6 +1042,65 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("forwards channel Flow inputs into Runtime parameter resolution", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const flows = new FlowCatalogStore(":memory:");
+    const initial = saveChannelRunbook(flows, "flow_channel_inputs");
+    const withInputs = {
+      ...initial,
+      inputs: [{
+        id: "oid",
+        type: "integer" as const,
+        source: "user" as const,
+        required: true,
+      }],
+    };
+    const flow = flows.save({
+      ...withInputs,
+      planIrHash: definitionHash(compileCatalogFlow(withInputs)),
+    });
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({ catalog, agents, workItems, coordinator, flows }, TOKEN);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat-inputs/messages",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": "channel-inputs",
+        },
+        body: JSON.stringify({
+          message: "运行 Flow：Channel Flow",
+          agent_id: "pi",
+          flow_id: flow.flowId,
+          definition_revision: flow.definitionRevision,
+          inputs: { oid: 1644460 },
+          actor_ref: { channel: "feishu", id: "open-user-1" },
+        }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    const body = await response.json() as { session_id: string };
+    const workItem = workItems.getWorkItemBySessionId(body.session_id)!;
+    expect(
+      workItems.listEvents(workItem.id).find((event) =>
+        event.type === "PARAM_RESOLVED" && event.payload.field === "oid"
+      )?.payload,
+    ).toMatchObject({
+      final_value: 1644460,
+      source: "user",
+      resolution: "confirmed",
+    });
+
+    flows.close();
+    catalog.close();
+    workItems.close();
+  });
+
   it("syncs session_runtime.provider_session_id for a bound session", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");

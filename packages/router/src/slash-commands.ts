@@ -109,6 +109,12 @@ export async function handleSlashCommand(
   const lower = cmd!.toLowerCase();
 
   switch (lower) {
+    case "/flow":
+      return {
+        type: "reply",
+        text: "Flow 消费入口当前不可用，请确认 Bridge Runtime 已连接。",
+      };
+
     case "/help":
       return {
         type: "reply",
