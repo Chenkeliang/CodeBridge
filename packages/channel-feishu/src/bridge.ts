@@ -752,6 +752,7 @@ export class FeishuBridge {
       attachments: msg.attachments,
       idempotencyKey: msg.messageId,
       replyToMessageId: msg.messageId,
+      actorRef: { channel: "feishu", id: msg.senderId },
     });
     const turn = {
       turnId: receipt.turnId,

@@ -150,6 +150,8 @@ export interface ChannelSessionMessage {
   cwd?: string;
   model?: string;
   flowId?: string;
+  flowDefinitionRevision?: string;
+  actorRef?: { channel: "feishu" | "telegram"; id: string };
   attachments?: RunAttachment[];
   idempotencyKey?: string;
   signal?: AbortSignal;
@@ -222,6 +224,11 @@ export interface ChannelDeliveryRow {
 
 export interface ChannelSessionIngress {
   submit(message: ChannelSessionMessage): Promise<ChannelSubmitReceipt>;
+  listConsumableFlows(): Promise<Array<{
+    flowId: string;
+    name: string;
+    definitionRevision: string;
+  }>>;
   events(
     sessionId: string,
     opts: { afterSequence: number; signal: AbortSignal },

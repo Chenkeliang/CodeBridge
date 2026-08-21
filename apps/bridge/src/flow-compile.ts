@@ -1,5 +1,6 @@
 import type { FlowRecord } from "@codebridge/flow-catalog";
 import { compileWorkflow, type PlanIR } from "@codebridge/workflow-engine";
+import { randomUUID } from "node:crypto";
 
 export function catalogPlanId(flowId: string): string {
   return `plan_${flowId}`;
@@ -35,4 +36,11 @@ export function compileCatalogFlow(flow: FlowRecord): PlanIR {
     definitionRevision: flow.definitionRevision,
     planId: catalogPlanId(flow.flowId),
   });
+}
+
+export function instantiateCatalogPlan(plan: PlanIR): PlanIR {
+  return {
+    ...plan,
+    planId: `plan_${randomUUID().replaceAll("-", "")}`,
+  };
 }

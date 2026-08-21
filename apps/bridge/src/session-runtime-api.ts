@@ -1,7 +1,7 @@
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
-import type { SqliteEventStore } from "@codebridge/work-items";
+import type { FlowActorRef, SqliteEventStore } from "@codebridge/work-items";
 import {
   SessionCommandError,
   type SessionCoordinator,
@@ -22,7 +22,8 @@ import {
   toApiSessionTurn,
   toApiTimeline,
 } from "./session-runtime-types.js";
-import { compileCatalogFlow } from "./flow-compile.js";
+import { compileCatalogFlow, instantiateCatalogPlan } from "./flow-compile.js";
+import { resolveFlowInvocation } from "./flow-invocation.js";
 
 export interface SessionRuntimeApiOptions {
   catalog: SessionCatalogStore;
@@ -31,6 +32,7 @@ export interface SessionRuntimeApiOptions {
   executor?: RunExecutor;
   flows?: FlowCatalogStore;
   capabilities?: CapabilityRegistry;
+  channelOriginToken?: string;
 }
 
 export function registerSessionRuntimeCommandRoutes(
@@ -52,20 +54,50 @@ export function registerSessionRuntimeCommandRoutes(
     }
     const attachments = parseAttachments(body.attachments);
     if (!attachments) return c.json({ error: "invalid_attachments" }, 400);
-    const flowId = nullable(body.flow_id, session.flowId);
-    const flow = flowId ? options.flows?.get(flowId) : undefined;
-    if (flowId && !flow) {
-      return c.json({ error: "flow_not_found", flow_id: flowId }, 404);
+    const hasFlowId = Object.hasOwn(body, "flow_id");
+    if (
+      hasFlowId
+      && body.flow_id !== null
+      && (typeof body.flow_id !== "string" || !body.flow_id.trim())
+    ) {
+      return c.json({ error: "invalid_flow_id" }, 400);
     }
-    if (flow?.status === "deprecated") {
-      return c.json({ error: "flow_deprecated", flow_id: flowId }, 409);
+    if (
+      Object.hasOwn(body, "definition_revision")
+      && (typeof body.definition_revision !== "string" || !body.definition_revision.trim())
+    ) {
+      return c.json({ error: "invalid_definition_revision" }, 400);
     }
     const dryRun = body.dry_run === true;
+    const origin = options.channelOriginToken
+      && c.req.header("x-codebridge-channel-origin") === options.channelOriginToken
+      ? "channel"
+      : "web";
+    const resolution = resolveFlowInvocation({
+      origin,
+      hasFlowId,
+      requestedFlowId: hasFlowId
+        ? body.flow_id === null ? null : String(body.flow_id).trim()
+        : undefined,
+      requestedDefinitionRevision: typeof body.definition_revision === "string"
+        ? body.definition_revision.trim()
+        : undefined,
+      binding: session.flowId !== null || session.flowDefinitionRevision !== null
+        ? {
+            flowId: session.flowId,
+            definitionRevision: session.flowDefinitionRevision,
+          }
+        : null,
+      dryRun,
+      getFlow: (flowId) => options.flows?.get(flowId),
+    });
+    if (resolution.kind === "error") {
+      return c.json(resolution.body, resolution.status);
+    }
+    const flow = resolution.kind === "flow" ? resolution.flow : undefined;
+    const flowId = flow?.flowId ?? null;
     let frozenPlan: PlanIR | null = null;
-    if (flow?.kind === "runbook") {
-      if (flow.status === "candidate" && !dryRun) {
-        return c.json({ error: "flow_not_executable", flow_id: flowId }, 409);
-      }
+    if (flow) {
       try {
         frozenPlan = compileCatalogFlow(flow);
       } catch (error) {
@@ -77,6 +109,7 @@ export function registerSessionRuntimeCommandRoutes(
       if (definitionHash(frozenPlan) !== flow.planIrHash) {
         return c.json({ error: "plan_ir_drift", flow_id: flowId }, 409);
       }
+      frozenPlan = instantiateCatalogPlan(frozenPlan);
       const provided = inputRecord(body.inputs);
       const missing = flow.inputs
         .filter((input) => input.required && input.source === "user")
@@ -115,6 +148,12 @@ export function registerSessionRuntimeCommandRoutes(
             body.permission_mode,
             session.permissionMode,
           ),
+          actorRef: origin === "web"
+            ? { channel: "web", id: "local" }
+            : channelActorRef(body.actor_ref),
+          flowInvocationSource: resolution.kind === "flow"
+            ? resolution.source
+            : "none",
           plan: frozenPlan
             ? {
                 ...frozenPlan,
@@ -133,14 +172,11 @@ export function registerSessionRuntimeCommandRoutes(
         },
         delivery,
       });
+      if (resolution.kind === "unbind" && !idempotencyReplay) {
+        options.catalog.unbindFlow(session.id);
+      }
       options.catalog.updateSession(session.id, {
         taskRecordId: result.workItemId,
-        flowId: persistedSessionFlowId(
-          session.flowId,
-          result.turn.message.flowId,
-          dryRun,
-          flow,
-        ),
         model: result.turn.message.model,
         effort: result.turn.message.effort,
         permissionMode: result.turn.message.permissionMode,
@@ -449,6 +485,19 @@ function nullable(value: unknown, fallback: string | null): string | null {
       : null;
 }
 
+function channelActorRef(value: unknown): FlowActorRef | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const actor = value as Record<string, unknown>;
+  if (
+    (actor.channel !== "feishu" && actor.channel !== "telegram")
+    || typeof actor.id !== "string"
+    || !actor.id.trim()
+  ) {
+    return undefined;
+  }
+  return { channel: actor.channel, id: actor.id.trim() };
+}
+
 function parseDelivery(value: unknown): {
   channel: string;
   conversationId: string;
@@ -596,18 +645,6 @@ async function observeExecution(
     }
     throw error;
   }
-}
-
-function persistedSessionFlowId(
-  current: string | null | undefined,
-  requested: string | null | undefined,
-  dryRun: boolean,
-  flow: FlowRecord | undefined,
-): string | null {
-  if (dryRun || (flow != null && flow.status !== "published")) {
-    return current ?? null;
-  }
-  return requested ?? current ?? null;
 }
 
 function inputRecord(value: unknown): Record<string, unknown> {

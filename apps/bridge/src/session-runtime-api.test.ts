@@ -184,7 +184,7 @@ describe("Session runtime command API", () => {
       steps: [{ id: "echo", capability: "demo.echo", mode: "read_only", successWhen: "output.text exists" }],
     });
     const fixture = setup({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const response = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -199,6 +199,253 @@ describe("Session runtime command API", () => {
     );
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: "flow_not_executable" });
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("rejects an explicit revision mismatch before creating a Run", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const current = savePublishedDemoEcho(flows);
+    const fixture = setup({ flows });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "revision_request_mismatch",
+        },
+        body: JSON.stringify({
+          message: "run",
+          flow_id: current.flowId,
+          definition_revision: "sha256:old",
+          inputs: { text: "hi" },
+        }),
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: "flow_revision_mismatch",
+      source: "request",
+      flow_id: current.flowId,
+      expected_definition_revision: "sha256:old",
+      current_definition_revision: current.definitionRevision,
+      requires_confirmation: true,
+    });
+    expect(fixture.workItems.getWorkItemBySessionId(fixture.session.id)).toBeUndefined();
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("rejects a stale binding without upgrading or falling back to Agent", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const current = savePublishedDemoEcho(flows);
+    const fixture = setup({ flows });
+    fixture.catalog.bindFlow(fixture.session.id, {
+      flowId: current.flowId,
+      definitionRevision: "sha256:old",
+    });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      request("run", "revision_binding_mismatch"),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: "flow_revision_mismatch",
+      source: "binding",
+      expected_definition_revision: "sha256:old",
+      current_definition_revision: current.definitionRevision,
+      requires_confirmation: true,
+    });
+    expect(fixture.catalog.getSession(fixture.session.id)).toMatchObject({
+      flowId: current.flowId,
+      flowDefinitionRevision: "sha256:old",
+    });
+    expect(fixture.workItems.getWorkItemBySessionId(fixture.session.id)).toBeUndefined();
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("rejects a migrated binding without a revision instead of falling back to Agent", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const current = savePublishedDemoEcho(flows);
+    const fixture = setup({ flows });
+    const persisted = fixture.catalog.getSession(fixture.session.id)!;
+    vi.spyOn(fixture.catalog, "getSession").mockImplementation((sessionId) =>
+      sessionId === fixture.session.id
+        ? { ...persisted, flowId: current.flowId, flowDefinitionRevision: null }
+        : undefined
+    );
+
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      request("ordinary", "binding_without_revision"),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "flow_binding_invalid",
+      source: "binding",
+      flow_id: current.flowId,
+      requires_confirmation: true,
+    });
+    expect(fixture.workItems.getWorkItemBySessionId(fixture.session.id)).toBeUndefined();
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("persists an explicit null Flow unbind after accepting the Web message", async () => {
+    const fixture = setup();
+    fixture.catalog.bindFlow(fixture.session.id, {
+      flowId: "flow-bound",
+      definitionRevision: "sha256:bound",
+    });
+
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "message_unbind",
+        },
+        body: JSON.stringify({ message: "ordinary", flow_id: null }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(fixture.catalog.getSession(fixture.session.id)).toMatchObject({
+      flowId: null,
+      flowDefinitionRevision: null,
+    });
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it.each([false, true])("rejects Guide invocation without Agent fallback when dryRun=%s", async (dryRun) => {
+    const flows = new FlowCatalogStore(":memory:");
+    flows.save({
+      flowId: "flow-guide",
+      name: "Guide",
+      kind: "guide",
+      status: "draft",
+      source: "agent_generated",
+      definitionRevision: "sha256:guide",
+      steps: [],
+    });
+    const fixture = setup({ flows });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": `guide_${dryRun}`,
+        },
+        body: JSON.stringify({
+          message: "run",
+          flow_id: "flow-guide",
+          definition_revision: "sha256:guide",
+          dry_run: dryRun,
+        }),
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "flow_not_executable",
+      flow_id: "flow-guide",
+    });
+    expect(fixture.workItems.getWorkItemBySessionId(fixture.session.id)).toBeUndefined();
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("runs explicit Flow A once while preserving the binding to Flow B", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const flowA = savePublishedDemoEcho(flows, { flowId: "flow_a" });
+    const flowB = savePublishedDemoEcho(flows, { flowId: "flow_b" });
+    const fixture = setup({ flows });
+    fixture.catalog.bindFlow(fixture.session.id, {
+      flowId: flowB.flowId,
+      definitionRevision: flowB.definitionRevision,
+    });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "one_shot_a",
+        },
+        body: JSON.stringify({
+          message: "run A",
+          flow_id: flowA.flowId,
+          definition_revision: flowA.definitionRevision,
+          actor_ref: { channel: "telegram", id: "spoofed-web-actor" },
+          inputs: { text: "hi" },
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    expect(fixture.catalog.getSession(fixture.session.id)).toMatchObject({
+      flowId: flowB.flowId,
+      flowDefinitionRevision: flowB.definitionRevision,
+    });
+    const workItem = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!;
+    const run = fixture.workItems.listRuns(workItem.id)[0]!;
+    expect(fixture.workItems.getPlan(run.planId!)?.workflowId).toBe(flowA.flowId);
+    expect(fixture.workItems.listEvents(workItem.id).find((event) => event.type === "MESSAGE_RECEIVED")?.payload).toMatchObject({
+      actor_ref: { channel: "web", id: "local" },
+      flow_invocation_source: "request",
+    });
+    flows.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("runs the same Published Flow concurrently with a distinct frozen Plan per Run", async () => {
+    const flows = new FlowCatalogStore(":memory:");
+    const flow = savePublishedDemoEcho(flows);
+    const fixture = setup({ flows });
+    const secondSession = fixture.catalog.createSession({ agentId: "pi", cwd: "/workspace" });
+    const invoke = (sessionId: string, key: string) => fixture.app.request(
+      `/v1/sessions/${sessionId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify({
+          message: "run",
+          flow_id: flow.flowId,
+          definition_revision: flow.definitionRevision,
+          inputs: { text: "hi" },
+        }),
+      },
+    );
+
+    const first = await invoke(fixture.session.id, "repeat_flow_first");
+    const second = await invoke(secondSession.id, "repeat_flow_second");
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    const firstWorkItem = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!;
+    const secondWorkItem = fixture.workItems.getWorkItemBySessionId(secondSession.id)!;
+    const firstRun = fixture.workItems.listRuns(firstWorkItem.id)[0]!;
+    const secondRun = fixture.workItems.listRuns(secondWorkItem.id)[0]!;
+    expect(firstRun.planId).not.toBe(secondRun.planId);
+    expect(fixture.workItems.getPlan(firstRun.planId!)?.workflowId).toBe(flow.flowId);
+    expect(fixture.workItems.getPlan(secondRun.planId!)?.workflowId).toBe(flow.flowId);
     flows.close();
     fixture.catalog.close();
     fixture.workItems.close();
@@ -237,7 +484,7 @@ describe("Session runtime command API", () => {
       }],
     });
     const fixture = setup({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const response = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -295,7 +542,7 @@ describe("Session runtime command API", () => {
       }],
     });
     const fixture = setup({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const response = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -319,7 +566,7 @@ describe("Session runtime command API", () => {
     const flows = new FlowCatalogStore(":memory:");
     const flow = savePublishedDemoEcho(flows);
     const fixture = setup({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const response = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -359,7 +606,7 @@ describe("Session runtime command API", () => {
     const flows = new FlowCatalogStore(":memory:");
     const flow = savePublishedDemoEcho(flows, { default: "hi" });
     const fixture = setup({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const first = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -429,7 +676,7 @@ describe("Session runtime command API", () => {
     const flows = new FlowCatalogStore(":memory:");
     const flow = savePublishedDemoEcho(flows);
     const fixture = setup({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const first = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -476,7 +723,7 @@ describe("Session runtime command API", () => {
     const flows = new FlowCatalogStore(":memory:");
     savePublishedDemoEcho(flows);
     const fixture = setup({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const bound = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -490,7 +737,7 @@ describe("Session runtime command API", () => {
       },
     );
     expect(bound.status).toBe(202);
-    fixture.catalog.updateSession(fixture.session.id, { flowId: null });
+    fixture.catalog.unbindFlow(fixture.session.id);
     const unbound = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -515,7 +762,7 @@ describe("Session runtime command API", () => {
     const flows = new FlowCatalogStore(":memory:");
     savePublishedDemoEcho(flows);
     const fixture = setupRuntimeLoop({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const response = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -549,7 +796,7 @@ describe("Session runtime command API", () => {
     const flows = new FlowCatalogStore(":memory:");
     savePublishedDemoEcho(flows);
     const fixture = setupRuntimeLoop({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const response = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -616,7 +863,7 @@ describe("Session runtime command API", () => {
       steps: [{ id: "ask", mode: "manual", purpose: "confirm" }],
     });
     const fixture = setupRuntimeLoop({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_manual_preview" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_manual_preview");
     const response = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -670,7 +917,7 @@ describe("Session runtime command API", () => {
     expect(unbound.status).toBe(202);
     expect(fixture.catalog.getSession(fixture.session.id)?.flowId ?? null).toBeNull();
 
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const overlay = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -696,7 +943,7 @@ describe("Session runtime command API", () => {
     fixture.workItems.close();
   });
 
-  it("binds a published flowId onto an unbound session after a live run", async () => {
+  it("does not bind an explicit Published Runbook after a live one-shot run", async () => {
     const flows = new FlowCatalogStore(":memory:");
     savePublishedDemoEcho(flows);
     const fixture = setupRuntimeLoop({ flows });
@@ -718,7 +965,10 @@ describe("Session runtime command API", () => {
       },
     );
     expect(response.status).toBe(202);
-    expect(fixture.catalog.getSession(fixture.session.id)?.flowId).toBe("flow_demo_echo");
+    expect(fixture.catalog.getSession(fixture.session.id)).toMatchObject({
+      flowId: null,
+      flowDefinitionRevision: null,
+    });
     flows.close();
     fixture.registry.close();
     fixture.catalog.close();
@@ -729,7 +979,7 @@ describe("Session runtime command API", () => {
     const flows = new FlowCatalogStore(":memory:");
     savePublishedDemoEcho(flows, { status: "candidate" });
     const fixture = setupRuntimeLoop({ flows });
-    fixture.catalog.updateSession(fixture.session.id, { flowId: "flow_demo_echo" });
+    bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const preview = await fixture.app.request(
       `/v1/sessions/${fixture.session.id}/messages`,
       {
@@ -838,4 +1088,18 @@ function savePublishedDemoEcho(
     }],
   });
   return flows.get(flowId)!;
+}
+
+function bindCatalogFlow(
+  catalog: SessionCatalogStore,
+  sessionId: string,
+  flows: FlowCatalogStore,
+  flowId: string,
+) {
+  const record = flows.get(flowId);
+  if (!record) throw new Error(`Flow not found: ${flowId}`);
+  return catalog.bindFlow(sessionId, {
+    flowId,
+    definitionRevision: record.definitionRevision,
+  });
 }

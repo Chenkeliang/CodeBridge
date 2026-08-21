@@ -44,11 +44,17 @@ export class ApiError extends Error {
 
 type ErrorPayload = {
   error?: string;
+  code?: string;
   detail?: string;
   details?: string;
   message?: string;
   issues?: string[];
   missing?: Array<{ id: string; type: string; source: string; reason: string }>;
+  source?: "binding" | "request";
+  flow_id?: string;
+  expected_definition_revision?: string;
+  current_definition_revision?: string;
+  requires_confirmation?: boolean;
 } | null;
 
 type SessionEventsPage = {
@@ -79,7 +85,7 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     const message = [payload?.message, payload?.detail ?? payload?.details ?? issueText]
       .filter((part): part is string => Boolean(part))
       .join(" · ") || `HTTP ${response.status}`;
-    throw new ApiError(response.status, payload?.error ?? "http_error", message, payload);
+    throw new ApiError(response.status, payload?.code ?? payload?.error ?? "http_error", message, payload);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -127,19 +133,23 @@ function sendMessage(
     : messageOrInput;
 
   const headers = input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined;
+  const body = {
+    message: input.message,
+    ...(Object.hasOwn(input, "flowId") ? { flow_id: input.flowId } : {}),
+    ...(Object.hasOwn(input, "definitionRevision")
+      ? { definition_revision: input.definitionRevision }
+      : {}),
+    model: input.model,
+    permission_mode: input.permissionMode,
+    effort: input.effort,
+    attachments: input.attachments,
+    inputs: input.inputs,
+    dry_run: input.dryRun === true,
+  };
   return request<SessionMessageReceipt>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
     method: "POST",
     ...(headers ? { headers } : {}),
-    body: JSON.stringify({
-      message: input.message,
-      flow_id: input.flowId,
-      model: input.model,
-      permission_mode: input.permissionMode,
-      effort: input.effort,
-      attachments: input.attachments,
-      inputs: input.inputs,
-      dry_run: input.dryRun === true,
-    }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -255,7 +265,20 @@ export const api = {
   updateSession: (id: string, update: Record<string, unknown>) =>
     request<AgentSession>(`/v1/sessions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(update) }),
   deleteSession: (id: string) => request<void>(`/v1/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  flows: async () => (await request<{ flows: FlowRecord[] }>("/v1/flows")).flows,
+  flows: async (view: "manage" | "consume") =>
+    (await request<{ flows: FlowRecord[] }>(`/v1/flows?view=${view}`)).flows,
+  applyFlow: (sessionId: string, flowId: string) =>
+    request<{
+      flow_id: string;
+      definition_revision: string;
+    }>(`/v1/flows/${encodeURIComponent(flowId)}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
+  unbindFlow: (sessionId: string) =>
+    request<AgentSession>(`/v1/sessions/${encodeURIComponent(sessionId)}/flow`, {
+      method: "DELETE",
+    }),
   configOptions: async (id: string) =>
     (await request<{ options?: ConfigOption[] }>(`/v1/sessions/${encodeURIComponent(id)}/config-options`)).options ?? [],
   providers: async () =>

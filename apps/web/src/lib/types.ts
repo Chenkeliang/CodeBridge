@@ -63,6 +63,7 @@ export interface AgentSession {
   provider_session_id: string | null;
   task_record_id: string | null;
   flow_id: string | null;
+  flow_definition_revision: string | null;
   model: string | null;
   effort: string | null;
   config_overrides?: Record<string, string | boolean>;
@@ -280,7 +281,8 @@ export interface SessionCancelRunResult {
 
 export interface SendMessageInput {
   message: string;
-  flowId: string | null;
+  flowId?: string | null;
+  definitionRevision?: string;
   model: string | null;
   attachments: MessageAttachmentInput[];
   permissionMode: string | null;

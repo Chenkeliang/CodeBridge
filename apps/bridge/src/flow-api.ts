@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
+import {
+  isBindable,
+  isConsumable,
+  isManageable,
+  type FlowCatalogStore,
+  type FlowRecord,
+} from "@codebridge/flow-catalog";
 import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
 import { compileWorkflow, definitionHash, validatePostcondition, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
@@ -19,7 +25,14 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     if (c.req.header("authorization") !== `Bearer ${token}`) return c.json({ error: "unauthorized" }, 401);
     await next();
   });
-  app.get("/v1/flows", (c) => c.json({ flows: catalog.list().map(toApiFlow) }));
+  app.get("/v1/flows", (c) => {
+    const view = c.req.query("view") ?? "consume";
+    if (view !== "manage" && view !== "consume") {
+      return c.json({ error: "invalid_flow_view" }, 400);
+    }
+    const predicate = view === "manage" ? isManageable : isConsumable;
+    return c.json({ flows: catalog.list().filter(predicate).map(toApiFlow) });
+  });
   app.get("/v1/flows/:flow_id", (c) => {
     const flow = catalog.get(c.req.param("flow_id"));
     return flow ? c.json(toApiFlow(flow)) : c.json({ error: "flow_not_found" }, 404);
@@ -28,13 +41,16 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
     const flow = catalog.get(c.req.param("flow_id"));
     if (!flow) return c.json({ error: "flow_not_found" }, 404);
-    if (flow.status === "deprecated") return c.json({ error: "flow_deprecated" }, 409);
+    if (!isBindable(flow)) return c.json({ error: "flow_not_bindable" }, 409);
     const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
     const sessionId = typeof body?.session_id === "string" ? body.session_id : undefined;
     if (!sessionId) return c.json({ error: "session_id is required" }, 400);
     const session = options.sessions.getSession(sessionId);
     if (!session) return c.json({ error: "session_not_found" }, 404);
-    options.sessions.updateSession(session.id, { flowId: flow.flowId });
+    options.sessions.bindFlow(session.id, {
+      flowId: flow.flowId,
+      definitionRevision: flow.definitionRevision,
+    });
     if (options.events && session.taskRecordId) {
       options.events.appendEvent({
         workItemId: session.taskRecordId,
@@ -55,7 +71,9 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
   app.post("/v1/flows/:flow_id/review", async (c) => {
     const flow = catalog.get(c.req.param("flow_id"));
     if (!flow) return c.json({ error: "flow_not_found" }, 404);
-    if (flow.status !== "candidate") return c.json({ error: "flow_not_reviewable" }, 409);
+    if (flow.status !== "candidate" || flow.kind !== "runbook") {
+      return c.json({ error: "flow_not_reviewable" }, 409);
+    }
     const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
     const decision = body?.decision;
     if (decision !== "approve" && decision !== "reject") {
@@ -84,21 +102,31 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     return c.json(toApiFlow(reviewed));
   });
   app.post("/v1/flows/candidates", async (c) => {
+    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
     const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
     if (!body || typeof body.session_id !== "string") {
       return c.json({ error: "session_id is required" }, 400);
     }
+    const session = options.sessions.getSession(body.session_id);
+    if (!session) return c.json({ error: "session_not_found" }, 404);
     const input = body.flow && typeof body.flow === "object" && !Array.isArray(body.flow)
       ? body.flow as Record<string, unknown>
       : {};
+    if (input.kind !== undefined && input.kind !== "runbook") {
+      return c.json({ error: "invalid_flow_state" }, 400);
+    }
     const flowId = typeof input.flow_id === "string" ? input.flow_id : `flow_${randomUUID().replaceAll("-", "")}`;
+    const existing = catalog.get(flowId);
+    if (existing && (existing.kind !== "runbook" || existing.status !== "candidate")) {
+      return c.json({ error: "flow_id_conflict", flow_id: flowId }, 409);
+    }
     const rawSteps = Array.isArray(input.steps) ? input.steps : [];
     const rawInputs = Array.isArray(input.inputs) ? input.inputs : [];
     const definition = {
       schema_version: 1,
       workflow_id: flowId,
       name: typeof input.name === "string" && input.name.trim() ? input.name : flowId,
-      kind: input.kind === "runbook" ? ("runbook" as const) : ("guide" as const),
+      kind: "runbook" as const,
       status: "draft",
       inputs: rawInputs,
       steps: rawSteps,
@@ -146,7 +174,6 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       validationIssues: [],
       steps,
     });
-    const session = options.sessions?.getSession(String(body.session_id));
     if (options.events && session?.taskRecordId) {
       options.events.appendEvent({
         workItemId: session.taskRecordId,

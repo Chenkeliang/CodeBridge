@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FlowCatalogStore } from "./index.js";
+import { InvalidFlowStateError } from "./policy.js";
 
 describe("flow catalog", () => {
   it("stores candidate and published Flow definitions by revision", () => {
@@ -7,7 +8,7 @@ describe("flow catalog", () => {
     const flow = store.save({
       flowId: "flow-a",
       name: "Flow A",
-      kind: "guide",
+      kind: "runbook",
       status: "candidate",
       source: "agent_generated",
       definitionRevision: "sha256:one",
@@ -18,6 +19,35 @@ describe("flow catalog", () => {
     expect(flow.gitRevision).toBeNull();
     expect(store.list()).toHaveLength(1);
     expect(store.save({ ...flow, status: "published", definitionRevision: "sha256:two", reviewStatus: "approved", gitRevision: "abc" })).toMatchObject({ reviewStatus: "approved", gitRevision: "abc" });
+    store.close();
+  });
+
+  it("rejects illegal Flow states before persistence", () => {
+    const store = new FlowCatalogStore(":memory:");
+
+    expect(() =>
+      store.save({
+        flowId: "guide-published",
+        name: "Invalid Guide",
+        kind: "guide",
+        status: "published",
+        source: "user_selected",
+        definitionRevision: "sha256:guide",
+        steps: [],
+      }),
+    ).toThrow(InvalidFlowStateError);
+    expect(() =>
+      store.save({
+        flowId: "ephemeral-draft",
+        name: "Invalid Ephemeral",
+        kind: "ephemeral",
+        status: "draft",
+        source: "agent_generated",
+        definitionRevision: "sha256:ephemeral",
+        steps: [],
+      }),
+    ).toThrow(InvalidFlowStateError);
+    expect(store.list()).toEqual([]);
     store.close();
   });
 

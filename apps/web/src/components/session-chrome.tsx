@@ -110,9 +110,15 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
   onDeleteSession: (session: AgentSession) => Promise<void>;
   onToggleArchived: () => void;
 }) {
+  const flowGroups = [
+    { status: "published", label: "已发布" },
+    { status: "candidate", label: "候选" },
+    { status: "draft", label: "草稿" },
+    { status: "deprecated", label: "已停用" },
+  ] as const;
   return <aside className={cn("flex min-h-0 min-w-0 flex-col border-r", "bg-sidebar", "border-line")}>
     <header className="flex items-start justify-between gap-3 px-5 pb-4 pt-6">
-      <div className="min-w-0"><p className={cn("mb-1 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>{area === "agents" ? "当前 Agent" : "目录"}</p><h1 className={cn("truncate font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>{area === "agents" ? agent?.display_name ?? "Agents" : "Flows"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-xs", "text-muted")}>{area === "agents" ? (agent?.status === "healthy" ? `${sessions.length} 个会话` : `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "不可用"} · ${sessions.length} 个会话`) : `${flows.filter((flow) => flow.status === "published").length} 个已发布定义`}</p></div>
+      <div className="min-w-0"><p className={cn("mb-1 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>{area === "agents" ? "当前 Agent" : "目录"}</p><h1 className={cn("truncate font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>{area === "agents" ? agent?.display_name ?? "Agents" : "Flows"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-xs", "text-muted")}>{area === "agents" ? (agent?.status === "healthy" ? `${sessions.length} 个会话` : `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "不可用"} · ${sessions.length} 个会话`) : `${flows.length} 个管理定义`}</p></div>
       <div className="flex gap-1">
         <Button aria-label="刷新" className={cn("size-8 px-0 hover:opacity-80", "text-muted")} onClick={onRefresh} size="icon" variant="ghost"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} /></Button>
         {area === "agents" && <Button aria-label="新建 Session" className={cn("size-8 border px-0 hover:-translate-y-px hover:opacity-80", "bg-surface", "text-ink", "border-line-strong")} disabled={!agent || agent.status !== "healthy"} onClick={onCreate} size="icon" variant="outline"><Plus className="size-4" /></Button>}
@@ -127,13 +133,15 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
       </div>
       <footer className={cn("border-t px-3 py-2", "border-line")}><button className={cn("flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-opacity hover:opacity-80", "text-muted")} onClick={onToggleArchived} type="button"><Archive className="size-3.5" /><span className="flex-1">{showArchived ? "返回 Sessions" : "已归档"}</span><span className="font-mono text-xs">{showArchived ? activeSessionCount : archivedSessionCount}</span></button></footer>
     </> : <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4">
-      <div className={cn("px-2.5 py-2 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>已发布</div>
-      {flows.filter((flow) => flow.status === "published").map((flow) => <button className={cn("flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2.5 text-left text-xs transition-colors hover:opacity-80", "text-ink", flowId === flow.flow_id && cn("bg-surface", "border-line"))} key={flow.flow_id} onClick={() => onFlow(flow.flow_id)} type="button"><Workflow className={cn("size-3.5", "text-muted")} /><span className="min-w-0 flex-1 truncate">{flow.name || flow.flow_id}</span><span className={cn("font-mono text-xs", "text-faint")}>{flow.kind}</span></button>)}
-      {!flows.some((flow) => flow.status === "published") && <div className={cn("px-3 py-8 text-center text-xs", "text-muted")}>暂无已发布 Flow</div>}
-      {flows.some((flow) => flow.status === "candidate") && <>
-        <div className={cn("px-2.5 py-2 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>候选</div>
-        {flows.filter((flow) => flow.status === "candidate").map((flow) => <button className={cn("flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2.5 text-left text-xs transition-colors hover:opacity-80", "text-ink", flowId === flow.flow_id && cn("bg-surface", "border-line"))} key={flow.flow_id} onClick={() => onFlow(flow.flow_id)} type="button"><Workflow className={cn("size-3.5", "text-warning")} /><span className="min-w-0 flex-1 truncate">{flow.name || flow.flow_id}</span><span className={cn("font-mono text-xs", "text-faint")}>{flow.kind}</span></button>)}
-      </>}
+      {flowGroups.map((group) => {
+        const groupFlows = flows.filter((flow) => flow.status === group.status);
+        if (!groupFlows.length) return null;
+        return <div key={group.status}>
+          <div className={cn("px-2.5 py-2 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>{group.label}</div>
+          {groupFlows.map((flow) => <button className={cn("flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2.5 text-left text-xs transition-colors hover:opacity-80", "text-ink", flowId === flow.flow_id && cn("bg-surface", "border-line"))} key={flow.flow_id} onClick={() => onFlow(flow.flow_id)} type="button"><Workflow className={cn("size-3.5", flow.status === "candidate" ? "text-warning" : "text-muted")} /><span className="min-w-0 flex-1 truncate">{flow.name || flow.flow_id}</span><span className={cn("font-mono text-xs", "text-faint")}>{flow.kind}</span></button>)}
+        </div>;
+      })}
+      {!flows.length && <div className={cn("px-3 py-8 text-center text-xs", "text-muted")}>暂无 Flow</div>}
     </div>}
   </aside>;
 }

@@ -18,6 +18,7 @@ const session: AgentSession = {
   provider_session_id: null,
   task_record_id: null,
   flow_id: null,
+  flow_definition_revision: null,
   model: "gpt-5",
   effort: "medium",
   permission_mode: "ask",
@@ -80,7 +81,7 @@ const permissionOption: ConfigOption = {
 const flow: FlowRecord = {
   flow_id: "flow-1",
   name: "Review Flow",
-  kind: "guide",
+  kind: "runbook",
   status: "published",
   source: "test",
   definition_revision: "1",

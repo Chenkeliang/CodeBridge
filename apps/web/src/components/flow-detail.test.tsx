@@ -55,6 +55,21 @@ describe("FlowDetail", () => {
     expect(onSubmit).toHaveBeenCalledWith({ text: "hello" }, false);
   });
 
+  it("binds a Published Runbook only through the explicit action", () => {
+    const onBind = vi.fn();
+    const view = renderDetail({
+      flow: echoFlow,
+      values: {},
+      missing: [],
+      onValues: () => {},
+      onSubmit: () => {},
+      onBind,
+      onClose: () => {},
+    });
+    clickButton(view.host, /绑定到会话/);
+    expect(onBind).toHaveBeenCalledWith(echoFlow);
+  });
+
   it("notifies the parent of edits", () => {
     const onValues = vi.fn();
     const view = renderDetail({ flow: echoFlow, values: {}, missing: [], onValues, onSubmit: () => {}, onClose: () => {} });
@@ -91,5 +106,17 @@ describe("FlowDetail", () => {
     expect(labels.some((label) => label.includes("运行"))).toBe(false);
     expect(labels.some((label) => /dry-run|预演/i.test(label))).toBe(true);
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...echoFlow, kind: "guide" as const, status: "draft" as const },
+    { ...echoFlow, status: "draft" as const },
+    { ...echoFlow, status: "deprecated" as const },
+  ])("keeps non-runnable states read-only", (flow) => {
+    const view = renderDetail({ flow, values: {}, missing: [], onValues: () => {}, onSubmit: () => {}, onClose: () => {} });
+    const labels = [...view.host.querySelectorAll("button")].map((node) => node.textContent ?? "");
+    expect(labels.some((label) => label.includes("运行一次"))).toBe(false);
+    expect(labels.some((label) => label.includes("绑定到会话"))).toBe(false);
+    expect(labels.some((label) => /dry-run|预演/i.test(label))).toBe(false);
   });
 });
