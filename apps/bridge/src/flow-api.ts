@@ -238,7 +238,7 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       // A stable planId keeps the compiled IR byte-identical across re-saves of
       // the same definition — the id is an identity, not contract content.
       plan = compileWorkflow(definition, {
-        source: source === "agent_generated" ? "agent_generated" : "workflow",
+        source: "workflow",
         definitionRevision,
         planId: `plan_${flowId}`,
       });
