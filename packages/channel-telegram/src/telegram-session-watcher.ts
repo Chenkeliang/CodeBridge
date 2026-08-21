@@ -4,8 +4,8 @@ import type {
   ChannelSessionIngress,
 } from "@codebridge/core";
 import {
-  createFeishuStreamPresenter,
-  type FeishuStreamPart,
+  createChannelStreamProjector,
+  type ChannelStreamProjector,
 } from "@codebridge/router";
 import { chunkTelegramText } from "./telegram-api.js";
 
@@ -30,19 +30,20 @@ export interface PendingTurn {
 }
 
 class TelegramRunRenderer {
-  private output = "";
+  private readonly projector: ChannelStreamProjector;
 
   constructor(
     private readonly api: TelegramTransport,
     private readonly chatId: string,
     private readonly topicId: string | undefined,
     private readonly pendingMessageId: number,
-    private readonly present: (event: AgentEvent) => FeishuStreamPart | null,
-  ) {}
+    showThinking: boolean,
+  ) {
+    this.projector = createChannelStreamProjector({ showThinking });
+  }
 
   onAgentEvent(event: AgentEvent): void {
-    const part = this.present(event);
-    if (part?.zone === "result") this.output += part.text;
+    this.projector.apply(event);
   }
 
   async onPermissionRequest(title: string): Promise<void> {
@@ -54,11 +55,11 @@ class TelegramRunRenderer {
   }
 
   appendError(message: string): void {
-    this.output += `\n❌ ${message}\n`;
+    this.projector.apply({ type: "error", message });
   }
 
   async finalize(): Promise<void> {
-    const chunks = chunkTelegramText(this.output.trim() || "（本次无输出）");
+    const chunks = chunkTelegramText(this.projector.snapshot().finalText);
     try {
       await this.api.editMessage(
         this.chatId,
@@ -124,7 +125,7 @@ export class TelegramSessionWatcher {
       chatId,
       topicId,
       pendingMessageId,
-      createFeishuStreamPresenter({ showThinking }).present,
+      showThinking,
     );
     this.runs.set(runId, renderer);
     this.deliveries.set(runId, { turnId, owner });
@@ -145,7 +146,7 @@ export class TelegramSessionWatcher {
       turn.chatId,
       turn.topicId,
       pending.message_id,
-      createFeishuStreamPresenter({ showThinking: turn.showThinking }).present,
+      turn.showThinking,
     );
     this.runs.set(runId, renderer);
     const acked = await this.ingress.ackDelivery(

@@ -1,6 +1,6 @@
 # 飞书运行状态栏持久化设计
 
-- Status: Review draft
+- Status: Accepted for implementation
 - Date: 2026-08-21
 - Scope: 飞书运行卡片的状态栏生命周期与终态展示
 - Out of scope: Telegram 展示、Runtime 状态机、ChannelStreamProjector 正文合并规则

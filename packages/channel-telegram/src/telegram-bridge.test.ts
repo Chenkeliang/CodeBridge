@@ -239,7 +239,19 @@ describe("TelegramBridge inbound commands", () => {
       prompt,
     ) {
       receivedPrompt = prompt;
-      yield { type: "text_delta", text: "处理完成" };
+      yield {
+        type: "text_delta",
+        phase: "commentary",
+        messageId: "checkpoint-1",
+        text: "正在处理",
+      };
+      yield { type: "tool_start", toolCallId: "tool-1", name: "Read" };
+      yield {
+        type: "text_delta",
+        phase: "final_answer",
+        messageId: "final-1",
+        text: "处理完成",
+      };
       yield { type: "done", exitCode: 0 };
     };
 
@@ -288,6 +300,11 @@ describe("TelegramBridge inbound commands", () => {
           user: { id: 100, is_bot: false, first_name: "张三" },
         },
       ],
+    );
+    expect(editMessage).toHaveBeenCalledWith(
+      "telegram:42",
+      8,
+      "处理完成",
     );
   });
 
