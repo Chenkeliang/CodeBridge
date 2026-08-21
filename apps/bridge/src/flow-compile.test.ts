@@ -5,6 +5,7 @@ import {
   catalogPlanId,
   compileCatalogFlow,
   flowRecordToDefinition,
+  instantiateCatalogPlan,
 } from "./flow-compile.js";
 
 describe("flow-compile", () => {
@@ -95,5 +96,29 @@ describe("flow-compile", () => {
     flow.steps[0]!.successWhen = "output.missing exists";
     expect(definitionHash(compileCatalogFlow(flow))).not.toBe(flow.planIrHash);
     store.close();
+  });
+
+  it("creates a distinct Plan instance for every invocation", () => {
+    const template = compileWorkflow({
+      schema_version: 1,
+      workflow_id: "flow_repeatable",
+      name: "repeatable",
+      kind: "runbook",
+      status: "draft",
+      inputs: [],
+      steps: [{ id: "echo", capability: "demo.echo", mode: "read_only" }],
+    }, {
+      source: "workflow",
+      definitionRevision: "sha256:def",
+      planId: catalogPlanId("flow_repeatable"),
+    });
+
+    const first = instantiateCatalogPlan(template);
+    const second = instantiateCatalogPlan(template);
+    expect(first.planId).not.toBe(template.planId);
+    expect(second.planId).not.toBe(template.planId);
+    expect(first.planId).not.toBe(second.planId);
+    expect({ ...first, planId: template.planId }).toEqual(template);
+    expect({ ...second, planId: template.planId }).toEqual(template);
   });
 });

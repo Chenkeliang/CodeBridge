@@ -47,6 +47,9 @@ export function createChannelSessionIngress(
   const submit = async (
     message: ChannelSessionMessage,
   ): Promise<ChannelSubmitReceipt> => {
+    if ((message.flowId === undefined) !== (message.flowDefinitionRevision === undefined)) {
+      throw new Error("flow_invocation_incomplete");
+    }
     const accepted = await app.request(
       `/v1/channels/${encodeURIComponent(message.channel)}/conversations/${encodeURIComponent(message.conversationId)}/messages`,
       {
@@ -63,7 +66,11 @@ export function createChannelSessionIngress(
           agent_id: message.agentId,
           cwd: message.cwd,
           model: message.model,
-          flow_id: message.flowId,
+          ...(message.flowId !== undefined ? { flow_id: message.flowId } : {}),
+          ...(message.flowDefinitionRevision !== undefined
+            ? { definition_revision: message.flowDefinitionRevision }
+            : {}),
+          ...(message.actorRef !== undefined ? { actor_ref: message.actorRef } : {}),
           generation: message.generation,
           reply_to_message_id: message.replyToMessageId,
           attachments: message.attachments?.map((attachment) => ({
@@ -95,6 +102,29 @@ export function createChannelSessionIngress(
       queueState: result.queue_state,
       eventSequence: result.event_sequence,
     };
+  };
+
+  const listConsumableFlows = async () => {
+    const response = await app.request("/v1/flows?view=consume", {
+      headers: auth,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `list consumable Flows failed (${response.status}): ${await response.text()}`,
+      );
+    }
+    const body = await response.json() as {
+      flows: Array<{
+        flow_id: string;
+        name: string | null;
+        definition_revision: string;
+      }>;
+    };
+    return body.flows.map((flow) => ({
+      flowId: flow.flow_id,
+      name: flow.name ?? flow.flow_id,
+      definitionRevision: flow.definition_revision,
+    }));
   };
 
   const events = async function* (
@@ -391,6 +421,7 @@ export function createChannelSessionIngress(
 
   return {
     submit,
+    listConsumableFlows,
     events,
     listDeliveries,
     claimDelivery,

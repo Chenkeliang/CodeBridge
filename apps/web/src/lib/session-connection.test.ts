@@ -12,6 +12,7 @@ function session(sessionId: string): AgentSession {
     provider_session_id: null,
     task_record_id: null,
     flow_id: null,
+    flow_definition_revision: null,
     model: null,
     effort: null,
     permission_mode: null,

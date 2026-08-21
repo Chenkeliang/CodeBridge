@@ -13,6 +13,7 @@ function session(sessionId: string): AgentSession {
     provider_session_id: null,
     task_record_id: null,
     flow_id: null,
+    flow_definition_revision: null,
     model: null,
     effort: null,
     config_overrides: undefined,
@@ -101,7 +102,6 @@ describe("workbench API client", () => {
 
     await api.sendMessage("sess_1", {
       message: "检查项目",
-      flowId: null,
       model: null,
       attachments: [],
       permissionMode: null,
@@ -112,6 +112,9 @@ describe("workbench API client", () => {
     const init = fetch.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("message_1");
+    const body = JSON.parse(String(init?.body));
+    expect(body).not.toHaveProperty("flow_id");
+    expect(body).not.toHaveProperty("definition_revision");
   });
 
   it("keeps the legacy sendMessage call shape working", async () => {
@@ -164,13 +167,18 @@ describe("workbench API client", () => {
     vi.stubGlobal("fetch", fetch);
 
     await api.sendMessage("sess_1", {
-      message: "run", flowId: "flow_demo_echo", model: null,
+      message: "run", flowId: "flow_demo_echo", definitionRevision: "sha256:one", model: null,
       attachments: [], permissionMode: null, effort: null, idempotencyKey: "k",
       inputs: { text: "hi" }, dryRun: true,
     });
 
     const body = JSON.parse(String((fetch.mock.calls.at(-1)?.[1] as RequestInit).body));
-    expect(body).toMatchObject({ flow_id: "flow_demo_echo", inputs: { text: "hi" }, dry_run: true });
+    expect(body).toMatchObject({
+      flow_id: "flow_demo_echo",
+      definition_revision: "sha256:one",
+      inputs: { text: "hi" },
+      dry_run: true,
+    });
   });
 
   it("exposes the response body on ApiError for missing_inputs", async () => {
@@ -184,6 +192,59 @@ describe("workbench API client", () => {
     }).catch((caught) => caught) as ApiError;
     expect(error.code).toBe("missing_inputs");
     expect(error.body).toMatchObject({ missing: [{ id: "text" }] });
+  });
+
+  it("preserves the structured revision mismatch error body", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: "flow_revision_mismatch",
+      source: "binding",
+      flow_id: "flow_demo",
+      expected_definition_revision: "sha256:old",
+      current_definition_revision: "sha256:new",
+      requires_confirmation: true,
+    }), { status: 409, headers: { "content-type": "application/json" } })));
+    const error = await api.sendMessage("sess_1", {
+      message: "run",
+      model: null,
+      attachments: [],
+      permissionMode: null,
+      effort: null,
+      idempotencyKey: "revision-mismatch",
+    }).catch((caught) => caught) as ApiError;
+    expect(error.code).toBe("flow_revision_mismatch");
+    expect(error.body).toMatchObject({
+      source: "binding",
+      flow_id: "flow_demo",
+      expected_definition_revision: "sha256:old",
+      current_definition_revision: "sha256:new",
+      requires_confirmation: true,
+    });
+  });
+
+  it.each(["manage", "consume"] as const)("lists the explicit %s Flow view", async (view) => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({ flows: [] }));
+    vi.stubGlobal("fetch", fetch);
+    await api.flows(view);
+    expect(fetch).toHaveBeenCalledWith(`/v1/flows?view=${view}`, expect.any(Object));
+  });
+
+  it("applies and unbinds Flow through explicit APIs", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        flow_id: "flow_demo",
+        definition_revision: "sha256:one",
+      }))
+      .mockResolvedValueOnce(Response.json(session("sess_1")));
+    vi.stubGlobal("fetch", fetch);
+    await api.applyFlow("sess_1", "flow_demo");
+    await api.unbindFlow("sess_1");
+    expect(fetch).toHaveBeenNthCalledWith(1, "/v1/flows/flow_demo/apply", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ session_id: "sess_1" }),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(2, "/v1/sessions/sess_1/flow", expect.objectContaining({
+      method: "DELETE",
+    }));
   });
 
   it("fetches a flow by id", async () => {

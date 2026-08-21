@@ -117,7 +117,11 @@ export class SessionCoordinator {
           type: "TURN_QUEUED",
           actor: "user",
           target: turn.turnId,
-          payload: { queue_position: turn.queuePosition },
+          payload: {
+            queue_position: turn.queuePosition,
+            actor_ref: turn.message.actorRef ?? null,
+            flow_invocation_source: turn.message.flowInvocationSource ?? "none",
+          },
         });
       }
       runtime = tx.getRuntime(input.sessionId)!;

@@ -375,6 +375,7 @@ describe("TelegramBridge inbound commands", () => {
         channel: "telegram",
         conversationId: "telegram:42|",
         message: expect.stringContaining("hello"),
+        actorRef: { channel: "telegram", id: "99" },
       }),
     );
     await bridge.disconnect();

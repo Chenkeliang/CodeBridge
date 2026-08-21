@@ -15,6 +15,8 @@ import { FeishuBridge, type FeishuMessage } from "@codebridge/channel-feishu";
 import { createSessionApp } from "./session-api.js";
 import { createChannelSessionIngress } from "./channel-ingress.js";
 import type { RunnerClient } from "@codebridge/runner-client";
+import { definitionHash } from "@codebridge/workflow-engine";
+import { compileCatalogFlow } from "./flow-compile.js";
 
 const TOKEN = "session-token";
 const agents: AgentProfile[] = [
@@ -115,6 +117,33 @@ function createSetupFixture(
     registry,
     configStore,
   };
+}
+
+function saveChannelRunbook(flows: FlowCatalogStore, flowId = "flow_channel") {
+  const base = {
+    schemaVersion: 1 as const,
+    flowId,
+    name: "Channel Flow",
+    kind: "runbook" as const,
+    status: "published" as const,
+    source: "git" as const,
+    definitionRevision: `sha256:${flowId}`,
+    planIrHash: null,
+    inputs: [],
+    reviewStatus: "approved" as const,
+    gitRevision: "test",
+    validationIssues: [],
+    steps: [{
+      id: "echo",
+      capability: "demo.echo",
+      mode: "read_only",
+      successWhen: "output.text exists",
+    }],
+    createdAt: "2026-08-21T00:00:00.000Z",
+    updatedAt: "2026-08-21T00:00:00.000Z",
+  };
+  const plan = compileCatalogFlow(base);
+  return flows.save({ ...base, planIrHash: definitionHash(plan) });
 }
 
 interface WriteCounters {
@@ -588,14 +617,20 @@ describe("session API", () => {
       body: JSON.stringify({ agent_id: "pi", model: "pi-model" }),
     });
     expect(create.status).toBe(201);
-    const session = (await create.json()) as { session_id: string; agent_id: string; model: string | null };
+    const session = (await create.json()) as {
+      session_id: string;
+      agent_id: string;
+      flow_definition_revision: string | null;
+      model: string | null;
+    };
     expect(session.agent_id).toBe("pi");
+    expect(session.flow_definition_revision).toBeNull();
     expect(session.model).toBe("pi-model");
 
     const message = await app.request(`/v1/sessions/${session.session_id}/messages`, {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ message: "检查当前上下文", flow_id: "flow-a" }),
+      body: JSON.stringify({ message: "检查当前上下文" }),
     });
     expect(message.status).toBe(202);
     const accepted = (await message.json()) as { task_record_id: string };
@@ -607,10 +642,46 @@ describe("session API", () => {
     expect(await current.json()).toMatchObject({
       session: {
         task_record_id: accepted.task_record_id,
-        flow_id: "flow-a",
+        flow_id: null,
+        flow_definition_revision: null,
       },
     });
     expect(workItems.listEvents(accepted.task_record_id).map((event) => event.type)).toContain("MESSAGE_RECEIVED");
+    catalog.close();
+    workItems.close();
+  });
+
+  it("explicitly unbinds both Flow id and definition revision", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+    const session = catalog.createSession({ agentId: "pi" });
+    catalog.bindFlow(session.id, {
+      flowId: "flow-bound",
+      definitionRevision: "sha256:bound",
+    });
+
+    const response = await app.request(`/v1/sessions/${session.id}/flow`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      session_id: session.id,
+      flow_id: null,
+      flow_definition_revision: null,
+    });
+    expect(catalog.getSession(session.id)).toMatchObject({
+      flowId: null,
+      flowDefinitionRevision: null,
+    });
+
+    const missing = await app.request("/v1/sessions/sess_missing/flow", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: "session_not_found" });
     catalog.close();
     workItems.close();
   });
@@ -833,6 +904,140 @@ describe("session API", () => {
       run_id: expect.stringMatching(/^run_/),
       turn_id: expect.stringMatching(/^turn_/),
     });
+    catalog.close();
+    workItems.close();
+  });
+
+  it("does not inherit a historical Session Flow binding for an ordinary channel message", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const flows = new FlowCatalogStore(":memory:");
+    const flow = saveChannelRunbook(flows);
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const session = catalog.createSession({ agentId: "pi" });
+    catalog.bindChannelConversation({
+      channel: "feishu",
+      conversationId: "chat",
+      agentId: "pi",
+      workspaceKey: canonicalWorkspaceKey("").key,
+      generation: 0,
+    }, session.id);
+    catalog.bindFlow(session.id, {
+      flowId: flow.flowId,
+      definitionRevision: flow.definitionRevision,
+    });
+    const app = createSessionApp({ catalog, agents, workItems, coordinator, flows }, TOKEN);
+
+    const response = await app.request("/v1/channels/feishu/conversations/chat/messages", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+        "idempotency-key": "channel-no-inherit",
+      },
+      body: JSON.stringify({ message: "ordinary", agent_id: "pi" }),
+    });
+    expect(response.status).toBe(202);
+    const workItem = workItems.getWorkItemBySessionId(session.id)!;
+    expect(workItems.listRuns(workItem.id)[0]?.planId).toBeNull();
+    expect(catalog.getSession(session.id)).toMatchObject({
+      flowId: flow.flowId,
+      flowDefinitionRevision: flow.definitionRevision,
+    });
+    flows.close();
+    catalog.close();
+    workItems.close();
+  });
+
+  it("forwards a complete channel Flow invocation and rejects incomplete pairs", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const flows = new FlowCatalogStore(":memory:");
+    const flow = saveChannelRunbook(flows);
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({ catalog, agents, workItems, coordinator, flows }, TOKEN);
+
+    const incomplete = await app.request("/v1/channels/telegram/conversations/chat/messages", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+        "idempotency-key": "channel-incomplete",
+      },
+      body: JSON.stringify({ message: "run", agent_id: "pi", flow_id: flow.flowId }),
+    });
+    expect(incomplete.status).toBe(400);
+    expect(await incomplete.json()).toEqual({ error: "flow_invocation_incomplete" });
+
+    const blank = await app.request("/v1/channels/telegram/conversations/chat/messages", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+        "idempotency-key": "channel-blank",
+      },
+      body: JSON.stringify({
+        message: "run",
+        agent_id: "pi",
+        flow_id: " ",
+        definition_revision: " ",
+      }),
+    });
+    expect(blank.status).toBe(400);
+    expect(await blank.json()).toEqual({ error: "invalid_flow_invocation" });
+
+    const response = await app.request("/v1/channels/telegram/conversations/chat/messages", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+        "idempotency-key": "channel-complete",
+      },
+      body: JSON.stringify({
+        message: "run",
+        agent_id: "pi",
+        flow_id: flow.flowId,
+        definition_revision: flow.definitionRevision,
+        actor_ref: { channel: "telegram", id: "user-42" },
+      }),
+    });
+    expect(response.status).toBe(202);
+    const body = await response.json() as { session_id: string };
+    const workItem = workItems.getWorkItemBySessionId(body.session_id)!;
+    const run = workItems.listRuns(workItem.id)[0]!;
+    expect(workItems.getPlan(run.planId!)?.workflowId).toBe(flow.flowId);
+    expect(workItems.listEvents(workItem.id).find((event) => event.type === "MESSAGE_RECEIVED")?.payload).toMatchObject({
+      actor_ref: { channel: "telegram", id: "user-42" },
+      flow_invocation_source: "request",
+    });
+    expect(catalog.getSession(body.session_id)).toMatchObject({
+      flowId: null,
+      flowDefinitionRevision: null,
+    });
+
+    const mismatchedActor = await app.request("/v1/channels/telegram/conversations/chat-mismatch/messages", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+        "idempotency-key": "channel-mismatched-actor",
+      },
+      body: JSON.stringify({
+        message: "run",
+        agent_id: "pi",
+        flow_id: flow.flowId,
+        definition_revision: flow.definitionRevision,
+        actor_ref: { channel: "feishu", id: "spoofed-user" },
+      }),
+    });
+    expect(mismatchedActor.status).toBe(202);
+    const mismatchedBody = await mismatchedActor.json() as { session_id: string };
+    const mismatchedWorkItem = workItems.getWorkItemBySessionId(mismatchedBody.session_id)!;
+    expect(workItems.listEvents(mismatchedWorkItem.id).find((event) => event.type === "MESSAGE_RECEIVED")?.payload).toMatchObject({
+      actor_ref: { channel: "telegram", id: "unknown" },
+      flow_invocation_source: "request",
+    });
+    flows.close();
     catalog.close();
     workItems.close();
   });

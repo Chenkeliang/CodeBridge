@@ -49,6 +49,11 @@ export interface SessionRuntime {
   updatedAt: string;
 }
 
+export type FlowActorRef = {
+  channel: "web" | "feishu" | "telegram";
+  id: string;
+};
+
 export interface SessionTurnMessage {
   text: string;
   attachmentIds: string[];
@@ -56,6 +61,8 @@ export interface SessionTurnMessage {
   model: string | null;
   effort: string | null;
   permissionMode: string | null;
+  actorRef?: FlowActorRef;
+  flowInvocationSource?: "none" | "request" | "binding";
   plan: {
     planId: string;
     source: "workflow" | "agent_generated";
@@ -732,6 +739,8 @@ export function createSqliteSessionRuntimeTransaction(
         payload: {
           message: turn.message.text,
           attachment_ids: turn.message.attachmentIds,
+          actor_ref: turn.message.actorRef ?? null,
+          flow_invocation_source: turn.message.flowInvocationSource ?? "none",
         },
       });
       transaction.appendEvent({

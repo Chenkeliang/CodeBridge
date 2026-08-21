@@ -14,12 +14,15 @@ describe("channel session ingress", () => {
     const app = new Hono();
     app.post("/v1/channels/:channel/conversations/:conversation/messages", async (c) => {
       expect(c.req.param("channel")).toBe("feishu");
-      expect(await c.req.json()).toMatchObject({
+      const body = await c.req.json() as Record<string, unknown>;
+      expect(body).toMatchObject({
         message: "hello",
         agent_id: "pi",
         generation: 0,
         reply_to_message_id: "msg_1",
       });
+      expect(body).not.toHaveProperty("flow_id");
+      expect(body).not.toHaveProperty("definition_revision");
       return c.json({
         session_id: "sess_1",
         turn_id: "turn_1",
@@ -46,6 +49,68 @@ describe("channel session ingress", () => {
       queueState: "ready",
       eventSequence: 3,
     });
+  });
+
+  it("submits a complete Flow invocation and actor identity", async () => {
+    const app = new Hono();
+    app.post("/v1/channels/:channel/conversations/:conversation/messages", async (c) => {
+      expect(await c.req.json()).toMatchObject({
+        flow_id: "flow_demo",
+        definition_revision: "sha256:one",
+        actor_ref: { channel: "telegram", id: "user_1" },
+      });
+      return c.json({
+        session_id: "sess_1",
+        turn_id: "turn_1",
+        run_id: "run_1",
+        acceptance: "dispatched",
+        queue_state: "ready",
+        event_sequence: 3,
+      }, 202);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    await ingress.submit({
+      channel: "telegram",
+      conversationId: "chat|topic",
+      message: "run",
+      flowId: "flow_demo",
+      flowDefinitionRevision: "sha256:one",
+      actorRef: { channel: "telegram", id: "user_1" },
+    });
+  });
+
+  it.each([
+    { flowId: "flow_demo" },
+    { flowDefinitionRevision: "sha256:one" },
+  ])("rejects an incomplete channel Flow invocation", async (partial) => {
+    const app = new Hono();
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.submit({
+      channel: "feishu",
+      conversationId: "chat",
+      message: "run",
+      ...partial,
+    })).rejects.toThrow("flow_invocation_incomplete");
+  });
+
+  it("lists only the fixed consume view", async () => {
+    const app = new Hono();
+    app.get("/v1/flows", (c) => {
+      expect(c.req.query("view")).toBe("consume");
+      return c.json({
+        flows: [{
+          flow_id: "flow_demo",
+          name: "Demo",
+          definition_revision: "sha256:one",
+        }],
+      });
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.listConsumableFlows()).resolves.toEqual([{
+      flowId: "flow_demo",
+      name: "Demo",
+      definitionRevision: "sha256:one",
+    }]);
   });
 
   it("resumes a provider session into a slot", async () => {

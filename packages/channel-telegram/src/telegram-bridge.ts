@@ -309,6 +309,7 @@ export class TelegramBridge {
       chatId,
       topicId,
       `${prompt}\n\n${mentionGuidance}`,
+      senderId,
     );
     this.activeReplies.add(task);
     void task
@@ -491,6 +492,7 @@ export class TelegramBridge {
     chatId: string,
     topicId: string | undefined,
     prompt: string,
+    senderId: string,
   ): Promise<void> {
     if (!this.sessionIngress) {
       await this.runLegacyAgent(chatId, topicId, prompt);
@@ -506,6 +508,7 @@ export class TelegramBridge {
       generation: slot.generation,
       message: prompt,
       model: binding.model,
+      actorRef: { channel: "telegram", id: senderId },
     });
     const turn = {
       turnId: receipt.turnId,

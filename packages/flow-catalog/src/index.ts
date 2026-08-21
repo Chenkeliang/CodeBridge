@@ -2,6 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { InvalidFlowStateError, isLegalFlowState } from "./policy.js";
+
+export {
+  InvalidFlowStateError,
+  isBindable,
+  isConsumable,
+  isDryRunnable,
+  isExecutable,
+  isLegalFlowState,
+  isManageable,
+} from "./policy.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
   typeof import("node:sqlite");
@@ -89,6 +100,11 @@ export class FlowCatalogStore {
   }
 
   save(input: Omit<FlowRecord, "schemaVersion" | "createdAt" | "updatedAt" | "reviewStatus" | "gitRevision" | "validationIssues" | "planIrHash" | "inputs"> & Partial<Pick<FlowRecord, "createdAt" | "updatedAt" | "reviewStatus" | "gitRevision" | "validationIssues" | "planIrHash" | "inputs">>): FlowRecord {
+    if (!isLegalFlowState(input)) {
+      throw new InvalidFlowStateError(
+        `invalid Flow state: ${input.kind}/${input.status}`,
+      );
+    }
     const current = this.get(input.flowId);
     const now = new Date().toISOString();
     const record: FlowRecord = {

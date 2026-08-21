@@ -13,6 +13,7 @@ export function toApiSession(session: AgentSession) {
     provider_session_id: session.providerSessionId,
     task_record_id: session.taskRecordId,
     flow_id: session.flowId,
+    flow_definition_revision: session.flowDefinitionRevision,
     model: session.model,
     effort: session.effort,
     config_overrides: session.configOverrides,

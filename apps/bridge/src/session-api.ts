@@ -23,7 +23,8 @@ import {
   registerSessionRuntimeCommandRoutes,
   registerSessionRuntimeReadRoutes,
 } from "./session-runtime-api.js";
-import { compileCatalogFlow } from "./flow-compile.js";
+import { compileCatalogFlow, instantiateCatalogPlan } from "./flow-compile.js";
+import { resolveFlowInvocation } from "./flow-invocation.js";
 
 export interface SessionApiOptions {
   catalog: SessionCatalogStore;
@@ -43,6 +44,7 @@ export interface SessionApiOptions {
 
 export function createSessionApp(options: SessionApiOptions, token: string) {
   const app = new Hono();
+  const channelOriginToken = randomUUID();
   const currentAgents = () => options.agentRegistry?.list()
     ?? (typeof options.agents === "function" ? options.agents() : options.agents);
   const currentProfiles = () => new Map(currentAgents().map((agent) => [agent.agentId, agent]));
@@ -92,6 +94,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       executor: options.executor,
       flows: options.flows,
       capabilities: options.capabilities,
+      channelOriginToken,
     });
   }
 
@@ -319,6 +322,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(response, 201);
   });
 
+  app.delete("/v1/sessions/:session_id/flow", (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    return c.json(toApiSession(options.catalog.unbindFlow(session.id)));
+  });
+
   app.post("/v1/channels/:channel/conversations/:conversation_id/messages", async (c) => {
     const body = await readJson(c);
     if (!body || typeof body.message !== "string" || !body.message.trim()) {
@@ -340,6 +349,33 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const generation = Number.isSafeInteger(body.generation)
       ? Number(body.generation)
       : 0;
+    const hasFlowId = Object.hasOwn(body, "flow_id");
+    const hasFlowRevision = Object.hasOwn(body, "definition_revision");
+    if (hasFlowId !== hasFlowRevision) {
+      return c.json({ error: "flow_invocation_incomplete" }, 400);
+    }
+    if (
+      hasFlowId
+      && (
+        typeof body.flow_id !== "string"
+        || !body.flow_id.trim()
+        || typeof body.definition_revision !== "string"
+        || !body.definition_revision.trim()
+      )
+    ) {
+      return c.json({ error: "invalid_flow_invocation" }, 400);
+    }
+    const rawActorRef = body.actor_ref && typeof body.actor_ref === "object"
+      ? body.actor_ref as Record<string, unknown>
+      : null;
+    const actorRef = (channel === "feishu" || channel === "telegram")
+      ? {
+          channel,
+          id: rawActorRef?.channel === channel && typeof rawActorRef.id === "string" && rawActorRef.id.trim()
+            ? rawActorRef.id.trim()
+            : "unknown",
+        }
+      : undefined;
     const slot: ChannelSlot = {
       channel,
       conversationId,
@@ -374,6 +410,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const childHeaders = {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
+      "x-codebridge-channel-origin": channelOriginToken,
       ...(idempotencyKey ? { "idempotency-key": `${idempotencyKey}:message` } : {}),
     };
     const messageResponse = await app.request(`/v1/sessions/${session.id}/messages`, {
@@ -381,7 +418,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       headers: childHeaders,
       body: JSON.stringify({
         message: body.message,
-        flow_id: asNullableString(body.flow_id),
+        ...(hasFlowId ? { flow_id: String(body.flow_id).trim() } : {}),
+        ...(hasFlowRevision
+          ? { definition_revision: String(body.definition_revision).trim() }
+          : {}),
+        ...(actorRef ? { actor_ref: actorRef } : {}),
         model: asNullableString(body.model),
         attachments: body.attachments,
         delivery: typeof body.reply_to_message_id === "string"
@@ -425,10 +466,14 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
+        "x-codebridge-channel-origin": channelOriginToken,
         ...(idempotencyKey ? { "idempotency-key": `${idempotencyKey}:run` } : {}),
       },
       body: JSON.stringify({
-        flow_id: asNullableString(body.flow_id),
+        ...(hasFlowId ? { flow_id: String(body.flow_id).trim() } : {}),
+        ...(hasFlowRevision
+          ? { definition_revision: String(body.definition_revision).trim() }
+          : {}),
         model: asNullableString(body.model),
       }),
     });
@@ -676,9 +721,48 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const task = session.taskRecordId
       ? options.workItems.getWorkItem(session.taskRecordId)
       : undefined;
-    const flowId = Object.hasOwn(body, "flow_id")
-      ? asNullableString(body.flow_id)
-      : session.flowId;
+    const hasFlowId = Object.hasOwn(body, "flow_id");
+    if (
+      hasFlowId
+      && body.flow_id !== null
+      && (typeof body.flow_id !== "string" || !body.flow_id.trim())
+    ) {
+      return c.json({ error: "invalid_flow_id" }, 400);
+    }
+    if (
+      Object.hasOwn(body, "definition_revision")
+      && (typeof body.definition_revision !== "string" || !body.definition_revision.trim())
+    ) {
+      return c.json({ error: "invalid_definition_revision" }, 400);
+    }
+    const flowResolution = resolveFlowInvocation({
+      origin: c.req.header("x-codebridge-channel-origin") === channelOriginToken
+        ? "channel"
+        : "web",
+      hasFlowId,
+      requestedFlowId: hasFlowId
+        ? body.flow_id === null ? null : String(body.flow_id).trim()
+        : undefined,
+      requestedDefinitionRevision: typeof body.definition_revision === "string"
+        ? body.definition_revision.trim()
+        : undefined,
+      binding: session.flowId !== null || session.flowDefinitionRevision !== null
+        ? {
+            flowId: session.flowId,
+            definitionRevision: session.flowDefinitionRevision,
+          }
+        : null,
+      dryRun: false,
+      getFlow: (flowId) => options.flows?.get(flowId),
+    });
+    if (flowResolution.kind === "error") {
+      return c.json(flowResolution.body, flowResolution.status);
+    }
+    if (flowResolution.kind === "unbind") {
+      options.catalog.unbindFlow(session.id);
+    }
+    const flow = flowResolution.kind === "flow" ? flowResolution.flow : undefined;
+    const flowId = flow?.flowId ?? null;
     const model = Object.hasOwn(body, "model") ? asNullableString(body.model) : session.model;
     const effort = Object.hasOwn(body, "effort") ? asNullableString(body.effort) : session.effort;
     const permissionMode = Object.hasOwn(body, "permission_mode")
@@ -692,6 +776,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         conversationId: `conv_${session.id.slice("sess_".length)}`,
         agentId: session.agentId,
         workflowId: flowId,
+        workflowRevision: flow?.definitionRevision ?? null,
         workspaceScope: session.cwd ? [session.cwd] : [],
         riskLevel: "read_only",
       });
@@ -706,8 +791,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     } catch (error) {
       return c.json({ error: "invalid_attachments", detail: error instanceof Error ? error.message : String(error) }, 400);
     }
-    if (task && task.workflowId !== flowId) {
-      options.workItems.updateWorkflowBinding(task.id, flowId);
+    if (
+      task
+      && (task.workflowId !== flowId || task.workflowRevision !== (flow?.definitionRevision ?? null))
+    ) {
+      options.workItems.updateWorkflowBinding(task.id, flowId, flow?.definitionRevision ?? null);
     }
     const event = options.workItems.appendEvent({
       workItemId: workItem.id,
@@ -717,7 +805,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     });
     options.catalog.updateSession(session.id, {
       taskRecordId: workItem.id,
-      flowId,
       model,
       effort,
       permissionMode,
@@ -788,25 +875,58 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       const cached = options.workItems.getIdempotencyResponse(`session:run:${session.id}`, idempotencyKey);
       if (cached !== undefined) return c.json(cached, 202);
     }
-    const flowId = body && Object.hasOwn(body, "flow_id")
-      ? asNullableString(body.flow_id)
-      : session.flowId;
+    const runBody = body ?? {};
+    const hasFlowId = Object.hasOwn(runBody, "flow_id");
+    if (
+      hasFlowId
+      && runBody.flow_id !== null
+      && (typeof runBody.flow_id !== "string" || !runBody.flow_id.trim())
+    ) {
+      return c.json({ error: "invalid_flow_id" }, 400);
+    }
+    if (
+      Object.hasOwn(runBody, "definition_revision")
+      && (typeof runBody.definition_revision !== "string" || !runBody.definition_revision.trim())
+    ) {
+      return c.json({ error: "invalid_definition_revision" }, 400);
+    }
+    const flowResolution = resolveFlowInvocation({
+      origin: c.req.header("x-codebridge-channel-origin") === channelOriginToken
+        ? "channel"
+        : "web",
+      hasFlowId,
+      requestedFlowId: hasFlowId
+        ? runBody.flow_id === null ? null : String(runBody.flow_id).trim()
+        : undefined,
+      requestedDefinitionRevision: typeof runBody.definition_revision === "string"
+        ? runBody.definition_revision.trim()
+        : undefined,
+      binding: session.flowId !== null || session.flowDefinitionRevision !== null
+        ? {
+            flowId: session.flowId,
+            definitionRevision: session.flowDefinitionRevision,
+          }
+        : null,
+      dryRun: false,
+      getFlow: (flowId) => options.flows?.get(flowId),
+    });
+    if (flowResolution.kind === "error") {
+      return c.json(flowResolution.body, flowResolution.status);
+    }
+    if (flowResolution.kind === "unbind") {
+      options.catalog.unbindFlow(session.id);
+    }
+    const flow = flowResolution.kind === "flow" ? flowResolution.flow : undefined;
+    const flowId = flow?.flowId ?? null;
     const model = body && Object.hasOwn(body, "model") ? asNullableString(body.model) : session.model;
     const effort = body && Object.hasOwn(body, "effort") ? asNullableString(body.effort) : session.effort;
     const permissionMode = body && Object.hasOwn(body, "permission_mode")
       ? asNullableString(body.permission_mode)
       : session.permissionMode;
-    const flow = flowId ? options.flows?.get(flowId) : undefined;
-    if (flowId && !flow) {
-      return c.json({ error: "flow_not_found", flow_id: flowId }, 404);
-    }
-    if (flow?.status === "deprecated") {
-      return c.json({ error: "flow_deprecated", flow_id: flowId }, 409);
-    }
     let plan;
     if (flow) {
       try {
-        plan = compileCatalogFlow(flow);
+        plan = instantiateCatalogPlan(compileCatalogFlow(flow));
       } catch (error) {
         if (error instanceof WorkflowValidationError) {
           return c.json({ error: "invalid_flow", issues: error.issues }, 409);
@@ -817,7 +937,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (task.workflowId !== flowId || task.workflowRevision !== (flow?.definitionRevision ?? null)) {
       options.workItems.updateWorkflowBinding(task.id, flowId, flow?.definitionRevision ?? null);
     }
-    options.catalog.updateSession(session.id, { flowId, model, effort, permissionMode });
+    options.catalog.updateSession(session.id, { model, effort, permissionMode });
     const runId = `run_${randomUUID().replaceAll("-", "")}`;
     if (plan) {
       options.workItems.savePlan({
@@ -1377,6 +1497,7 @@ function toApiSession(session: ReturnType<SessionCatalogStore["getSession"]>): R
     provider_session_id: session.providerSessionId,
     task_record_id: session.taskRecordId,
     flow_id: session.flowId,
+    flow_definition_revision: session.flowDefinitionRevision,
     model: session.model,
     effort: session.effort,
     config_overrides: session.configOverrides,

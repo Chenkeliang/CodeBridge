@@ -140,6 +140,7 @@ function ProcessBlock(props: {
   loadingBlockId: string | null;
   onLoadSegments: (blockId: string, after: number) => void;
 }) {
+  const [liveFallbackStart] = useState(() => new Date().toISOString());
   const visible = props.blocks.filter((block) =>
     !isEmptyProcessBlock(block) || block.block_id === props.liveBlockId
   );
@@ -150,7 +151,6 @@ function ProcessBlock(props: {
   const endedAt = visible.every((block) => blockEndedAt(block))
     ? latestTimestamp(visible.map(blockEndedAt))
     : null;
-  const [liveFallbackStart] = useState(() => new Date().toISOString());
   const elapsedStart = startedAt ?? (isLive ? liveFallbackStart : null);
   const completedElapsed = !isLive && startedAt && endedAt
     ? formatElapsed(startedAt, endedAt)

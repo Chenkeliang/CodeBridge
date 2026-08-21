@@ -33,6 +33,7 @@ export type {
   ChannelDeliveryInput,
   ChannelDeliveryRow,
   ChannelDeliveryStatus,
+  FlowActorRef,
   ImportedHistoryEntry,
   ProviderHistoryImportInput,
   ProviderHistoryImportResult,

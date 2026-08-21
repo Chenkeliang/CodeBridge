@@ -77,6 +77,7 @@ export interface AgentSession {
   providerSessionId: string | null;
   taskRecordId: string | null;
   flowId: string | null;
+  flowDefinitionRevision: string | null;
   model: string | null;
   effort: string | null;
   configOverrides: SessionConfigOverrides;
@@ -103,7 +104,6 @@ export interface CreateSessionInput {
   agentId: string;
   providerSessionId?: string | null;
   taskRecordId?: string | null;
-  flowId?: string | null;
   model?: string | null;
   effort?: string | null;
   configOverrides?: SessionConfigOverrides;
@@ -147,6 +147,7 @@ export class SessionCatalogStore {
         provider_session_id TEXT,
         task_record_id TEXT,
         flow_id TEXT,
+        flow_definition_revision TEXT,
         model TEXT,
         effort TEXT,
         config_overrides TEXT NOT NULL,
@@ -185,6 +186,13 @@ export class SessionCatalogStore {
       this.database.exec("ALTER TABLE agent_sessions ADD COLUMN flow_id TEXT");
     } catch {
       // Existing databases already contain the Flow binding column.
+    }
+    try {
+      this.database.exec(
+        "ALTER TABLE agent_sessions ADD COLUMN flow_definition_revision TEXT",
+      );
+    } catch {
+      // Existing databases already contain the immutable Flow revision column.
     }
     try {
       this.database.exec("ALTER TABLE agent_sessions ADD COLUMN model TEXT");
@@ -300,7 +308,8 @@ export class SessionCatalogStore {
       agentId: input.agentId,
       providerSessionId: input.providerSessionId ?? null,
       taskRecordId: input.taskRecordId ?? null,
-      flowId: input.flowId ?? null,
+      flowId: null,
+      flowDefinitionRevision: null,
       model: input.model ?? null,
       effort: input.effort ?? null,
       configOverrides: { ...(input.configOverrides ?? {}) },
@@ -318,9 +327,9 @@ export class SessionCatalogStore {
     this.database
       .prepare(
         `INSERT INTO agent_sessions (
-          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, model, effort, config_overrides, permission_mode, folder_id, cwd,
+          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, flow_definition_revision, model, effort, config_overrides, permission_mode, folder_id, cwd,
           additional_directories, title, status, pinned_at, archived_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -329,6 +338,7 @@ export class SessionCatalogStore {
         session.providerSessionId,
         session.taskRecordId,
         session.flowId,
+        session.flowDefinitionRevision,
         session.model,
         session.effort,
         JSON.stringify(session.configOverrides),
@@ -555,7 +565,6 @@ export class SessionCatalogStore {
       ...existing,
       providerSessionId: input.providerSessionId ?? existing.providerSessionId,
       taskRecordId: input.taskRecordId ?? existing.taskRecordId,
-      flowId: input.flowId !== undefined ? input.flowId : existing.flowId,
       model: input.model !== undefined ? input.model : existing.model,
       effort: input.effort !== undefined ? input.effort : existing.effort,
       configOverrides: input.configOverrides !== undefined ? { ...input.configOverrides } : existing.configOverrides,
@@ -571,13 +580,12 @@ export class SessionCatalogStore {
     };
     this.database
       .prepare(
-        `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, flow_id = ?, model = ?, effort = ?, config_overrides = ?, permission_mode = ?, folder_id = ?, cwd = ?,
+        `UPDATE agent_sessions SET provider_session_id = ?, task_record_id = ?, model = ?, effort = ?, config_overrides = ?, permission_mode = ?, folder_id = ?, cwd = ?,
          additional_directories = ?, title = ?, status = ?, pinned_at = ?, archived_at = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.providerSessionId,
         next.taskRecordId,
-        next.flowId,
         next.model,
         next.effort,
         JSON.stringify(next.configOverrides),
@@ -593,6 +601,39 @@ export class SessionCatalogStore {
         id,
       );
     return next;
+  }
+
+  bindFlow(
+    id: string,
+    binding: { flowId: string; definitionRevision: string },
+  ): AgentSession {
+    const now = new Date().toISOString();
+    const result = this.database
+      .prepare(
+        `UPDATE agent_sessions
+         SET flow_id = ?, flow_definition_revision = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(binding.flowId, binding.definitionRevision, now, id);
+    if (Number(result.changes) === 0) {
+      throw new Error(`Session not found: ${id}`);
+    }
+    return this.getSession(id)!;
+  }
+
+  unbindFlow(id: string): AgentSession {
+    const now = new Date().toISOString();
+    const result = this.database
+      .prepare(
+        `UPDATE agent_sessions
+         SET flow_id = NULL, flow_definition_revision = NULL, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(now, id);
+    if (Number(result.changes) === 0) {
+      throw new Error(`Session not found: ${id}`);
+    }
+    return this.getSession(id)!;
   }
 
   deleteSession(id: string): boolean {
@@ -613,6 +654,11 @@ function toSession(row: SqliteRow): AgentSession {
     providerSessionId: row.provider_session_id === null ? null : String(row.provider_session_id),
     taskRecordId: row.task_record_id === null ? null : String(row.task_record_id),
     flowId: row.flow_id === null ? null : String(row.flow_id),
+    flowDefinitionRevision:
+      row.flow_definition_revision === null ||
+      row.flow_definition_revision === undefined
+        ? null
+        : String(row.flow_definition_revision),
     model: row.model === null || row.model === undefined ? null : String(row.model),
     effort: row.effort === null || row.effort === undefined ? null : String(row.effort),
     configOverrides: JSON.parse(String(row.config_overrides ?? "{}")) as SessionConfigOverrides,

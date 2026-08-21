@@ -3,7 +3,6 @@ import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import {
   CapabilityRegistry,
   CapabilityRuntime,
-  SkillCapabilityAdapter,
   registerDemoCapabilities,
   registerEquityCapabilities,
 } from "@codebridge/policy";
@@ -12,33 +11,63 @@ import { SqliteEventStore } from "@codebridge/work-items";
 import { createFlowApp } from "./flow-api.js";
 
 describe("flow API", () => {
-  it("lists generic Flow Catalog records behind auth", async () => {
+  it("separates management and consumption views behind auth", async () => {
     const catalog = new FlowCatalogStore(":memory:");
-    catalog.save({
-      flowId: "flow-a",
-      name: "Flow A",
-      kind: "guide",
-      status: "published",
-      source: "git",
-      definitionRevision: "git:one",
-      steps: [{ id: "inspect" }],
-    });
+    for (const flow of [
+      { flowId: "guide-draft", kind: "guide", status: "draft" },
+      { flowId: "runbook-draft", kind: "runbook", status: "draft" },
+      { flowId: "runbook-candidate", kind: "runbook", status: "candidate" },
+      { flowId: "runbook-published", kind: "runbook", status: "published" },
+      { flowId: "runbook-deprecated", kind: "runbook", status: "deprecated" },
+    ] as const) {
+      catalog.save({
+        ...flow,
+        name: flow.flowId,
+        source: "git",
+        definitionRevision: `git:${flow.flowId}`,
+        steps: [],
+      });
+    }
     const app = createFlowApp(catalog, "token");
     expect((await app.request("/v1/flows")).status).toBe(401);
-    const response = await app.request("/v1/flows", { headers: { authorization: "Bearer token" } });
-    expect(response.status).toBe(200);
-    expect((await response.json() as { flows: Array<{ flow_id: string }> }).flows[0]?.flow_id).toBe("flow-a");
+    const manage = await app.request("/v1/flows?view=manage", { headers: { authorization: "Bearer token" } });
+    expect(manage.status).toBe(200);
+    expect((await manage.json() as { flows: Array<{ flow_id: string }> }).flows.map((flow) => flow.flow_id).sort()).toEqual([
+      "guide-draft",
+      "runbook-candidate",
+      "runbook-deprecated",
+      "runbook-draft",
+      "runbook-published",
+    ]);
+
+    const consume = await app.request("/v1/flows?view=consume", { headers: { authorization: "Bearer token" } });
+    expect(consume.status).toBe(200);
+    expect((await consume.json() as { flows: Array<{ flow_id: string }> }).flows.map((flow) => flow.flow_id)).toEqual([
+      "runbook-published",
+    ]);
+
+    const safeDefault = await app.request("/v1/flows", { headers: { authorization: "Bearer token" } });
+    expect(safeDefault.status).toBe(200);
+    expect((await safeDefault.json() as { flows: Array<{ flow_id: string }> }).flows).toEqual([
+      expect.objectContaining({ flow_id: "runbook-published" }),
+    ]);
+
+    const invalid = await app.request("/v1/flows?view=other", { headers: { authorization: "Bearer token" } });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: "invalid_flow_view" });
     catalog.close();
   });
 
   it("saves a Session-generated Flow as a candidate", async () => {
     const catalog = new FlowCatalogStore(":memory:");
-    const app = createFlowApp(catalog, "token");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    const app = createFlowApp(catalog, "token", { sessions });
     const response = await app.request("/v1/flows/candidates", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
       body: JSON.stringify({
-        session_id: "sess_1",
+        session_id: session.id,
         definition_revision: "sha256:one",
         flow: {
           flow_id: "flow-candidate",
@@ -54,21 +83,110 @@ describe("flow API", () => {
     });
     expect(response.status).toBe(201);
     expect((await response.json() as { status: string; flow_id: string })).toMatchObject({
+      kind: "runbook",
       status: "candidate",
       flow_id: "flow-candidate",
       steps: [{ retry: { max_attempts: 3, delay_ms: 10 } }],
     });
+    sessions.close();
+    catalog.close();
+  });
+
+  it("rejects a candidate with a nonexistent Session before writing the Catalog", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const app = createFlowApp(catalog, "token", { sessions });
+
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: "sess_missing",
+        flow: {
+          flow_id: "flow-untraceable",
+          steps: [{ id: "inspect", capability: "context.inspect", mode: "read_only" }],
+        },
+      }),
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "session_not_found" });
+    expect(catalog.get("flow-untraceable")).toBeUndefined();
+    sessions.close();
+    catalog.close();
+  });
+
+  it("does not let a candidate overwrite an existing Published Flow", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    catalog.save({
+      flowId: "flow-stable",
+      name: "Stable",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:published",
+      steps: [{ id: "inspect", capability: "context.inspect", mode: "read_only" }],
+    });
+    const app = createFlowApp(catalog, "token", { sessions });
+
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: session.id,
+        flow: {
+          flow_id: "flow-stable",
+          steps: [{ id: "replace", capability: "context.inspect", mode: "read_only" }],
+        },
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "flow_id_conflict",
+      flow_id: "flow-stable",
+    });
+    expect(catalog.get("flow-stable")).toMatchObject({
+      status: "published",
+      definitionRevision: "sha256:published",
+      steps: [expect.objectContaining({ id: "inspect" })],
+    });
+    sessions.close();
+    catalog.close();
+  });
+
+  it.each(["guide", "ephemeral"])("rejects an explicit %s candidate kind", async (kind) => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    const app = createFlowApp(catalog, "token", { sessions });
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: session.id,
+        flow: { flow_id: `flow-${kind}`, kind, steps: [] },
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_flow_state" });
+    expect(catalog.get(`flow-${kind}`)).toBeUndefined();
+    sessions.close();
     catalog.close();
   });
 
   it("rejects a candidate that violates the Workflow DSL", async () => {
     const catalog = new FlowCatalogStore(":memory:");
-    const app = createFlowApp(catalog, "token");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    const app = createFlowApp(catalog, "token", { sessions });
     const response = await app.request("/v1/flows/candidates", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
       body: JSON.stringify({
-        session_id: "sess_1",
+        session_id: session.id,
         definition_revision: "sha256:invalid",
         flow: { flow_id: "invalid-flow", steps: [{ id: "release", capability: "release.execute", mode: "production_write" }] },
       }),
@@ -76,6 +194,7 @@ describe("flow API", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: "invalid_flow" });
     expect(catalog.get("invalid-flow")).toBeUndefined();
+    sessions.close();
     catalog.close();
   });
 
@@ -84,13 +203,15 @@ describe("flow API", () => {
     catalog.save({
       flowId: "flow-review",
       name: "Review me",
-      kind: "guide",
+      kind: "runbook",
       status: "candidate",
       source: "agent_generated",
       definitionRevision: "sha256:one",
-      steps: [{ id: "inspect", capability: "context.inspect", mode: "read_only" }],
+      steps: [],
     });
-    const app = createFlowApp(catalog, "token");
+    const capabilities = new CapabilityRegistry();
+    const runtime = new CapabilityRuntime();
+    const app = createFlowApp(catalog, "token", { capabilities, runtime });
     const missingRevision = await app.request("/v1/flows/flow-review/review", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
@@ -105,6 +226,7 @@ describe("flow API", () => {
     });
     expect(approved.status).toBe(200);
     expect(await approved.json()).toMatchObject({ status: "published", review_status: "approved", git_revision: "abc123", definition_revision: "sha256:one" });
+    capabilities.close();
     catalog.close();
   });
 
@@ -115,7 +237,7 @@ describe("flow API", () => {
     catalog.save({
       flowId: "flow-bind",
       name: "Bind me",
-      kind: "guide",
+      kind: "runbook",
       status: "published",
       source: "git",
       definitionRevision: "git:one",
@@ -130,6 +252,42 @@ describe("flow API", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ accepted: true, session_id: session.id, flow_id: "flow-bind", definition_revision: "git:one" });
     expect(sessions.getSession(session.id)?.flowId).toBe("flow-bind");
+    expect(sessions.getSession(session.id)?.flowDefinitionRevision).toBe("git:one");
+    sessions.close();
+    catalog.close();
+  });
+
+  it.each([
+    ["guide", "draft"],
+    ["runbook", "draft"],
+    ["runbook", "candidate"],
+    ["runbook", "deprecated"],
+  ] as const)("rejects applying a %s %s without changing the existing binding", async (kind, status) => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    sessions.bindFlow(session.id, { flowId: "flow-current", definitionRevision: "sha256:current" });
+    catalog.save({
+      flowId: `flow-${kind}-${status}`,
+      name: "Not bindable",
+      kind,
+      status,
+      source: "git",
+      definitionRevision: "sha256:new",
+      steps: [],
+    });
+    const app = createFlowApp(catalog, "token", { sessions });
+    const response = await app.request(`/v1/flows/flow-${kind}-${status}/apply`, {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ session_id: session.id }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "flow_not_bindable" });
+    expect(sessions.getSession(session.id)).toMatchObject({
+      flowId: "flow-current",
+      flowDefinitionRevision: "sha256:current",
+    });
     sessions.close();
     catalog.close();
   });
@@ -148,7 +306,7 @@ describe("flow API", () => {
     catalog.save({
       flowId: "flow-select",
       name: "Select",
-      kind: "guide",
+      kind: "runbook",
       status: "published",
       source: "git",
       definitionRevision: "git:select",
@@ -222,12 +380,14 @@ describe("flow API", () => {
 
   it("persists success_when from the candidate body", async () => {
     const catalog = new FlowCatalogStore(":memory:");
-    const app = createFlowApp(catalog, "token");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
+    const app = createFlowApp(catalog, "token", { sessions });
     const response = await app.request("/v1/flows/candidates", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
       body: JSON.stringify({
-        session_id: "sess_1",
+        session_id: session.id,
         flow: {
           flow_id: "flow-when",
           kind: "runbook",
@@ -244,6 +404,7 @@ describe("flow API", () => {
     expect(catalog.get("flow-when")?.steps[0]?.successWhen).toBe("output.text exists");
     const body = await response.json() as { steps: Array<{ success_when: string | null }> };
     expect(body.steps[0]?.success_when).toBe("output.text exists");
+    sessions.close();
     catalog.close();
   });
 
@@ -336,15 +497,17 @@ describe("flow API", () => {
 
   it("publishes a runbook whose demo capabilities are registered", async () => {
     const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
     const capabilities = new CapabilityRegistry();
     const runtime = new CapabilityRuntime();
     registerDemoCapabilities(capabilities, runtime);
-    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const app = createFlowApp(catalog, "token", { capabilities, runtime, sessions });
     const created = await app.request("/v1/flows/candidates", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
       body: JSON.stringify({
-        session_id: "sess_1",
+        session_id: session.id,
         flow: {
           flow_id: "flow_demo_echo",
           kind: "runbook",
@@ -376,20 +539,23 @@ describe("flow API", () => {
     expect(approved.status).toBe(200);
     expect(await approved.json()).toMatchObject({ status: "published" });
     capabilities.close();
+    sessions.close();
     catalog.close();
   });
 
   it("publishes a runbook whose equity capability is registered", async () => {
     const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "pi" });
     const capabilities = new CapabilityRegistry();
     const runtime = new CapabilityRuntime();
     registerEquityCapabilities(capabilities, runtime);
-    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const app = createFlowApp(catalog, "token", { capabilities, runtime, sessions });
     const created = await app.request("/v1/flows/candidates", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
       body: JSON.stringify({
-        session_id: "sess_1",
+        session_id: session.id,
         flow: {
           flow_id: "flow_equity_balance",
           name: "Equity Balance",
@@ -414,6 +580,7 @@ describe("flow API", () => {
     expect(await approved.json()).toMatchObject({ status: "published" });
     expect(catalog.get("flow_equity_balance")?.status).toBe("published");
     capabilities.close();
+    sessions.close();
     catalog.close();
   });
 
@@ -443,42 +610,26 @@ describe("flow API", () => {
     catalog.close();
   });
 
-  it("rejects publishing a guide whose step uses a skill adapter", async () => {
+  it("rejects review for a Guide draft", async () => {
     const catalog = new FlowCatalogStore(":memory:");
     catalog.save({
       flowId: "flow-skill-guide",
       name: "Skill guide",
       kind: "guide",
-      status: "candidate",
+      status: "draft",
       source: "agent_generated",
       definitionRevision: "sha256:one",
       steps: [{ id: "investigate", capability: "skill.investigate", mode: "read_only" }],
     });
-    const capabilities = new CapabilityRegistry();
-    const runtime = new CapabilityRuntime();
-    capabilities.register({
-      id: "skill.investigate",
-      risk: "read_only",
-      adapter: "skill.investigate",
-      side_effects: false,
-      source: { kind: "skill", ref: "investigate" },
-    });
-    runtime.register(new SkillCapabilityAdapter("skill.investigate", {
-      id: "investigate",
-      directory: "/tmp",
-      file: "/tmp/SKILL.md",
-      content: "investigate",
-    }));
-    const app = createFlowApp(catalog, "token", { capabilities, runtime });
+    const app = createFlowApp(catalog, "token");
     const approved = await app.request("/v1/flows/flow-skill-guide/review", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
       body: JSON.stringify({ decision: "approve", git_revision: "abc" }),
     });
     expect(approved.status).toBe(409);
-    expect(await approved.json()).toMatchObject({ error: "flow_not_publishable" });
-    expect(catalog.get("flow-skill-guide")?.status).toBe("candidate");
-    capabilities.close();
+    expect(await approved.json()).toMatchObject({ error: "flow_not_reviewable" });
+    expect(catalog.get("flow-skill-guide")?.status).toBe("draft");
     catalog.close();
   });
 });

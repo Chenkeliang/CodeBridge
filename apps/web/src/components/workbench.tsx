@@ -28,6 +28,13 @@ import { cn } from "@/lib/utils";
 import { applyComposerSuggestion, composerTrigger, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, orderSessions, restoreSessionSelection, selectInitialAgent, serializeConfigOverride, workspacePaths } from "@/lib/workbench-logic";
 import { messageOf, statusLabel, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
 
+type FlowRevisionMismatch = {
+  source: "binding" | "request";
+  flow_id: string;
+  expected_definition_revision: string;
+  current_definition_revision: string;
+};
+
 export function Workbench() {
   const [theme, setTheme] = useState<Theme>(() => readTheme());
   const [area, setArea] = useState<PanelArea>("agents");
@@ -36,6 +43,7 @@ export function Workbench() {
   const [effectiveDefaultAgentId, setEffectiveDefaultAgentId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [flows, setFlows] = useState<FlowRecord[]>([]);
+  const [consumableFlows, setConsumableFlows] = useState<FlowRecord[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
@@ -45,8 +53,9 @@ export function Workbench() {
   const [effort, setEffort] = useState("");
   const [configOverrides, setConfigOverrides] = useState<Record<string, string | boolean>>({});
   const [permissionMode, setPermissionMode] = useState("");
-  const [flowId, setFlowId] = useState("");
+  const [pendingFlowId, setPendingFlowId] = useState("");
   const [detailFlow, setDetailFlow] = useState<FlowRecord | null>(null);
+  const [flowMismatch, setFlowMismatch] = useState<FlowRevisionMismatch | null>(null);
   const [paramValues, setParamValues] = useState<Record<string, unknown>>({});
   const [missingInputs, setMissingInputs] = useState<Array<{
     id: string; type: string; source: string; reason: string;
@@ -106,6 +115,7 @@ export function Workbench() {
   const thoughtLevelOption = useMemo(() => configOptions.find(isThoughtLevelOption), [configOptions]);
   const speedOption = useMemo(() => configOptions.find(isSpeedOption), [configOptions]);
   const permissionOption = useMemo(() => configOptions.find(isPermissionOption), [configOptions]);
+  const pendingFlow = consumableFlows.find((flow) => flow.flow_id === pendingFlowId) ?? null;
 
   const notify = useCallback((message: string, kind: "info" | "error" = "info") => {
     setNotice({ text: message, kind });
@@ -117,17 +127,19 @@ export function Workbench() {
     if (!silent) setError(null);
     try {
       if (importProvider) await api.importSessions();
-      const [agentList, nextSessions, nextFlows] = await Promise.all([
+      const [agentList, nextSessions, nextFlows, nextConsumableFlows] = await Promise.all([
         api.agents(),
         api.sessions(false, true),
-        api.flows(),
+        api.flows("manage"),
+        api.flows("consume"),
       ]);
       const nextAgents = agentList.agents;
       setAgents(nextAgents);
       setDefaultAgentId(agentList.default_agent_id);
       setEffectiveDefaultAgentId(agentList.effective_default_agent_id);
       setSessions(nextSessions);
-      setFlows(nextFlows.filter((flow) => flow.status !== "deprecated"));
+      setFlows(nextFlows);
+      setConsumableFlows(nextConsumableFlows);
       const nextAgentId = selectedAgentRef.current && nextAgents.some((agent) => agent.agent_id === selectedAgentRef.current)
         ? selectedAgentRef.current
         : selectInitialAgent(nextAgents, agentList.effective_default_agent_id);
@@ -168,7 +180,7 @@ export function Workbench() {
       setEffort("");
       setConfigOverrides({});
       setPermissionMode("");
-      setFlowId("");
+      setPendingFlowId("");
       setLoadingSession(false);
       setWorkspaceListing(null);
       return;
@@ -203,7 +215,7 @@ export function Workbench() {
         setEffort(session.effort ?? "");
         setConfigOverrides(session.config_overrides ?? {});
         setPermissionMode(session.permission_mode ?? "");
-        setFlowId(session.flow_id ?? "");
+        setPendingFlowId("");
         setLoadingSession(false);
         await sessionConnection.open(sessionId);
       } catch (caught) {
@@ -361,7 +373,79 @@ export function Workbench() {
       const flow = await api.fetchFlow(id);
       setDetailFlow(flow);
       setParamValues(defaultsFromFlow(flow));
-      if (flow.status === "published") setFlowId(id);
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  function captureFlowMismatch(error: {
+    code: string;
+    body: Record<string, unknown> | null;
+  }): boolean {
+    const body = error.body;
+    if (
+      error.code !== "flow_revision_mismatch"
+      || body?.source !== "binding"
+      || typeof body.flow_id !== "string"
+      || typeof body.expected_definition_revision !== "string"
+      || typeof body.current_definition_revision !== "string"
+    ) {
+      return false;
+    }
+    setFlowMismatch({
+      source: "binding",
+      flow_id: body.flow_id,
+      expected_definition_revision: body.expected_definition_revision,
+      current_definition_revision: body.current_definition_revision,
+    });
+    return true;
+  }
+
+  async function bindFlowToSession(flow: FlowRecord) {
+    const sessionId = selectedSessionId ?? (await ensureSession());
+    if (!sessionId) {
+      setError("请选择一个可用的 Agent");
+      return;
+    }
+    try {
+      const binding = await api.applyFlow(sessionId, flow.flow_id);
+      setSessions((current) => current.map((session) => session.session_id === sessionId
+        ? {
+            ...session,
+            flow_id: binding.flow_id,
+            flow_definition_revision: binding.definition_revision,
+          }
+        : session));
+      setFlowMismatch(null);
+      notify(`已绑定 ${flow.name || flow.flow_id}`);
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  async function unbindSelectedFlow() {
+    if (!selectedSessionId) return;
+    try {
+      const updated = await api.unbindFlow(selectedSessionId);
+      setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
+      setFlowMismatch(null);
+      notify("已解绑 Flow");
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  async function rebindLatestFlow() {
+    if (!selectedSessionId || !flowMismatch) return;
+    try {
+      const latest = await api.fetchFlow(flowMismatch.flow_id);
+      if (latest.definition_revision !== flowMismatch.current_definition_revision) {
+        setError("Flow 已再次更新，请重新查看最新版本");
+        return;
+      }
+      setDetailFlow(latest);
+      setParamValues(defaultsFromFlow(latest));
+      await bindFlowToSession(latest);
     } catch (caught) {
       setError(messageOf(caught));
     }
@@ -395,6 +479,7 @@ export function Workbench() {
       input: {
         message,
         flowId: flow.flow_id,
+        definitionRevision: flow.definition_revision,
         model: model || null,
         attachments,
         permissionMode: permissionMode || null,
@@ -409,7 +494,9 @@ export function Workbench() {
       return;
     }
     if (result.kind === "rejected" || result.kind === "unknown") {
-      setError(messageOf(result.kind === "rejected" ? result.error : result.idempotencyKey));
+      if (result.kind !== "rejected" || !captureFlowMismatch(result.error)) {
+        setError(messageOf(result.kind === "rejected" ? result.error : result.idempotencyKey));
+      }
       setSending(false);
       return;
     }
@@ -451,7 +538,20 @@ export function Workbench() {
       lookup: api.submission,
       sessionId,
       idempotencyKey,
-      input: { message, flowId: flowId || null, model: model || null, attachments: pendingAttachments, permissionMode: permissionMode || null, effort: effort || null, inputs: flowId ? paramValues : undefined },
+      input: {
+        message,
+        ...(pendingFlow
+          ? {
+              flowId: pendingFlow.flow_id,
+              definitionRevision: pendingFlow.definition_revision,
+            }
+          : {}),
+        model: model || null,
+        attachments: pendingAttachments,
+        permissionMode: permissionMode || null,
+        effort: effort || null,
+        inputs: pendingFlow ? paramValues : undefined,
+      },
     });
     if (result.kind === "unknown") {
       setDraft(message);
@@ -464,11 +564,12 @@ export function Workbench() {
       pendingSubmissionKey.current = null;
       setDraft(message);
       setAttachments(pendingAttachments);
-      setError(messageOf(result.error));
+      if (!captureFlowMismatch(result.error)) setError(messageOf(result.error));
       setSending(false);
       return;
     }
     pendingSubmissionKey.current = null;
+    setPendingFlowId("");
     try {
       if (
         result.receipt.acceptance === "queued"
@@ -716,7 +817,7 @@ export function Workbench() {
         area={area}
         archivedSessionCount={archivedSessionCount}
         flows={flows}
-        flowId={flowId}
+        flowId={detailFlow?.flow_id ?? ""}
         loading={loading}
         query={query}
         sessions={agentSessions}
@@ -751,6 +852,12 @@ export function Workbench() {
         />}
 
         {error && <div className={cn("mx-8 mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span><button aria-label="关闭错误" onClick={() => setError(null)} type="button"><X className="size-3.5" /></button></div>}
+        {flowMismatch && <div className={cn("mx-8 mt-4 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-warning-soft", "text-warning", "border-line-strong")} role="alert">
+          <span className="min-w-0 flex-1">Flow 已更新，请确认后重新绑定</span>
+          <button className="rounded border border-line px-2 py-1" onClick={() => void openFlow(flowMismatch.flow_id)} type="button">查看最新版本</button>
+          <button className="rounded border border-line px-2 py-1" onClick={() => void rebindLatestFlow()} type="button">重新绑定</button>
+          <button className="rounded border border-line px-2 py-1" onClick={() => void unbindSelectedFlow()} type="button">解绑</button>
+        </div>}
 
         {area === "settings" ? (
           <section aria-label="设置" className="min-h-0 flex-1 overflow-y-auto">
@@ -831,8 +938,8 @@ export function Workbench() {
                 workspaceLoading={false}
                 disabled={!selectedAgent || selectedAgent.status !== "healthy"}
                 draft={draft}
-                flowId={flowId}
-                flows={flows}
+                flowId={pendingFlowId}
+                flows={consumableFlows}
                 model={model}
                 modelOption={modelOption}
                 effort={effort}
@@ -851,7 +958,7 @@ export function Workbench() {
                 onContextOpen={toggleContext}
                 onDraft={handleDraftChange}
                 onFiles={() => fileInput.current?.click()}
-                onFlow={setFlowId}
+                onFlow={setPendingFlowId}
                 onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
                 onEffort={setSessionEffort}
                 onConfigOverride={setSessionConfigOverride}
@@ -868,9 +975,14 @@ export function Workbench() {
           <div className="flex min-h-0 flex-1 flex-col">
             <section aria-label="Session conversation" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7" onScroll={handleConversationScroll} ref={conversationViewport}>
               <div className="mx-auto w-full max-w-[880px] pb-7">
+                {selectedSession.flow_id && <div className="mb-3 flex items-center gap-2 rounded-md border border-line bg-surface-soft px-3 py-2 text-xs text-muted">
+                  <span className="min-w-0 flex-1 truncate">已绑定 Flow · {selectedSession.flow_id}</span>
+                  <button className="text-ink hover:opacity-80" onClick={() => void unbindSelectedFlow()} type="button">解绑</button>
+                </div>}
                 {detailFlow && <div className="mb-4"><FlowDetail
                   flow={detailFlow}
                   missing={missingInputs}
+                  onBind={(flow) => { void bindFlowToSession(flow); }}
                   onClose={() => { setDetailFlow(null); setMissingInputs([]); }}
                   onSubmit={(values, dryRun) => { void runFlow(detailFlow, values, dryRun); }}
                   onValues={(values) => {
@@ -920,8 +1032,8 @@ export function Workbench() {
                   workspaceLoading={workspaceLoading}
                   disabled={false}
                   draft={draft}
-                  flowId={flowId}
-                  flows={flows}
+                  flowId={pendingFlowId}
+                  flows={consumableFlows}
                   model={model}
                   modelOption={modelOption}
                   effort={effort}
@@ -940,7 +1052,7 @@ export function Workbench() {
                   onContextOpen={toggleContext}
                   onDraft={handleDraftChange}
                   onFiles={() => fileInput.current?.click()}
-                  onFlow={setFlowId}
+                  onFlow={setPendingFlowId}
                   onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
                   onEffort={setSessionEffort}
                   onConfigOverride={setSessionConfigOverride}

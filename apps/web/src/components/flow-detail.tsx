@@ -17,6 +17,7 @@ export function FlowDetail(props: {
   missing: MissingInput[];
   onValues: (values: Record<string, unknown>) => void;
   onSubmit: (values: Record<string, unknown>, dryRun: boolean) => void;
+  onBind?: (flow: FlowRecord) => void;
   onClose: () => void;
 }) {
   const { flow, values } = props;
@@ -47,7 +48,7 @@ export function FlowDetail(props: {
       ))}
     </ol>
 
-    {flow.inputs.length > 0 && <form
+    <form
       className="grid gap-2"
       onSubmit={(event) => {
         event.preventDefault();
@@ -74,13 +75,16 @@ export function FlowDetail(props: {
         </label>
       ))}
       <div className="flex gap-2">
-        {flow.status === "published" && (
-          <Button className="h-8 text-xs" size="sm" type="submit">运行</Button>
+        {flow.kind === "runbook" && flow.status === "published" && (
+          <>
+            <Button className="h-8 text-xs" size="sm" type="submit">运行一次</Button>
+            <Button className="h-8 text-xs" onClick={() => props.onBind?.(flow)} size="sm" type="button" variant="outline">绑定到会话</Button>
+          </>
         )}
-        {flow.status === "candidate" && (
+        {flow.kind === "runbook" && flow.status === "candidate" && (
           <Button className="h-8 text-xs" size="sm" type="submit" variant="outline">Dry-run 预演</Button>
         )}
       </div>
-    </form>}
+    </form>
   </section>;
 }
