@@ -171,6 +171,25 @@ export interface FlowCapability {
   side_effects: boolean | null;
 }
 
+export interface FlowProposal {
+  session_id: string;
+  run_id: string;
+  agent_id: string;
+  run_status: string;
+  kind: "structured_plan" | "observed_trace" | "unavailable";
+  saveable: boolean;
+  reason: string | null;
+  source_definition_revision: string | null;
+  guide: {
+    name: string;
+    description: string | null;
+    steps: Array<{
+      id: string;
+      purpose: string;
+    }>;
+  } | null;
+}
+
 export interface ConfigOptionValue {
   value: string;
   name?: string;

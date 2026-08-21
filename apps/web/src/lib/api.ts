@@ -7,6 +7,7 @@ import type {
   ApprovalRecord,
   ConfigOption,
   FlowCapability,
+  FlowProposal,
   FlowRecord,
   FlowReviewContext,
   MessageAttachmentInput,
@@ -271,6 +272,15 @@ export const api = {
     (await request<{ flows: FlowRecord[] }>(`/v1/flows?view=${view}`)).flows,
   flowCapabilities: async () =>
     (await request<{ capabilities: FlowCapability[] }>("/v1/capabilities")).capabilities,
+  flowProposals: async (sessionId: string) =>
+    (await request<{ proposals: FlowProposal[] }>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-proposals`,
+    )).proposals,
+  saveGuide: (sessionId: string, runId: string) =>
+    request<FlowRecord>("/v1/flows/guides", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, run_id: runId }),
+    }),
   flowReviewContext: (flowId: string) =>
     request<FlowReviewContext>(`/v1/flows/${encodeURIComponent(flowId)}/review-context`),
   createCandidate: (sessionId: string, runId: string) =>
