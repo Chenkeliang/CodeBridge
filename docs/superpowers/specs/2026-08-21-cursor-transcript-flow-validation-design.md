@@ -1,6 +1,6 @@
 # Cursor Transcript → 通用 Flow 全链验证设计
 
-Status: Review draft
+Status: Accepted for implementation
 
 ## 1. 目标
 
@@ -9,6 +9,8 @@ Status: Review draft
 本设计使用 Cursor Session `83944f05-2d18-4935-8296-773caa8165fc` 仅做需求分析和匿名测试样本来源。产品代码、测试夹具、Flow 定义和运行时均不得依赖该 UUID、原始文件路径、原订单号、PID 或其他实例值。
 
 完整执行验证只能发生在独立 simulation 环境。禁止连接线上业务写接口，禁止执行 upsert、商品状态/价格更新、缓存清理、SPU 同步或 depot 写操作。
+
+本设计属于 P2 冷启动与验证能力，不是 V1 三通道交付门禁；Guide 不是生成或使用 Flow 的必经阶段。既有“Published Runbook 成功 Run → Candidate → Dry-run → Review → Published”主路径，以及 Web 管理、飞书/Telegram 消费、Bridge 统一领域能力、Runtime 确定性执行的三通道目标均保持不变。
 
 ## 2. Flow 通用化原则
 
