@@ -1,7 +1,10 @@
 import type { Hono } from "hono";
 import type {
   ChannelCommandContext,
+  ChannelConsumableFlow,
   ChannelDeliveryRow,
+  ChannelFlowInput,
+  ChannelRuntimeApproval,
   ChannelSessionEvent,
   ChannelSessionIngress,
   ChannelSessionMessage,
@@ -84,6 +87,7 @@ export function createChannelSessionIngress(
           ...(message.flowDefinitionRevision !== undefined
             ? { definition_revision: message.flowDefinitionRevision }
             : {}),
+          ...(message.inputs !== undefined ? { inputs: message.inputs } : {}),
           ...(message.actorRef !== undefined ? { actor_ref: message.actorRef } : {}),
           generation: message.generation,
           reply_to_message_id: message.replyToMessageId,
@@ -118,7 +122,7 @@ export function createChannelSessionIngress(
     };
   };
 
-  const listConsumableFlows = async () => {
+  const listConsumableFlows = async (): Promise<ChannelConsumableFlow[]> => {
     const response = await app.request("/v1/flows?view=consume", {
       headers: auth,
     });
@@ -132,13 +136,88 @@ export function createChannelSessionIngress(
         flow_id: string;
         name: string | null;
         definition_revision: string;
+        inputs?: ChannelFlowInput[];
+        steps?: Array<{
+          id: string;
+          purpose?: string | null;
+          mode?: string | null;
+          approval?: "none" | "required";
+        }>;
       }>;
     };
     return body.flows.map((flow) => ({
       flowId: flow.flow_id,
       name: flow.name ?? flow.flow_id,
       definitionRevision: flow.definition_revision,
+      inputs: flow.inputs ?? [],
+      steps: (flow.steps ?? []).map((step) => ({
+        id: step.id,
+        purpose: step.purpose ?? null,
+        mode: step.mode ?? null,
+        approval: step.approval ?? "none",
+      })),
     }));
+  };
+
+  const listRuntimeApprovals = async (
+    runId: string,
+  ): Promise<ChannelRuntimeApproval[]> => {
+    const response = await app.request(
+      `/v1/runs/${encodeURIComponent(runId)}/approvals`,
+      { headers: auth },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `list Runtime approvals failed (${response.status}): ${await response.text()}`,
+      );
+    }
+    const body = await response.json() as {
+      approvals: Array<{
+        id: string;
+        run_id: string;
+        step_id?: string | null;
+        capability_id?: string | null;
+        status: string;
+        environment?: string | null;
+        target_resource?: string | null;
+        expires_at?: string | null;
+      }>;
+    };
+    return body.approvals.map(toChannelRuntimeApproval);
+  };
+
+  const resolveRuntimeApproval = async (
+    runId: string,
+    approvalId: string,
+    decision: "approve" | "reject",
+  ): Promise<ChannelRuntimeApproval> => {
+    const response = await app.request(
+      `/v1/runs/${encodeURIComponent(runId)}/${decision}`,
+      {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ approval_id: approvalId }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `resolve Runtime approval failed (${response.status}): ${await response.text()}`,
+      );
+    }
+    const body = await response.json() as {
+      approval_id: string;
+      status: string;
+    };
+    return {
+      id: body.approval_id,
+      runId,
+      stepId: null,
+      capabilityId: null,
+      status: body.status,
+      environment: null,
+      targetResource: null,
+      expiresAt: null,
+    };
   };
 
   const events = async function* (
@@ -430,6 +509,8 @@ export function createChannelSessionIngress(
   return {
     submit,
     listConsumableFlows,
+    listRuntimeApprovals,
+    resolveRuntimeApproval,
     events,
     listDeliveries,
     claimDelivery,
@@ -442,6 +523,28 @@ export function createChannelSessionIngress(
     resolvePermission,
     resumeQueue,
     resetSlot,
+  };
+}
+
+function toChannelRuntimeApproval(input: {
+  id: string;
+  run_id: string;
+  step_id?: string | null;
+  capability_id?: string | null;
+  status: string;
+  environment?: string | null;
+  target_resource?: string | null;
+  expires_at?: string | null;
+}): ChannelRuntimeApproval {
+  return {
+    id: input.id,
+    runId: input.run_id,
+    stepId: input.step_id ?? null,
+    capabilityId: input.capability_id ?? null,
+    status: input.status,
+    environment: input.environment ?? null,
+    targetResource: input.target_resource ?? null,
+    expiresAt: input.expires_at ?? null,
   };
 }
 

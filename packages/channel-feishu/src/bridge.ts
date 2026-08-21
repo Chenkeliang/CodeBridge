@@ -21,6 +21,7 @@ import {
 import {
   RunOrchestrator,
   BOT_MENU_EVENT_KEYS,
+  ChannelFlowController,
   checkAccess,
   createChannelStreamProjector,
   formatElapsed,
@@ -99,6 +100,13 @@ interface PendingFeishuStream {
   startedAt: string;
 }
 
+interface ChannelFlowSubmission {
+  flowId: string;
+  definitionRevision: string;
+  inputs: Record<string, unknown>;
+  idempotencyKey: string;
+}
+
 function interruptedStreamCard(): object {
   return {
     schema: "2.0",
@@ -157,6 +165,7 @@ export class FeishuBridge {
   private readonly activeAborts = new Set<AbortController>();
   /** 每 Session 一个持久事件订阅，单订阅路由 Turn/Run/Delivery */
   private readonly sessionWatchers = new Map<string, FeishuSessionWatcher>();
+  private readonly flowController = new ChannelFlowController();
   private readonly instanceId = randomUUID();
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
@@ -419,6 +428,45 @@ export class FeishuBridge {
       this.chatKey(msg.chatId, topicId),
       msg.messageId,
     );
+
+    const flowCommand = this.sessionIngress
+      ? await this.flowController.handle({
+          scopeKey: `feishu|${this.chatKey(msg.chatId, topicId)}|${msg.senderId}`,
+          text: msg.content,
+          listFlows: () => this.sessionIngress!.listConsumableFlows(),
+          getActiveRunId: async () => {
+            const context = await this.sessionIngress!.getSlotCommandContext(
+              this.buildFullSlot(msg.chatId, topicId),
+            );
+            return context.activeRunId;
+          },
+          listApprovals: (runId) =>
+            this.sessionIngress!.listRuntimeApprovals?.(runId) ?? Promise.resolve([]),
+          resolveApproval: (runId, approvalId, decision) => {
+            const resolve = this.sessionIngress!.resolveRuntimeApproval;
+            if (!resolve) throw new Error("Runtime 审批入口未就绪");
+            return resolve(runId, approvalId, decision);
+          },
+        })
+      : null;
+    if (flowCommand?.type === "reply") {
+      await this.sendMarkdown(msg.chatId, flowCommand.text, msg.messageId);
+      return;
+    }
+    if (flowCommand?.type === "invoke") {
+      await this.submitAndStream(
+        msg,
+        `运行 Flow：${flowCommand.flow.name}`,
+        topicId,
+        {
+          flowId: flowCommand.flow.flowId,
+          definitionRevision: flowCommand.flow.definitionRevision,
+          inputs: flowCommand.inputs,
+          idempotencyKey: flowCommand.idempotencyKey,
+        },
+      );
+      return;
+    }
 
     const slash = await handleSlashCommand({
       chatId: msg.chatId,
@@ -734,6 +782,7 @@ export class FeishuBridge {
     msg: FeishuMessage,
     prompt: string,
     topicId: string | undefined,
+    flow?: ChannelFlowSubmission,
   ): Promise<void> {
     if (!this.sessionIngress) {
       await this.streamAgentReply(msg, prompt, topicId);
@@ -749,8 +798,15 @@ export class FeishuBridge {
       generation: slot.generation,
       message: prompt,
       model: binding.model,
+      ...(flow
+        ? {
+            flowId: flow.flowId,
+            flowDefinitionRevision: flow.definitionRevision,
+            inputs: flow.inputs,
+          }
+        : {}),
       attachments: msg.attachments,
-      idempotencyKey: msg.messageId,
+      idempotencyKey: flow?.idempotencyKey ?? msg.messageId,
       replyToMessageId: msg.messageId,
       actorRef: { channel: "feishu", id: msg.senderId },
     });

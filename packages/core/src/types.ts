@@ -142,6 +142,45 @@ export type AgentEvent =
   | { type: "permission_request"; requestId: string; title: string }
   | { type: "done"; exitCode: number };
 
+export interface ChannelFlowInput {
+  id: string;
+  type: "string" | "integer" | "enum" | "directory" | "secret_ref";
+  source: "user" | "context" | "agent" | "step_output" | "default";
+  required?: boolean;
+  pattern?: string;
+  values?: string[];
+  default?: string;
+  confirmation?: { when: string };
+  from?: string;
+  scope?: "authorized_folders";
+}
+
+export interface ChannelFlowStep {
+  id: string;
+  purpose: string | null;
+  mode: string | null;
+  approval: "none" | "required";
+}
+
+export interface ChannelConsumableFlow {
+  flowId: string;
+  name: string;
+  definitionRevision: string;
+  inputs: ChannelFlowInput[];
+  steps: ChannelFlowStep[];
+}
+
+export interface ChannelRuntimeApproval {
+  id: string;
+  runId: string;
+  stepId: string | null;
+  capabilityId: string | null;
+  status: "requested" | "granted" | "revoked" | "expired" | string;
+  environment: string | null;
+  targetResource: string | null;
+  expiresAt: string | null;
+}
+
 export interface ChannelSessionMessage {
   channel: string;
   conversationId: string;
@@ -151,6 +190,7 @@ export interface ChannelSessionMessage {
   model?: string;
   flowId?: string;
   flowDefinitionRevision?: string;
+  inputs?: Record<string, unknown>;
   actorRef?: { channel: "feishu" | "telegram"; id: string };
   attachments?: RunAttachment[];
   idempotencyKey?: string;
@@ -226,11 +266,13 @@ export interface ChannelDeliveryRow {
 
 export interface ChannelSessionIngress {
   submit(message: ChannelSessionMessage): Promise<ChannelSubmitReceipt>;
-  listConsumableFlows(): Promise<Array<{
-    flowId: string;
-    name: string;
-    definitionRevision: string;
-  }>>;
+  listConsumableFlows(): Promise<ChannelConsumableFlow[]>;
+  listRuntimeApprovals?(runId: string): Promise<ChannelRuntimeApproval[]>;
+  resolveRuntimeApproval?(
+    runId: string,
+    approvalId: string,
+    decision: "approve" | "reject",
+  ): Promise<ChannelRuntimeApproval>;
   events(
     sessionId: string,
     opts: { afterSequence: number; signal: AbortSignal },

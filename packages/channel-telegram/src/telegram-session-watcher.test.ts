@@ -290,9 +290,10 @@ describe("TelegramSessionWatcher", () => {
 
     expect(api.editMessage.mock.calls.length).toBeGreaterThan(1);
     expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
-    expect(api.editMessage.mock.calls.some((call) =>
-      String(call[2]).includes("请在 Web 打开当前 Session 完成审批")
-    )).toBe(true);
+    expect(api.editMessage.mock.calls.some((call) => {
+      const content = String(call[2]);
+      return content.includes("/flow approve") && content.includes("Web Workbench");
+    })).toBe(true);
     const finalText = String(api.editMessage.mock.calls.at(-1)?.[2]);
     expect(finalText).toContain("Flow 结果 · 成功");
     expect(finalText.match(/deploy\.output\.json/g)).toHaveLength(1);

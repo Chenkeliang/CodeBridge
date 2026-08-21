@@ -20,13 +20,24 @@ const COMMAND_HELP_GROUPS: CommandHelpGroup[] = [
     ],
   },
   {
+    title: "Flow",
+    items: [
+      { command: "/flow", summary: "列出可使用的 Published Runbook" },
+      { command: "/flow <序号或 ID>", summary: "查看并选择一个 Flow" },
+      { command: "/flow set 参数=值", summary: "填写 Flow 参数" },
+      { command: "/flow run", summary: "检查参数和风险" },
+      { command: "/flow confirm", summary: "确认并执行一次 Flow" },
+      { command: "/flow approve|reject", summary: "处理 Runtime 步骤审批" },
+    ],
+  },
+  {
     title: "任务控制",
     items: [
       { command: "/stop", summary: "停止当前 Agent 任务（别名 /cancel、/x）" },
       { command: "/continue", summary: "恢复暂停队列（别名 /c）" },
       { command: "/steer <指令>", summary: "向运行中的 ACP turn 注入补充指令" },
-      { command: "/approve", summary: "允许当前挂起的权限请求（别名 /a）" },
-      { command: "/deny", summary: "拒绝当前挂起的权限请求（别名 /d）" },
+      { command: "/approve", summary: "允许当前 Agent 工具权限请求（别名 /a）" },
+      { command: "/deny", summary: "拒绝当前 Agent 工具权限请求（别名 /d）" },
     ],
   },
   {

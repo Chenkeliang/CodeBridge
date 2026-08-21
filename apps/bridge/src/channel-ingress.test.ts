@@ -57,6 +57,7 @@ describe("channel session ingress", () => {
       expect(await c.req.json()).toMatchObject({
         flow_id: "flow_demo",
         definition_revision: "sha256:one",
+        inputs: { oid: 1644460 },
         actor_ref: { channel: "telegram", id: "user_1" },
       });
       return c.json({
@@ -75,6 +76,7 @@ describe("channel session ingress", () => {
       message: "run",
       flowId: "flow_demo",
       flowDefinitionRevision: "sha256:one",
+      inputs: { oid: 1644460 },
       actorRef: { channel: "telegram", id: "user_1" },
     });
   });
@@ -102,6 +104,18 @@ describe("channel session ingress", () => {
           flow_id: "flow_demo",
           name: "Demo",
           definition_revision: "sha256:one",
+          inputs: [{
+            id: "oid",
+            type: "integer",
+            source: "user",
+            required: true,
+          }],
+          steps: [{
+            id: "lookup",
+            purpose: "查订单",
+            mode: "read_only",
+            approval: "none",
+          }],
         }],
       });
     });
@@ -110,7 +124,69 @@ describe("channel session ingress", () => {
       flowId: "flow_demo",
       name: "Demo",
       definitionRevision: "sha256:one",
+      inputs: [{
+        id: "oid",
+        type: "integer",
+        source: "user",
+        required: true,
+      }],
+      steps: [{
+        id: "lookup",
+        purpose: "查订单",
+        mode: "read_only",
+        approval: "none",
+      }],
     }]);
+  });
+
+  it("lists and resolves Runtime step approvals through the existing APIs", async () => {
+    const app = new Hono();
+    app.get("/v1/runs/:run/approvals", (c) => {
+      expect(c.req.param("run")).toBe("run_1");
+      return c.json({
+        approvals: [{
+          id: "approval_1",
+          run_id: "run_1",
+          step_id: "deploy",
+          capability_id: "deploy.release",
+          status: "requested",
+          environment: "production",
+          target_resource: "service:bridge",
+          expires_at: "2026-08-21T15:00:00.000Z",
+        }],
+      });
+    });
+    app.post("/v1/runs/:run/approve", async (c) => {
+      expect(c.req.param("run")).toBe("run_1");
+      expect(await c.req.json()).toEqual({ approval_id: "approval_1" });
+      return c.json({
+        approval_id: "approval_1",
+        status: "granted",
+        granted_at: "2026-08-21T14:30:00.000Z",
+      });
+    });
+    app.post("/v1/runs/:run/reject", async (c) => {
+      expect(await c.req.json()).toEqual({ approval_id: "approval_1" });
+      return c.json({ approval_id: "approval_1", status: "revoked" });
+    });
+
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.listRuntimeApprovals?.("run_1")).resolves.toEqual([{
+      id: "approval_1",
+      runId: "run_1",
+      stepId: "deploy",
+      capabilityId: "deploy.release",
+      status: "requested",
+      environment: "production",
+      targetResource: "service:bridge",
+      expiresAt: "2026-08-21T15:00:00.000Z",
+    }]);
+    await expect(
+      ingress.resolveRuntimeApproval?.("run_1", "approval_1", "approve"),
+    ).resolves.toMatchObject({ id: "approval_1", status: "granted" });
+    await expect(
+      ingress.resolveRuntimeApproval?.("run_1", "approval_1", "reject"),
+    ).resolves.toMatchObject({ id: "approval_1", status: "revoked" });
   });
 
   it("resumes a provider session into a slot", async () => {

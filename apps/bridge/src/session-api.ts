@@ -422,6 +422,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         ...(hasFlowRevision
           ? { definition_revision: String(body.definition_revision).trim() }
           : {}),
+        inputs: channelInputRecord(body.inputs),
         ...(actorRef ? { actor_ref: actorRef } : {}),
         model: asNullableString(body.model),
         attachments: body.attachments,
@@ -474,6 +475,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         ...(hasFlowRevision
           ? { definition_revision: String(body.definition_revision).trim() }
           : {}),
+        inputs: channelInputRecord(body.inputs),
         model: asNullableString(body.model),
       }),
     });
@@ -1606,6 +1608,12 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<R
   return body && typeof body === "object" && !Array.isArray(body)
     ? (body as Record<string, unknown>)
     : null;
+}
+
+function channelInputRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function parseChannelSlot(value: unknown): {
