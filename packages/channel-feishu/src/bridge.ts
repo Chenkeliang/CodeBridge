@@ -52,7 +52,9 @@ import {
   finishFeishuRunStatus,
   recordFeishuRunActivity,
   renderFeishuRunStatus,
+  type FeishuConnectionState,
 } from "./run-status.js";
+import { FeishuDeliveryReconciler } from "./delivery-reconciler.js";
 
 export interface FeishuMessage {
   messageId: string;
@@ -167,6 +169,8 @@ export class FeishuBridge {
   private readonly sessionWatchers = new Map<string, FeishuSessionWatcher>();
   private readonly flowController = new ChannelFlowController();
   private readonly instanceId = randomUUID();
+  private readonly deliveryReconciler: FeishuDeliveryReconciler;
+  private inboundWebSocketState: FeishuConnectionState = "unavailable";
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
 
@@ -179,6 +183,15 @@ export class FeishuBridge {
     this.orchestrator = new RunOrchestrator({
       dataDir: options.dataDir,
       config: options.config,
+    });
+    this.deliveryReconciler = new FeishuDeliveryReconciler({
+      intervalMs: FEISHU_LIVE_STATUS_TICK_MS,
+      reconcile: () => this.reconcileDeliveries(),
+      onError: (error) => {
+        this.options.onLog?.(
+          `飞书 Delivery/Run 对账失败: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
     });
   }
 
@@ -236,10 +249,19 @@ export class FeishuBridge {
     });
 
     this.channel.on("reconnecting", () => {
+      this.inboundWebSocketState = "reconnecting";
+      for (const watcher of this.sessionWatchers.values()) {
+        void watcher.setInboundWebSocketState("reconnecting").catch(() => {});
+      }
       this.options.onLog?.("飞书 WebSocket 重连中…");
     });
 
     this.channel.on("reconnected", () => {
+      this.inboundWebSocketState = "connected";
+      for (const watcher of this.sessionWatchers.values()) {
+        void watcher.setInboundWebSocketState("connected").catch(() => {});
+      }
+      void this.deliveryReconciler.trigger();
       this.options.onLog?.("飞书 WebSocket 已重连");
     });
 
@@ -273,7 +295,8 @@ export class FeishuBridge {
     });
 
     await this.channel.connect();
-    await this.recoverDeliveries();
+    this.inboundWebSocketState = "connected";
+    this.deliveryReconciler.start();
     await this.recoverInterruptedStreams();
     const botName = this.channel.botIdentity?.name ?? "unknown";
     this.options.onLog?.(`已连接飞书 bot: ${botName}`);
@@ -284,6 +307,8 @@ export class FeishuBridge {
 
   async disconnect(): Promise<void> {
     this.disconnecting = true;
+    this.deliveryReconciler.stop();
+    this.inboundWebSocketState = "unavailable";
     for (const ac of this.activeAborts) ac.abort();
     this.activeAborts.clear();
     for (const watcher of this.sessionWatchers.values()) watcher.abort();
@@ -725,56 +750,44 @@ export class FeishuBridge {
     return watcher;
   }
 
-  private async recoverDeliveries(): Promise<void> {
+  private async reconcileDeliveries(): Promise<void> {
     if (!this.sessionIngress || !this.channel) return;
-    try {
-      const deliveries = await this.sessionIngress.listDeliveries("feishu");
-      const bySession = new Map<string, typeof deliveries>();
-      for (const delivery of deliveries) {
-        const list = bySession.get(delivery.sessionId) ?? [];
-        list.push(delivery);
-        bySession.set(delivery.sessionId, list);
-      }
-      for (const [sessionId, list] of bySession) {
-        const watcher = this.ensureSessionWatcher(sessionId);
-        const minAccepted = Math.min(
-          ...list.map((delivery) => delivery.acceptedSequence),
-        );
-        for (const delivery of list) {
-          const chatId =
-            delivery.conversationId.split("|")[0] ?? delivery.conversationId;
-          const turn = {
-            turnId: delivery.turnId,
-            chatId,
-            sourceMessageId: delivery.replyToMessageId,
-            showThinking: true,
-          };
-          if (delivery.runId && delivery.surfaceMessageId === null) {
-            await watcher.openCardForRun(delivery.runId, turn);
-          } else if (delivery.runId) {
-            // delivering：从 legacy interrupted recovery 中剔除，避免被覆盖成“服务中断”
-            this.pendingStreams.update((all) => {
-              const next = { ...all };
-              delete next[delivery.surfaceMessageId!];
-              return next;
-            });
-            watcher.resumeCardForRun(
-              delivery.runId,
-              delivery.surfaceMessageId ?? "",
-              delivery.turnId,
-              delivery.claimOwner ?? "",
-              turn.showThinking,
-            );
-          } else {
-            watcher.registerPendingTurn(delivery.turnId, turn);
-          }
-        }
-        watcher.start(minAccepted);
-      }
-    } catch (err) {
-      this.options.onLog?.(
-        `delivery 恢复失败: ${err instanceof Error ? err.message : String(err)}`,
+    const deliveries = await this.sessionIngress.listDeliveries("feishu");
+    const bySession = new Map<string, typeof deliveries>();
+    for (const delivery of deliveries) {
+      const list = bySession.get(delivery.sessionId) ?? [];
+      list.push(delivery);
+      bySession.set(delivery.sessionId, list);
+    }
+    for (const [sessionId, list] of bySession) {
+      const watcher = this.ensureSessionWatcher(sessionId);
+      const minAccepted = Math.min(
+        ...list.map((delivery) => delivery.acceptedSequence),
       );
+      for (const delivery of list) {
+        const chatId =
+          delivery.conversationId.split("|")[0] ?? delivery.conversationId;
+        const turn = {
+          turnId: delivery.turnId,
+          chatId,
+          sourceMessageId: delivery.replyToMessageId,
+          showThinking: true,
+        };
+        if (delivery.surfaceMessageId) {
+          // delivering：从 legacy interrupted recovery 中剔除，避免被覆盖成“服务中断”
+          this.pendingStreams.update((all) => {
+            const next = { ...all };
+            delete next[delivery.surfaceMessageId!];
+            return next;
+          });
+        }
+        await watcher.reconcileDelivery(
+          delivery,
+          turn,
+          this.inboundWebSocketState,
+        );
+      }
+      watcher.start(minAccepted);
     }
   }
 
@@ -1012,7 +1025,7 @@ export class FeishuBridge {
               const lines = [
                 hasNewActivity
                   ? `🟢 **任务仍在运行** · 已运行 ${formatElapsed(Date.now() - startedAt)}`
-                  : `🟠 **会话仍连接，但暂无新任务事件** · 已运行 ${formatElapsed(Date.now() - startedAt)}`,
+                  : `🟠 **任务运行中 · 暂无新事件** · 已运行 ${formatElapsed(Date.now() - startedAt)}`,
                 `最近真实任务事件：${formatElapsed(Date.now() - runStatus.lastActivityAt)}前`,
                 `当前阶段：${runStatus.phase}`,
                 checkpoint ? `最新检查点：${checkpoint}` : undefined,

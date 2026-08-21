@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  ChannelDeliveryRow,
   ChannelSessionEvent,
   ChannelSessionIngress,
 } from "@codebridge/core";
 import {
+  classifyFeishuCardWriteError,
   FeishuRunCard,
   FeishuSessionWatcher,
   type FeishuCardHost,
@@ -68,6 +70,36 @@ function turn(turnId = "turn_1"): PendingTurn {
     chatId: "chat-1",
     sourceMessageId: "m1",
     showThinking: false,
+  };
+}
+
+function delivery(
+  status: NonNullable<ChannelDeliveryRow["runSnapshot"]>["status"],
+): ChannelDeliveryRow {
+  return {
+    turnId: "turn_1",
+    sessionId: "sess_1",
+    channel: "feishu",
+    conversationId: "chat-1|",
+    replyToMessageId: "m1",
+    surfaceMessageId: "card-old",
+    claimOwner: "feishu:old:run_1",
+    claimExpiresAt: null,
+    acceptedSequence: 0,
+    runId: "run_1",
+    runTerminalAt: status === "succeeded" ? new Date(5_000).toISOString() : null,
+    status: "delivering",
+    createdAt: new Date(1_000).toISOString(),
+    updatedAt: new Date(5_000).toISOString(),
+    runSnapshot: {
+      status,
+      createdAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(5_000).toISOString(),
+      leaseExpiresAt: status === "running" ? new Date(60_000).toISOString() : null,
+      terminalReason: null,
+      sessionActiveRunId: status === "running" ? "run_1" : null,
+      sessionQueueState: "ready",
+    },
   };
 }
 
@@ -146,6 +178,94 @@ async function waitUntil(
 }
 
 describe("FeishuSessionWatcher", () => {
+  it("classifies only known invalid-card signals as permanent", () => {
+    expect(classifyFeishuCardWriteError(new Error("11310 cardid invalid"))).toBe(
+      "permanent",
+    );
+    expect(classifyFeishuCardWriteError(new Error("HTTP 503"))).toBe(
+      "transient",
+    );
+  });
+
+  it("renders a restored terminal snapshot but waits for the terminal event before completion", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    ingress.events = blockingEvents([terminalEvent(9)]);
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain(
+      "✅ **已完成**",
+    );
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+
+    w.start(0);
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length === 1);
+    expect(ingress.completeDelivery).toHaveBeenCalledWith(
+      "turn_1",
+      "feishu:old:run_1",
+    );
+    w.abort();
+  });
+
+  it("never lets a stale live snapshot reverse a terminal card", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+    await w.reconcileDelivery(delivery("running"), turn(), "connected");
+
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain(
+      "✅ **已完成**",
+    );
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it("shows an inconsistent warning when a live Run is not the Session active Run", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    const row = delivery("running");
+    row.runSnapshot!.sessionActiveRunId = "run_other";
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(row, turn(), "connected");
+
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain(
+      "状态核验暂不可用",
+    );
+    w.abort();
+  });
+
+  it("suppresses a permanently invalid card after one structured warning", async () => {
+    const logs: string[] = [];
+    const { host } = makeHost();
+    host.log = (message) => logs.push(message);
+    host.updateCard = vi.fn(async () => {
+      throw new Error("11310 cardid invalid");
+    });
+    const ingress = makeIngress();
+    ingress.events = blockingEvents([terminalEvent(9)]);
+    const w = watcher(ingress, host);
+    const row = delivery("running");
+
+    await w.reconcileDelivery(row, turn(), "connected");
+    w.start(0);
+    await waitUntil(() => ingress.events.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const attempts = vi.mocked(host.updateCard).mock.calls.length;
+
+    await w.reconcileDelivery(row, turn(), "connected");
+
+    expect(vi.mocked(host.updateCard)).toHaveBeenCalledTimes(attempts);
+    expect(logs.filter((line) => line.includes("feishu_card_permanently_invalid"))).toHaveLength(1);
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+
   it("reconnects with the old cursor and replays after a failed transition", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
@@ -411,7 +531,7 @@ describe("FeishuSessionWatcher", () => {
     w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
     w.start(0);
 
-    await waitUntil(() => updates >= 2);
+    await waitUntil(() => ingress.events.mock.calls.length >= 2);
 
     const calls = ingress.events.mock.calls as unknown as Array<
       [string, { afterSequence: number }]

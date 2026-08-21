@@ -241,6 +241,25 @@ export type ChannelDeliveryStatus =
   | "delivering"
   | "completed";
 
+export type ChannelRuntimeRunStatus =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export interface ChannelDeliveryRunSnapshot {
+  status: ChannelRuntimeRunStatus;
+  createdAt: string;
+  updatedAt: string;
+  leaseExpiresAt: string | null;
+  terminalReason: string | null;
+  sessionActiveRunId: string | null;
+  sessionQueueState: "ready" | "paused";
+}
+
 export interface ChannelDeliveryInput {
   channel: string;
   conversationId: string;
@@ -262,6 +281,7 @@ export interface ChannelDeliveryRow {
   status: ChannelDeliveryStatus;
   createdAt: string;
   updatedAt: string;
+  runSnapshot: ChannelDeliveryRunSnapshot | null;
 }
 
 export interface ChannelSessionIngress {

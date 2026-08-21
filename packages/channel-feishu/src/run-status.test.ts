@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyRunSnapshot,
   createFeishuRunStatus,
   finishFeishuRunStatus,
   recordFeishuRunActivity,
+  recordRunVerification,
   renderFeishuRunStatus,
+  setCoreEventStream,
 } from "./run-status.js";
 
 describe("Feishu run status", () => {
-  it("renders live activity and the quiet connection state", () => {
+  it("renders live activity and quiet without claiming a connection", () => {
     const status = createFeishuRunStatus(1_000);
 
     expect(
@@ -17,16 +20,64 @@ describe("Feishu run status", () => {
         2_000,
       ),
     ).toBe(true);
+    recordRunVerification(status, 2_500);
     expect(renderFeishuRunStatus(status, 3_000)).toContain("🟢 **执行中**");
     expect(renderFeishuRunStatus(status, 3_000)).toContain(
       "当前阶段：工具执行：Read",
     );
     expect(renderFeishuRunStatus(status, 5 * 60_000 + 2_000)).toContain(
-      "🟠 **任务连接保持**",
+      "🟠 **任务运行中 · 暂无新事件**",
     );
     expect(renderFeishuRunStatus(status, 5 * 60_000 + 2_000)).toContain(
       "最近阶段：工具执行：Read",
     );
+    expect(renderFeishuRunStatus(status, 5 * 60_000 + 2_000)).toContain(
+      "最近任务事件：",
+    );
+    expect(renderFeishuRunStatus(status, 5 * 60_000 + 2_000)).toContain(
+      "最近状态核验：",
+    );
+    expect(renderFeishuRunStatus(status, 5 * 60_000 + 2_000)).not.toContain(
+      "任务连接保持",
+    );
+  });
+
+  it("renders Core SSE reconnecting independently from Runtime state", () => {
+    const status = createFeishuRunStatus(1_000);
+    recordRunVerification(status, 2_000);
+    setCoreEventStream(status, "reconnecting");
+
+    expect(renderFeishuRunStatus(status, 3_000)).toContain(
+      "⚠️ **事件流重连中 · 后台任务仍在运行**",
+    );
+    expect(status.state).toBe("running");
+  });
+
+  it("uses persisted Run times and never reverses a terminal snapshot", () => {
+    const status = createFeishuRunStatus(90_000);
+    expect(applyRunSnapshot(status, {
+      status: "succeeded",
+      createdAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(5_000).toISOString(),
+      leaseExpiresAt: null,
+      terminalReason: null,
+      sessionActiveRunId: null,
+      sessionQueueState: "ready",
+    }, 91_000)).toBe(true);
+
+    expect(renderFeishuRunStatus(status, 99_000)).toContain(
+      "✅ **已完成** · 总耗时 4 秒",
+    );
+    expect(applyRunSnapshot(status, {
+      status: "running",
+      createdAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(6_000).toISOString(),
+      leaseExpiresAt: new Date(60_000).toISOString(),
+      terminalReason: null,
+      sessionActiveRunId: "run_1",
+      sessionQueueState: "ready",
+    }, 92_000)).toBe(false);
+    expect(status.state).toBe("succeeded");
   });
 
   it.each([

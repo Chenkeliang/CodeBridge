@@ -3,7 +3,9 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   ChannelDeliveryInput,
   ChannelDeliveryRow,
+  ChannelDeliveryRunSnapshot,
   ChannelDeliveryStatus,
+  ChannelRuntimeRunStatus,
 } from "@codebridge/core";
 import { projectSessionEvent } from "./session-projector.js";
 import type {
@@ -1198,9 +1200,19 @@ export function createSqliteSessionRuntimeTransaction(
     listDeliveries(channel) {
       const rows = database
         .prepare(
-          `SELECT * FROM channel_turn_delivery
-           WHERE channel = ? AND status != 'completed'
-           ORDER BY accepted_sequence ASC`,
+          `SELECT d.*,
+                  r.status AS run_snapshot_status,
+                  r.created_at AS run_snapshot_created_at,
+                  r.updated_at AS run_snapshot_updated_at,
+                  r.lease_expires_at AS run_snapshot_lease_expires_at,
+                  r.terminal_reason AS run_snapshot_terminal_reason,
+                  sr.active_run_id AS run_snapshot_active_run_id,
+                  sr.queue_state AS run_snapshot_queue_state
+           FROM channel_turn_delivery d
+           LEFT JOIN runs r ON r.id = d.run_id
+           LEFT JOIN session_runtime sr ON sr.session_id = d.session_id
+           WHERE d.channel = ? AND d.status != 'completed'
+           ORDER BY d.accepted_sequence ASC`,
         )
         .all(channel) as SqliteRow[];
       return rows.map(toChannelDeliveryRow);
@@ -1664,6 +1676,43 @@ function nullableString(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
 }
 
+function channelRuntimeRunStatus(value: unknown): ChannelRuntimeRunStatus {
+  switch (value) {
+    case "queued":
+    case "running":
+    case "waiting":
+    case "succeeded":
+    case "failed":
+    case "cancelled":
+    case "interrupted":
+      return value;
+    default:
+      throw new Error(`invalid channel Runtime Run status: ${String(value)}`);
+  }
+}
+
+function channelSessionQueueState(value: unknown): "ready" | "paused" {
+  if (value === "ready" || value === "paused") return value;
+  throw new Error(`invalid channel Session queue state: ${String(value)}`);
+}
+
+function toChannelDeliveryRunSnapshot(
+  row: SqliteRow,
+): ChannelDeliveryRunSnapshot | null {
+  if (row.run_snapshot_status === null || row.run_snapshot_status === undefined) {
+    return null;
+  }
+  return {
+    status: channelRuntimeRunStatus(row.run_snapshot_status),
+    createdAt: String(row.run_snapshot_created_at),
+    updatedAt: String(row.run_snapshot_updated_at),
+    leaseExpiresAt: nullableString(row.run_snapshot_lease_expires_at),
+    terminalReason: nullableString(row.run_snapshot_terminal_reason),
+    sessionActiveRunId: nullableString(row.run_snapshot_active_run_id),
+    sessionQueueState: channelSessionQueueState(row.run_snapshot_queue_state),
+  };
+}
+
 /** R3：runs.agent_id 以 WorkItem 为准；input.agentId 有值则必须相等。 */
 function resolveRunAgentId(
   requested: string | null | undefined,
@@ -1698,6 +1747,7 @@ function toChannelDeliveryRow(row: SqliteRow): ChannelDeliveryRow {
     status: String(row.status) as ChannelDeliveryStatus,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    runSnapshot: toChannelDeliveryRunSnapshot(row),
   };
 }
 

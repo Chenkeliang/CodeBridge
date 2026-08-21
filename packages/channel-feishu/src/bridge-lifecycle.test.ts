@@ -1,9 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, type ChannelSessionIngress } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "./bridge.js";
+
+const lifecycleHandlers = new Map<string, () => void>();
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > 2_000) throw new Error("waitUntil timed out");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 type TestableBridge = {
   channel: {
@@ -43,6 +53,49 @@ function message(id: string): FeishuMessage {
 }
 
 describe("FeishuBridge stream lifecycle", () => {
+  beforeEach(() => lifecycleHandlers.clear());
+
+  it("reconciles immediately after the Feishu WebSocket reconnects", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-lifecycle-"));
+    const listDeliveries = vi.fn(async () => []);
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir,
+      sessionIngress: {
+        listDeliveries,
+      } as unknown as ChannelSessionIngress,
+    }) as unknown as {
+      channel: {
+        botIdentity: { name: string };
+        on(event: string, handler: () => void): void;
+        connect(): Promise<void>;
+        disconnect(): Promise<void>;
+      };
+      connect(): Promise<void>;
+      disconnect(): Promise<void>;
+    };
+    bridge.channel = undefined as never;
+
+    const sdk = await import("@larksuiteoapi/node-sdk");
+    const fakeChannel = {
+      botIdentity: { name: "test" },
+      dispatcher: { register: vi.fn() },
+      on: (event: string, handler: () => void) => lifecycleHandlers.set(event, handler),
+      connect: vi.fn(async () => {}),
+      disconnect: vi.fn(async () => {}),
+      updatePolicy: vi.fn(),
+    };
+    vi.spyOn(sdk, "createLarkChannel").mockReturnValueOnce(fakeChannel as never);
+
+    await bridge.connect();
+    expect(listDeliveries).toHaveBeenCalledTimes(1);
+
+    lifecycleHandlers.get("reconnected")?.();
+    await waitUntil(() => listDeliveries.mock.calls.length === 2);
+    expect(listDeliveries).toHaveBeenCalledTimes(2);
+    await bridge.disconnect();
+  });
+
   it("streams two runs without aborting each other", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-lifecycle-"));
     const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge & {

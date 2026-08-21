@@ -1571,6 +1571,22 @@ describe("session API", () => {
       conversationId: "chat",
       replyToMessageId: "msg-42",
       status: "dispatched",
+      runSnapshot: {
+        status: "queued",
+        sessionActiveRunId: expect.any(String),
+        sessionQueueState: "ready",
+      },
+    });
+
+    const listed = await app.request("/v1/deliveries?channel=feishu", {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(listed.status).toBe(200);
+    expect((await listed.json() as { deliveries: unknown[] }).deliveries[0]).toMatchObject({
+      runSnapshot: {
+        status: "queued",
+        sessionActiveRunId: expect.any(String),
+      },
     });
     catalog.close();
     workItems.close();
