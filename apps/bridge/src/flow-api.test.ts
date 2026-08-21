@@ -157,6 +157,202 @@ function seedAgentRun(
 }
 
 describe("flow API", () => {
+  it("creates and updates only server-revisioned Guide drafts", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const app = createFlowApp(catalog, "token");
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
+    const created = await app.request("/v1/flows/guides", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ flow: {
+        name: "订单排查草稿",
+        description: "人工整理",
+        steps: [
+          { id: "lookup", purpose: "查询订单" },
+          { id: "verify", purpose: "核对仓配", depends_on: ["lookup"] },
+        ],
+      } }),
+    });
+    expect(created.status).toBe(201);
+    const guide = await created.json() as { flow_id: string; definition_revision: string };
+    expect(guide).toMatchObject({ kind: "guide", status: "draft", source: "user_selected" });
+    expect(guide.definition_revision).toMatch(/^sha256:/);
+
+    const updated = await app.request(`/v1/flows/${guide.flow_id}/guide`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ flow: {
+        name: "订单排查草稿 v2",
+        description: "更新说明",
+        steps: [{ id: "lookup", purpose: "查询并核对订单" }],
+      } }),
+    });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toMatchObject({
+      flow_id: guide.flow_id,
+      name: "订单排查草稿 v2",
+      kind: "guide",
+      status: "draft",
+      steps: [{ id: "lookup", capability: null, mode: "manual" }],
+    });
+    expect(catalog.get(guide.flow_id)?.definitionRevision).not.toBe(guide.definition_revision);
+    expect(catalog.list().filter((flow) => flow.flowId === guide.flow_id)).toHaveLength(1);
+
+    const invalid = await app.request("/v1/flows/guides", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ flow: { name: "空步骤", steps: [{ id: "", purpose: "" }] } }),
+    });
+    expect(invalid.status).toBe(400);
+    catalog.close();
+  });
+
+  it("updates only Candidate summary fields with a server revision", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    catalog.save({
+      flowId: "flow_candidate_summary", name: "旧名称", description: "旧说明",
+      kind: "runbook", status: "candidate", source: "user_selected", definitionRevision: "sha256:old",
+      inputs: [], steps: [{ id: "lookup", capability: "demo.echo", mode: "read_only", successWhen: "output exists" }],
+    });
+    const app = createFlowApp(catalog, "token");
+    const response = await app.request("/v1/flows/flow_candidate_summary/summary", {
+      method: "PATCH",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ name: "新名称", description: "新说明" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      flow_id: "flow_candidate_summary", name: "新名称", description: "新说明",
+      status: "candidate", steps: [{ id: "lookup", capability: "demo.echo" }],
+    });
+    expect(catalog.get("flow_candidate_summary")?.definitionRevision).toMatch(/^sha256:/);
+    expect(catalog.get("flow_candidate_summary")?.definitionRevision).not.toBe("sha256:old");
+    catalog.close();
+  });
+
+  it("promotes a Guide into a separate Candidate lineage record", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const session = sessions.createSession({ agentId: "codex" });
+    const guide = catalog.save({
+      flowId: "flow_guide_parent", name: "Guide", kind: "guide", status: "draft",
+      source: "user_selected", definitionRevision: "sha256:guide",
+      steps: [{ id: "lookup", purpose: "查询", mode: "manual", approval: "none" }],
+    });
+    const app = createFlowApp(catalog, "token", { sessions });
+    const response = await app.request("/v1/flows/candidates", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: session.id,
+        flow: {
+          parent_flow_id: guide.flowId, name: "Guide Candidate", kind: "runbook", inputs: [],
+          steps: [{ id: "lookup", capability: "demo.echo", purpose: "查询", mode: "read_only", approval: "none", success_when: "output exists" }],
+        },
+      }),
+    });
+    expect(response.status).toBe(201);
+    const candidate = await response.json() as { flow_id: string };
+    expect(candidate.flow_id).not.toBe(guide.flowId);
+    expect(catalog.get(candidate.flow_id)).toMatchObject({
+      kind: "runbook", status: "candidate", parentFlowId: guide.flowId, lineageRootFlowId: guide.flowId,
+    });
+    sessions.close();
+    catalog.close();
+  });
+
+  it("records only validated, idempotent Agent Flow recommendations", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    const fixture = seedAgentRun(sessions, events, {
+      agentId: "codex",
+      title: "检查订单",
+      tools: ["lookup", "verify"],
+    });
+    catalog.save({
+      flowId: "flow_order_check",
+      name: "订单核验",
+      kind: "runbook",
+      status: "published",
+      source: "git",
+      definitionRevision: "sha256:published",
+      inputs: [
+        { id: "oid", type: "integer", source: "user", required: true },
+        { id: "token", type: "secret_ref", source: "user", required: false },
+      ],
+      steps: [{ id: "lookup", capability: "demo.echo", mode: "read_only", successWhen: "output exists" }],
+    });
+    const app = createFlowApp(catalog, "token", { sessions, events });
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
+    const body = JSON.stringify({
+      run_id: fixture.run.id,
+      flow_id: "flow_order_check",
+      definition_revision: "sha256:published",
+      reason: "用户目标与订单核验一致",
+      extracted_inputs: { oid: 1644460, token: "must-not-persist", extra: "ignored" },
+    });
+
+    const first = await app.request("/v1/flows/recommendations", { method: "POST", headers, body });
+    const duplicate = await app.request("/v1/flows/recommendations", { method: "POST", headers, body });
+    expect(first.status).toBe(201);
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toEqual(await first.json());
+
+    const listed = await app.request(
+      `/v1/sessions/${fixture.session.id}/flow-recommendations`,
+      { headers },
+    );
+    const listedBody = await listed.json();
+    expect(listedBody).toMatchObject({
+      recommendations: [{
+        run_id: fixture.run.id,
+        flow_id: "flow_order_check",
+        definition_revision: "sha256:published",
+        status: "pending",
+        extracted_inputs: { oid: 1644460 },
+      }],
+    });
+    const serialized = JSON.stringify(listedBody);
+    expect(serialized).not.toContain("must-not-persist");
+
+    const dismissed = await app.request(
+      `/v1/flows/recommendations/${fixture.run.id}/dismiss`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          session_id: fixture.session.id,
+          flow_id: "flow_order_check",
+        }),
+      },
+    );
+    expect(dismissed.status).toBe(200);
+    const afterDismiss = await app.request(
+      `/v1/sessions/${fixture.session.id}/flow-recommendations`,
+      { headers },
+    );
+    expect(await afterDismiss.json()).toMatchObject({
+      recommendations: [{ status: "dismissed" }],
+    });
+
+    const stale = await app.request("/v1/flows/recommendations", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        run_id: fixture.run.id,
+        flow_id: "flow_order_check",
+        definition_revision: "sha256:stale",
+      }),
+    });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: "flow_revision_mismatch" });
+
+    events.close();
+    sessions.close();
+    catalog.close();
+  });
+
   it("reads structured and observed Agent Run proposals without making them executable", async () => {
     const catalog = new FlowCatalogStore(":memory:");
     const sessions = new SessionCatalogStore(":memory:");

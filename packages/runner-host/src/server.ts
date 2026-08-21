@@ -246,6 +246,7 @@ export class RunnerHost {
     const env: Record<string, string> = {
       FCB_CHAT_ID: request.sessionKey.chatId,
       FCB_API: `http://127.0.0.1:${this.options.config.bridge?.apiPort ?? 19790}`,
+      FCB_RUN_ID: request.runId,
       FCB_TOKEN: this.options.token,
     };
     if (request.sessionKey.topicId) {

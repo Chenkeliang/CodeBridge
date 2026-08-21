@@ -7,13 +7,14 @@ import path from "node:path";
  */
 const FCB_SCRIPT = `#!/usr/bin/env node
 // fcb — 在 CodeBridge Agent 任务里把文件/消息发回当前聊天
-// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息>
+// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest <Flow ID> <revision> [参数=值] [--reason 原因]
 const path = require("node:path");
 
 const api = process.env.FCB_API;
 const token = process.env.FCB_TOKEN;
 const chatId = process.env.FCB_CHAT_ID;
 const topicId = process.env.FCB_TOPIC_ID;
+const runId = process.env.FCB_RUN_ID;
 
 function fail(msg) {
   console.error(msg);
@@ -58,8 +59,31 @@ async function main() {
       ref: rest[0],
       text: rest.slice(1).join(" "),
     });
+  } else if (cmd === "flow" && rest[0] === "suggest" && rest[1] && rest[2]) {
+    const [subcommand, flowId, definitionRevision, ...options] = rest;
+    const reasonIndex = options.indexOf("--reason");
+    const assignments = reasonIndex >= 0 ? options.slice(0, reasonIndex) : options;
+    const reason = reasonIndex >= 0 ? options.slice(reasonIndex + 1).join(" ") : "";
+    const extractedInputs = {};
+    for (const assignment of assignments) {
+      const equals = assignment.indexOf("=");
+      if (equals <= 0) continue;
+      const key = assignment.slice(0, equals);
+      const raw = assignment.slice(equals + 1);
+      extractedInputs[key] = /^-?\\d+$/.test(raw) && Number.isSafeInteger(Number(raw))
+        ? Number(raw)
+        : raw;
+    }
+    if (!runId) fail("fcb: 缺少 FCB_RUN_ID，不能提交 Flow 建议");
+    await post("/v1/flows/recommendations", {
+      run_id: runId,
+      flow_id: flowId,
+      definition_revision: definitionRevision,
+      reason,
+      extracted_inputs: extractedInputs,
+    });
   } else {
-    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息>");
+    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest <Flow ID> <revision> [参数=值] [--reason 原因]");
   }
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Archive, ChevronDown, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Sun, Trash2, Workflow } from "lucide-react";
+import { Archive, ChevronDown, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Sun, Trash2, Upload, Workflow } from "lucide-react";
 import { BrandAgentIcon, agentTintClass } from "@/components/brand-agent-icon";
 import { PixelMark } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
@@ -89,7 +89,7 @@ function SessionRow({ session, selected, onSession, onUpdateSession, onDeleteSes
   </div>;
 }
 
-export function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, flows, flowId, loading, query, sessions, selectedSessionId, showArchived, onCreate, onFlow, onQuery, onRefresh, onSession, onUpdateSession, onDeleteSession, onToggleArchived }: {
+export function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, flows, flowId, loading, query, sessions, selectedSessionId, showArchived, onCreate, onCreateGuide, onImportGuide, onFlow, onQuery, onRefresh, onSession, onUpdateSession, onDeleteSession, onToggleArchived }: {
   agent: AgentProfile | null;
   activeSessionCount: number;
   area: PanelArea;
@@ -102,6 +102,8 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
   selectedSessionId: string | null;
   showArchived: boolean;
   onCreate: () => void;
+  onCreateGuide?: () => void;
+  onImportGuide?: () => void;
   onFlow: (id: string) => void;
   onQuery: (value: string) => void;
   onRefresh: () => void;
@@ -122,6 +124,8 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
       <div className="flex gap-1">
         <Button aria-label="刷新" className={cn("size-8 px-0 hover:opacity-80", "text-muted")} onClick={onRefresh} size="icon" variant="ghost"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} /></Button>
         {area === "agents" && <Button aria-label="新建 Session" className={cn("size-8 border px-0 hover:-translate-y-px hover:opacity-80", "bg-surface", "text-ink", "border-line-strong")} disabled={!agent || agent.status !== "healthy"} onClick={onCreate} size="icon" variant="outline"><Plus className="size-4" /></Button>}
+        {area === "flows" && onCreateGuide && <Button aria-label="新建 Guide 草稿" className={cn("size-8 border px-0 hover:-translate-y-px hover:opacity-80", "bg-surface", "text-ink", "border-line-strong")} onClick={onCreateGuide} size="icon" variant="outline"><Plus className="size-4" /></Button>}
+        {area === "flows" && onImportGuide && <Button aria-label="导入 Guide JSON" className={cn("size-8 border px-0 hover:-translate-y-px hover:opacity-80", "bg-surface", "text-ink", "border-line-strong")} onClick={onImportGuide} size="icon" variant="outline"><Upload className="size-4" /></Button>}
       </div>
     </header>
     {area === "agents" ? <>

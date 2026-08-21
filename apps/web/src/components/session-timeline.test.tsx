@@ -650,4 +650,41 @@ describe("SessionTimeline", () => {
     act(() => root.unmount());
     host.remove();
   });
+
+  it("renders a pending Agent recommendation as an explicit confirmation card", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onUseFlowRecommendation = vi.fn();
+    const onDismissFlowRecommendation = vi.fn();
+    const recommendation = {
+      recommendation_id: "evt_1", session_id: "sess_1", run_id: "run-source",
+      flow_id: "flow_order", definition_revision: "sha256:one",
+      reason: "用户目标与订单核验完全匹配", extracted_inputs: { oid: 1644460 },
+      status: "pending" as const, created_at: "2026-08-21T00:00:00.000Z",
+    };
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      flowRecommendations={[recommendation]}
+      onUseFlowRecommendation={onUseFlowRecommendation}
+      onDismissFlowRecommendation={onDismissFlowRecommendation}
+      turns={[{ timeline_index: 0, turn_id: "turn-source", run_id: "run-source", status: "succeeded", blocks: [] }]}
+    />));
+    expect(host.textContent).toContain("Agent 建议使用 Flow");
+    expect(host.textContent).toContain("用户目标与订单核验完全匹配");
+    const use = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("查看并使用"));
+    const dismiss = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("忽略"));
+    act(() => use!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    act(() => dismiss!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onUseFlowRecommendation).toHaveBeenCalledWith(recommendation);
+    expect(onDismissFlowRecommendation).toHaveBeenCalledWith(recommendation);
+
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      flowRecommendations={[{ ...recommendation, status: "dismissed" }]}
+      turns={[{ timeline_index: 0, turn_id: "turn-source", run_id: "run-source", status: "succeeded", blocks: [] }]}
+    />));
+    expect(host.textContent).not.toContain("Agent 建议使用 Flow");
+    act(() => root.unmount());
+    host.remove();
+  });
 });

@@ -41,6 +41,10 @@ describe("TelegramBridge inbound commands", () => {
           inputs: [{ id: "oid", type: "integer", source: "user", required: true }],
           steps: [{ id: "lookup", purpose: "查订单", mode: "read_only", approval: "none" }],
         }]),
+        listManageableFlows: vi.fn().mockResolvedValue([{
+          flowId: "flow_candidate", name: "订单排查候选", description: null,
+          definitionRevision: "sha256:candidate", kind: "runbook", status: "candidate", reviewStatus: "pending",
+        }]),
         submit,
         getSlotCommandContext: vi.fn().mockResolvedValue({
           sessionId: null,
@@ -68,6 +72,7 @@ describe("TelegramBridge inbound commands", () => {
       },
     });
 
+    await bridge.handleUpdate(update(0, "/flow manage"));
     await bridge.handleUpdate(update(1, "/flow"));
     await bridge.handleUpdate(update(2, "/flow 1"));
     await bridge.handleUpdate(update(3, "/flow set oid=1644460"));
@@ -77,6 +82,11 @@ describe("TelegramBridge inbound commands", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       "telegram:42",
       expect.stringContaining("订单排查"),
+      undefined,
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "telegram:42",
+      expect.stringContaining("runbook/candidate"),
       undefined,
     );
     expect(submit).toHaveBeenCalledTimes(1);

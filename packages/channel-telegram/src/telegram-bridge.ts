@@ -219,6 +219,15 @@ export class TelegramBridge {
           scopeKey: `telegram|${chatId}|${topicId ?? ""}|${senderId}`,
           text: normalized,
           listFlows: () => this.sessionIngress!.listConsumableFlows(),
+          getSessionId: async () => {
+            const context = await this.sessionIngress!.getSlotCommandContext(this.buildFullSlot(chatId, topicId));
+            return context.sessionId;
+          },
+          listManageableFlows: this.sessionIngress.listManageableFlows,
+          saveLatestGuide: this.sessionIngress.saveLatestGuide,
+          getFlowReviewSummary: this.sessionIngress.getFlowReviewSummary,
+          updateCandidateSummary: this.sessionIngress.updateCandidateSummary,
+          rejectCandidate: this.sessionIngress.rejectCandidate,
           getActiveRunId: async () => {
             const context = await this.sessionIngress!.getSlotCommandContext(
               this.buildFullSlot(chatId, topicId),

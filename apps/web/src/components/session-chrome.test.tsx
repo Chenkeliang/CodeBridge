@@ -62,6 +62,19 @@ function panelProps(): ComponentProps<typeof SessionPanel> {
 }
 
 describe("SessionPanel menus", () => {
+  it("offers Guide creation only from the Flow management surface", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onCreateGuide = vi.fn();
+    act(() => root.render(<SessionPanel {...panelProps()} area="flows" onCreateGuide={onCreateGuide} />));
+    const button = host.querySelector('button[aria-label="新建 Guide 草稿"]');
+    expect(button).not.toBeNull();
+    act(() => button!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onCreateGuide).toHaveBeenCalledOnce();
+    act(() => root.unmount());
+    host.remove();
+  });
+
   it("closes a Session row menu after clicking elsewhere", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);

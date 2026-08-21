@@ -26,6 +26,9 @@ describe("writeFcbScript", () => {
     expect(content).toContain("FCB_CHAT_ID");
     expect(content).toContain('cmd === "mention"');
     expect(content).toContain('post("/outbound/mention"');
+    expect(content).toContain("FCB_RUN_ID");
+    expect(content).toContain('rest[0] === "suggest"');
+    expect(content).toContain('post("/v1/flows/recommendations"');
 
     const stat = await fs.stat(file);
     expect(stat.mode & 0o111).not.toBe(0);

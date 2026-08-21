@@ -51,6 +51,7 @@ import { createChannelSessionIngress } from "./channel-ingress.js";
 import { createMcpApp } from "./mcp-api.js";
 import { resolveStartupSurfaces } from "./startup-surfaces.js";
 import { SessionRuntimeMigration } from "./session-runtime-migration.js";
+import { buildFlowRecommendationGuidance } from "./flow-recommendation-guidance.js";
 
 const program = new Command();
 
@@ -213,6 +214,12 @@ program
             : resolveDefaultAgentId(config);
         const basePrompt =
           typeof latestMessage === "string" ? latestMessage : workItem.title;
+        const recommendationGuidance = !step && !workItem.workflowId
+          ? buildFlowRecommendationGuidance(flowCatalog.list())
+          : "";
+        const ordinaryPrompt = recommendationGuidance
+          ? `${basePrompt}\n\n${recommendationGuidance}`
+          : basePrompt;
         const prompt = step
           ? [
               `[Workflow ${workItem.workflowId ?? "临时计划"}${run.workflowRevision ? ` @ ${run.workflowRevision}` : ""}]`,
@@ -224,7 +231,7 @@ program
             ].filter(Boolean).join("\n")
           : workItem.workflowId
             ? `[参考 Workflow: ${workItem.workflowId}]\n${basePrompt}`
-            : basePrompt;
+            : ordinaryPrompt;
         return {
           runId: run.id,
           sessionKey: {
