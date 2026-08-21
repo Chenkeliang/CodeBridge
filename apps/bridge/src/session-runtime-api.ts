@@ -583,6 +583,7 @@ function toSubmitReceipt(
 ) {
   return {
     acceptance: result.acceptance,
+    run_id: result.run?.id ?? null,
     turn: toApiSessionTurn(result.turn),
     runtime: runtimeView(options, result.turn.sessionId),
   };

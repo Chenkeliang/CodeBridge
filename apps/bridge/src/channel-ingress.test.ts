@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import { createChannelSessionIngress } from "./channel-ingress.js";
+import {
+  createChannelIngressApi,
+  createChannelSessionIngress,
+} from "./channel-ingress.js";
 
 function sse(events: string[]): Response {
   return new Response(
@@ -10,6 +13,34 @@ function sse(events: string[]): Response {
 }
 
 describe("channel session ingress", () => {
+  it("mounts both Session and Flow APIs for production channel commands", async () => {
+    const sessionApp = new Hono();
+    sessionApp.get("/v1/sessions/:sessionId", (c) => c.json({
+      session_id: c.req.param("sessionId"),
+    }));
+    const flowApp = new Hono();
+    flowApp.get("/v1/flows", (c) => c.json({
+      flows: [{
+        flow_id: "flow_demo",
+        name: "Demo",
+        definition_revision: "sha256:one",
+      }],
+    }));
+
+    const api = createChannelIngressApi(sessionApp, flowApp);
+    const ingress = createChannelSessionIngress(api, "token");
+
+    await expect(ingress.listConsumableFlows()).resolves.toEqual([{
+      flowId: "flow_demo",
+      name: "Demo",
+      definitionRevision: "sha256:one",
+      inputs: [],
+      steps: [],
+    }]);
+    const sessionResponse = await api.request("/v1/sessions/sess_1");
+    expect(sessionResponse.status).toBe(200);
+  });
+
   it("submits a channel message and returns a receipt", async () => {
     const app = new Hono();
     app.post("/v1/channels/:channel/conversations/:conversation/messages", async (c) => {

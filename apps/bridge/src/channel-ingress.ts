@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import { Hono } from "hono";
 import type {
   ChannelCommandContext,
   ChannelConsumableFlow,
@@ -34,6 +34,16 @@ function toChannelSessionEvent(event: SessionEventWire): ChannelSessionEvent {
     resultRef: typeof event.result_ref === "string" ? event.result_ref : null,
     payload: event.payload ?? {},
   };
+}
+
+export function createChannelIngressApi(
+  sessionApp: Hono,
+  flowApp: Hono,
+): Hono {
+  const app = new Hono();
+  app.route("/", sessionApp);
+  app.route("/", flowApp);
+  return app;
 }
 
 export function createChannelSessionIngress(

@@ -439,6 +439,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (options.coordinator) {
       const result = await messageResponse.json() as {
         acceptance: "queued" | "dispatched";
+        run_id: string | null;
         turn: { turn_id: string };
         runtime: {
           active_run: { run_id: string } | null;
@@ -457,7 +458,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         queue_state: result.runtime.queue_state,
         turn_id: result.turn.turn_id,
         run_id: result.acceptance === "dispatched"
-          ? result.runtime.active_run?.run_id ?? null
+          ? result.run_id
           : null,
       }, 202);
     }
