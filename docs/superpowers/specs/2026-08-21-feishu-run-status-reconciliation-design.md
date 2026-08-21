@@ -299,8 +299,13 @@ flowchart LR
 1. 进程停止期间无法更新飞书表面；
 2. 新进程连接飞书后立即读取未完成 Delivery；
 3. 若 Run 已终态，直接恢复终态状态和持久化起止时间，禁止新建运行计时器；
-4. 历史事件重放只恢复正文和最终阶段；
-5. 原卡片终态更新成功后 complete Delivery。
+4. Run 快照可以先纠正终态；历史事件重放恢复正文和最终阶段；
+5. 只有 watcher 已消费并投影该 Run 的终态事件、原卡片终态更新成功后，才
+   complete Delivery。
+
+若 Core SSE 暂时不可用，权威 Run 快照仍用于停止虚假计时和展示终态；Delivery
+保持未完成，等待事件流恢复后重放完整正文并闭合。禁止仅凭 Run 快照提前完成
+Delivery，否则 Bridge 再次重启会失去恢复最终正文的入口。
 
 ### 8.6 卡片更新失败
 
@@ -338,17 +343,18 @@ flowchart LR
 1. Run 终态不可逆，任何恢复或旧 live snapshot 都不能改回 running；
 2. SSE 终态和 Reconciler 终态竞争时，每个 Run 串行执行一次 terminal transition；
 3. terminal card write 成功前 Delivery 保持 `delivering`；
-4. complete Delivery 重试保持幂等；
-5. `reconnected`、周期 tick 和 `connect()` 首次恢复不得创建重复 watcher、重复 timer 或重复卡片；
-6. 卡片 writer 的 terminal snapshot 优先级高于 status-only/live snapshot；
-7. 对账失败不能推进事件 cursor；事件处理成功后才推进 sequence；
-8. 永久失效卡片不得在缺少持久化幂等凭据时自动补发普通消息。
+4. Run 快照终态只纠正展示；终态事件尚未重放和投影时不得 complete Delivery；
+5. complete Delivery 重试保持幂等；
+6. `reconnected`、周期 tick 和 `connect()` 首次恢复不得创建重复 watcher、重复 timer 或重复卡片；
+7. 卡片 writer 的 terminal snapshot 优先级高于 status-only/live snapshot；
+8. 对账失败不能推进事件 cursor；事件处理成功后才推进 sequence；
+9. 永久失效卡片不得在缺少持久化幂等凭据时自动补发普通消息。
 
 ## 11. 时效目标
 
 | 场景 | 目标 |
 | --- | --- |
-| Run 已终态但 Delivery 未完成 | Bridge 在线时不超过 15 秒收敛；Bridge 重启后首次对账立即收敛 |
+| Run 已终态但 Delivery 未完成 | Core SSE 可用时 Bridge 在线不超过 15 秒收敛；Bridge 重启后首次对账立即纠正状态，并在终态事件重放后完成 Delivery |
 | 飞书 WebSocket 短暂断开 | SDK 回调立即记录入站连接状态；重连成功后立即对账 |
 | Core API SSE 短暂断开 | 250ms 重试循环开始重连，同时由 15 秒 Run 对账兜底 |
 | Runner/Bridge 执行器真正失联 | 现有 Lease 最坏约 75 秒收敛领域终态，再加最多 15 秒飞书对账，总目标不超过约 90 秒 |
@@ -445,7 +451,7 @@ flowchart LR
 ### FRSR-5：终态恢复和写入失败恢复
 
 - 已终态 Delivery 恢复时不启动 running timer；
-- 重放历史正文并更新原卡片；
+- Run 快照先纠正终态；重放历史正文和终态事件后再更新原卡片并完成 Delivery；
 - patch 失败保留 Delivery 并重试；
 - card invalid 时保留 Delivery、停止高频重试并告警；
 - 写入成功后才 complete Delivery。
@@ -534,6 +540,8 @@ GitNexus 影响分析结果：
 - `FeishuRunCard.finalize()` 虽会等待 writer flush，但 writer 当前可能吞掉写卡失败，
   随后 watcher 仍完成 Delivery；FRSR-5 必须让 terminal write 失败可观察并阻止
   `completeDelivery`；
+- Run 快照只允许先纠正卡片状态，不能代替终态事件重放；Delivery 必须等终态
+  事件已投影且终态写卡成功后才完成；
 - `ChannelDeliveryRow` 使用嵌套 nullable `runSnapshot`，Telegram 只做类型兼容回归；
 - 对账循环只属于 Bridge 生产 SessionWatcher 主路径，不复制到 legacy fallback；
 - 永久 card invalid 只做进程内抑制和一次告警，跨重启持久抑制留给未来 durable
