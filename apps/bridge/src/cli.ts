@@ -47,7 +47,10 @@ import { createProjectCatalogApp } from "./project-api.js";
 import { createWebFrontendApp } from "./web-frontend.js";
 import { createSessionApp } from "./session-api.js";
 import { createFlowApp } from "./flow-api.js";
-import { createChannelSessionIngress } from "./channel-ingress.js";
+import {
+  createChannelIngressApi,
+  createChannelSessionIngress,
+} from "./channel-ingress.js";
 import { createMcpApp } from "./mcp-api.js";
 import { resolveStartupSurfaces } from "./startup-surfaces.js";
 import { SessionRuntimeMigration } from "./session-runtime-migration.js";
@@ -415,15 +418,18 @@ program
       },
       config.runner.token,
     );
-    const channelSessionIngress = createChannelSessionIngress(sessionCatalogApp, config.runner.token);
-    bridge?.setSessionIngress(channelSessionIngress);
-    telegram?.setSessionIngress(channelSessionIngress);
     const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token, {
       sessions: sessionCatalog,
       events: workItemStore,
       capabilities: capabilityRegistry,
       runtime: capabilityRuntime,
     });
+    const channelSessionIngress = createChannelSessionIngress(
+      createChannelIngressApi(sessionCatalogApp, flowCatalogApp),
+      config.runner.token,
+    );
+    bridge?.setSessionIngress(channelSessionIngress);
+    telegram?.setSessionIngress(channelSessionIngress);
 
     store.onChange((c) => {
       bridge?.updateConfig(c);

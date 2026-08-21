@@ -1,12 +1,14 @@
 # Cursor Transcript → 通用 Flow 全链验证设计
 
-Status: Accepted for implementation
+Status: Superseded by the accepted single-goal validation plan
+
+> 2026-08-21：原“Cursor transcript 导入产品”方案不再实施。当前只把真实 Agent 工作过程作为人工参考，使用匿名参数化 fixture、现有 Flow 生命周期和纯内存 demo 能力完成验证；不建设 UUID 导入器、路径扫描、LLM 服务或额外迁移层。实施以 `docs/superpowers/plans/2026-08-21-cursor-transcript-flow-validation.md` 为准。
 
 ## 1. 目标
 
 使用真实 Cursor Agent 对话作为经验样本，验证 CodeBridge 能否把一次完成过的任务提炼成可参数化、可追溯、可审查的通用 Flow，并通过 Web 完成 Guide → Candidate → Dry-run → Review → Published → Apply/Run → 结果回流的完整生命周期。
 
-本设计使用 Cursor Session `83944f05-2d18-4935-8296-773caa8165fc` 仅做需求分析和匿名测试样本来源。产品代码、测试夹具、Flow 定义和运行时均不得依赖该 UUID、原始文件路径、原订单号、PID 或其他实例值。
+本设计仅使用一次真实 Cursor 工作过程做需求分析和匿名测试样本来源。产品代码、测试夹具、Flow 定义和运行时均不得依赖原 Session UUID、原始文件路径、原订单号、PID 或其他实例值。
 
 完整执行验证只能发生在独立 simulation 环境。禁止连接线上业务写接口，禁止执行 upsert、商品状态/价格更新、缓存清理、SPU 同步或 depot 写操作。
 

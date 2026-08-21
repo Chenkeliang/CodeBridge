@@ -15,6 +15,7 @@ import { FeishuBridge, type FeishuMessage } from "@codebridge/channel-feishu";
 import { createSessionApp } from "./session-api.js";
 import { createChannelSessionIngress } from "./channel-ingress.js";
 import type { RunnerClient } from "@codebridge/runner-client";
+import type { RunExecutor } from "@codebridge/run-executor";
 import { definitionHash } from "@codebridge/workflow-engine";
 import { compileCatalogFlow } from "./flow-compile.js";
 
@@ -1041,6 +1042,59 @@ describe("session API", () => {
     expect(workItems.listEvents(mismatchedWorkItem.id).find((event) => event.type === "MESSAGE_RECEIVED")?.payload).toMatchObject({
       actor_ref: { channel: "telegram", id: "unknown" },
       flow_invocation_source: "request",
+    });
+    flows.close();
+    catalog.close();
+    workItems.close();
+  });
+
+  it("keeps the dispatched Run ID when a channel Flow finishes before the receipt is built", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const flows = new FlowCatalogStore(":memory:");
+    const flow = saveChannelRunbook(flows, "flow_fast_channel");
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const executor = {
+      execute: vi.fn(async (runId: string) => {
+        const run = workItems.getRun(runId)!;
+        coordinator.finishRun({
+          sessionId: run.sessionId!,
+          runId,
+          status: "succeeded",
+        });
+      }),
+    } as unknown as RunExecutor;
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      coordinator,
+      flows,
+      executor,
+    }, TOKEN);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat-fast/messages",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": "channel-fast-flow",
+        },
+        body: JSON.stringify({
+          message: "运行 Flow：Fast Channel Flow",
+          agent_id: "pi",
+          flow_id: flow.flowId,
+          definition_revision: flow.definitionRevision,
+        }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({
+      acceptance: "dispatched",
+      run_id: expect.stringMatching(/^run_/),
     });
     flows.close();
     catalog.close();
