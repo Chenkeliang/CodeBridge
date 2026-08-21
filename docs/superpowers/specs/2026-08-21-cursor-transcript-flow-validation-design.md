@@ -81,16 +81,20 @@ interface SessionEvidence {
   startedAt: string | null;
   completedAt: string | null;
   messages: Array<{
+    position: number;
     role: "user" | "assistant";
     text: string;
   }>;
   toolObservations: Array<{
+    position: number;
     category: string;
     name: string;
     status: "completed" | "failed" | "unknown";
   }>;
 }
 ```
+
+`position` 保留脱敏前事件的相对顺序；导入时间线和通用化 evidence 必须按 position 合并，不能把消息与工具轨迹分批重排。
 
 在进入 LLM 或数据库前完成脱敏。默认不保留工具参数、Shell 命令正文和工具原始输出。Provider Session ID 仅作为导入来源追溯字段；Flow 提取器不得读取它来决定定义。
 
@@ -111,10 +115,10 @@ interface GeneralizedGuideProposal {
   description: string;
   inputs: Array<{
     id: string;
-    type: "string" | "number" | "boolean" | "string[]";
+    type: "string" | "integer" | "enum" | "directory" | "secret_ref";
     required: boolean;
     purpose: string;
-    example?: unknown;
+    example?: string;
   }>;
   steps: Array<{
     id: string;
@@ -126,6 +130,8 @@ interface GeneralizedGuideProposal {
   unresolved: string[];
 }
 ```
+
+本轮不扩张既有 Flow input type。批量标识（如 `product_ids`）使用 `string`，由 UI 以换行/逗号分隔采集并由 Capability 合同规范化；新增数组类型属于独立领域变更，不夹带进 transcript 导入。
 
 LLM 生成的 `proposedCapability` 只是建议。只有 Registry 中真实存在且合同匹配的 Capability 才能进入 Candidate Runbook；否则该步骤保留为 Guide 语义步骤。
 
