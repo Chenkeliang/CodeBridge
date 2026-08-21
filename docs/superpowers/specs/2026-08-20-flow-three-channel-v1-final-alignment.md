@@ -582,6 +582,16 @@ V1 采用一次性显式调用时，每次 Run 必须携带所选 Flow 和版本
 
 所以飞书和 Telegram 尚未具备完整的“使用 Flow”能力。能发起 Run 不代表产品闭环已经完成。
 
+Web 也存在 Runtime approval 的活跃表面断层：Bridge 已有 approval 查询/批准/拒绝 API，Session projector 也会为 `APPROVAL_REQUESTED` 创建 Timeline block，但当前 Workbench 使用的 `SessionTimeline` 没有渲染和操作该 block；旧 `ProjectionItem/ApprovalCard` 未挂载，不能视为用户能力。`APPROVAL_GRANTED/REJECTED` 当前也没有更新 Timeline block 状态。
+
+因此 P0 的结构化回流必须同时完成：
+
+- Web 活跃 Timeline 的 Runtime approval 展示、现有 approve/reject 写路径接入和终态闭合；
+- 飞书/Telegram 对 approval 状态的只读展示，并在等待态引导到已可操作的 Web Session；
+- 三端对 Step、Artifact、Verification 和 Run snapshot 的一致投影。
+
+飞书/Telegram 的提示不得先于 Web 审批入口上线。详细设计见 [Flow P0B 三表面结构化回流设计](./2026-08-21-flow-p0b-structured-return-design.md)。
+
 ### 9.5 绑定没有不可变版本语义
 
 - **已有（Runtime）**：编译并冻结执行计划；校验 `planIrHash`（`plan_ir_drift` 门禁）；每次 Run 执行的都是冻结计划。
@@ -630,7 +640,7 @@ V1 必须拆开应用用例：
 6. 拆开一次执行与持久绑定：`/messages` 显式 Flow 不得写 binding，持久写只由 `apply` / unbind 完成。
 7. `/messages` 支持 `definition_revision`；在 compile/Run 创建前执行 revision 失配校验并返回 `409 flow_revision_mismatch`。
 8. 保留 Runtime 已有 `planIrHash + frozenPlan` 执行冻结，不重复建设。
-9. 补齐运行事件到原通道的结构化回流。
+9. 补齐运行事件到三个活跃表面的结构化回流：Web Timeline 完成 Runtime approval 展示、现有 approve/reject 写路径接入和终态闭合；飞书/Telegram 只读展示 approval 状态；三端一致消费 Step、Artifact、Verification 和 Run snapshot。任何“前往 Web”提示必须与 Web 可操作入口同阶段交付。
 10. 将 Web、飞书和 Telegram 身份映射为统一 actor 并写审计；复用既有 Capability 授权，不建设 Flow ACL。
 
 ### P1：完成三通道 V1 产品
@@ -697,6 +707,7 @@ Web：
 - 每次运行都能定位到确定的 Flow revision 和 hash。
 - “仅运行一次”不改变 binding；“绑定到会话”必须经 `apply`；解绑必须真实写入后端。
 - binding 或显式 invocation revision 失配时返回 `409 flow_revision_mismatch`，不执行、不升级、不回落 Agent。
+- Runtime step approval 在当前 Workbench Timeline 可见、可通过现有 API 批准或拒绝，并能观察到 granted/rejected 与 Run 终态。
 
 ### 11.2 飞书和 Telegram
 
