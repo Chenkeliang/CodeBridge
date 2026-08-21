@@ -139,6 +139,46 @@ async function renderThroughSdk(chunks: string[]): Promise<string> {
   return rendered;
 }
 
+async function renderAgentRun(
+  runAgent: () => AsyncGenerator<AgentEvent>,
+): Promise<string> {
+  const bridge = new FeishuBridge({
+    config: defaultConfig(),
+    dataDir: os.tmpdir(),
+  }) as unknown as TestableBridge;
+  let rendered = "";
+  bridge.channel = {
+    async stream(_chatId, input) {
+      await input.markdown({
+        messageId: "card-message-1",
+        async append(chunk) {
+          rendered = sdkMergeStreamingText(rendered, chunk);
+        },
+        async setContent(full) {
+          rendered = full;
+        },
+      });
+    },
+  };
+  bridge.orchestrator = {
+    router: { getBinding: () => ({ showThinking: false }) },
+    cancelActiveForChat: async () => false,
+    runAgent,
+  };
+
+  await bridge.streamAgentReply(
+    {
+      messageId: "message-1",
+      chatId: "chat-1",
+      chatType: "p2p",
+      senderId: "user-1",
+      content: "test",
+    },
+    "test",
+  );
+  return rendered;
+}
+
 describe("FeishuBridge streaming", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -233,13 +273,20 @@ describe("FeishuBridge streaming", () => {
   });
 
   it("preserves repeated letters split across ACP deltas", async () => {
-    await expect(renderThroughSdk(["Me", "epo"])).resolves.toBe("Meepo");
+    const rendered = await renderThroughSdk(["Me", "epo"]);
+    expect(rendered).toContain("✅ **已完成**");
+    expect(rendered).toContain("Meepo");
   });
 
   it("preserves repeated digits split across ACP deltas", async () => {
-    await expect(
-      renderThroughSdk(["692818", "820925", "5382", "277A"]),
-    ).resolves.toBe("6928188209255382277A");
+    const rendered = await renderThroughSdk([
+      "692818",
+      "820925",
+      "5382",
+      "277A",
+    ]);
+    expect(rendered).toContain("✅ **已完成**");
+    expect(rendered).toContain("6928188209255382277A");
   });
 
   it("does not block ACP event consumption on a slow Feishu card write", async () => {
@@ -366,7 +413,101 @@ describe("FeishuBridge streaming", () => {
 
     releaseAgent();
     await running;
-    expect(rendered).toBe("全部完成");
+    expect(rendered).toContain("✅ **已完成**");
+    expect(rendered).toContain("全部完成");
+  });
+
+  it("does not repeat or roll back cumulative commentary around tools", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as TestableBridge;
+    let rendered = "";
+    let releaseAgent!: () => void;
+    let checkpointsEmitted!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseAgent = resolve;
+    });
+    const emitted = new Promise<void>((resolve) => {
+      checkpointsEmitted = resolve;
+    });
+
+    bridge.channel = {
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "card-message-1",
+          async append(chunk) {
+            rendered = sdkMergeStreamingText(rendered, chunk);
+          },
+          async setContent(full) {
+            rendered = full;
+          },
+        });
+      },
+    };
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false }),
+      },
+      cancelActiveForChat: async () => false,
+      runAgent: async function* () {
+        yield {
+          type: "text_delta",
+          text: "你好",
+          messageId: "checkpoint-1",
+          phase: "commentary",
+        };
+        yield { type: "tool_start", toolCallId: "tool-1", name: "Read" };
+        yield { type: "tool_end", toolCallId: "tool-1", name: "Read" };
+        yield {
+          type: "text_delta",
+          text: "你好，我来帮你处理",
+          messageId: "checkpoint-1",
+          phase: "commentary",
+        };
+        yield {
+          type: "text_delta",
+          text: "你好",
+          messageId: "checkpoint-2",
+          phase: "commentary",
+        };
+        yield {
+          type: "text_delta",
+          text: "你好",
+          messageId: "checkpoint-2",
+          phase: "commentary",
+        };
+        checkpointsEmitted();
+        await release;
+        yield {
+          type: "text_delta",
+          text: "已处理完成",
+          messageId: "final-1",
+          phase: "final_answer",
+        };
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+
+    const running = bridge.streamAgentReply(
+      {
+        messageId: "message-1",
+        chatId: "chat-1",
+        chatType: "p2p",
+        senderId: "user-1",
+        content: "test",
+      },
+      "test",
+    );
+    await emitted;
+    await vi.waitFor(() => expect(rendered).toContain("你好"));
+    expect(rendered).toContain("你好，我来帮你处理");
+    expect(rendered.match(/你好/g)).toHaveLength(1);
+
+    releaseAgent();
+    await running;
+    expect(rendered).toContain("✅ **已完成**");
+    expect(rendered).toContain("已处理完成");
   });
 
   it("sends a sparse progress message without counting it as Agent activity", async () => {
@@ -503,8 +644,40 @@ describe("FeishuBridge streaming", () => {
 
     releaseAgent();
     await running;
-    expect(rendered).toBe("任务完成");
+    expect(rendered).toContain("✅ **已完成**");
+    expect(rendered).toContain("任务完成");
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    [
+      "non-zero exit",
+      async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: "text_delta", text: "执行失败" };
+        yield { type: "done", exitCode: 1 };
+      },
+      "❌ **已失败**",
+    ],
+    [
+      "ordinary exception",
+      async function* (): AsyncGenerator<AgentEvent> {
+        throw new Error("bridge boom");
+      },
+      "❌ **已失败**",
+    ],
+    [
+      "abort",
+      async function* (): AsyncGenerator<AgentEvent> {
+        const error = new Error("cancelled");
+        error.name = "AbortError";
+        throw error;
+      },
+      "⏹ **已停止**",
+    ],
+  ] as const)("keeps the terminal status for %s", async (_name, runAgent, title) => {
+    const rendered = await renderAgentRun(runAgent);
+
+    expect(rendered).toContain(title);
   });
 
   it("keeps the agent result when a periodic status refresh fails", async () => {
@@ -569,7 +742,8 @@ describe("FeishuBridge streaming", () => {
     releaseAgent();
     await running;
 
-    expect(rendered).toBe("最终结果仍然送达");
+    expect(rendered).toContain("✅ **已完成**");
+    expect(rendered).toContain("最终结果仍然送达");
     expect(logs).toContain(
       "飞书任务状态刷新失败（不影响 Agent 运行）：temporary card error",
     );
@@ -646,7 +820,8 @@ describe("FeishuBridge streaming", () => {
     expect(runSettled).toBe(false);
     releaseStatusWrite();
     await running;
-    expect(rendered).toBe("最终结果");
+    expect(rendered).toContain("✅ **已完成**");
+    expect(rendered).toContain("最终结果");
     expect(vi.getTimerCount()).toBe(0);
   });
 });

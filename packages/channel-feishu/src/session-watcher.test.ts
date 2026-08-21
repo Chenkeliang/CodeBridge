@@ -81,9 +81,16 @@ function dispatchedEvent(sequence: number): ChannelSessionEvent {
   };
 }
 
-function terminalEvent(sequence: number): ChannelSessionEvent {
+function terminalEvent(
+  sequence: number,
+  type:
+    | "RUN_SUCCEEDED"
+    | "RUN_FAILED"
+    | "RUN_CANCELLED"
+    | "RUN_INTERRUPTED" = "RUN_SUCCEEDED",
+): ChannelSessionEvent {
   return {
-    type: "RUN_SUCCEEDED",
+    type,
     sequence,
     runId: "run_1",
     target: null,
@@ -207,14 +214,42 @@ describe("FeishuSessionWatcher", () => {
     expect(host.updateCard).toHaveBeenCalledWith(
       "card-old",
       expect.objectContaining({
-        body: { elements: [{ tag: "markdown", content: "final answer" }] },
+        body: {
+          elements: [{
+            tag: "markdown",
+            content: expect.stringContaining("✅ **已完成**"),
+          }],
+        },
       }),
+    );
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain(
+      "final answer",
     );
     expect(ingress.completeDelivery).toHaveBeenCalledWith(
       "turn_1",
       "feishu:old:run_1",
     );
     expect(ingress.claimDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it.each([
+    ["RUN_SUCCEEDED", "✅ **已完成**"],
+    ["RUN_FAILED", "❌ **已失败**"],
+    ["RUN_CANCELLED", "⏹ **已停止**"],
+    ["RUN_INTERRUPTED", "⚠️ **已中断**"],
+  ] as const)("keeps the %s status on a recovered terminal card", async (type, title) => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    ingress.events = blockingEvents([terminalEvent(9, type)]);
+
+    const w = watcher(ingress, host);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain(title);
     w.abort();
   });
 
@@ -334,8 +369,16 @@ describe("FeishuSessionWatcher", () => {
     expect(host.updateCard).toHaveBeenCalledWith(
       "card-old",
       expect.objectContaining({
-        body: { elements: [{ tag: "markdown", content: "final answer" }] },
+        body: {
+          elements: [{
+            tag: "markdown",
+            content: expect.stringContaining("final answer"),
+          }],
+        },
       }),
+    );
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).not.toContain(
+      "thinking…",
     );
     w.abort();
   });
@@ -359,6 +402,88 @@ describe("FeishuSessionWatcher", () => {
 });
 
 describe("FeishuRunCard", () => {
+  it("does not repeat or roll back commentary around tool calls", async () => {
+    const contents: string[] = [];
+    const host: FeishuCardHost = {
+      channel: {
+        stream: async (
+          _chatId: string,
+          input: {
+            markdown(controller: {
+              messageId: string;
+              setContent(full: string): Promise<void>;
+            }): Promise<void>;
+          },
+        ) => {
+          void input.markdown({
+            messageId: "card-1",
+            setContent: async (full) => {
+              contents.push(full);
+            },
+          }).catch(() => {});
+        },
+      } as never,
+      sendMarkdown: async () => {},
+      updateCard: async () => {},
+      registerPendingStream: () => {},
+      clearPendingStream: () => {},
+      log: () => {},
+      isDisconnecting: () => false,
+    };
+    const card = new FeishuRunCard(host, "chat", "src", "run_1", false);
+    await card.open();
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "commentary",
+      messageId: "m1",
+      text: "你好",
+    });
+    await card.onAgentEvent({
+      type: "tool_start",
+      toolCallId: "tool-1",
+      name: "Read",
+    });
+    await card.onAgentEvent({
+      type: "tool_end",
+      toolCallId: "tool-1",
+      name: "Read",
+    });
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "commentary",
+      messageId: "m1",
+      text: "你好，我来帮你处理",
+    });
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "commentary",
+      messageId: "m2",
+      text: "你好",
+    });
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "commentary",
+      messageId: "m2",
+      text: "你好",
+    });
+
+    await waitUntil(() => contents.at(-1)?.includes("你好，我来帮你处理") === true);
+    const live = contents.at(-1)!;
+    expect(live).toContain("🟢 **执行中**");
+    expect(live.match(/你好/g)).toHaveLength(1);
+
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "final_answer",
+      messageId: "final-1",
+      text: "已处理完成",
+    });
+    await card.finalize("succeeded");
+
+    expect(contents.at(-1)).toContain("✅ **已完成**");
+    expect(contents.at(-1)).toContain("已处理完成");
+  });
+
   it("refreshes live status when thinking is hidden but tools are running", async () => {
     const contents: string[] = [];
     const host: FeishuCardHost = {

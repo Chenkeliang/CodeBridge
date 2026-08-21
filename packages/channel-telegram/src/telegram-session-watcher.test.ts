@@ -102,6 +102,13 @@ describe("TelegramSessionWatcher", () => {
     const api = makeApi();
     const ingress = makeIngress();
     ingress.events = blockingEvents([
+      agentEvent(2, {
+        type: "text_delta",
+        phase: "commentary",
+        messageId: "checkpoint-1",
+        text: "正在处理",
+      }),
+      agentEvent(3, { type: "tool_start", toolCallId: "t1", name: "Read" }),
       agentEvent(4, { type: "text_delta", text: "answer" }),
       terminalEvent(5),
     ]);
@@ -122,6 +129,8 @@ describe("TelegramSessionWatcher", () => {
       8,
       "answer",
     );
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessage).toHaveBeenCalledTimes(1);
     expect(ingress.completeDelivery).toHaveBeenCalledWith(
       "turn_1",
       expect.stringMatching(/^telegram:inst-1:run_1$/),

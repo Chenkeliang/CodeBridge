@@ -1,6 +1,6 @@
 # Web / 飞书 / Telegram 统一流式投影设计
 
-- Status: Review draft
+- Status: Accepted for implementation
 - Date: 2026-08-21
 - Scope: AgentEvent 到通道展示快照的统一投影；修复飞书工具阶段 commentary 重复
 - Out of scope: Flow 产品实现、ACP wire protocol 改造、Telegram 实时编辑交互

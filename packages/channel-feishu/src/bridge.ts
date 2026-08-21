@@ -22,7 +22,7 @@ import {
   RunOrchestrator,
   BOT_MENU_EVENT_KEYS,
   checkAccess,
-  createFeishuStreamPresenter,
+  createChannelStreamProjector,
   formatElapsed,
   formatWelcomeMessage,
   handleSlashCommand,
@@ -32,7 +32,6 @@ import { ChainTopicTracker } from "./chain-topics.js";
 import {
   FeishuSessionWatcher,
   FEISHU_LIVE_STATUS_TICK_MS,
-  FEISHU_LIVE_STATUS_QUIET_MS,
   FEISHU_PROGRESS_NOTICE_INTERVAL_MS,
   type FeishuCardHost,
 } from "./session-watcher.js";
@@ -47,6 +46,12 @@ import {
   topicActiveForMessage,
 } from "./feishu-mention-gate.js";
 import { CoalescingCardWriter } from "./coalescing-card-writer.js";
+import {
+  createFeishuRunStatus,
+  finishFeishuRunStatus,
+  recordFeishuRunActivity,
+  renderFeishuRunStatus,
+} from "./run-status.js";
 
 export interface FeishuMessage {
   messageId: string;
@@ -92,64 +97,6 @@ interface PendingFeishuStream {
   chatId: string;
   sourceMessageId: string;
   startedAt: string;
-}
-
-interface FeishuLiveStatus {
-  startedAt: number;
-  lastActivityAt: number;
-  phase: string;
-}
-
-function recordLiveActivity(
-  status: FeishuLiveStatus,
-  event: AgentEvent,
-  now = Date.now(),
-): boolean {
-  let phase: string | undefined;
-  switch (event.type) {
-    case "thought_delta":
-      phase = "分析任务";
-      break;
-    case "text_delta":
-      phase =
-        event.phase === "commentary" ? "任务检查点" : "生成最终回复";
-      break;
-    case "tool_start":
-      phase = `工具执行：${event.name}`;
-      break;
-    case "tool_update":
-      phase = event.name ? `工具执行：${event.name}` : status.phase;
-      break;
-    case "tool_end":
-      phase = event.name ? `工具完成：${event.name}` : "工具完成";
-      break;
-    case "plan":
-    case "plan_update":
-    case "plan_removed":
-      phase = "更新计划";
-      break;
-    case "permission_request":
-      phase = "等待权限确认";
-      break;
-    default:
-      return false;
-  }
-  status.lastActivityAt = now;
-  status.phase = phase;
-  return true;
-}
-
-function renderLiveStatus(status: FeishuLiveStatus, now = Date.now()): string {
-  const sinceActivity = Math.max(0, now - status.lastActivityAt);
-  const quiet = sinceActivity >= FEISHU_LIVE_STATUS_QUIET_MS;
-  return [
-    `${quiet ? "🟠 **任务连接保持**" : "🟢 **执行中**"} · 已运行 ${formatElapsed(now - status.startedAt)}`,
-    `最近确认活动：${formatElapsed(sinceActivity)}前`,
-    quiet ? "暂未收到新的任务事件" : `当前阶段：${status.phase}`,
-    quiet ? `最近阶段：${status.phase}` : undefined,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
 }
 
 function interruptedStreamCard(): object {
@@ -851,14 +798,12 @@ export class FeishuBridge {
     const showThinking =
       this.orchestrator.router.getBinding(msg.chatId, topicId).showThinking ??
       true;
-    const { present } = createFeishuStreamPresenter({ showThinking });
-    const startedAt = Date.now();
-    const liveStatus: FeishuLiveStatus = {
-      startedAt,
-      lastActivityAt: startedAt,
-      phase: "任务启动",
-    };
-    let resultBuffer = ""; // 结果区累积；卡片挂了/被截断就用它降级发普通消息
+    const projector = createChannelStreamProjector({
+      showThinking,
+      maxProgressChars: FEISHU_LIVE_PROGRESS_CHARS,
+    });
+    const runStatus = createFeishuRunStatus();
+    const startedAt = runStatus.startedAt;
     let agentConsumed = false; // 已消费过 agent 事件流？（避免降级时重复跑）
     let cardBroken = false; // 飞书卡片流式失败（如 11310 cardid invalid）→ 降级
     let streamMessageId: string | undefined;
@@ -866,9 +811,7 @@ export class FeishuBridge {
     // 消费 Agent 事件只更新内存状态；飞书 I/O 由独立合并写队列处理，不能反压 ACP。
     const consumeAgent = async (
       onEvent: (event: AgentEvent) => void,
-      onThinking: (text: string) => void,
-      onProgress: (text: string, messageId?: string) => void,
-      onResult: (text: string) => void,
+      onProjection: () => void,
     ): Promise<void> => {
       agentConsumed = true;
       try {
@@ -895,26 +838,32 @@ export class FeishuBridge {
             ).catch(() => {});
             continue;
           }
-          const part = present(event);
-          if (!part) continue;
-          if (part.zone === "thinking") {
-            onThinking(part.text);
-          } else if (part.zone === "progress") {
-            onProgress(part.text, part.messageId);
-          } else {
-            resultBuffer += part.text;
-            onResult(part.text);
+          projector.apply(event);
+          if (event.type === "done") {
+            finishFeishuRunStatus(
+              runStatus,
+              event.exitCode === 0 ? "succeeded" : "failed",
+            );
           }
+          onProjection();
         }
+        finishFeishuRunStatus(runStatus, "succeeded");
+        onProjection();
       } catch (err) {
-        if (streamAbort.signal.aborted) return;
+        if (streamAbort.signal.aborted) {
+          finishFeishuRunStatus(runStatus, "interrupted");
+          return;
+        }
         if (err instanceof Error && err.name === "AbortError") {
-          onResult("\n\n⏹ 已停止\n");
+          projector.apply({ type: "text_delta", text: "\n\n⏹ 已停止\n" });
+          finishFeishuRunStatus(runStatus, "cancelled");
+          onProjection();
           return;
         }
         const message = err instanceof Error ? err.message : String(err);
-        resultBuffer += `\n❌ ${message}\n`;
-        onResult(`\n❌ ${message}\n`);
+        projector.apply({ type: "error", message });
+        finishFeishuRunStatus(runStatus, "failed");
+        onProjection();
       }
     };
 
@@ -933,28 +882,16 @@ export class FeishuBridge {
               },
             }));
             if (streamAbort.signal.aborted) return;
-            let thinkingContent = showThinking ? "_思考中…_" : "";
-            let progressContent = "";
-            let progressMessageId: string | undefined;
-            let showLiveStatus = true;
             let activityVersion = 0;
             let notifiedActivityVersion = 0;
             let quietNotifiedActivityVersion = -1;
             type CardSnapshot = { content: string; statusOnly: boolean };
 
             const renderBody = (): string => {
-              if (!showLiveStatus && resultBuffer) {
-                return showThinking && thinkingContent
-                  ? `${thinkingContent}\n\n---\n\n${resultBuffer}`
-                  : resultBuffer;
-              }
-              const sections: string[] = [];
-              if (showThinking && thinkingContent) sections.push(thinkingContent);
-              if (progressContent) {
-                sections.push(`**最新进度**\n${progressContent}`);
-              }
-              if (resultBuffer) sections.push(resultBuffer);
-              return sections.join("\n\n---\n\n");
+              const snapshot = projector.snapshot();
+              return runStatus.state === "running"
+                ? snapshot.liveText
+                : snapshot.finalText;
             };
 
             const writer = new CoalescingCardWriter<CardSnapshot>(
@@ -984,7 +921,7 @@ export class FeishuBridge {
             );
 
             const queueRender = (statusOnly: boolean): void => {
-              const status = showLiveStatus ? renderLiveStatus(liveStatus) : "";
+              const status = renderFeishuRunStatus(runStatus);
               const body = renderBody();
               writer.enqueue({
                 content:
@@ -1005,7 +942,7 @@ export class FeishuBridge {
               const version = activityVersion;
               const hasNewActivity = version > notifiedActivityVersion;
               const quiet =
-                Date.now() - liveStatus.lastActivityAt >=
+                Date.now() - runStatus.lastActivityAt >=
                 FEISHU_PROGRESS_NOTICE_INTERVAL_MS;
               if (
                 !hasNewActivity &&
@@ -1014,13 +951,13 @@ export class FeishuBridge {
                 return;
               }
 
-              const checkpoint = progressContent.trim().slice(-360);
+              const checkpoint = projector.snapshot().progress.trim().slice(-360);
               const lines = [
                 hasNewActivity
                   ? `🟢 **任务仍在运行** · 已运行 ${formatElapsed(Date.now() - startedAt)}`
                   : `🟠 **会话仍连接，但暂无新任务事件** · 已运行 ${formatElapsed(Date.now() - startedAt)}`,
-                `最近真实任务事件：${formatElapsed(Date.now() - liveStatus.lastActivityAt)}前`,
-                `当前阶段：${liveStatus.phase}`,
+                `最近真实任务事件：${formatElapsed(Date.now() - runStatus.lastActivityAt)}前`,
+                `当前阶段：${runStatus.phase}`,
                 checkpoint ? `最新检查点：${checkpoint}` : undefined,
               ]
                 .filter((line): line is string => Boolean(line))
@@ -1048,35 +985,16 @@ export class FeishuBridge {
             try {
               await consumeAgent(
                 (event) => {
-                  if (recordLiveActivity(liveStatus, event)) {
+                  if (recordFeishuRunActivity(runStatus, event)) {
                     activityVersion += 1;
                     queueRender(true);
                   }
-                },
-                (text) => {
-                  thinkingContent += text;
-                  queueRender(false);
-                },
-                (text, messageId) => {
-                  if (
-                    messageId &&
-                    progressMessageId &&
-                    messageId !== progressMessageId
-                  ) {
-                    progressContent = "";
-                  }
-                  if (messageId) progressMessageId = messageId;
-                  progressContent = (progressContent + text).slice(
-                    -FEISHU_LIVE_PROGRESS_CHARS,
-                  );
-                  queueRender(false);
                 },
                 () => queueRender(false),
               );
             } finally {
               clearInterval(statusTimer);
               clearInterval(noticeTimer);
-              showLiveStatus = false;
               // 合并队列保证旧状态先落完、最终快照最后落下，不会反向覆盖结果。
               queueRender(false);
               await writer.flush();
@@ -1111,12 +1029,10 @@ export class FeishuBridge {
         await consumeAgent(
           () => {},
           () => {},
-          () => {},
-          () => {},
         );
       }
       if (streamAbort.signal.aborted) return;
-      const text = resultBuffer.trim() || "（本次无输出）";
+      const text = `${renderFeishuRunStatus(runStatus)}\n\n---\n\n${projector.snapshot().finalText}`;
       for (const chunk of chunkMarkdown(text, FEISHU_MSG_CHUNK_CHARS)) {
         if (streamAbort.signal.aborted) return;
         await this.sendMarkdown(msg.chatId, chunk, msg.messageId).catch((err) => {

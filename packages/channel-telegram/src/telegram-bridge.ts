@@ -10,7 +10,7 @@ import {
 } from "@codebridge/core";
 import {
   RunOrchestrator,
-  createFeishuStreamPresenter,
+  createChannelStreamProjector,
   handleSlashCommand,
 } from "@codebridge/router";
 import {
@@ -543,8 +543,7 @@ export class TelegramBridge {
     const pending = await this.api.sendMessage(chatId, "⏳ Agent 正在处理…", topicId);
     const showThinking =
       this.orchestrator.router.getBinding(chatId, topicId).showThinking ?? true;
-    const { present } = createFeishuStreamPresenter({ showThinking });
-    let output = "";
+    const projector = createChannelStreamProjector({ showThinking });
     const events = this.orchestrator.runAgent(chatId, topicId, prompt);
     for await (const event of events) {
       if (event.type === "permission_request") {
@@ -555,10 +554,9 @@ export class TelegramBridge {
         );
         continue;
       }
-      const part = present(event);
-      if (part) output += part.text;
+      projector.apply(event);
     }
-    const chunks = chunkTelegramText(output.trim() || "（本次无输出）");
+    const chunks = chunkTelegramText(projector.snapshot().finalText);
     try {
       await this.api.editMessage(chatId, pending.message_id, chunks[0]!);
     } catch {
