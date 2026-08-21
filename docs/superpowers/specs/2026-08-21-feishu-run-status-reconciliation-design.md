@@ -1,6 +1,6 @@
 # 飞书运行状态对账与重连恢复设计
 
-- Status: Proposed — pending user review
+- Status: Accepted for implementation
 - Date: 2026-08-21
 - Scope: 飞书运行卡片的事实源对账、断流展示、WebSocket 重连、Bridge 重启恢复和 Delivery 终态闭环
 - Amends: `docs/superpowers/specs/2026-08-21-feishu-persistent-run-status-design.md`
@@ -187,6 +187,10 @@ interface ChannelDeliveryRunSnapshot {
   sessionQueueState: "ready" | "paused";
 }
 ```
+
+该快照作为 `ChannelDeliveryRow.runSnapshot: ChannelDeliveryRunSnapshot | null`
+返回；没有关联 Run 的 pending Delivery 返回 `null`。字段不平铺到 Delivery，
+避免把 Delivery 状态和 Runtime Run 状态混成一个状态机。
 
 `listDeliveries(channel)` 通过 `channel_turn_delivery LEFT JOIN runs LEFT JOIN session_runtime` 返回快照。不增加数据库列，不改变 Run 状态机。
 
@@ -426,6 +430,10 @@ flowchart LR
 - 增加 single-flight/coalescing；
 - disconnect 时释放 timer。
 
+对账只覆盖已接入 `ChannelSessionIngress` 的生产 SessionWatcher 主路径；
+`streamAgentReply` legacy fallback 不新增第二套对账循环，只保留回归测试，避免
+同一 Run 被两套轮询器同时接管。
+
 ### FRSR-4：Run/Transport 分离展示
 
 - SessionWatcher 接收权威 Run 快照；
@@ -441,6 +449,10 @@ flowchart LR
 - patch 失败保留 Delivery 并重试；
 - card invalid 时保留 Delivery、停止高频重试并告警；
 - 写入成功后才 complete Delivery。
+
+永久失效卡片的重试抑制是 Bridge 进程内、按 `surfaceMessageId` 记录，并且每个
+进程只输出一次结构化告警。Bridge 重启后允许重新探测一次；由于本轮明确不新增
+数据库列或 durable outbox，不能把该抑制描述为跨重启持久化或 exactly-once。
 
 ### FRSR-6：Surface Matrix 门禁与发布验证
 
@@ -514,3 +526,16 @@ GitNexus 影响分析结果：
 - 不新增数据库列；
 - 不扩展本轮到 Telegram 新 UI；
 - 本文通过审查后再编写逐步实施计划，不在 spec 审查阶段修改业务代码。
+
+## 19. 审查归一记录（2026-08-21）
+
+- 已逐项核对生产代码：恢复路径无条件创建 `running`、15 秒 timer 只重绘、
+  `reconnected` 只记日志、Delivery 未联表 Run，均与根因描述一致；
+- `FeishuRunCard.finalize()` 虽会等待 writer flush，但 writer 当前可能吞掉写卡失败，
+  随后 watcher 仍完成 Delivery；FRSR-5 必须让 terminal write 失败可观察并阻止
+  `completeDelivery`；
+- `ChannelDeliveryRow` 使用嵌套 nullable `runSnapshot`，Telegram 只做类型兼容回归；
+- 对账循环只属于 Bridge 生产 SessionWatcher 主路径，不复制到 legacy fallback；
+- 永久 card invalid 只做进程内抑制和一次告警，跨重启持久抑制留给未来 durable
+  outbox/receipt 设计；
+- 本文状态改为 `Accepted for implementation`，可以据此拆解 FRSR 实施计划。
