@@ -717,6 +717,6 @@ pnpm build
 
 P0A 合入后再分别编写：
 
-1. **P0B — 三通道结构化结果回流：** watcher 消费 Run snapshot、step success/failure、artifact、verification 和 Runtime approval；保持 Bridge 领域事件为唯一来源。
+1. **P0B — 三表面结构化结果回流：** Web 当前 `SessionTimeline` 完成 Runtime approval 卡片、现有 approve/reject API 接入和 granted/rejected 终态闭合；飞书/Telegram watcher 只读展示 Runtime approval，并消费 Run snapshot、step success/failure、artifact 和 verification。三个表面保持 Bridge 领域事件为唯一来源；通道“前往 Web”提示不得早于 Web 可操作入口交付。实施依据见 [2026-08-21-flow-p0b-structured-return-design.md](../specs/2026-08-21-flow-p0b-structured-return-design.md)。
 2. **P1 — Web 创作与审查闭环：** 成功 Run → Candidate（必须有 provenance/lineage）→ Dry-run → Review → Published；届时再决定 lineage 使用同一 `flow_id` 还是 parent 指针。
 3. **P1 Channel UI — 飞书/Telegram 消费交互：** `view=consume` 列表、选择、补参、确认、显式 invocation。只实现 adapter 和权限映射，不复制 Catalog/Review/Runtime 逻辑。
