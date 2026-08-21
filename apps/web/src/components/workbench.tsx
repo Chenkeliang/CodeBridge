@@ -27,6 +27,7 @@ import type {
   ConfigOption,
   FlowRecord,
   FlowCapability,
+  FlowProposal,
   FlowReviewContext,
   MessageAttachmentInput,
   WorkspaceListing,
@@ -67,6 +68,8 @@ export function Workbench() {
   const [flowControlBusy, setFlowControlBusy] = useState(false);
   const [flowControlError, setFlowControlError] = useState<string | null>(null);
   const [savingCandidateRunId, setSavingCandidateRunId] = useState<string | null>(null);
+  const [flowProposals, setFlowProposals] = useState<FlowProposal[]>([]);
+  const [savingGuideRunId, setSavingGuideRunId] = useState<string | null>(null);
   const [flowMismatch, setFlowMismatch] = useState<FlowRevisionMismatch | null>(null);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
   const [approvalStatusOverrides, setApprovalStatusOverrides] = useState<Record<string, RuntimeApprovalStatus>>({});
@@ -104,6 +107,9 @@ export function Workbench() {
     openSession: api.openSession,
   }), []);
   const sessionView = useSessionView(selectedSessionId);
+  const proposalRunKey = sessionView?.snapshot.timeline.turns
+    .map((turn) => `${turn.run_id}:${turn.status}`)
+    .join("|") ?? "";
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
@@ -303,6 +309,23 @@ export function Workbench() {
       sessionConnection.close();
     };
   }, [selectedSessionId, sessionConnection]);
+
+  useEffect(() => {
+    let active = true;
+    if (!selectedSessionId) {
+      queueMicrotask(() => {
+        if (active) setFlowProposals([]);
+      });
+      return () => { active = false; };
+    }
+    const sessionId = selectedSessionId;
+    void api.flowProposals(sessionId).then((proposals) => {
+      if (active) setFlowProposals(proposals);
+    }).catch(() => {
+      if (active) setFlowProposals([]);
+    });
+    return () => { active = false; };
+  }, [proposalRunKey, selectedSessionId]);
 
   const [stuckToBottom, setStuckToBottom] = useState(true);
   const sessionSwitch = useRef(true);
@@ -511,6 +534,21 @@ export function Workbench() {
       notify(messageOf(caught), "error");
     } finally {
       setSavingCandidateRunId(null);
+    }
+  }
+
+  async function createGuideFromRun(runId: string): Promise<void> {
+    if (!selectedSessionId || savingGuideRunId) return;
+    setSavingGuideRunId(runId);
+    setFlowControlError(null);
+    try {
+      const guide = await api.saveGuide(selectedSessionId, runId);
+      await refreshFlowCatalog(guide.flow_id);
+      notify(`已整理为 Guide 草稿 · ${guide.name || guide.flow_id}`);
+    } catch (caught) {
+      notify(messageOf(caught), "error");
+    } finally {
+      setSavingGuideRunId(null);
     }
   }
 
@@ -1205,9 +1243,12 @@ export function Workbench() {
                     onLoadEarlier={() => void loadEarlierTimeline()}
                     onLoadSegments={(blockId, after) => void loadBlockSegments(blockId, after)}
                     onCreateCandidate={(runId) => { void createCandidateFromRun(runId); }}
+                    flowProposals={flowProposals}
+                    onCreateGuide={(runId) => { void createGuideFromRun(runId); }}
                     onResolveApproval={(action, approve) => void resolveRuntimeApproval(action, approve)}
                     resolvingApprovalId={resolvingApprovalId}
                     savingCandidateRunId={savingCandidateRunId}
+                    savingGuideRunId={savingGuideRunId}
                     solidifiableFlowIds={flows
                       .filter((flow) => flow.kind === "runbook" && flow.status === "published")
                       .map((flow) => flow.flow_id)}

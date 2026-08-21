@@ -14,6 +14,7 @@ import {
 import { formatElapsed } from "@/components/workbench-shared";
 import { revisionTail } from "@/lib/revision-tail";
 import type {
+  FlowProposal,
   TimelineBlockView,
   TimelineSegmentView,
   TimelineTurnView,
@@ -34,6 +35,9 @@ export function SessionTimeline(props: {
   solidifiableFlowIds?: string[];
   savingCandidateRunId?: string | null;
   onCreateCandidate?: (runId: string) => void;
+  flowProposals?: FlowProposal[];
+  savingGuideRunId?: string | null;
+  onCreateGuide?: (runId: string) => void;
 }) {
   const timelineRoot = useRef<HTMLDivElement | null>(null);
   const seenSegmentIds = useRef<Set<string> | null>(null);
@@ -84,6 +88,10 @@ export function SessionTimeline(props: {
     </Button>}
     {props.turns.map((turn) => {
       const liveBlockId = liveProcessBlockId(turn, props.activeRunId);
+      const guideProposal = props.flowProposals?.find((proposal) =>
+        proposal.run_id === turn.run_id && proposal.saveable && proposal.guide
+      ) ?? null;
+      const guide = guideProposal?.guide ?? null;
       return <article className="grid gap-4" data-timeline-turn={turn.turn_id} key={turn.turn_id}>
         {groupProcessBlocks(turn.blocks).map((item) => item.kind === "group"
           ? <ProcessBlock
@@ -108,6 +116,23 @@ export function SessionTimeline(props: {
               onCreateCandidate={props.onCreateCandidate}
               runId={turn.run_id}
             />)}
+        {guideProposal && guide && <div className="ml-auto flex max-w-[780px] items-center gap-3 rounded-lg border border-line bg-surface-soft px-3.5 py-3 text-xs text-muted">
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-ink">可整理为 Guide · {guide.name}</div>
+            <div className="mt-1 truncate">
+              {guideProposal.kind === "structured_plan" ? "基于 Agent 计划" : "基于工具轨迹，需人工整理"}
+            </div>
+          </div>
+          <Button
+            disabled={props.savingGuideRunId === turn.run_id}
+            onClick={() => props.onCreateGuide?.(turn.run_id)}
+            size="sm"
+            variant="outline"
+          >
+            {props.savingGuideRunId === turn.run_id ? <LoaderCircle className="size-3.5 animate-spin" /> : <Workflow className="size-3.5" />}
+            整理为 Guide
+          </Button>
+        </div>}
       </article>;
     })}
   </div>;
