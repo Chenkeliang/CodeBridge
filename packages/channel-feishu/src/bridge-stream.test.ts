@@ -722,7 +722,8 @@ describe("FeishuBridge streaming", () => {
     expect(rendered).toContain("工具执行：Bash");
     expect(rendered).not.toContain("内部思考内容不能展示");
     await vi.advanceTimersByTimeAsync(FEISHU_LIVE_STATUS_QUIET_MS);
-    expect(rendered).toContain("任务连接保持");
+    expect(rendered).toContain("任务运行中 · 暂无新事件");
+    expect(rendered).not.toContain("任务连接保持");
     expect(rendered).not.toContain("内部思考内容不能展示");
 
     releaseAgent();

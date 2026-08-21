@@ -54,6 +54,11 @@ describe("channel turn delivery", () => {
     const { store, coordinator } = setup();
     const first = submitWithDelivery(coordinator, "m1", "一");
     expect(first.acceptance).toBe("dispatched");
+    store.updateRunControl(first.run!.id, {
+      status: "running",
+      leaseOwner: "runner-1",
+      leaseExpiresAt: "2026-08-14T00:01:00.000Z",
+    });
 
     const deliveries = store.listDeliveries("feishu");
     expect(deliveries).toHaveLength(1);
@@ -65,6 +70,15 @@ describe("channel turn delivery", () => {
       replyToMessageId: "msg_m1",
       runId: first.run?.id,
       status: "dispatched",
+      runSnapshot: {
+        status: "running",
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
+        leaseExpiresAt: "2026-08-14T00:01:00.000Z",
+        terminalReason: null,
+        sessionActiveRunId: first.run?.id,
+        sessionQueueState: "ready",
+      },
     });
     store.close();
   });
@@ -77,7 +91,11 @@ describe("channel turn delivery", () => {
 
     const deliveries = store.listDeliveries("feishu");
     const queued = deliveries.find((d) => d.turnId === second.turn.turnId);
-    expect(queued).toMatchObject({ runId: null, status: "pending" });
+    expect(queued).toMatchObject({
+      runId: null,
+      status: "pending",
+      runSnapshot: null,
+    });
     store.close();
   });
 
@@ -93,6 +111,12 @@ describe("channel turn delivery", () => {
     const delivery = store.listDeliveries("feishu")[0];
     expect(delivery.runTerminalAt).toBe(NOW);
     expect(delivery.status).toBe("dispatched");
+    expect(delivery.runSnapshot).toMatchObject({
+      status: "succeeded",
+      terminalReason: null,
+      sessionActiveRunId: null,
+      sessionQueueState: "ready",
+    });
     store.close();
   });
 

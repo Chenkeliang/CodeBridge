@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig } from "@codebridge/core";
+import {
+  defaultConfig,
+  type ChannelSessionIngress,
+  type ChannelSessionEvent,
+} from "@codebridge/core";
 
 const channel = vi.hoisted(() => ({
   botIdentity: { name: "Test Bot" },
@@ -53,5 +57,77 @@ describe("FeishuBridge interrupted stream recovery", () => {
       "服务重启",
     );
     expect(JSON.parse(fs.readFileSync(pendingPath, "utf8"))).toEqual({});
+  });
+
+  it("restores a terminal Run card and completes only after terminal event replay", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-recovery-"));
+    const completeDelivery = vi.fn(async () => true);
+    const terminal: ChannelSessionEvent = {
+      type: "RUN_SUCCEEDED",
+      sequence: 9,
+      runId: "run_1",
+      occurredAt: new Date(5_000).toISOString(),
+      target: null,
+      resultRef: null,
+      payload: {},
+    };
+    const ingress = {
+      listDeliveries: vi.fn(async () => [{
+        turnId: "turn_1",
+        sessionId: "sess_1",
+        channel: "feishu",
+        conversationId: "chat-1|",
+        replyToMessageId: "source-1",
+        surfaceMessageId: "card-terminal",
+        claimOwner: "feishu:old:run_1",
+        claimExpiresAt: null,
+        acceptedSequence: 0,
+        runId: "run_1",
+        runTerminalAt: new Date(5_000).toISOString(),
+        status: "delivering" as const,
+        createdAt: new Date(1_000).toISOString(),
+        updatedAt: new Date(5_000).toISOString(),
+        runSnapshot: {
+          status: "succeeded" as const,
+          createdAt: new Date(1_000).toISOString(),
+          updatedAt: new Date(5_000).toISOString(),
+          leaseExpiresAt: null,
+          terminalReason: null,
+          sessionActiveRunId: null,
+          sessionQueueState: "ready" as const,
+        },
+      }]),
+      events: vi.fn(async function* (
+        _sessionId: string,
+        options: { signal: AbortSignal },
+      ) {
+        yield terminal;
+        await new Promise<void>((resolve) =>
+          options.signal.addEventListener("abort", () => resolve()),
+        );
+      }),
+      completeDelivery,
+    } as unknown as ChannelSessionIngress;
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir,
+      sessionIngress: ingress,
+    });
+
+    await bridge.connect();
+    const startedAt = Date.now();
+    while (completeDelivery.mock.calls.length === 0) {
+      if (Date.now() - startedAt > 2_000) throw new Error("completion timed out");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(JSON.stringify(channel.updateCard.mock.calls[0]?.[1])).toContain(
+      "✅ **已完成**",
+    );
+    expect(completeDelivery).toHaveBeenCalledWith(
+      "turn_1",
+      "feishu:old:run_1",
+    );
+    await bridge.disconnect();
   });
 });

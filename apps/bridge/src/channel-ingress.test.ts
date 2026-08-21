@@ -309,11 +309,37 @@ describe("channel session ingress", () => {
     const app = new Hono();
     app.get("/v1/deliveries", (c) => {
       expect(c.req.query("channel")).toBe("feishu");
-      return c.json({ deliveries: [{ turnId: "turn_1", status: "pending" }] });
+      return c.json({
+        deliveries: [{
+          turnId: "turn_1",
+          status: "delivering",
+          runSnapshot: {
+            status: "succeeded",
+            createdAt: "2026-08-21T00:00:00.000Z",
+            updatedAt: "2026-08-21T00:00:05.000Z",
+            leaseExpiresAt: null,
+            terminalReason: null,
+            sessionActiveRunId: null,
+            sessionQueueState: "ready",
+          },
+        }],
+      });
     });
     const ingress = createChannelSessionIngress(app, "token");
     const deliveries = await ingress.listDeliveries("feishu");
-    expect(deliveries).toEqual([{ turnId: "turn_1", status: "pending" }]);
+    expect(deliveries).toEqual([{
+      turnId: "turn_1",
+      status: "delivering",
+      runSnapshot: {
+        status: "succeeded",
+        createdAt: "2026-08-21T00:00:00.000Z",
+        updatedAt: "2026-08-21T00:00:05.000Z",
+        leaseExpiresAt: null,
+        terminalReason: null,
+        sessionActiveRunId: null,
+        sessionQueueState: "ready",
+      },
+    }]);
   });
 
   it("throws on a non-2xx delivery claim instead of returning false", async () => {
