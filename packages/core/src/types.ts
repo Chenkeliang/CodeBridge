@@ -189,7 +189,9 @@ export interface ChannelSessionEvent {
   type: string;
   sequence: number;
   runId: string | null;
+  occurredAt: string | null;
   target: string | null;
+  resultRef: string | null;
   payload: Record<string, unknown>;
 }
 

@@ -4,6 +4,10 @@ import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { CommandPalette } from "@/components/command-palette";
 import { Composer } from "@/components/composer";
 import { LoadingConversation } from "@/components/conversation";
+import type {
+  RuntimeApprovalAction,
+  RuntimeApprovalStatus,
+} from "@/components/runtime-approval-card";
 import { SessionQueue } from "@/components/session-queue";
 import { SessionTimeline } from "@/components/session-timeline";
 import { FlowDetail } from "@/components/flow-detail";
@@ -56,6 +60,8 @@ export function Workbench() {
   const [pendingFlowId, setPendingFlowId] = useState("");
   const [detailFlow, setDetailFlow] = useState<FlowRecord | null>(null);
   const [flowMismatch, setFlowMismatch] = useState<FlowRevisionMismatch | null>(null);
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
+  const [approvalStatusOverrides, setApprovalStatusOverrides] = useState<Record<string, RuntimeApprovalStatus>>({});
   const [paramValues, setParamValues] = useState<Record<string, unknown>>({});
   const [missingInputs, setMissingInputs] = useState<Array<{
     id: string; type: string; source: string; reason: string;
@@ -116,7 +122,18 @@ export function Workbench() {
   const speedOption = useMemo(() => configOptions.find(isSpeedOption), [configOptions]);
   const permissionOption = useMemo(() => configOptions.find(isPermissionOption), [configOptions]);
   const pendingFlow = consumableFlows.find((flow) => flow.flow_id === pendingFlowId) ?? null;
-
+  const waitingRuntimeApprovals = useMemo(() =>
+    sessionView?.snapshot.timeline.turns.flatMap((turn) =>
+      turn.blocks.flatMap((block) => {
+        const approvalId = typeof block.metadata.approval_id === "string"
+          ? block.metadata.approval_id
+          : null;
+        return block.kind === "approval" && block.status === "waiting" && approvalId
+          ? [{ runId: turn.run_id, approvalId }]
+          : [];
+      }),
+    ) ?? [],
+  [sessionView?.snapshot.timeline.turns]);
   const notify = useCallback((message: string, kind: "info" | "error" = "info") => {
     setNotice({ text: message, kind });
     window.setTimeout(() => setNotice((current) => current?.text === message ? null : current), 4000);
@@ -163,6 +180,32 @@ export function Workbench() {
 
   useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
   useEffect(() => { selectedSessionRef.current = selectedSessionId; }, [selectedSessionId]);
+
+  useEffect(() => {
+    let active = true;
+    if (!selectedSessionId || !waitingRuntimeApprovals.length) {
+      queueMicrotask(() => {
+        if (active) setApprovalStatusOverrides({});
+      });
+      return () => { active = false; };
+    }
+    const byRun = new Map<string, string[]>();
+    for (const approval of waitingRuntimeApprovals) {
+      byRun.set(approval.runId, [...(byRun.get(approval.runId) ?? []), approval.approvalId]);
+    }
+    void Promise.all(Array.from(byRun, async ([runId, approvalIds]) => {
+      const records = await api.approvals(runId).catch(() => []);
+      return records.filter((record) =>
+        approvalIds.includes(record.id) && record.status === "expired"
+      );
+    })).then((groups) => {
+      if (!active) return;
+      setApprovalStatusOverrides(Object.fromEntries(
+        groups.flat().map((record) => [record.id, "expired" as const]),
+      ));
+    });
+    return () => { active = false; };
+  }, [selectedSessionId, waitingRuntimeApprovals]);
 
   useEffect(() => {
     window.localStorage.setItem("codebridge:web-theme", theme);
@@ -363,6 +406,37 @@ export function Workbench() {
       if (selectedSessionId) await sessionConnection.refresh(selectedSessionId);
     } catch (caught) {
       notify(messageOf(caught), "error");
+    }
+  }
+
+  async function resolveRuntimeApproval(
+    action: RuntimeApprovalAction,
+    approve: boolean,
+  ): Promise<void> {
+    if (!selectedSessionId || resolvingApprovalId) return;
+    setResolvingApprovalId(action.approvalId);
+    try {
+      if (approve) await api.approve(action.runId, action.approvalId);
+      else await api.reject(action.runId, action.approvalId);
+      setApprovalStatusOverrides((current) => {
+        const next = { ...current };
+        delete next[action.approvalId];
+        return next;
+      });
+      await sessionConnection.refresh(selectedSessionId);
+    } catch (caught) {
+      await sessionConnection.refresh(selectedSessionId).catch(() => {});
+      const records = await api.approvals(action.runId).catch(() => []);
+      const current = records.find((record) => record.id === action.approvalId);
+      if (current?.status === "expired") {
+        setApprovalStatusOverrides((value) => ({
+          ...value,
+          [action.approvalId]: "expired",
+        }));
+      }
+      notify(messageOf(caught), "error");
+    } finally {
+      setResolvingApprovalId(null);
     }
   }
 
@@ -997,12 +1071,15 @@ export function Workbench() {
                 {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
                   <SessionTimeline
                     activeRunId={sessionView.snapshot.runtime.active_run?.run_id ?? null}
+                    approvalStatusOverrides={approvalStatusOverrides}
                     hasEarlier={sessionView.snapshot.timeline.previous_cursor !== null}
                     key={selectedSessionId}
                     loadingBlockId={loadingBlockId}
                     loadingEarlier={loadingEarlier}
                     onLoadEarlier={() => void loadEarlierTimeline()}
                     onLoadSegments={(blockId, after) => void loadBlockSegments(blockId, after)}
+                    onResolveApproval={(action, approve) => void resolveRuntimeApproval(action, approve)}
+                    resolvingApprovalId={resolvingApprovalId}
                     turns={sessionView.snapshot.timeline.turns}
                   />
                 ) : <div aria-label="Empty Session" className="flex min-h-[42vh] flex-col items-center justify-center text-center">

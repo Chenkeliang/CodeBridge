@@ -48,11 +48,20 @@ export function projectSessionEvent(
         database,
         sessionId,
         event,
-        `approval:${event.target}`,
+        approvalBlockId(event),
         "approval",
         "waiting",
-        event.payload,
+        {
+          ...event.payload,
+          capability_id: event.target,
+        },
       );
+      break;
+    case "APPROVAL_GRANTED":
+      updateApprovalBlock(database, event, "granted");
+      break;
+    case "APPROVAL_REJECTED":
+      updateApprovalBlock(database, event, "rejected");
       break;
     case "RUN_SUCCEEDED":
       closeRun(database, event, "succeeded");
@@ -158,8 +167,6 @@ export function projectSessionEvent(
     case "PROJECT_CANDIDATE_FOUND":
     case "ARTIFACT_CREATED":
     case "VERIFICATION_COMPLETED":
-    case "APPROVAL_GRANTED":
-    case "APPROVAL_REJECTED":
     case "WORK_ITEM_COMPLETED":
     // 迁移/水合/学习信号事件：绑定前写下的历史事件会经 backfillSessionProjection
     // 走投影，显式 no-op（否则回放命中 default 会打挂迁移）。
@@ -720,6 +727,61 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function targetOf(event: DomainEvent): string {
   return typeof event.target === "string" ? event.target : "";
+}
+
+function approvalIdOf(event: DomainEvent): string {
+  const approvalId = asRecord(event.payload).approval_id;
+  if (typeof approvalId !== "string" || !approvalId) {
+    throw new Error(`Approval event missing approval_id: ${event.eventId}`);
+  }
+  return approvalId;
+}
+
+function approvalBlockId(event: DomainEvent): string {
+  return `approval:${approvalIdOf(event)}`;
+}
+
+function updateApprovalBlock(
+  database: DatabaseSync,
+  event: DomainEvent,
+  status: "granted" | "rejected",
+): void {
+  const preferredBlockId = approvalBlockId(event);
+  const legacyBlockId = event.target ? `approval:${event.target}` : null;
+  const candidates = legacyBlockId
+    ? [preferredBlockId, legacyBlockId]
+    : [preferredBlockId];
+  let blockId: string | null = null;
+  let metadata: Record<string, unknown> = {};
+  for (const candidate of candidates) {
+    const row = database
+      .prepare(
+        `SELECT metadata_json FROM session_timeline_blocks
+         WHERE block_id = ?`,
+      )
+      .get(candidate) as { metadata_json?: string } | undefined;
+    if (!row) continue;
+    blockId = candidate;
+    metadata = JSON.parse(row.metadata_json ?? "{}") as Record<string, unknown>;
+    break;
+  }
+  if (!blockId) return;
+  database
+    .prepare(
+      `UPDATE session_timeline_blocks
+       SET status = ?, metadata_json = ?
+       WHERE block_id = ?`,
+    )
+    .run(
+      status,
+      JSON.stringify(boundMetadata({
+        ...metadata,
+        ...event.payload,
+        capability_id: event.target ?? metadata.capability_id ?? null,
+        resolved_at: event.occurredAt,
+      })),
+      blockId,
+    );
 }
 
 function resolveFlowTurn(

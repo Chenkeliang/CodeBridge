@@ -5,8 +5,12 @@ import type {
   ChannelSessionIngress,
 } from "@codebridge/core";
 import {
+  createChannelFlowProjector,
   createChannelStreamProjector,
   formatElapsed,
+  renderChannelFlowFinal,
+  renderChannelFlowLive,
+  type ChannelFlowProjector,
   type ChannelStreamProjector,
 } from "@codebridge/router";
 import { CoalescingCardWriter } from "./coalescing-card-writer.js";
@@ -51,6 +55,26 @@ function markdownCard(content: string): object {
 
 type CardSnapshot = { content: string; statusOnly: boolean };
 
+function isStructuredFlowEvent(type: string): boolean {
+  return type === "STEP_STARTED"
+    || type === "STEP_SUCCEEDED"
+    || type === "STEP_FAILED"
+    || type === "STEP_RETRYING"
+    || type === "STEP_SKIPPED"
+    || type === "ARTIFACT_CREATED"
+    || type === "VERIFICATION_FAILED"
+    || type === "RUN_SNAPSHOT"
+    || type === "APPROVAL_REQUESTED"
+    || type === "APPROVAL_GRANTED"
+    || type === "APPROVAL_REJECTED";
+}
+
+function composeFeishuRunBody(agentText: string, flowText: string): string {
+  return [agentText || undefined, flowText || undefined]
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n---\n\n");
+}
+
 function terminalStateForEvent(
   type: ChannelSessionEvent["type"],
 ): Exclude<FeishuRunState, "running"> | undefined {
@@ -71,6 +95,7 @@ function terminalStateForEvent(
 /** 一个 Run 的飞书流式卡片。开卡后由 watcher 喂 AgentEvent，终态时 finalize。 */
 export class FeishuRunCard {
   private readonly projector: ChannelStreamProjector;
+  private readonly flowProjector: ChannelFlowProjector;
   private readonly runStatus: FeishuRunStatus;
   private readonly abortController: AbortController;
   private readonly cardDone: Promise<void>;
@@ -99,6 +124,7 @@ export class FeishuRunCard {
       showThinking,
       maxProgressChars: FEISHU_LIVE_PROGRESS_CHARS,
     });
+    this.flowProjector = createChannelFlowProjector();
     this.runStatus = createFeishuRunStatus();
     this.abortController = new AbortController();
     this.cardDone = new Promise<void>((resolve) => { this.cardDoneResolve = resolve; });
@@ -153,9 +179,16 @@ export class FeishuRunCard {
           this.queueRender = (statusOnly: boolean): void => {
             const status = renderFeishuRunStatus(this.runStatus);
             const snapshot = this.projector.snapshot();
-            const body = this.runStatus.state === "running"
+            const flowSnapshot = this.flowProjector.snapshot();
+            const flowText = this.runStatus.state === "running"
+              ? renderChannelFlowLive(flowSnapshot)
+              : renderChannelFlowFinal(flowSnapshot);
+            const agentText = this.runStatus.state === "running"
               ? snapshot.liveText
-              : snapshot.finalText;
+              : flowText && !snapshot.result.trim()
+                ? ""
+                : snapshot.finalText;
+            const body = composeFeishuRunBody(agentText, flowText);
             this.writer?.enqueue({
               content: status && body ? `${status}\n\n---\n\n${body}` : status || body,
               statusOnly,
@@ -245,6 +278,15 @@ export class FeishuRunCard {
     this.queueRender(previous === next.liveText);
   }
 
+  async onDomainEvent(event: ChannelSessionEvent): Promise<void> {
+    await this.ready;
+    if (this.abortController.signal.aborted || !isStructuredFlowEvent(event.type)) return;
+    const previous = renderChannelFlowLive(this.flowProjector.snapshot());
+    const next = this.flowProjector.apply(event);
+    const current = renderChannelFlowLive(next);
+    this.queueRender(previous === current);
+  }
+
   async finalize(
     terminalState: Exclude<FeishuRunState, "running">,
   ): Promise<void> {
@@ -295,6 +337,7 @@ export class FeishuSessionWatcher {
     {
       surfaceMessageId: string;
       projector: ChannelStreamProjector;
+      flowProjector: ChannelFlowProjector;
       runStatus: FeishuRunStatus;
       timer: NodeJS.Timeout;
     }
@@ -351,6 +394,7 @@ export class FeishuSessionWatcher {
         showThinking,
         maxProgressChars: FEISHU_LIVE_PROGRESS_CHARS,
       }),
+      flowProjector: createChannelFlowProjector(),
       runStatus,
       timer,
     });
@@ -360,14 +404,22 @@ export class FeishuSessionWatcher {
   private resumedCardBody(
     resumed: {
       projector: ChannelStreamProjector;
+      flowProjector: ChannelFlowProjector;
       runStatus: FeishuRunStatus;
     },
   ): object {
     const status = renderFeishuRunStatus(resumed.runStatus);
     const snapshot = resumed.projector.snapshot();
-    const body = resumed.runStatus.state === "running"
+    const flowSnapshot = resumed.flowProjector.snapshot();
+    const flowText = resumed.runStatus.state === "running"
+      ? renderChannelFlowLive(flowSnapshot)
+      : renderChannelFlowFinal(flowSnapshot);
+    const agentText = resumed.runStatus.state === "running"
       ? snapshot.liveText
-      : snapshot.finalText;
+      : flowText && !snapshot.result.trim()
+        ? ""
+        : snapshot.finalText;
+    const body = composeFeishuRunBody(agentText, flowText);
     const markdown = status && body
       ? `${status}\n\n---\n\n${body}`
       : status || body || "（运行中）";
@@ -459,6 +511,19 @@ export class FeishuSessionWatcher {
         await card.onAgentEvent(agentEvent);
       }
       return;
+    }
+    if (isStructuredFlowEvent(event.type) && event.runId) {
+      const card = this.cards.get(event.runId);
+      if (card) await card.onDomainEvent(event);
+      const resumed = this.resumedCards.get(event.runId);
+      if (resumed) {
+        resumed.flowProjector.apply(event);
+        await this.host.updateCard(
+          resumed.surfaceMessageId,
+          this.resumedCardBody(resumed),
+        );
+      }
+      if (event.type !== "STEP_FAILED") return;
     }
     if (event.type === "STEP_FAILED" && event.runId) {
       const message = String(

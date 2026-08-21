@@ -455,6 +455,61 @@ describe("SessionTimeline", () => {
     host.remove();
   });
 
+  it("renders and resolves a Runtime approval on the active timeline", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onResolveApproval = vi.fn();
+    const approvalTurn: TimelineTurnView = {
+      timeline_index: 0,
+      turn_id: "turn-1",
+      run_id: "run-1",
+      status: "waiting",
+      blocks: [{
+        block_id: "approval:approval_1",
+        block_index: 0,
+        kind: "approval",
+        status: "waiting",
+        metadata: {
+          approval_id: "approval_1",
+          step_id: "deploy",
+          capability_id: "deploy.production",
+          environment: "production",
+          target_resource: "service/demo",
+          expires_at: "2026-08-21T12:00:00.000Z",
+        },
+        segments: [],
+        next_segment_cursor: null,
+      }],
+    };
+
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      onResolveApproval={onResolveApproval}
+      turns={[approvalTurn]}
+    />));
+    expect(host.textContent).toContain("Runtime 步骤需要审批");
+    expect(host.textContent).toContain("deploy.production");
+    const approve = Array.from(host.querySelectorAll("button"))
+      .find((button) => button.textContent === "允许一次");
+    act(() => approve?.click());
+    expect(onResolveApproval).toHaveBeenCalledWith({
+      runId: "run-1",
+      approvalId: "approval_1",
+    }, true);
+
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      approvalStatusOverrides={{ approval_1: "expired" }}
+      onResolveApproval={onResolveApproval}
+      turns={[approvalTurn]}
+    />));
+    expect(host.textContent).toContain("审批已过期");
+    expect(Array.from(host.querySelectorAll("button"))
+      .some((button) => button.textContent === "允许一次")).toBe(false);
+    act(() => root.unmount());
+    host.remove();
+  });
+
   it("renders a verification failure with category and truncated mark", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { DatabaseSync } from "node:sqlite";
 import { SqliteEventStore, type DomainEventType } from "./index.js";
 
 function setup() {
@@ -40,6 +41,10 @@ function seedDispatchedTurn(
       workflowRevision: null,
     });
   });
+}
+
+function rawDatabase(store: SqliteEventStore): DatabaseSync {
+  return (store as unknown as { database: DatabaseSync }).database;
 }
 
 describe("Session projector", () => {
@@ -364,6 +369,7 @@ describe("Session projector", () => {
       type: "APPROVAL_GRANTED",
       actor: "user",
       target: "run.production",
+      payload: { approval_id: "approval_1", step_id: "run" },
     });
     // no-op 事件不抛错，且后续投影继续可用（cursor 前进）。
     store.appendEvent({
@@ -376,6 +382,95 @@ describe("Session projector", () => {
       .listTimelineTurns("sess_1", { limit: 50 })
       .turns[0]!;
     expect(turn.status).toBe("succeeded");
+    store.close();
+  });
+
+  it("projects a Runtime approval request and closes it when granted", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "APPROVAL_REQUESTED",
+      actor: "system",
+      target: "deploy.production",
+      payload: {
+        approval_id: "approval_1",
+        step_id: "deploy",
+        environment: "production",
+        target_resource: "service/demo",
+        expires_at: "2026-08-21T12:00:00.000Z",
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "APPROVAL_GRANTED",
+      actor: "user",
+      target: "deploy.production",
+      payload: {
+        approval_id: "approval_1",
+        step_id: "deploy",
+        granted_by: "user",
+      },
+    });
+
+    const approvals = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.filter((block) => block.kind === "approval");
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      blockId: "approval:approval_1",
+      status: "granted",
+      metadata: expect.objectContaining({
+        approval_id: "approval_1",
+        step_id: "deploy",
+        capability_id: "deploy.production",
+        environment: "production",
+        target_resource: "service/demo",
+        granted_by: "user",
+      }),
+    });
+    store.close();
+  });
+
+  it("closes an approval as rejected and supports the legacy capability key", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "APPROVAL_REQUESTED",
+      actor: "system",
+      target: "deploy.production",
+      payload: { approval_id: "approval_1", step_id: "deploy" },
+    });
+    rawDatabase(store)
+      .prepare("UPDATE session_timeline_blocks SET block_id = ? WHERE block_id = ?")
+      .run("approval:deploy.production", "approval:approval_1");
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "APPROVAL_REJECTED",
+      actor: "user",
+      target: "deploy.production",
+      payload: {
+        approval_id: "approval_1",
+        step_id: "deploy",
+        rejected_by: "user",
+      },
+    });
+
+    const approvals = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.filter((block) => block.kind === "approval");
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      blockId: "approval:deploy.production",
+      status: "rejected",
+      metadata: expect.objectContaining({
+        approval_id: "approval_1",
+        rejected_by: "user",
+      }),
+    });
     store.close();
   });
 

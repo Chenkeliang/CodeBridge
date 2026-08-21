@@ -75,6 +75,28 @@ function snapshotResponse(sessionId: string): SessionCompositeSnapshot {
 }
 
 describe("workbench API client", () => {
+  it("uses the existing Runtime approval query and write contracts", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ approvals: [{ id: "approval_1", status: "requested" }] }))
+      .mockResolvedValueOnce(Response.json({ approval_id: "approval_1", status: "granted" }))
+      .mockResolvedValueOnce(Response.json({ approval_id: "approval_1", status: "revoked" }));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.approvals("run_1");
+    await api.approve("run_1", "approval_1");
+    await api.reject("run_1", "approval_1");
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("/v1/runs/run_1/approvals");
+    expect(fetch.mock.calls[1]).toEqual([
+      "/v1/runs/run_1/approve",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ approval_id: "approval_1" }) }),
+    ]);
+    expect(fetch.mock.calls[2]).toEqual([
+      "/v1/runs/run_1/reject",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ approval_id: "approval_1" }) }),
+    ]);
+  });
+
   it("can request archived Sessions for the archive view", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ sessions: [] }));
     vi.stubGlobal("fetch", fetch);
