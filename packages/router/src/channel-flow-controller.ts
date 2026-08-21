@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type {
   ChannelConsumableFlow,
   ChannelFlowInput,
+  ChannelFlowReviewSummary,
+  ChannelManageableFlow,
   ChannelRuntimeApproval,
 } from "@codebridge/core";
 
@@ -25,6 +27,12 @@ export interface ChannelFlowCommandInput {
   scopeKey: string;
   text: string;
   listFlows(): Promise<ChannelConsumableFlow[]>;
+  getSessionId(): Promise<string | null>;
+  listManageableFlows?(): Promise<ChannelManageableFlow[]>;
+  saveLatestGuide?(sessionId: string): Promise<ChannelManageableFlow>;
+  getFlowReviewSummary?(flowId: string): Promise<ChannelFlowReviewSummary>;
+  updateCandidateSummary?(flowId: string, patch: { name?: string; description?: string }): Promise<ChannelManageableFlow>;
+  rejectCandidate?(flowId: string): Promise<ChannelManageableFlow>;
   getActiveRunId(): Promise<string | null>;
   listApprovals(runId: string): Promise<ChannelRuntimeApproval[]>;
   resolveApproval(
@@ -62,6 +70,56 @@ export class ChannelFlowController {
         || flow.flowId.toLowerCase().includes(query)
       );
       return { type: "reply", text: formatFlowList(flows, `搜索“${remainder}”`) };
+    }
+
+    if (lowerAction === "manage") {
+      if (!input.listManageableFlows) return managementUnavailable();
+      return { type: "reply", text: formatManageableFlows(await input.listManageableFlows()) };
+    }
+
+    if (lowerAction === "guide") {
+      if (remainder.toLowerCase() !== "save") {
+        return { type: "reply", text: "用法：/flow guide save" };
+      }
+      if (!input.saveLatestGuide) return managementUnavailable();
+      const sessionId = await input.getSessionId();
+      if (!sessionId) return { type: "reply", text: "当前话题尚未关联 Session，不能保存 Guide。" };
+      const saved = await input.saveLatestGuide(sessionId);
+      return { type: "reply", text: `已保存 Guide 草稿：${saved.name} (${saved.flowId})\n版本：${saved.definitionRevision}` };
+    }
+
+    if (lowerAction === "diff" || lowerAction === "review") {
+      if (!remainder) return { type: "reply", text: `用法：/flow ${lowerAction} <Flow ID>` };
+      if (!input.getFlowReviewSummary) return managementUnavailable();
+      const summary = await input.getFlowReviewSummary(remainder);
+      return { type: "reply", text: lowerAction === "diff" ? formatReviewSummary(summary) : formatReviewPrompt(summary) };
+    }
+
+    if (lowerAction === "edit") {
+      const [flowId = "", ...assignmentParts] = rest;
+      const assignment = assignmentParts.join(" ").trim();
+      const equals = assignment.indexOf("=");
+      const field = equals > 0 ? assignment.slice(0, equals).trim() : "";
+      const value = equals > 0 ? assignment.slice(equals + 1).trim() : "";
+      if (!flowId || !["name", "description"].includes(field) || !value) {
+        return { type: "reply", text: "用法：/flow edit <Flow ID> name=<名称> 或 description=<说明>" };
+      }
+      if (!input.updateCandidateSummary) return managementUnavailable();
+      const updated = await input.updateCandidateSummary(flowId, { [field]: value });
+      return { type: "reply", text: `已更新 Candidate：${updated.name}\n新版本：${updated.definitionRevision}` };
+    }
+
+    if (lowerAction === "reject" && remainder) {
+      if (!input.rejectCandidate) return managementUnavailable();
+      const rejected = await input.rejectCandidate(remainder);
+      return { type: "reply", text: `已打回 Candidate：${rejected.name} (${rejected.flowId})` };
+    }
+
+    if (lowerAction === "open") {
+      if (!remainder) return { type: "reply", text: "用法：/flow open <Flow ID>" };
+      const sessionId = await input.getSessionId();
+      const query = new URLSearchParams({ flow: remainder, ...(sessionId ? { session: sessionId } : {}) });
+      return { type: "reply", text: `在 Web Workbench 打开：/workbench/?${query.toString()}` };
     }
 
     if (lowerAction === "set") {
@@ -361,5 +419,39 @@ function flowHelp(): string {
     "/flow confirm — 显式执行一次",
     "/flow cancel — 取消选择",
     "/flow approve | reject — 处理当前 Runtime 步骤审批",
+    "/flow manage — 列出管理态 Flow",
+    "/flow guide save — 保存最近一次成功 Run 为 Guide",
+    "/flow diff | review | reject | open <Flow ID> — 管理 Candidate（批准发布仅限 Web）",
+    "/flow edit <Flow ID> name=<名称> — 编辑 Candidate 摘要",
+  ].join("\n");
+}
+
+function managementUnavailable(): ChannelFlowCommandResult {
+  return { type: "reply", text: "Flow 管理入口尚未就绪，请前往 Web Workbench。" };
+}
+
+function formatManageableFlows(flows: ChannelManageableFlow[]): string {
+  if (!flows.length) return "管理目录：暂无 Flow。";
+  return [
+    "Flow 管理目录：",
+    ...flows.map((flow, index) => `${index + 1}. [${flow.kind}/${flow.status}] ${flow.name} (${flow.flowId})`),
+  ].join("\n");
+}
+
+function formatReviewSummary(summary: ChannelFlowReviewSummary): string {
+  return [
+    `Flow Diff：${summary.flow.name} (${summary.flow.flowId})`,
+    `状态：${summary.flow.kind}/${summary.flow.status} · review ${summary.flow.reviewStatus ?? "pending"}`,
+    `变更：${summary.changedFields.length ? summary.changedFields.join("、") : "无"}`,
+    `来源 Run：${summary.provenance?.sourceRunId ?? "无"}`,
+    `Dry-run 成功证据：${summary.evidenceCount}`,
+    ...(summary.validationIssues.length ? [`校验问题：${summary.validationIssues.join("；")}`] : []),
+  ].join("\n");
+}
+
+function formatReviewPrompt(summary: ChannelFlowReviewSummary): string {
+  return [
+    formatReviewSummary(summary),
+    `Definition Review 已待处理。发送 /flow open ${summary.flow.flowId} 前往 Web 审查；通道不提供批准发布。`,
   ].join("\n");
 }

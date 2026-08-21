@@ -459,6 +459,15 @@ export class FeishuBridge {
           scopeKey: `feishu|${this.chatKey(msg.chatId, topicId)}|${msg.senderId}`,
           text: msg.content,
           listFlows: () => this.sessionIngress!.listConsumableFlows(),
+          getSessionId: async () => {
+            const context = await this.sessionIngress!.getSlotCommandContext(this.buildFullSlot(msg.chatId, topicId));
+            return context.sessionId;
+          },
+          listManageableFlows: this.sessionIngress.listManageableFlows,
+          saveLatestGuide: this.sessionIngress.saveLatestGuide,
+          getFlowReviewSummary: this.sessionIngress.getFlowReviewSummary,
+          updateCandidateSummary: this.sessionIngress.updateCandidateSummary,
+          rejectCandidate: this.sessionIngress.rejectCandidate,
           getActiveRunId: async () => {
             const context = await this.sessionIngress!.getSlotCommandContext(
               this.buildFullSlot(msg.chatId, topicId),

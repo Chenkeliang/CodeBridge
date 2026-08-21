@@ -11,6 +11,7 @@ import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
 import { compileWorkflow, definitionHash, validatePostcondition, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import type { SqliteEventStore } from "@codebridge/work-items";
+import type { DomainEvent } from "@codebridge/work-items";
 
 export interface FlowApiOptions {
   sessions?: SessionCatalogStore;
@@ -73,6 +74,118 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       proposals: proposalsForSession(session.id, session.agentId, session.taskRecordId, options.events)
         .map(toApiFlowProposal),
     });
+  });
+  app.get("/v1/sessions/:session_id/flow-recommendations", (c) => {
+    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
+    if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
+    const session = options.sessions.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    const workItem = session.taskRecordId
+      ? options.events.getWorkItem(session.taskRecordId)
+      : options.events.getWorkItemBySessionId(session.id);
+    if (!workItem) return c.json({ recommendations: [] });
+    const sessionRunIds = new Set(
+      options.events.listRuns(workItem.id)
+        .filter((run) => run.sessionId === session.id && run.status === "succeeded")
+        .map((run) => run.id),
+    );
+    const events = options.events.listEvents(workItem.id);
+    const dismissed = new Set(events.flatMap((event) =>
+      event.type === "FLOW_REJECTED"
+      && event.payload.source === "recommendation"
+      && typeof event.runId === "string"
+      && typeof event.target === "string"
+        ? [`${event.runId}:${event.target}`]
+        : []
+    ));
+    return c.json({
+      recommendations: events
+        .filter((event) =>
+          event.type === "FLOW_RECOMMENDED"
+          && event.runId !== null
+          && sessionRunIds.has(event.runId)
+        )
+        .map((event) => toApiFlowRecommendation(
+          event,
+          event.runId && dismissed.has(`${event.runId}:${String(event.payload.flow_id)}`)
+            ? "dismissed"
+            : "pending",
+        )),
+    });
+  });
+  app.post("/v1/flows/recommendations", async (c) => {
+    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
+    if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const runId = typeof body?.run_id === "string" ? body.run_id : "";
+    const flowId = typeof body?.flow_id === "string" ? body.flow_id : "";
+    const revision = typeof body?.definition_revision === "string" ? body.definition_revision : "";
+    if (!runId || !flowId || !revision) {
+      return c.json({ error: "run_id, flow_id and definition_revision are required" }, 400);
+    }
+    const run = options.events.getRun(runId);
+    if (!run || !run.sessionId || !options.sessions.getSession(run.sessionId)) {
+      return c.json({ error: "run_not_found" }, 404);
+    }
+    if (run.status !== "running" && run.status !== "succeeded") {
+      return c.json({ error: "run_not_recommendable" }, 409);
+    }
+    const flow = catalog.get(flowId);
+    if (!flow || !isConsumable(flow)) return c.json({ error: "flow_not_consumable" }, 409);
+    if (flow.definitionRevision !== revision) {
+      return c.json({ error: "flow_revision_mismatch" }, 409);
+    }
+    const extracted = recommendationInputs(flow, body?.extracted_inputs);
+    const reason = typeof body?.reason === "string"
+      ? Array.from(body.reason.trim()).slice(0, 240).join("")
+      : "";
+    const inputHash = `flow-recommendation:${definitionHash({ runId, flowId, revision, extracted })}`;
+    const existing = options.events.listEvents(run.workItemId).find((event) =>
+      event.type === "FLOW_RECOMMENDED" && event.inputHash === inputHash
+    );
+    const event = existing ?? options.events.appendEventOnce({
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "FLOW_RECOMMENDED",
+      actor: "agent",
+      target: flow.flowId,
+      inputHash,
+      payload: {
+        session_id: run.sessionId,
+        flow_id: flow.flowId,
+        definition_revision: flow.definitionRevision,
+        reason,
+        extracted_inputs: extracted,
+      },
+    });
+    return c.json(toApiFlowRecommendation(event), existing ? 200 : 201);
+  });
+  app.post("/v1/flows/recommendations/:run_id/dismiss", async (c) => {
+    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
+    if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const sessionId = typeof body?.session_id === "string" ? body.session_id : "";
+    const flowId = typeof body?.flow_id === "string" ? body.flow_id : "";
+    const run = options.events.getRun(c.req.param("run_id"));
+    if (!run || run.sessionId !== sessionId || !flowId) {
+      return c.json({ error: "recommendation_not_found" }, 404);
+    }
+    const recommendation = options.events.listEvents(run.workItemId).find((event) =>
+      event.type === "FLOW_RECOMMENDED"
+      && event.runId === run.id
+      && event.payload.flow_id === flowId
+    );
+    if (!recommendation) return c.json({ error: "recommendation_not_found" }, 404);
+    options.events.appendEventOnce({
+      workItemId: run.workItemId,
+      runId: run.id,
+      type: "FLOW_REJECTED",
+      actor: "user",
+      target: flowId,
+      inputHash: `flow-recommendation-dismiss:${run.id}:${flowId}`,
+      payload: { source: "recommendation", flow_id: flowId },
+    });
+    return c.json({ status: "dismissed", run_id: run.id, flow_id: flowId });
   });
   app.get("/v1/flows/:flow_id", (c) => {
     const flow = catalog.get(c.req.param("flow_id"));
@@ -188,9 +301,31 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     return c.json(toApiFlow(catalog.save({ ...flow, status: "deprecated" })));
   });
   app.post("/v1/flows/guides", async (c) => {
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    if (body?.flow && typeof body.flow === "object" && !Array.isArray(body.flow)) {
+      const parsed = parseGuideDraft(body.flow);
+      if ("error" in parsed) return c.json({ error: parsed.error }, 400);
+      const flowId = `flow_${randomUUID().replaceAll("-", "")}`;
+      return c.json(toApiFlow(catalog.save({
+        flowId,
+        ...parsed,
+        kind: "guide",
+        status: "draft",
+        source: "user_selected",
+        definitionRevision: guideDefinitionRevision(flowId, parsed),
+        planIrHash: null,
+        inputs: [],
+        reviewStatus: "pending",
+        gitRevision: null,
+        validationIssues: [],
+        lineageRootFlowId: flowId,
+        parentFlowId: null,
+        provenance: null,
+        publicationSequence: 0,
+      })), 201);
+    }
     if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
     if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
-    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
     const sessionId = typeof body?.session_id === "string" ? body.session_id : undefined;
     const runId = typeof body?.run_id === "string" ? body.run_id : undefined;
     if (!sessionId) return c.json({ error: "session_id is required" }, 400);
@@ -270,6 +405,41 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     });
     return c.json(toApiFlow(saved), 201);
   });
+  app.put("/v1/flows/:flow_id/guide", async (c) => {
+    const existing = catalog.get(c.req.param("flow_id"));
+    if (!existing) return c.json({ error: "flow_not_found" }, 404);
+    if (existing.kind !== "guide" || existing.status !== "draft") {
+      return c.json({ error: "flow_not_editable" }, 409);
+    }
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const parsed = parseGuideDraft(body?.flow);
+    if ("error" in parsed) return c.json({ error: parsed.error }, 400);
+    return c.json(toApiFlow(catalog.save({
+      ...existing,
+      ...parsed,
+      definitionRevision: guideDefinitionRevision(existing.flowId, parsed),
+    })));
+  });
+  app.patch("/v1/flows/:flow_id/summary", async (c) => {
+    const existing = catalog.get(c.req.param("flow_id"));
+    if (!existing) return c.json({ error: "flow_not_found" }, 404);
+    if (existing.kind !== "runbook" || existing.status !== "candidate") {
+      return c.json({ error: "flow_summary_not_editable" }, 409);
+    }
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const name = typeof body?.name === "string" ? body.name.trim() : existing.name;
+    if (!name) return c.json({ error: "flow.name is required" }, 400);
+    const description = typeof body?.description === "string"
+      ? body.description.trim() || null
+      : existing.description;
+    const next = { ...existing, name, description };
+    return c.json(toApiFlow(catalog.save({
+      ...next,
+      definitionRevision: catalogDefinitionRevision(next),
+      reviewStatus: "pending",
+      gitRevision: null,
+    })));
+  });
   app.post("/v1/flows/candidates", async (c) => {
     if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
     const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
@@ -285,6 +455,12 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       return c.json({ error: "invalid_flow_state" }, 400);
     }
     let derivedFrom: FlowRecord | undefined;
+    const guideParent = typeof input.parent_flow_id === "string"
+      ? catalog.get(input.parent_flow_id)
+      : undefined;
+    if (input.parent_flow_id !== undefined && (!guideParent || guideParent.kind !== "guide" || guideParent.status !== "draft")) {
+      return c.json({ error: "guide_parent_not_found" }, 409);
+    }
     let provenance: FlowRecord["provenance"] = null;
     if (body.run_id !== undefined) {
       if (typeof body.run_id !== "string" || !body.run_id.trim()) {
@@ -318,7 +494,9 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
         sourceDefinitionRevision: source.definitionRevision,
       };
     }
-    const flowId = typeof input.flow_id === "string" ? input.flow_id : `flow_${randomUUID().replaceAll("-", "")}`;
+    const flowId = typeof input.flow_id === "string" && input.flow_id.trim()
+      ? input.flow_id
+      : `flow_${randomUUID().replaceAll("-", "")}`;
     const existing = catalog.get(flowId);
     if (existing && (existing.kind !== "runbook" || existing.status !== "candidate")) {
       return c.json({ error: "flow_id_conflict", flow_id: flowId }, 409);
@@ -386,8 +564,8 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       gitRevision: null,
       validationIssues: [],
       steps,
-      lineageRootFlowId: existing?.lineageRootFlowId ?? derivedFrom?.lineageRootFlowId ?? flowId,
-      parentFlowId: existing?.parentFlowId ?? derivedFrom?.flowId ?? null,
+      lineageRootFlowId: existing?.lineageRootFlowId ?? derivedFrom?.lineageRootFlowId ?? guideParent?.lineageRootFlowId ?? flowId,
+      parentFlowId: existing?.parentFlowId ?? derivedFrom?.flowId ?? guideParent?.flowId ?? null,
       provenance: existing?.provenance ?? provenance ?? null,
       publicationSequence: existing?.publicationSequence ?? 0,
     });
@@ -407,6 +585,133 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     return c.json(toApiFlow(flow), 201);
   });
   return app;
+}
+
+function recommendationInputs(
+  flow: FlowRecord,
+  value: unknown,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const source = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const definition of flow.inputs) {
+    if (definition.type === "secret_ref" || !Object.hasOwn(source, definition.id)) continue;
+    const candidate = source[definition.id];
+    if (definition.type === "integer") {
+      if (typeof candidate === "number" && Number.isSafeInteger(candidate)) {
+        result[definition.id] = candidate;
+      }
+      continue;
+    }
+    if (typeof candidate === "string") result[definition.id] = candidate;
+  }
+  return result;
+}
+
+type GuideDraftDefinition = Pick<FlowRecord, "name" | "description" | "steps">;
+
+function parseGuideDraft(value: unknown): GuideDraftDefinition | { error: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { error: "flow is required" };
+  }
+  const source = value as Record<string, unknown>;
+  const name = typeof source.name === "string" ? source.name.trim() : "";
+  if (!name) return { error: "flow.name is required" };
+  const rawSteps = Array.isArray(source.steps) ? source.steps : [];
+  if (rawSteps.length === 0) return { error: "flow.steps is required" };
+  if (rawSteps.length > 24) return { error: "flow.steps exceeds limit" };
+  const seen = new Set<string>();
+  const steps = rawSteps.flatMap((raw): FlowRecord["steps"] => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const step = raw as Record<string, unknown>;
+    const id = typeof step.id === "string" ? step.id.trim() : "";
+    const purpose = typeof step.purpose === "string" ? step.purpose.trim() : "";
+    if (!id || !purpose || seen.has(id)) return [];
+    seen.add(id);
+    const dependsOn = Array.isArray(step.depends_on)
+      ? step.depends_on.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+      : [];
+    return [{
+      id,
+      purpose,
+      capability: undefined,
+      mode: "manual",
+      dependsOn,
+      approval: "none",
+      successWhen: undefined,
+    }];
+  });
+  if (steps.length !== rawSteps.length) {
+    return { error: "flow.steps require unique non-empty id and purpose" };
+  }
+  const stepIds = new Set(steps.map((step) => step.id));
+  if (steps.some((step) => step.dependsOn?.some((dependency) => !stepIds.has(dependency)))) {
+    return { error: "flow.steps contain unknown dependency" };
+  }
+  return {
+    name,
+    description: typeof source.description === "string" ? source.description.trim() || null : null,
+    steps,
+  };
+}
+
+function guideDefinitionRevision(flowId: string, flow: GuideDraftDefinition): string {
+  return definitionHash({
+    schema_version: 1,
+    workflow_id: flowId,
+    name: flow.name,
+    description: flow.description ?? undefined,
+    kind: "guide",
+    status: "draft",
+    inputs: [],
+    steps: flow.steps.map((step) => ({
+      id: step.id,
+      purpose: step.purpose,
+      mode: "manual",
+      depends_on: step.dependsOn ?? [],
+      approval: "none",
+    })),
+  });
+}
+
+function catalogDefinitionRevision(flow: FlowRecord): string {
+  return definitionHash({
+    schema_version: flow.schemaVersion,
+    workflow_id: flow.flowId,
+    name: flow.name ?? undefined,
+    description: flow.description ?? undefined,
+    kind: flow.kind,
+    status: flow.status,
+    inputs: flow.inputs,
+    steps: flow.steps.map((step) => ({
+      id: step.id,
+      capability: step.capability,
+      purpose: step.purpose,
+      mode: step.mode,
+      depends_on: step.dependsOn,
+      approval: step.approval,
+      branches: step.branches,
+      retry: step.retry && { max_attempts: step.retry.maxAttempts, delay_ms: step.retry.delayMs },
+      success_when: step.successWhen,
+    })),
+  });
+}
+
+function toApiFlowRecommendation(
+  event: DomainEvent,
+  status: "pending" | "dismissed" = "pending",
+): Record<string, unknown> {
+  return {
+    recommendation_id: event.eventId,
+    session_id: event.payload.session_id ?? null,
+    run_id: event.runId,
+    flow_id: event.payload.flow_id,
+    definition_revision: event.payload.definition_revision,
+    reason: event.payload.reason ?? "",
+    extracted_inputs: event.payload.extracted_inputs ?? {},
+    status,
+    created_at: event.occurredAt,
+  };
 }
 
 function proposalsForSession(

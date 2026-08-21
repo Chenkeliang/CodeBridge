@@ -4,6 +4,8 @@ import type {
   ChannelConsumableFlow,
   ChannelDeliveryRow,
   ChannelFlowInput,
+  ChannelFlowReviewSummary,
+  ChannelManageableFlow,
   ChannelRuntimeApproval,
   ChannelSessionEvent,
   ChannelSessionIngress,
@@ -157,6 +159,88 @@ export function createChannelSessionIngress(
         approval: step.approval ?? "none",
       })),
     }));
+  };
+
+  const listManageableFlows = async (): Promise<ChannelManageableFlow[]> => {
+    const response = await app.request("/v1/flows?view=manage", { headers: auth });
+    if (!response.ok) throw new Error(`list manageable Flows failed (${response.status}): ${await response.text()}`);
+    const body = await response.json() as { flows: Array<Record<string, unknown>> };
+    return body.flows.map(toChannelManageableFlow);
+  };
+
+  const saveLatestGuide = async (sessionId: string): Promise<ChannelManageableFlow> => {
+    const proposals = await app.request(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-proposals`,
+      { headers: auth },
+    );
+    if (!proposals.ok) throw new Error(`list Flow proposals failed (${proposals.status}): ${await proposals.text()}`);
+    const body = await proposals.json() as { proposals: Array<{ run_id: string; saveable: boolean }> };
+    const proposal = body.proposals.find((entry) => entry.saveable);
+    if (!proposal) throw new Error("当前 Session 没有可保存的成功 Agent Run");
+    const response = await app.request("/v1/flows/guides", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, run_id: proposal.run_id }),
+    });
+    if (!response.ok) throw new Error(`save Guide failed (${response.status}): ${await response.text()}`);
+    return toChannelManageableFlow(await response.json() as Record<string, unknown>);
+  };
+
+  const getFlowReviewSummary = async (flowId: string): Promise<ChannelFlowReviewSummary> => {
+    const response = await app.request(`/v1/flows/${encodeURIComponent(flowId)}/review-context`, { headers: auth });
+    if (!response.ok) throw new Error(`read Flow review failed (${response.status}): ${await response.text()}`);
+    const body = await response.json() as {
+      flow: Record<string, unknown>;
+      diff: { name_changed?: boolean; description_changed?: boolean; inputs?: { added?: string[]; removed?: string[]; changed?: string[] }; steps?: { added?: string[]; removed?: string[]; changed?: string[]; reordered?: boolean } };
+      provenance?: { source_run_id?: string; source_session_id?: string } | null;
+      evidence?: unknown[];
+    };
+    const changedFields = [
+      body.diff.name_changed ? "name" : null,
+      body.diff.description_changed ? "description" : null,
+      ...(body.diff.inputs?.added ?? []).map((id) => `input +${id}`),
+      ...(body.diff.inputs?.removed ?? []).map((id) => `input -${id}`),
+      ...(body.diff.inputs?.changed ?? []).map((id) => `input ~${id}`),
+      ...(body.diff.steps?.added ?? []).map((id) => `step +${id}`),
+      ...(body.diff.steps?.removed ?? []).map((id) => `step -${id}`),
+      ...(body.diff.steps?.changed ?? []).map((id) => `step ~${id}`),
+      body.diff.steps?.reordered ? "steps reordered" : null,
+    ].filter((value): value is string => Boolean(value));
+    const flow = toChannelManageableFlow(body.flow);
+    return {
+      flow,
+      changedFields,
+      provenance: body.provenance?.source_run_id && body.provenance.source_session_id
+        ? { sourceRunId: body.provenance.source_run_id, sourceSessionId: body.provenance.source_session_id }
+        : null,
+      evidenceCount: body.evidence?.length ?? 0,
+      validationIssues: Array.isArray(body.flow.validation_issues)
+        ? body.flow.validation_issues.filter((value): value is string => typeof value === "string")
+        : [],
+    };
+  };
+
+  const updateCandidateSummary = async (
+    flowId: string,
+    patch: { name?: string; description?: string },
+  ): Promise<ChannelManageableFlow> => {
+    const response = await app.request(`/v1/flows/${encodeURIComponent(flowId)}/summary`, {
+      method: "PATCH",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!response.ok) throw new Error(`update Candidate summary failed (${response.status}): ${await response.text()}`);
+    return toChannelManageableFlow(await response.json() as Record<string, unknown>);
+  };
+
+  const rejectCandidate = async (flowId: string): Promise<ChannelManageableFlow> => {
+    const response = await app.request(`/v1/flows/${encodeURIComponent(flowId)}/review`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ decision: "reject" }),
+    });
+    if (!response.ok) throw new Error(`reject Candidate failed (${response.status}): ${await response.text()}`);
+    return toChannelManageableFlow(await response.json() as Record<string, unknown>);
   };
 
   const listRuntimeApprovals = async (
@@ -509,6 +593,11 @@ export function createChannelSessionIngress(
   return {
     submit,
     listConsumableFlows,
+    listManageableFlows,
+    saveLatestGuide,
+    getFlowReviewSummary,
+    updateCandidateSummary,
+    rejectCandidate,
     listRuntimeApprovals,
     resolveRuntimeApproval,
     events,
@@ -545,6 +634,22 @@ function toChannelRuntimeApproval(input: {
     environment: input.environment ?? null,
     targetResource: input.target_resource ?? null,
     expiresAt: input.expires_at ?? null,
+  };
+}
+
+function toChannelManageableFlow(input: Record<string, unknown>): ChannelManageableFlow {
+  return {
+    flowId: String(input.flow_id ?? ""),
+    name: typeof input.name === "string" ? input.name : String(input.flow_id ?? ""),
+    description: typeof input.description === "string" ? input.description : null,
+    definitionRevision: String(input.definition_revision ?? ""),
+    kind: input.kind === "guide" || input.kind === "runbook" || input.kind === "ephemeral"
+      ? input.kind
+      : "guide",
+    status: input.status === "draft" || input.status === "candidate" || input.status === "published" || input.status === "deprecated"
+      ? input.status
+      : "draft",
+    reviewStatus: typeof input.review_status === "string" ? input.review_status : null,
   };
 }
 

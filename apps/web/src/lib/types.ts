@@ -190,6 +190,18 @@ export interface FlowProposal {
   } | null;
 }
 
+export interface FlowRecommendation {
+  recommendation_id: string;
+  session_id: string;
+  run_id: string;
+  flow_id: string;
+  definition_revision: string;
+  reason: string;
+  extracted_inputs: Record<string, unknown>;
+  status: "pending" | "dismissed" | "accepted" | "stale";
+  created_at: string;
+}
+
 export interface ConfigOptionValue {
   value: string;
   name?: string;

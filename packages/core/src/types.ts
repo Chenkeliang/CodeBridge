@@ -170,6 +170,24 @@ export interface ChannelConsumableFlow {
   steps: ChannelFlowStep[];
 }
 
+export interface ChannelManageableFlow {
+  flowId: string;
+  name: string;
+  description: string | null;
+  definitionRevision: string;
+  kind: "guide" | "runbook" | "ephemeral";
+  status: "draft" | "candidate" | "published" | "deprecated";
+  reviewStatus: string | null;
+}
+
+export interface ChannelFlowReviewSummary {
+  flow: ChannelManageableFlow;
+  changedFields: string[];
+  provenance: { sourceRunId: string; sourceSessionId: string } | null;
+  evidenceCount: number;
+  validationIssues: string[];
+}
+
 export interface ChannelRuntimeApproval {
   id: string;
   runId: string;
@@ -287,6 +305,11 @@ export interface ChannelDeliveryRow {
 export interface ChannelSessionIngress {
   submit(message: ChannelSessionMessage): Promise<ChannelSubmitReceipt>;
   listConsumableFlows(): Promise<ChannelConsumableFlow[]>;
+  listManageableFlows?(): Promise<ChannelManageableFlow[]>;
+  saveLatestGuide?(sessionId: string): Promise<ChannelManageableFlow>;
+  getFlowReviewSummary?(flowId: string): Promise<ChannelFlowReviewSummary>;
+  updateCandidateSummary?(flowId: string, patch: { name?: string; description?: string }): Promise<ChannelManageableFlow>;
+  rejectCandidate?(flowId: string): Promise<ChannelManageableFlow>;
   listRuntimeApprovals?(runId: string): Promise<ChannelRuntimeApproval[]>;
   resolveRuntimeApproval?(
     runId: string,

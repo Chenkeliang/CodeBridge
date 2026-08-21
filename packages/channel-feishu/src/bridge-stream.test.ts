@@ -198,6 +198,10 @@ describe("FeishuBridge streaming", () => {
         inputs: [{ id: "oid", type: "integer", source: "user", required: true }],
         steps: [{ id: "lookup", purpose: "查订单", mode: "read_only", approval: "none" }],
       }]),
+      listManageableFlows: vi.fn().mockResolvedValue([{
+        flowId: "flow_candidate", name: "订单排查候选", description: null,
+        definitionRevision: "sha256:candidate", kind: "runbook", status: "candidate", reviewStatus: "pending",
+      }]),
       submit,
       getSlotCommandContext: vi.fn().mockResolvedValue({
         sessionId: null,
@@ -241,6 +245,7 @@ describe("FeishuBridge streaming", () => {
       content,
     });
 
+    await bridge.handleMessage(message("m0", "/flow manage"));
     await bridge.handleMessage(message("m1", "/flow"));
     await bridge.handleMessage(message("m2", "/flow 1"));
     await bridge.handleMessage(message("m3", "/flow set oid=1644460"));
@@ -248,6 +253,7 @@ describe("FeishuBridge streaming", () => {
     await bridge.handleMessage(message("m5", "/flow confirm"));
 
     expect(replies.join("\n")).toContain("订单排查");
+    expect(replies.join("\n")).toContain("runbook/candidate");
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       channel: "feishu",

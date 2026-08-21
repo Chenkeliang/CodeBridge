@@ -28,6 +28,7 @@ import type {
   FlowRecord,
   FlowCapability,
   FlowProposal,
+  FlowRecommendation,
   FlowReviewContext,
   MessageAttachmentInput,
   WorkspaceListing,
@@ -69,6 +70,7 @@ export function Workbench() {
   const [flowControlError, setFlowControlError] = useState<string | null>(null);
   const [savingCandidateRunId, setSavingCandidateRunId] = useState<string | null>(null);
   const [flowProposals, setFlowProposals] = useState<FlowProposal[]>([]);
+  const [flowRecommendations, setFlowRecommendations] = useState<FlowRecommendation[]>([]);
   const [savingGuideRunId, setSavingGuideRunId] = useState<string | null>(null);
   const [flowMismatch, setFlowMismatch] = useState<FlowRevisionMismatch | null>(null);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
@@ -99,6 +101,8 @@ export function Workbench() {
   const [workspaceListing, setWorkspaceListing] = useState<WorkspaceListing | null>(null);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const guideImportInput = useRef<HTMLInputElement | null>(null);
+  const deepLinkHandled = useRef(false);
   const conversationViewport = useRef<HTMLElement | null>(null);
   const selectedAgentRef = useRef<string | null>(null);
   const selectedSessionRef = useRef<string | null>(null);
@@ -208,6 +212,30 @@ export function Workbench() {
   useEffect(() => { selectedSessionRef.current = selectedSessionId; }, [selectedSessionId]);
 
   useEffect(() => {
+    if (loading || deepLinkHandled.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const flowId = params.get("flow");
+    const sessionId = params.get("session");
+    if (!flowId && !sessionId) return;
+    deepLinkHandled.current = true;
+    queueMicrotask(() => {
+      if (sessionId) {
+        const session = sessions.find((candidate) => candidate.session_id === sessionId);
+        if (!session) {
+          notify("深链中的 Session 不存在或不可访问", "error");
+          return;
+        }
+        setSelectedAgentId(session.agent_id);
+        setSelectedSessionId(session.session_id);
+      }
+      if (flowId) {
+        setArea("flows");
+        void openFlow(flowId);
+      }
+    });
+  }, [loading, notify, sessions]);
+
+  useEffect(() => {
     if (!detailCandidateFlowId || !detailEvidenceKey) return;
     let active = true;
     void api.flowReviewContext(detailCandidateFlowId).then((context) => {
@@ -315,14 +343,20 @@ export function Workbench() {
     if (!selectedSessionId) {
       queueMicrotask(() => {
         if (active) setFlowProposals([]);
+        if (active) setFlowRecommendations([]);
       });
       return () => { active = false; };
     }
     const sessionId = selectedSessionId;
-    void api.flowProposals(sessionId).then((proposals) => {
+    void Promise.all([
+      api.flowProposals(sessionId),
+      api.flowRecommendations(sessionId),
+    ]).then(([proposals, recommendations]) => {
       if (active) setFlowProposals(proposals);
+      if (active) setFlowRecommendations(recommendations);
     }).catch(() => {
       if (active) setFlowProposals([]);
+      if (active) setFlowRecommendations([]);
     });
     return () => { active = false; };
   }, [proposalRunKey, selectedSessionId]);
@@ -552,6 +586,44 @@ export function Workbench() {
     }
   }
 
+  async function openFlowRecommendation(recommendation: FlowRecommendation): Promise<void> {
+    try {
+      const context = await api.flowReviewContext(recommendation.flow_id);
+      if (context.flow.definition_revision !== recommendation.definition_revision) {
+        notify("该 Flow 版本已变化，请重新确认最新版本", "error");
+        return;
+      }
+      setFlowReviewContext(context);
+      setDetailFlow(context.flow);
+      setParamValues({
+        ...defaultsFromFlow(context.flow),
+        ...recommendation.extracted_inputs,
+      });
+      setMissingInputs([]);
+      notify("已打开建议 Flow；请核对参数后明确运行");
+    } catch (caught) {
+      notify(messageOf(caught), "error");
+    }
+  }
+
+  async function dismissFlowRecommendation(recommendation: FlowRecommendation): Promise<void> {
+    if (!selectedSessionId) return;
+    try {
+      await api.dismissFlowRecommendation(
+        selectedSessionId,
+        recommendation.run_id,
+        recommendation.flow_id,
+      );
+      setFlowRecommendations((current) => current.map((entry) =>
+        entry.recommendation_id === recommendation.recommendation_id
+          ? { ...entry, status: "dismissed" }
+          : entry
+      ));
+    } catch (caught) {
+      notify(messageOf(caught), "error");
+    }
+  }
+
   async function saveCandidate(flow: FlowRecord): Promise<void> {
     if (!selectedSessionId || flowControlBusy) {
       if (!selectedSessionId) setFlowControlError("请选择来源 Session 后再保存 Candidate");
@@ -563,6 +635,63 @@ export function Workbench() {
       const saved = await api.saveCandidate(selectedSessionId, flow);
       await refreshFlowCatalog(saved.flow_id);
       notify("Candidate 已保存；revision 已由服务端重新计算");
+    } catch (caught) {
+      setFlowControlError(messageOf(caught));
+    } finally {
+      setFlowControlBusy(false);
+    }
+  }
+
+  async function createGuideDraft(): Promise<void> {
+    if (flowControlBusy) return;
+    setFlowControlBusy(true);
+    setFlowControlError(null);
+    try {
+      const created = await api.createGuide({
+        name: "未命名 Guide",
+        description: "",
+        steps: [{
+          id: "step_1", capability: null, purpose: "请描述这个人工步骤", depends_on: [],
+          mode: "manual", approval: "none", branches: [], retry: null, success_when: null,
+        }],
+      });
+      await refreshFlowCatalog(created.flow_id);
+      notify("Guide 草稿已创建；请整理名称和人工步骤");
+    } catch (caught) {
+      setFlowControlError(messageOf(caught));
+    } finally {
+      setFlowControlBusy(false);
+    }
+  }
+
+  async function importGuideDraft(file: File): Promise<void> {
+    if (flowControlBusy) return;
+    setFlowControlBusy(true);
+    setFlowControlError(null);
+    try {
+      const parsed = JSON.parse(await file.text()) as Record<string, unknown>;
+      const source = parsed.flow && typeof parsed.flow === "object" && !Array.isArray(parsed.flow)
+        ? parsed.flow as Record<string, unknown>
+        : parsed;
+      const created = await api.createGuide(source as unknown as Pick<FlowRecord, "name" | "description" | "steps">);
+      await refreshFlowCatalog(created.flow_id);
+      notify("Guide JSON 已导入；revision 已由服务端重新计算");
+    } catch (caught) {
+      setFlowControlError(messageOf(caught));
+      notify(messageOf(caught), "error");
+    } finally {
+      setFlowControlBusy(false);
+    }
+  }
+
+  async function saveGuideDraft(flow: FlowRecord): Promise<void> {
+    if (flowControlBusy) return;
+    setFlowControlBusy(true);
+    setFlowControlError(null);
+    try {
+      const saved = await api.saveGuideDraft(flow);
+      await refreshFlowCatalog(saved.flow_id);
+      notify("Guide 草稿已保存；revision 已由服务端重新计算");
     } catch (caught) {
       setFlowControlError(messageOf(caught));
     } finally {
@@ -1031,7 +1160,7 @@ export function Workbench() {
       key={`${flowReviewContext.flow.flow_id}:${flowReviewContext.flow.definition_revision}:${flowReviewContext.flow.status}`}
       onDeprecate={() => { void deprecateDefinition(); }}
       onReview={(decision, gitRevision) => { void reviewDefinition(decision, gitRevision); }}
-      onSave={(flow) => { void saveCandidate(flow); }}
+      onSave={(flow) => { void (flow.kind === "guide" ? saveGuideDraft(flow) : saveCandidate(flow)); }}
     /> : undefined}
     missing={missingInputs}
     onBind={(flow) => { void bindFlowToSession(flow); }}
@@ -1071,6 +1200,8 @@ export function Workbench() {
         sessions={agentSessions}
         selectedSessionId={selectedSessionId}
         onCreate={() => selectedAgent && void createSession(selectedAgent.agent_id)}
+        onCreateGuide={() => { void createGuideDraft(); }}
+        onImportGuide={() => guideImportInput.current?.click()}
         onFlow={(id) => { void openFlow(id); }}
         onQuery={setQuery}
         onRefresh={() => void reload(true)}
@@ -1080,6 +1211,18 @@ export function Workbench() {
         onToggleArchived={() => setShowArchived((current) => !current)}
         showArchived={showArchived}
       />}
+
+      <input
+        accept="application/json,.json"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void importGuideDraft(file);
+          event.currentTarget.value = "";
+        }}
+        ref={guideImportInput}
+        type="file"
+      />
 
       <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", "bg-canvas text-ink")}>
         {pixelWipe > 0 && <PixelWipe key={pixelWipe} seed={pixelWipe} />}
@@ -1244,7 +1387,10 @@ export function Workbench() {
                     onLoadSegments={(blockId, after) => void loadBlockSegments(blockId, after)}
                     onCreateCandidate={(runId) => { void createCandidateFromRun(runId); }}
                     flowProposals={flowProposals}
+                    flowRecommendations={flowRecommendations}
                     onCreateGuide={(runId) => { void createGuideFromRun(runId); }}
+                    onUseFlowRecommendation={(recommendation) => { void openFlowRecommendation(recommendation); }}
+                    onDismissFlowRecommendation={(recommendation) => { void dismissFlowRecommendation(recommendation); }}
                     onResolveApproval={(action, approve) => void resolveRuntimeApproval(action, approve)}
                     resolvingApprovalId={resolvingApprovalId}
                     savingCandidateRunId={savingCandidateRunId}

@@ -21,9 +21,11 @@ export function FlowControlPanel(props: {
   onDeprecate: () => void;
 }) {
   const [draft, setDraft] = useState<FlowRecord>(() => structuredClone(props.context.flow));
+  const [promotingGuide, setPromotingGuide] = useState(false);
   const [gitRevision, setGitRevision] = useState("");
   const flow = props.context.flow;
   const candidate = flow.kind === "runbook" && flow.status === "candidate";
+  const guide = flow.kind === "guide" && flow.status === "draft";
   const canApprove = candidate && props.context.evidence.length > 0 && Boolean(gitRevision.trim()) && !props.busy;
 
   return <div className="grid gap-4 border-t border-line pt-4">
@@ -49,7 +51,16 @@ export function FlowControlPanel(props: {
 
     <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_280px]">
       <div className="min-w-0">
-        {candidate ? <CandidateEditor
+        {guide && !promotingGuide ? <GuideEditor
+          disabled={props.busy}
+          draft={draft}
+          onDraft={setDraft}
+          onSave={() => props.onSave(draft)}
+          onPromote={() => {
+            setDraft(candidateFromGuide(draft));
+            setPromotingGuide(true);
+          }}
+        /> : candidate || promotingGuide ? <CandidateEditor
           capabilities={props.capabilities}
           disabled={props.busy}
           draft={draft}
@@ -79,6 +90,40 @@ export function FlowControlPanel(props: {
       </div>
     </div>}
   </div>;
+}
+
+function GuideEditor(props: {
+  draft: FlowRecord;
+  disabled: boolean;
+  onDraft: (flow: FlowRecord) => void;
+  onSave: () => void;
+  onPromote: () => void;
+}) {
+  const updateStep = (index: number, patch: Partial<FlowStepRecord>) => props.onDraft({
+    ...props.draft,
+    steps: props.draft.steps.map((step, valueIndex) => valueIndex === index ? { ...step, ...patch } : step),
+  });
+  return <form className="grid gap-5" onSubmit={(event) => { event.preventDefault(); props.onSave(); }}>
+    <div className="grid gap-3">
+      <label className="grid gap-1.5"><span className="text-xs font-medium text-muted">名称</span><input aria-label="Flow 名称" className={controlClass} disabled={props.disabled} onChange={(event) => props.onDraft({ ...props.draft, name: event.target.value })} value={props.draft.name ?? ""} /></label>
+      <label className="grid gap-1.5"><span className="text-xs font-medium text-muted">说明</span><textarea aria-label="Flow 说明" className="min-h-20 rounded-md border border-line bg-surface-tint px-3 py-2 text-xs leading-5 text-ink outline-none focus:border-control-accent" disabled={props.disabled} onChange={(event) => props.onDraft({ ...props.draft, description: event.target.value })} value={props.draft.description ?? ""} /></label>
+    </div>
+    <EditorSection
+      action={<Button disabled={props.disabled} onClick={() => props.onDraft({ ...props.draft, steps: [...props.draft.steps, emptyGuideStep(props.draft.steps.length + 1)] })} size="sm" type="button" variant="ghost"><Plus className="size-3.5" />添加步骤</Button>}
+      title="人工步骤"
+    >
+      {props.draft.steps.map((step, index) => <div className="grid gap-2 border-t border-line py-3 first:border-t-0 first:pt-0" key={`${step.id}:${index}`}>
+        <div className="grid gap-2 md:grid-cols-[160px_minmax(0,1fr)_auto]">
+          <label className="grid gap-1"><span className={miniLabelClass}>Step ID</span><input aria-label={`Guide 步骤 ${index + 1} ID`} className={controlClass} disabled={props.disabled} onChange={(event) => updateStep(index, { id: event.target.value })} value={step.id} /></label>
+          <label className="grid gap-1"><span className={miniLabelClass}>目的</span><input aria-label={`Guide 步骤 ${index + 1} 目的`} className={controlClass} disabled={props.disabled} onChange={(event) => updateStep(index, { purpose: event.target.value || null })} value={step.purpose ?? ""} /></label>
+          <Button aria-label={`删除 Guide 步骤 ${step.id}`} className="self-end" disabled={props.disabled || props.draft.steps.length === 1} onClick={() => props.onDraft({ ...props.draft, steps: props.draft.steps.filter((_, valueIndex) => valueIndex !== index) })} size="sm" type="button" variant="ghost"><Trash2 className="size-3.5" /></Button>
+        </div>
+        <label className="grid gap-1"><span className={miniLabelClass}>依赖（逗号分隔）</span><input className={controlClass} disabled={props.disabled} onChange={(event) => updateStep(index, { depends_on: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) })} value={step.depends_on.join(", ")} /></label>
+      </div>)}
+    </EditorSection>
+    <p className="text-xs leading-5 text-faint">Guide 仅用于整理草稿；补齐 Capability、验收条件并转成 Candidate 后才能 Dry-run。</p>
+    <div className="flex gap-2"><Button className="h-8 text-xs" disabled={props.disabled} size="sm" type="submit">保存 Guide 草稿</Button><Button className="h-8 text-xs" disabled={props.disabled} onClick={props.onPromote} size="sm" type="button" variant="outline">升级为 Candidate</Button></div>
+  </form>;
 }
 
 function CandidateEditor(props: {
@@ -227,6 +272,30 @@ function EmptyLine({ text }: { text: string }) {
 
 function emptyStep(index: number): FlowStepRecord {
   return { id: `step_${index}`, capability: null, purpose: null, depends_on: [], mode: "read_only", approval: "none", branches: [], retry: null, success_when: null };
+}
+
+function emptyGuideStep(index: number): FlowStepRecord {
+  return { id: `step_${index}`, capability: null, purpose: "", depends_on: [], mode: "manual", approval: "none", branches: [], retry: null, success_when: null };
+}
+
+function candidateFromGuide(guide: FlowRecord): FlowRecord {
+  return {
+    ...guide,
+    flow_id: "",
+    kind: "runbook",
+    status: "candidate",
+    source: "user_selected",
+    definition_revision: "",
+    plan_ir_hash: null,
+    parent_flow_id: guide.flow_id,
+    review_status: "pending",
+    steps: guide.steps.map((step) => ({
+      ...step,
+      capability: null,
+      mode: "read_only",
+      success_when: null,
+    })),
+  };
 }
 
 const controlClass = cn("h-9 min-w-0 rounded-md border border-line bg-surface-tint px-3 font-mono text-xs text-ink outline-none focus:border-control-accent disabled:opacity-60");

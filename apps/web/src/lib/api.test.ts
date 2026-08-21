@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "./api";
-import type { AgentSession, SessionCompositeSnapshot, SessionMessageReceipt, SessionRuntimeView, SessionTurnView } from "./types";
+import type { AgentSession, FlowRecord, SessionCompositeSnapshot, SessionMessageReceipt, SessionRuntimeView, SessionTurnView } from "./types";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -379,6 +379,63 @@ describe("workbench API client", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ session_id: "sess_1", run_id: "run_1" }),
+      }),
+    ]);
+  });
+
+  it("creates and updates a manually authored Guide draft", async () => {
+    const flow = {
+      flow_id: "flow_guide",
+      name: "订单排查",
+      description: "人工草稿",
+      steps: [{ id: "lookup", purpose: "查询订单", depends_on: [] }],
+    } as unknown as FlowRecord;
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ ...flow, kind: "guide", status: "draft" }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ ...flow, name: "订单排查 v2", kind: "guide", status: "draft" }));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.createGuide(flow);
+    await api.saveGuideDraft({ ...flow, name: "订单排查 v2" });
+
+    expect(fetch.mock.calls[0]).toEqual([
+      "/v1/flows/guides",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ flow }) }),
+    ]);
+    expect(fetch.mock.calls[1]).toEqual([
+      "/v1/flows/flow_guide/guide",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ flow: { name: "订单排查 v2", description: flow.description, steps: flow.steps } }),
+      }),
+    ]);
+  });
+
+  it("lists and dismisses Agent Flow recommendations", async () => {
+    const recommendation = {
+      recommendation_id: "evt_1",
+      session_id: "sess_1",
+      run_id: "run_1",
+      flow_id: "flow_order",
+      definition_revision: "sha256:one",
+      reason: "目标匹配",
+      extracted_inputs: { oid: 1644460 },
+      status: "pending",
+      created_at: "2026-08-21T00:00:00.000Z",
+    } as const;
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ recommendations: [recommendation] }))
+      .mockResolvedValueOnce(Response.json({ status: "dismissed" }));
+    vi.stubGlobal("fetch", fetch);
+
+    expect(await api.flowRecommendations("sess_1")).toEqual([recommendation]);
+    await api.dismissFlowRecommendation("sess_1", "run_1", "flow_order");
+    expect(fetch.mock.calls[0]?.[0]).toBe("/v1/sessions/sess_1/flow-recommendations");
+    expect(fetch.mock.calls[1]).toEqual([
+      "/v1/flows/recommendations/run_1/dismiss",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ session_id: "sess_1", flow_id: "flow_order" }),
       }),
     ]);
   });

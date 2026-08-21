@@ -139,6 +139,41 @@ describe("channel session ingress", () => {
     }]);
   });
 
+  it("adapts Flow management calls without moving domain rules into channels", async () => {
+    const app = new Hono();
+    const candidate = {
+      flow_id: "flow_candidate", name: "Candidate", description: "Draft", definition_revision: "sha256:one",
+      kind: "runbook", status: "candidate", review_status: "pending", validation_issues: [],
+    };
+    app.get("/v1/flows", (c) => {
+      expect(c.req.query("view")).toBe("manage");
+      return c.json({ flows: [candidate] });
+    });
+    app.get("/v1/sessions/:session/flow-proposals", (c) => c.json({ proposals: [{ run_id: "run_1", saveable: true }] }));
+    app.post("/v1/flows/guides", async (c) => {
+      expect(await c.req.json()).toEqual({ session_id: "sess_1", run_id: "run_1" });
+      return c.json({ ...candidate, flow_id: "flow_guide", kind: "guide", status: "draft" }, 201);
+    });
+    app.get("/v1/flows/:flow/review-context", (c) => c.json({
+      flow: candidate,
+      diff: { name_changed: true, description_changed: false, inputs: {}, steps: { changed: ["lookup"] } },
+      provenance: { source_run_id: "run_1", source_session_id: "sess_1" },
+      evidence: [{}],
+    }));
+    app.patch("/v1/flows/:flow/summary", async (c) => c.json({ ...candidate, ...(await c.req.json()) }));
+    app.post("/v1/flows/:flow/review", async (c) => {
+      expect(await c.req.json()).toEqual({ decision: "reject" });
+      return c.json({ ...candidate, review_status: "rejected" });
+    });
+
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.listManageableFlows?.()).resolves.toMatchObject([{ flowId: "flow_candidate", status: "candidate" }]);
+    await expect(ingress.saveLatestGuide?.("sess_1")).resolves.toMatchObject({ flowId: "flow_guide", kind: "guide" });
+    await expect(ingress.getFlowReviewSummary?.("flow_candidate")).resolves.toMatchObject({ changedFields: ["name", "step ~lookup"], evidenceCount: 1 });
+    await expect(ingress.updateCandidateSummary?.("flow_candidate", { name: "New" })).resolves.toMatchObject({ name: "New" });
+    await expect(ingress.rejectCandidate?.("flow_candidate")).resolves.toMatchObject({ reviewStatus: "rejected" });
+  });
+
   it("lists and resolves Runtime step approvals through the existing APIs", async () => {
     const app = new Hono();
     app.get("/v1/runs/:run/approvals", (c) => {

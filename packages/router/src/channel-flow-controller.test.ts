@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   ChannelConsumableFlow,
+  ChannelFlowReviewSummary,
+  ChannelManageableFlow,
   ChannelRuntimeApproval,
 } from "@codebridge/core";
 import { ChannelFlowController } from "./channel-flow-controller.js";
@@ -41,12 +43,25 @@ function context(
     activeRunId?: string | null;
     approvals?: ChannelRuntimeApproval[];
     resolveApproval?: ReturnType<typeof vi.fn>;
+    management?: {
+      flows: ChannelManageableFlow[];
+      review: ChannelFlowReviewSummary;
+      save?: ReturnType<typeof vi.fn>;
+      update?: ReturnType<typeof vi.fn>;
+      reject?: ReturnType<typeof vi.fn>;
+    };
   } = {},
 ) {
   return controller.handle({
     scopeKey: options.scopeKey ?? "feishu|chat|topic|user-1",
     text,
     listFlows: async () => options.flows ?? [demoFlow],
+    getSessionId: async () => "sess_1",
+    listManageableFlows: options.management ? async () => options.management!.flows : undefined,
+    saveLatestGuide: options.management?.save,
+    getFlowReviewSummary: options.management ? async () => options.management!.review : undefined,
+    updateCandidateSummary: options.management?.update,
+    rejectCandidate: options.management?.reject,
     getActiveRunId: async () => options.activeRunId ?? null,
     listApprovals: async () => options.approvals ?? [],
     resolveApproval: options.resolveApproval ?? vi.fn(),
@@ -54,6 +69,33 @@ function context(
 }
 
 describe("ChannelFlowController", () => {
+  it("routes management commands without exposing publish approval", async () => {
+    const controller = new ChannelFlowController();
+    const flow: ChannelManageableFlow = {
+      flowId: "flow_candidate", name: "订单核验", description: null,
+      definitionRevision: "sha256:candidate", kind: "runbook", status: "candidate", reviewStatus: "pending",
+    };
+    const review: ChannelFlowReviewSummary = {
+      flow, changedFields: ["step ~lookup"], provenance: { sourceRunId: "run_1", sourceSessionId: "sess_1" },
+      evidenceCount: 1, validationIssues: [],
+    };
+    const save = vi.fn(async () => ({ ...flow, flowId: "flow_guide", kind: "guide" as const, status: "draft" as const }));
+    const update = vi.fn(async () => ({ ...flow, name: "新名称", definitionRevision: "sha256:next" }));
+    const reject = vi.fn(async () => ({ ...flow, reviewStatus: "rejected" }));
+    const management = { flows: [flow], review, save, update, reject };
+
+    await expect(context(controller, "/flow manage", { management })).resolves.toMatchObject({ text: expect.stringContaining("runbook/candidate") });
+    await expect(context(controller, "/flow guide save", { management })).resolves.toMatchObject({ text: expect.stringContaining("flow_guide") });
+    await expect(context(controller, "/flow diff flow_candidate", { management })).resolves.toMatchObject({ text: expect.stringContaining("Dry-run 成功证据：1") });
+    await context(controller, "/flow edit flow_candidate name=新名称", { management });
+    expect(update).toHaveBeenCalledWith("flow_candidate", { name: "新名称" });
+    await context(controller, "/flow reject flow_candidate", { management });
+    expect(reject).toHaveBeenCalledWith("flow_candidate");
+    await expect(context(controller, "/flow review flow_candidate", { management })).resolves.toMatchObject({ text: expect.stringContaining("通道不提供批准发布") });
+    await expect(context(controller, "/flow open flow_candidate", { management })).resolves.toMatchObject({ text: expect.stringContaining("flow=flow_candidate&session=sess_1") });
+    await expect(context(controller, "/flow publish flow_candidate", { management })).resolves.toMatchObject({ text: expect.stringContaining("没有找到可使用的 Flow") });
+  });
+
   it("lists, searches, and selects only supplied consumable Flows", async () => {
     const controller = new ChannelFlowController();
     await expect(context(controller, "/flow")).resolves.toMatchObject({

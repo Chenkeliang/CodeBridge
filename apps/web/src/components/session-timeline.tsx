@@ -15,6 +15,7 @@ import { formatElapsed } from "@/components/workbench-shared";
 import { revisionTail } from "@/lib/revision-tail";
 import type {
   FlowProposal,
+  FlowRecommendation,
   TimelineBlockView,
   TimelineSegmentView,
   TimelineTurnView,
@@ -38,6 +39,9 @@ export function SessionTimeline(props: {
   flowProposals?: FlowProposal[];
   savingGuideRunId?: string | null;
   onCreateGuide?: (runId: string) => void;
+  flowRecommendations?: FlowRecommendation[];
+  onUseFlowRecommendation?: (recommendation: FlowRecommendation) => void;
+  onDismissFlowRecommendation?: (recommendation: FlowRecommendation) => void;
 }) {
   const timelineRoot = useRef<HTMLDivElement | null>(null);
   const seenSegmentIds = useRef<Set<string> | null>(null);
@@ -92,6 +96,9 @@ export function SessionTimeline(props: {
         proposal.run_id === turn.run_id && proposal.saveable && proposal.guide
       ) ?? null;
       const guide = guideProposal?.guide ?? null;
+      const recommendation = props.flowRecommendations?.find((entry) =>
+        entry.run_id === turn.run_id && entry.status === "pending"
+      ) ?? null;
       return <article className="grid gap-4" data-timeline-turn={turn.turn_id} key={turn.turn_id}>
         {groupProcessBlocks(turn.blocks).map((item) => item.kind === "group"
           ? <ProcessBlock
@@ -132,6 +139,20 @@ export function SessionTimeline(props: {
             {props.savingGuideRunId === turn.run_id ? <LoaderCircle className="size-3.5 animate-spin" /> : <Workflow className="size-3.5" />}
             整理为 Guide
           </Button>
+        </div>}
+        {recommendation && <div className="grid max-w-[780px] gap-3 rounded-lg border border-accent/40 bg-accent-soft px-3.5 py-3 text-xs text-muted">
+          <div>
+            <div className="font-medium text-ink">Agent 建议使用 Flow · {recommendation.flow_id}</div>
+            <div className="mt-1">{recommendation.reason || "当前任务与已发布 Flow 匹配"}</div>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={() => props.onUseFlowRecommendation?.(recommendation)} size="sm">
+              <Workflow className="size-3.5" />查看并使用
+            </Button>
+            <Button onClick={() => props.onDismissFlowRecommendation?.(recommendation)} size="sm" variant="ghost">
+              <X className="size-3.5" />忽略
+            </Button>
+          </div>
         </div>}
       </article>;
     })}

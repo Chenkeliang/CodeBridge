@@ -8,6 +8,7 @@ import type {
   ConfigOption,
   FlowCapability,
   FlowProposal,
+  FlowRecommendation,
   FlowRecord,
   FlowReviewContext,
   MessageAttachmentInput,
@@ -276,10 +277,34 @@ export const api = {
     (await request<{ proposals: FlowProposal[] }>(
       `/v1/sessions/${encodeURIComponent(sessionId)}/flow-proposals`,
     )).proposals,
+  flowRecommendations: async (sessionId: string) =>
+    (await request<{ recommendations: FlowRecommendation[] }>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-recommendations`,
+    )).recommendations,
+  dismissFlowRecommendation: (sessionId: string, runId: string, flowId: string) =>
+    request<{ status: "dismissed" }>(
+      `/v1/flows/recommendations/${encodeURIComponent(runId)}/dismiss`,
+      {
+        method: "POST",
+        body: JSON.stringify({ session_id: sessionId, flow_id: flowId }),
+      },
+    ),
   saveGuide: (sessionId: string, runId: string) =>
     request<FlowRecord>("/v1/flows/guides", {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId, run_id: runId }),
+    }),
+  createGuide: (flow: Pick<FlowRecord, "name" | "description" | "steps">) =>
+    request<FlowRecord>("/v1/flows/guides", {
+      method: "POST",
+      body: JSON.stringify({ flow }),
+    }),
+  saveGuideDraft: (flow: FlowRecord) =>
+    request<FlowRecord>(`/v1/flows/${encodeURIComponent(flow.flow_id)}/guide`, {
+      method: "PUT",
+      body: JSON.stringify({
+        flow: { name: flow.name, description: flow.description, steps: flow.steps },
+      }),
     }),
   flowReviewContext: (flowId: string) =>
     request<FlowReviewContext>(`/v1/flows/${encodeURIComponent(flowId)}/review-context`),
@@ -294,7 +319,8 @@ export const api = {
       body: JSON.stringify({
         session_id: sessionId,
         flow: {
-          flow_id: flow.flow_id,
+          ...(flow.flow_id ? { flow_id: flow.flow_id } : {}),
+          ...(flow.parent_flow_id ? { parent_flow_id: flow.parent_flow_id } : {}),
           name: flow.name,
           description: flow.description,
           kind: flow.kind,

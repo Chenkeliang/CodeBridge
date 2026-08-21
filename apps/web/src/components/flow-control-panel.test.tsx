@@ -88,6 +88,57 @@ function click(host: HTMLElement, text: string) {
 }
 
 describe("FlowControlPanel", () => {
+  it("edits Guide drafts without exposing executable fields", () => {
+    const onSave = vi.fn();
+    const guide: FlowRecord = {
+      ...candidate,
+      flow_id: "flow_guide",
+      kind: "guide",
+      status: "draft",
+      inputs: [],
+      steps: [{ ...candidate.steps[0]!, capability: null, mode: "manual", success_when: null }],
+    };
+    const view = renderPanel({
+      context: { ...context(false), flow: guide, base: null, provenance: null, evidence: [] },
+      onSave,
+    });
+    expect(view.host.textContent).toContain("Guide 仅用于整理草稿");
+    expect(view.host.querySelector('select[aria-label="步骤 1 Capability"]')).toBeNull();
+    const name = view.host.querySelector('input[aria-label="Flow 名称"]') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+    act(() => {
+      setter.call(name, "Guide v2");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    click(view.host, "保存 Guide 草稿");
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      flow_id: "flow_guide",
+      name: "Guide v2",
+      kind: "guide",
+      status: "draft",
+    }));
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
+
+  it("promotes a Guide into a new Candidate editing draft", () => {
+    const onSave = vi.fn();
+    const guide: FlowRecord = {
+      ...candidate, flow_id: "flow_guide", kind: "guide", status: "draft", inputs: [],
+      steps: [{ ...candidate.steps[0]!, capability: null, mode: "manual", success_when: null }],
+    };
+    const view = renderPanel({ context: { ...context(false), flow: guide, base: null, provenance: null, evidence: [] }, onSave });
+    click(view.host, "升级为 Candidate");
+    expect(view.host.textContent).toContain("保存 Candidate");
+    expect(view.host.querySelector('select[aria-label="步骤 1 Capability"]')).not.toBeNull();
+    click(view.host, "保存 Candidate");
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      flow_id: "", parent_flow_id: "flow_guide", kind: "runbook", status: "candidate",
+    }));
+    act(() => view.root.unmount());
+    view.host.remove();
+  });
+
   it("renders semantic review evidence, provenance, history, and capability mapping", () => {
     const view = renderPanel();
     expect(view.host.textContent).toContain("run_source");
