@@ -239,3 +239,31 @@ no new Run was created for the repair
 ```
 
 If Feishu rejects the old card as permanently invalid, retain Delivery and report the exact provider error; do not send an untracked fallback message.
+
+## 5. Task 4 — Persist and update the actual CardKit instance
+
+实机复核证明 `im.message.patch(surface_message_id)` 不能更新 SDK 创建的流式 CardKit 实例。本任务修订 Task 3 的“patch 成功”定义。
+
+- [x] **Step 1: RED — 锁定双 ID 与失败不完成合同**
+
+  覆盖 schema 迁移、ack 的可选 `surface_card_id`、新卡同时确认 message/card ID、历史 ID 解析、解析失败不完成，以及恢复写入使用 `card_id`。
+
+- [x] **Step 2: 持久化 CardKit ID**
+
+  `ChannelDeliveryRow` 增加 `surfaceCardId`；ack 保持旧三参数兼容，并允许第四参数原子保存 CardKit ID。SQLite 迁移保留旧行并为其写入 `NULL`。
+
+- [x] **Step 3: 改用 CardKit 全量更新**
+
+  新卡从 SDK controller 取得运行时 `cardId`。恢复路径只调用 `cardkit.v1.card.update`，并检查响应；不再把 IM message PATCH 成功当成用户表面成功。
+
+- [x] **Step 4: 历史兼容**
+
+  对 `surface_card_id IS NULL` 的 Delivery 调用 `card.idConvert(surface_message_id)`，成功后持久化再写卡；缺权限或解析失败时保留 Delivery。
+
+- [ ] **Step 5: 全量验证、提交和重启**
+
+  运行全量 test/lint/build 与 GitNexus change detection，仅提交本任务文件，然后重启 Bridge。
+
+- [ ] **Step 6: 历史误完成补偿与实机验收**
+
+  将本次错误窗口内误标 completed 的 10 条 Delivery 恢复为可对账状态；这只修复交付状态，不创建新 Run。开通 `cardkit:card:read` 后由正常 reconciler 解析旧 card ID、更新原卡并完成 Delivery，以飞书实机可见结果作为最终验收。

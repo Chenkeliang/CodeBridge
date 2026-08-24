@@ -18,6 +18,7 @@ function makeHost() {
       _chatId: string,
       input: {
         markdown(controller: {
+          cardId: string;
           messageId: string;
           setContent(full: string): Promise<void>;
         }): Promise<void>;
@@ -25,13 +26,18 @@ function makeHost() {
       _opts: unknown,
     ) => {
       void input
-        .markdown({ messageId: "card-1", setContent: async () => {} })
+        .markdown({
+          cardId: "cardkit-1",
+          messageId: "card-1",
+          setContent: async () => {},
+        })
         .catch(() => {});
     },
   );
   const host: FeishuCardHost = {
     channel: { stream } as never,
     sendMarkdown: async () => {},
+    resolveCardId: vi.fn(async () => "cardkit-resolved"),
     updateCard: vi.fn(async () => {}),
     registerPendingStream: () => {},
     clearPendingStream: () => {},
@@ -84,6 +90,7 @@ function delivery(
     conversationId: "chat-1|",
     replyToMessageId: "m1",
     surfaceMessageId: "card-old",
+    surfaceCardId: "cardkit-old",
     claimOwner: "feishu:old:run_1",
     claimExpiresAt: null,
     acceptedSequence: 0,
@@ -300,7 +307,7 @@ describe("FeishuSessionWatcher", () => {
     ingress.events = blockingEvents([repeated]);
     ingress.replayEvents.mockResolvedValue([repeated, terminalEvent(9)]);
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old");
     w.start(0);
     await waitUntil(() => ingress.events.mock.calls.length === 1);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -433,6 +440,7 @@ describe("FeishuSessionWatcher", () => {
       "turn_1",
       expect.stringMatching(/^feishu:inst-1:run_1$/),
       "card-1",
+      "cardkit-1",
     );
     w.abort();
   });
@@ -451,6 +459,7 @@ describe("FeishuSessionWatcher", () => {
       "turn_1",
       expect.stringMatching(/^feishu:inst-1:run_1$/),
       "card-1",
+      "cardkit-1",
     );
     w.abort();
   });
@@ -472,13 +481,13 @@ describe("FeishuSessionWatcher", () => {
     ]);
 
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old");
     w.start(0);
 
     await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
 
     expect(host.updateCard).toHaveBeenCalledWith(
-      "card-old",
+      "cardkit-old",
       expect.objectContaining({
         body: {
           elements: [{
@@ -496,6 +505,46 @@ describe("FeishuSessionWatcher", () => {
       "feishu:old:run_1",
     );
     expect(ingress.claimDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it("resolves and persists a legacy CardKit id before updating the card", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    const row = delivery("succeeded");
+    row.surfaceCardId = null;
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(row, turn(), "connected");
+
+    expect(host.resolveCardId).toHaveBeenCalledWith("card-old");
+    expect(ingress.ackDelivery).toHaveBeenCalledWith(
+      "turn_1",
+      "feishu:old:run_1",
+      "card-old",
+      "cardkit-resolved",
+    );
+    expect(host.updateCard).toHaveBeenCalledWith(
+      "cardkit-resolved",
+      expect.any(Object),
+    );
+    w.abort();
+  });
+
+  it("keeps a legacy delivery recoverable when CardKit id resolution fails", async () => {
+    const { host } = makeHost();
+    host.resolveCardId = vi.fn(async () => {
+      throw new Error("missing cardkit:card:read");
+    });
+    const ingress = makeIngress();
+    const row = delivery("succeeded");
+    row.surfaceCardId = null;
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(row, turn(), "connected");
+
+    expect(host.updateCard).not.toHaveBeenCalled();
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
     w.abort();
   });
 
@@ -543,7 +592,7 @@ describe("FeishuSessionWatcher", () => {
     ]);
 
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old");
     w.start(0);
 
     await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
@@ -574,7 +623,7 @@ describe("FeishuSessionWatcher", () => {
     ingress.events = blockingEvents([terminalEvent(9, type)]);
 
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old");
     w.start(0);
 
     await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
@@ -594,7 +643,7 @@ describe("FeishuSessionWatcher", () => {
     ingress.events = blockingEvents([terminalEvent(9)]);
 
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old");
     w.start(0);
 
     await waitUntil(() => completes >= 2);
@@ -654,7 +703,7 @@ describe("FeishuSessionWatcher", () => {
     ]);
 
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old");
     w.start(0);
 
     await waitUntil(() => ingress.events.mock.calls.length >= 2);
@@ -697,13 +746,13 @@ describe("FeishuSessionWatcher", () => {
     ]);
 
     const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old");
     w.start(0);
 
     await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
 
     expect(host.updateCard).toHaveBeenCalledWith(
-      "card-old",
+      "cardkit-old",
       expect.objectContaining({
         body: {
           elements: [{

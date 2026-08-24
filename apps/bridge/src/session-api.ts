@@ -1120,11 +1120,19 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const surfaceMessageId = typeof body?.surface_message_id === "string"
       ? body.surface_message_id
       : null;
+    const surfaceCardId = typeof body?.surface_card_id === "string"
+      ? body.surface_card_id
+      : undefined;
     if (!owner || !surfaceMessageId) {
       return c.json({ error: "owner_and_surface_message_id_required" }, 400);
     }
     const acked = options.workItems.withSessionTransaction((tx) =>
-      tx.ackDelivery(c.req.param("turn_id"), owner, surfaceMessageId),
+      tx.ackDelivery(
+        c.req.param("turn_id"),
+        owner,
+        surfaceMessageId,
+        surfaceCardId,
+      ),
     );
     return c.json({ acked });
   });

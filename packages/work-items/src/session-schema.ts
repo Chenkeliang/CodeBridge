@@ -160,6 +160,7 @@ export function initializeSessionRuntimeSchema(
       conversation_id TEXT NOT NULL,
       reply_to_message_id TEXT NOT NULL,
       surface_message_id TEXT,
+      surface_card_id TEXT,
       claim_owner TEXT,
       claim_expires_at TEXT,
       accepted_sequence INTEGER NOT NULL,
@@ -179,6 +180,10 @@ export function initializeSessionRuntimeSchema(
     database,
     "ALTER TABLE session_runtime ADD COLUMN provider_session_id TEXT",
   );
+  addColumn(
+    database,
+    "ALTER TABLE channel_turn_delivery ADD COLUMN surface_card_id TEXT",
+  );
 
   migrateChannelDeliveryStatusCheck(database);
 }
@@ -195,7 +200,12 @@ export function migrateChannelDeliveryStatusCheck(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channel_turn_delivery'",
     )
     .get() as { sql?: string } | undefined;
-  if (!row?.sql || row.sql.includes("CHECK")) return;
+  if (!row?.sql) return;
+  addColumn(
+    database,
+    "ALTER TABLE channel_turn_delivery ADD COLUMN surface_card_id TEXT",
+  );
+  if (row.sql.includes("CHECK")) return;
 
   database.exec("BEGIN IMMEDIATE;");
   try {
@@ -210,6 +220,7 @@ export function migrateChannelDeliveryStatusCheck(
         conversation_id TEXT NOT NULL,
         reply_to_message_id TEXT NOT NULL,
         surface_message_id TEXT,
+        surface_card_id TEXT,
         claim_owner TEXT,
         claim_expires_at TEXT,
         accepted_sequence INTEGER NOT NULL,
@@ -220,9 +231,20 @@ export function migrateChannelDeliveryStatusCheck(
         updated_at TEXT NOT NULL
       );
     `);
-    database.exec(
-      "INSERT INTO channel_turn_delivery SELECT * FROM channel_turn_delivery_legacy;",
-    );
+    database.exec(`
+      INSERT INTO channel_turn_delivery (
+        turn_id, session_id, channel, conversation_id, reply_to_message_id,
+        surface_message_id, surface_card_id, claim_owner, claim_expires_at,
+        accepted_sequence, run_id, run_terminal_at, status, created_at,
+        updated_at
+      )
+      SELECT
+        turn_id, session_id, channel, conversation_id, reply_to_message_id,
+        surface_message_id, surface_card_id, claim_owner, claim_expires_at,
+        accepted_sequence, run_id, run_terminal_at, status, created_at,
+        updated_at
+      FROM channel_turn_delivery_legacy;
+    `);
     database.exec("DROP TABLE channel_turn_delivery_legacy;");
     database.exec(`
       CREATE INDEX IF NOT EXISTS channel_delivery_pending

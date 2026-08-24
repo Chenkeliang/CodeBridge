@@ -327,6 +327,7 @@ export interface SessionRuntimeTransaction {
     turnId: string,
     owner: string,
     surfaceMessageId: string,
+    surfaceCardId?: string,
   ): boolean;
   completeDelivery(turnId: string, owner: string): boolean;
   listDeliveries(channel: string): ChannelDeliveryRow[];
@@ -1130,16 +1131,17 @@ export function createSqliteSessionRuntimeTransaction(
       return Number(result.changes) === 1;
     },
 
-    ackDelivery(turnId, owner, surfaceMessageId) {
+    ackDelivery(turnId, owner, surfaceMessageId, surfaceCardId) {
       assertActive();
       const row = database
         .prepare(
-          `SELECT surface_message_id, claim_owner, status
+          `SELECT surface_message_id, surface_card_id, claim_owner, status
            FROM channel_turn_delivery WHERE turn_id = ?`,
         )
         .get(turnId) as
           | {
               surface_message_id?: string | null;
+              surface_card_id?: string | null;
               claim_owner?: string | null;
               status?: string;
             }
@@ -1155,16 +1157,33 @@ export function createSqliteSessionRuntimeTransaction(
         row.surface_message_id !== null
         && row.surface_message_id !== undefined
       ) {
-        return String(row.surface_message_id) === surfaceMessageId;
+        if (String(row.surface_message_id) !== surfaceMessageId) return false;
+        if (
+          row.surface_card_id !== null
+          && row.surface_card_id !== undefined
+        ) {
+          return surfaceCardId === undefined
+            || String(row.surface_card_id) === surfaceCardId;
+        }
+        if (surfaceCardId === undefined) return true;
+        const now = new Date().toISOString();
+        const result = database
+          .prepare(
+            `UPDATE channel_turn_delivery
+             SET surface_card_id = ?, updated_at = ?
+             WHERE turn_id = ? AND surface_card_id IS NULL`,
+          )
+          .run(surfaceCardId, now, turnId);
+        return Number(result.changes) === 1;
       }
       const now = new Date().toISOString();
       database
         .prepare(
           `UPDATE channel_turn_delivery
-           SET surface_message_id = ?, updated_at = ?
+           SET surface_message_id = ?, surface_card_id = ?, updated_at = ?
            WHERE turn_id = ? AND surface_message_id IS NULL`,
         )
-        .run(surfaceMessageId, now, turnId);
+        .run(surfaceMessageId, surfaceCardId ?? null, now, turnId);
       return true;
     },
 
@@ -1739,6 +1758,7 @@ function toChannelDeliveryRow(row: SqliteRow): ChannelDeliveryRow {
     conversationId: String(row.conversation_id),
     replyToMessageId: String(row.reply_to_message_id),
     surfaceMessageId: nullableString(row.surface_message_id),
+    surfaceCardId: nullableString(row.surface_card_id),
     claimOwner: nullableString(row.claim_owner),
     claimExpiresAt: nullableString(row.claim_expires_at),
     acceptedSequence: Number(row.accepted_sequence),
