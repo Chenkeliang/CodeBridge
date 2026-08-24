@@ -154,6 +154,25 @@ export function projectSessionEvent(
       });
       break;
     }
+    case "FLOW_BATCH_DRAFTED":
+    case "FLOW_BATCH_CONFIRMED":
+    case "FLOW_BATCH_UPDATED":
+    case "FLOW_BATCH_COMPLETED": {
+      const payload = asRecord(event.payload);
+      const batchId = typeof payload.batch_id === "string"
+        ? payload.batch_id
+        : event.target ?? "batch";
+      upsertFlowBlock(
+        database,
+        sessionId,
+        event,
+        `flow_batch:${batchId}`,
+        "flow_batch",
+        typeof payload.status === "string" ? payload.status : "queued",
+        payload,
+      );
+      break;
+    }
     // 已知但有意不进时间线的类型：显式 no-op（cursor 正常前进）。
     case "WORK_ITEM_CREATED":
     case "TURN_QUEUED":

@@ -385,6 +385,50 @@ describe("Session projector", () => {
     store.close();
   });
 
+  it("upserts Flow batch progress into one timeline block", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_BATCH_CONFIRMED",
+      actor: "system",
+      target: "batch_1",
+      payload: {
+        batch_id: "batch_1",
+        flow_id: "flow_orders",
+        status: "queued",
+        total: 3,
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_BATCH_UPDATED",
+      actor: "system",
+      target: "batch_1",
+      payload: {
+        batch_id: "batch_1",
+        flow_id: "flow_orders",
+        status: "running",
+        counts: { total: 3, running: 2, queued: 1 },
+      },
+    });
+
+    const blocks = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.filter((block) => block.kind === "flow_batch");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      blockId: "flow_batch:batch_1",
+      status: "running",
+      metadata: expect.objectContaining({
+        batch_id: "batch_1",
+        counts: { total: 3, running: 2, queued: 1 },
+      }),
+    });
+    store.close();
+  });
+
   it("projects a Runtime approval request and closes it when granted", () => {
     const { store, item } = setup();
     seedDispatchedTurn(store, item.id);
