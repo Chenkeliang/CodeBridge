@@ -199,6 +199,35 @@ export interface ChannelRuntimeApproval {
   expiresAt: string | null;
 }
 
+export interface ChannelFlowBatchDraft {
+  draftId: string;
+  sessionId: string;
+  flowId: string;
+  definitionRevision: string;
+  status: "needs_input" | "ready" | "confirmed" | "stale" | "cancelled";
+  revision: number;
+  total: number;
+  blocking: number;
+}
+
+export interface ChannelFlowBatchSnapshot {
+  batchId: string;
+  draftId: string;
+  sessionId: string;
+  flowId: string;
+  definitionRevision: string;
+  status: "queued" | "running" | "succeeded" | "partial_succeeded" | "failed" | "cancelled";
+  counts: {
+    total: number;
+    queued: number;
+    running: number;
+    waiting: number;
+    succeeded: number;
+    failed: number;
+    cancelled: number;
+  };
+}
+
 export interface ChannelSessionMessage {
   channel: string;
   conversationId: string;
@@ -316,6 +345,18 @@ export interface ChannelSessionIngress {
     approvalId: string,
     decision: "approve" | "reject",
   ): Promise<ChannelRuntimeApproval>;
+  getFlowBatchDraft?(draftId: string): Promise<ChannelFlowBatchDraft>;
+  confirmFlowBatchDraft?(
+    draftId: string,
+    revision: number,
+    idempotencyKey: string,
+  ): Promise<ChannelFlowBatchSnapshot>;
+  getFlowBatch?(batchId: string): Promise<ChannelFlowBatchSnapshot>;
+  cancelFlowBatch?(batchId: string): Promise<ChannelFlowBatchSnapshot>;
+  retryFailedFlowBatch?(
+    batchId: string,
+    idempotencyKey: string,
+  ): Promise<ChannelFlowBatchSnapshot>;
   events(
     sessionId: string,
     opts: { afterSequence: number; signal: AbortSignal },

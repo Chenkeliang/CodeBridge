@@ -12,7 +12,7 @@ import {
 } from "@codebridge/core";
 import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
 import { TelegramBridge } from "@codebridge/channel-telegram";
-import { SqliteEventStore, type PersistedPlanStep } from "@codebridge/work-items";
+import { FlowBatchStore, SqliteEventStore, type PersistedPlanStep } from "@codebridge/work-items";
 import {
   ApprovalService,
   CapabilityRegistry,
@@ -55,6 +55,8 @@ import { createMcpApp } from "./mcp-api.js";
 import { resolveStartupSurfaces } from "./startup-surfaces.js";
 import { SessionRuntimeMigration } from "./session-runtime-migration.js";
 import { buildFlowRecommendationGuidance } from "./flow-recommendation-guidance.js";
+import { createFlowBatchApp } from "./flow-batch-api.js";
+import { FlowBatchService } from "./flow-batch-service.js";
 
 const program = new Command();
 
@@ -95,9 +97,9 @@ program
           onLog: (m) => console.log(m),
         })
       : undefined;
-    const workItemStore = new SqliteEventStore(
-      path.join(dataDir, "orchestration.sqlite"),
-    );
+    const orchestrationPath = path.join(dataDir, "orchestration.sqlite");
+    const workItemStore = new SqliteEventStore(orchestrationPath);
+    const flowBatchStore = new FlowBatchStore(orchestrationPath);
     const sessionCatalog = new SessionCatalogStore(
       path.join(dataDir, "sessions.sqlite"),
       {
@@ -252,6 +254,13 @@ program
         };
       },
     });
+    const flowBatchService = new FlowBatchService({
+      batches: flowBatchStore,
+      workItems: workItemStore,
+      flows: flowCatalog,
+      executor: runExecutor,
+    });
+    await flowBatchService.recover();
     sessionRecovery.scanExpired();
     sessionRecovery.scanCancellationDeadlines();
     const reclaimQueued = (): void => {
@@ -280,6 +289,12 @@ program
         );
       }
       reclaimQueued();
+      void flowBatchService.recover().catch((error) => {
+        console.error(
+          "Flow batch recovery failed:",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
     }, 15_000);
     const cancellationInterval = setInterval(() => {
       try {
@@ -424,8 +439,12 @@ program
       capabilities: capabilityRegistry,
       runtime: capabilityRuntime,
     });
+    const flowBatchApp = createFlowBatchApp(
+      flowBatchService,
+      config.runner.token,
+    );
     const channelSessionIngress = createChannelSessionIngress(
-      createChannelIngressApi(sessionCatalogApp, flowCatalogApp),
+      createChannelIngressApi(sessionCatalogApp, flowCatalogApp, flowBatchApp),
       config.runner.token,
     );
     bridge?.setSessionIngress(channelSessionIngress);
@@ -450,6 +469,7 @@ program
       projectDiscovery.close();
       sessionCatalog.close();
       flowCatalog.close();
+      flowBatchStore.close();
       workItemStore.close();
       process.exit(0);
     };
@@ -498,6 +518,7 @@ program
         webFrontendApp,
         sessionCatalogApp,
         flowCatalogApp,
+        flowBatchApp,
         mcpApp,
       ).fetch,
       hostname: "127.0.0.1",

@@ -205,6 +205,57 @@ describe("channel session ingress", () => {
     await expect(ingress.rejectCandidate?.("flow_candidate")).resolves.toMatchObject({ reviewStatus: "rejected" });
   });
 
+  it("adapts Flow batch reads and commands through the shared API", async () => {
+    const app = new Hono();
+    const counts = {
+      total: 2, queued: 1, running: 1, waiting: 0,
+      succeeded: 0, failed: 0, cancelled: 0,
+    };
+    app.get("/v1/flow-invocation-drafts/:draft", (c) => c.json({
+      draft_id: c.req.param("draft"),
+      session_id: "sess_1",
+      flow_id: "flow_orders",
+      definition_revision: "sha256:def",
+      status: "ready",
+      revision: 2,
+      items: [{ issues: [] }, { issues: [{ blocking: true }] }],
+    }));
+    app.post("/v1/flow-invocation-drafts/:draft/confirm", async (c) => {
+      expect(c.req.header("idempotency-key")).toBe("confirm-1");
+      expect(await c.req.json()).toEqual({
+        draft_revision: 2,
+        created_by: "channel",
+      });
+      return c.json({
+        batch_id: "batch_1", draft_id: c.req.param("draft"), session_id: "sess_1",
+        flow_id: "flow_orders", definition_revision: "sha256:def", status: "running", counts,
+      }, 202);
+    });
+    app.get("/v1/flow-batches/:batch", (c) => c.json({
+      batch_id: c.req.param("batch"), draft_id: "draft_1", session_id: "sess_1",
+      flow_id: "flow_orders", definition_revision: "sha256:def", status: "running", counts,
+    }));
+    app.post("/v1/flow-batches/:batch/cancel", (c) => c.json({
+      batch_id: c.req.param("batch"), draft_id: "draft_1", session_id: "sess_1",
+      flow_id: "flow_orders", definition_revision: "sha256:def", status: "cancelled",
+      counts: { ...counts, queued: 0, running: 0, cancelled: 2 },
+    }));
+    app.post("/v1/flow-batches/:batch/retry-failed", (c) => c.json({
+      batch_id: c.req.param("batch"), draft_id: "draft_1", session_id: "sess_1",
+      flow_id: "flow_orders", definition_revision: "sha256:def", status: "running", counts,
+    }));
+
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.getFlowBatchDraft?.("draft_1")).resolves.toMatchObject({
+      draftId: "draft_1", total: 2, blocking: 1,
+    });
+    await expect(ingress.confirmFlowBatchDraft?.("draft_1", 2, "confirm-1"))
+      .resolves.toMatchObject({ batchId: "batch_1", status: "running", counts });
+    await expect(ingress.getFlowBatch?.("batch_1")).resolves.toMatchObject({ batchId: "batch_1" });
+    await expect(ingress.cancelFlowBatch?.("batch_1")).resolves.toMatchObject({ status: "cancelled" });
+    await expect(ingress.retryFailedFlowBatch?.("batch_1", "retry-1")).resolves.toMatchObject({ batchId: "batch_1" });
+  });
+
   it("lists and resolves Runtime step approvals through the existing APIs", async () => {
     const app = new Hono();
     app.get("/v1/runs/:run/approvals", (c) => {
