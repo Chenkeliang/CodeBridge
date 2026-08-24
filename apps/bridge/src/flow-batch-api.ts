@@ -219,7 +219,7 @@ function batchError(c: Context, error: unknown): Response {
 }
 
 function draftIdentity(body: Record<string, unknown>): {
-  sessionId: string;
+  sessionId?: string;
   sourceRunId: string;
   flowId: string;
   definitionRevision: string;
@@ -228,8 +228,13 @@ function draftIdentity(body: Record<string, unknown>): {
   const sourceRunId = stringValue(body.source_run_id);
   const flowId = stringValue(body.flow_id);
   const definitionRevision = stringValue(body.definition_revision);
-  return sessionId && sourceRunId && flowId && definitionRevision
-    ? { sessionId, sourceRunId, flowId, definitionRevision }
+  return sourceRunId && flowId && definitionRevision
+    ? {
+        ...(sessionId ? { sessionId } : {}),
+        sourceRunId,
+        flowId,
+        definitionRevision,
+      }
     : null;
 }
 

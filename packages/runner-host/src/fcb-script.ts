@@ -7,8 +7,9 @@ import path from "node:path";
  */
 const FCB_SCRIPT = `#!/usr/bin/env node
 // fcb — 在 CodeBridge Agent 任务里把文件/消息发回当前聊天
-// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest <Flow ID> <revision> [参数=值] [--reason 原因]
+// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest ... | fcb flow batch <draft-json-file>
 const path = require("node:path");
+const fs = require("node:fs");
 
 const api = process.env.FCB_API;
 const token = process.env.FCB_TOKEN;
@@ -59,6 +60,26 @@ async function main() {
       ref: rest[0],
       text: rest.slice(1).join(" "),
     });
+  } else if (cmd === "flow" && rest[0] === "batch" && rest[1]) {
+    if (!runId) fail("fcb: 缺少 FCB_RUN_ID，不能提交 Flow 批量草稿");
+    const draftPath = path.resolve(rest[1]);
+    const stat = fs.statSync(draftPath);
+    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) {
+      fail("fcb: Flow 批量草稿必须是 2 MiB 以内的 JSON 文件");
+    }
+    const draft = JSON.parse(fs.readFileSync(draftPath, "utf8"));
+    if (!draft || typeof draft !== "object" || Array.isArray(draft)) {
+      fail("fcb: Flow 批量草稿必须是 JSON 对象");
+    }
+    if (!draft.flow_id || !draft.definition_revision || !Array.isArray(draft.items)) {
+      fail("fcb: Flow 批量草稿缺少 flow_id、definition_revision 或 items");
+    }
+    if (draft.items.length < 1 || draft.items.length > 500) {
+      fail("fcb: Flow 批量草稿 items 必须为 1–500 项");
+    }
+    delete draft.session_id;
+    draft.source_run_id = runId;
+    await post("/v1/flow-invocation-drafts", draft);
   } else if (cmd === "flow" && rest[0] === "suggest" && rest[1] && rest[2]) {
     const [subcommand, flowId, definitionRevision, ...options] = rest;
     const reasonIndex = options.indexOf("--reason");
@@ -83,7 +104,7 @@ async function main() {
       extracted_inputs: extractedInputs,
     });
   } else {
-    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest <Flow ID> <revision> [参数=值] [--reason 原因]");
+    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest <Flow ID> <revision> [参数=值] [--reason 原因] | fcb flow batch <draft-json-file>");
   }
 }
 
