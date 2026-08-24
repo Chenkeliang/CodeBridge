@@ -188,6 +188,7 @@ export class FeishuBridge {
   private inboundWebSocketState: FeishuConnectionState = "unavailable";
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
+  private readonly cardUpdateSequences = new Map<string, number>();
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
@@ -756,11 +757,20 @@ export class FeishuBridge {
       },
       updateCard: async (cardId, card) => {
         if (!this.channel) throw new Error("Feishu channel is unavailable");
+        const wallClockSequence = Math.floor(Date.now() / 1000);
+        const sequence = Math.max(
+          wallClockSequence,
+          (this.cardUpdateSequences.get(cardId) ?? 0) + 1,
+        );
+        if (sequence > 2_147_483_647) {
+          throw new Error("CardKit update sequence exceeds int32 range");
+        }
+        this.cardUpdateSequences.set(cardId, sequence);
         const response = await this.channel.rawClient.cardkit.v1.card.update({
           path: { card_id: cardId },
           data: {
             card: { type: "card_json", data: JSON.stringify(card) },
-            sequence: Date.now(),
+            sequence,
             uuid: `recovery_${randomUUID()}`,
           },
         });
