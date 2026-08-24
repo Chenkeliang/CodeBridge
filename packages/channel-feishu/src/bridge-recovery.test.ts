@@ -172,4 +172,26 @@ describe("FeishuBridge interrupted stream recovery", () => {
 
     await bridge.disconnect();
   });
+
+  it("uses a monotonic 32-bit sequence for CardKit recovery writes", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-recovery-"));
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir,
+    });
+    await bridge.connect();
+    const host = (bridge as unknown as {
+      cardHost(): { updateCard(cardId: string, card: object): Promise<void> };
+    }).cardHost();
+
+    await host.updateCard("cardkit-sequence", { schema: "2.0" });
+    await host.updateCard("cardkit-sequence", { schema: "2.0" });
+
+    const calls = channel.rawClient.cardkit.v1.card.update.mock.calls.slice(-2);
+    const first = calls[0]?.[0].data.sequence as number;
+    const second = calls[1]?.[0].data.sequence as number;
+    expect(first).toBeLessThanOrEqual(2_147_483_647);
+    expect(second).toBe(first + 1);
+    await bridge.disconnect();
+  });
 });
