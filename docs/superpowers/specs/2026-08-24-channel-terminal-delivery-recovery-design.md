@@ -1,6 +1,6 @@
 # 通道终态结果持久化恢复设计
 
-- Status: Review draft
+- Status: Accepted for implementation
 - Date: 2026-08-24
 - Scope: 飞书终态卡片在 Bridge 重启、Core SSE 断流或重连后的确定性恢复
 - Amends: `docs/superpowers/specs/2026-08-21-feishu-run-status-reconciliation-design.md`
