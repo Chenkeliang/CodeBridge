@@ -49,9 +49,19 @@ describe("channel turn delivery schema migration", () => {
     expect(sql).toContain("CHECK");
 
     const row = db
-      .prepare("SELECT turn_id, status, run_id FROM channel_turn_delivery")
-      .get() as { turn_id?: string; status?: string; run_id?: string };
-    expect(row).toEqual({ turn_id: "turn_1", status: "pending", run_id: "run_1" });
+      .prepare("SELECT turn_id, status, run_id, surface_card_id FROM channel_turn_delivery")
+      .get() as {
+        turn_id?: string;
+        status?: string;
+        run_id?: string;
+        surface_card_id?: string | null;
+      };
+    expect(row).toEqual({
+      turn_id: "turn_1",
+      status: "pending",
+      run_id: "run_1",
+      surface_card_id: null,
+    });
 
     // 非法状态会被 CHECK 拒绝
     expect(() =>

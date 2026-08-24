@@ -320,6 +320,8 @@ export interface ChannelDeliveryRow {
   conversationId: string;
   replyToMessageId: string;
   surfaceMessageId: string | null;
+  /** Feishu CardKit instance id; distinct from the IM message id. */
+  surfaceCardId: string | null;
   claimOwner: string | null;
   claimExpiresAt: string | null;
   acceptedSequence: number;
@@ -371,6 +373,7 @@ export interface ChannelSessionIngress {
     turnId: string,
     owner: string,
     surfaceMessageId: string,
+    surfaceCardId?: string,
   ): Promise<boolean>;
   completeDelivery(turnId: string, owner: string): Promise<boolean>;
   getSlotCommandContext(slot: ChannelSlot): Promise<ChannelCommandContext>;

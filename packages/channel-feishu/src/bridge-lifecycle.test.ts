@@ -21,6 +21,7 @@ type TestableBridge = {
       chatId: string,
       input: {
         markdown(controller: {
+          cardId: string;
           messageId: string;
           append(chunk: string): Promise<void>;
           setContent(full: string): Promise<void>;
@@ -120,6 +121,7 @@ describe("FeishuBridge stream lifecycle", () => {
       async stream(_chatId, input) {
         let out = "";
         await input.markdown({
+          cardId: "cardkit-1",
           messageId: "card-1",
           async append(chunk: string) { out += chunk; },
           async setContent(full: string) { out = full; },
@@ -163,6 +165,7 @@ describe("FeishuBridge stream lifecycle", () => {
     bridge.channel = {
       async stream(_chatId, input) {
         await input.markdown({
+          cardId: "cardkit-1",
           messageId: "card-1",
           async append() {},
           async setContent() {},
@@ -282,6 +285,7 @@ describe("FeishuBridge stream lifecycle", () => {
     bridge.channel = {
       async stream(_chatId, input) {
         await input.markdown({
+          cardId: "cardkit-1",
           messageId: "card-1",
           async append(chunk: string) { rendered += chunk; },
           async setContent(full: string) { rendered = full; },
@@ -329,6 +333,7 @@ describe("FeishuBridge stream lifecycle", () => {
     bridge.channel = {
       async stream(_chatId, input) {
         await input.markdown({
+          cardId: "cardkit-1",
           messageId: "card-1",
           async append(chunk: string) { rendered += chunk; },
           async setContent(full: string) { rendered = full; },
@@ -364,6 +369,7 @@ describe("FeishuBridge stream lifecycle", () => {
       "turn_1",
       expect.stringMatching(/^feishu:.+:run_1$/),
       "card-1",
+      "cardkit-1",
     );
     expect(complete).toHaveBeenCalledWith(
       "turn_1",

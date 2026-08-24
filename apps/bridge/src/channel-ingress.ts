@@ -472,13 +472,18 @@ export function createChannelSessionIngress(
     turnId: string,
     owner: string,
     surfaceMessageId: string,
+    surfaceCardId?: string,
   ): Promise<boolean> => {
     const response = await app.request(
       `/v1/deliveries/${encodeURIComponent(turnId)}/ack`,
       {
         method: "POST",
         headers: { ...auth, "content-type": "application/json" },
-        body: JSON.stringify({ owner, surface_message_id: surfaceMessageId }),
+        body: JSON.stringify({
+          owner,
+          surface_message_id: surfaceMessageId,
+          ...(surfaceCardId ? { surface_card_id: surfaceCardId } : {}),
+        }),
       },
     );
     if (!response.ok) {

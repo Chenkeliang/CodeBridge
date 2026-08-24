@@ -740,8 +740,35 @@ export class FeishuBridge {
       channel: this.channel,
       sendMarkdown: (chatId, markdown, replyTo) =>
         this.sendMarkdown(chatId, markdown, replyTo),
-      updateCard: async (messageId, card) => {
-        if (this.channel) await this.channel.updateCard(messageId, card);
+      resolveCardId: async (messageId) => {
+        if (!this.channel) throw new Error("Feishu channel is unavailable");
+        const response = await this.channel.rawClient.cardkit.v1.card.idConvert({
+          data: { message_id: messageId },
+        });
+        if (response.code !== undefined && response.code !== 0) {
+          throw new Error(
+            `CardKit id conversion failed (${response.code}): ${response.msg ?? "unknown"}`,
+          );
+        }
+        const cardId = response.data?.card_id;
+        if (!cardId) throw new Error("CardKit id conversion returned no card_id");
+        return cardId;
+      },
+      updateCard: async (cardId, card) => {
+        if (!this.channel) throw new Error("Feishu channel is unavailable");
+        const response = await this.channel.rawClient.cardkit.v1.card.update({
+          path: { card_id: cardId },
+          data: {
+            card: { type: "card_json", data: JSON.stringify(card) },
+            sequence: Date.now(),
+            uuid: `recovery_${randomUUID()}`,
+          },
+        });
+        if (response.code !== undefined && response.code !== 0) {
+          throw new Error(
+            `CardKit update failed (${response.code}): ${response.msg ?? "unknown"}`,
+          );
+        }
       },
       registerPendingStream: (messageId, entry) => {
         this.pendingStreams.update((all) => ({ ...all, [messageId]: entry }));

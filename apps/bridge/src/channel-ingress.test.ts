@@ -446,7 +446,11 @@ describe("channel session ingress", () => {
       return c.json({ claimed: true });
     });
     app.post("/v1/deliveries/:turn/ack", async (c) => {
-      expect(await c.req.json()).toEqual({ owner: "owner-1", surface_message_id: "card-1" });
+      expect(await c.req.json()).toEqual({
+        owner: "owner-1",
+        surface_message_id: "message-1",
+        surface_card_id: "cardkit-1",
+      });
       return c.json({ acked: true });
     });
     app.post("/v1/deliveries/:turn/complete", async (c) => {
@@ -455,7 +459,12 @@ describe("channel session ingress", () => {
     });
     const ingress = createChannelSessionIngress(app, "token");
     expect(await ingress.claimDelivery("turn_1", "owner-1")).toBe(true);
-    expect(await ingress.ackDelivery("turn_1", "owner-1", "card-1")).toBe(true);
+    expect(await ingress.ackDelivery(
+      "turn_1",
+      "owner-1",
+      "message-1",
+      "cardkit-1",
+    )).toBe(true);
     expect(await ingress.completeDelivery("turn_1", "owner-1")).toBe(true);
   });
 

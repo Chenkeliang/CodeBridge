@@ -139,3 +139,28 @@ replayEvents?(
 | Web | Session timeline | 既有持久化 Projection | 无新增 | 已有完整结果 | 无改动 |
 | Agent | Runtime | 无新增 | 无新增 | 不负责交付 | 非目标 |
 | Telegram | watcher | 未来复用 replayEvents | 无新增 | 暂未启用 | 后续收尾 |
+
+## 11. 实机复核修订：消息 ID 不等于 CardKit ID
+
+有限历史重放已经恢复出正确结果，但实机验证发现飞书表面仍未改变。二次追踪确认：SDK 的 Markdown 流式卡片先创建独立的 CardKit 实例，再发送一条引用该实例的 IM 消息。`surface_message_id` 只标识引用消息；流式内容实际由 `card_id` 标识。
+
+旧恢复实现调用 `im.v1.message.patch(surface_message_id)`。该请求成功只说明消息 PATCH 被接受，不代表底层 CardKit 实例已更新，因此不能作为 Delivery 完成证据。
+
+修订后的唯一合法表面提交条件为：
+
+```text
+Runtime 已终态
+AND 持久化结果已重放
+AND 真实 CardKit card_id 已确定
+AND cardkit.v1.card.update(card_id) 成功
+=> Delivery completed
+```
+
+V1 实现约束：
+
+- `channel_turn_delivery` 同时保存 `surface_message_id` 与 `surface_card_id`；
+- 新卡开卡时直接从 SDK 流式 controller 取得 `card_id`，与消息 ID 一起确认 Delivery；
+- 历史 Delivery 缺少 `card_id` 时，通过官方 `card.idConvert(message_id)` 解析并持久化；
+- 解析、持久化或 CardKit 更新任一步失败，Delivery 保持可恢复，禁止标记 completed；
+- `cardkit:card:read` 仅用于历史消息 ID 转换；新 Delivery 不依赖该读权限；
+- 不重跑 Agent/Flow，不发送无持久化幂等保护的普通消息兜底。

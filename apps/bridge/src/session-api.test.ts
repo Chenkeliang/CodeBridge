@@ -1642,6 +1642,26 @@ describe("session API", () => {
         sessionActiveRunId: expect.any(String),
       },
     });
+    expect(workItems.withSessionTransaction((tx) =>
+      tx.claimDelivery(
+        deliveries[0]!.turnId,
+        "feishu:test",
+        new Date().toISOString(),
+        new Date(Date.now() + 60_000).toISOString(),
+      )
+    )).toBe(true);
+    expect(workItems.withSessionTransaction((tx) =>
+      tx.ackDelivery(
+        deliveries[0]!.turnId,
+        "feishu:test",
+        "message-42",
+        "cardkit-42",
+      )
+    )).toBe(true);
+    expect(workItems.listDeliveries("feishu")[0]).toMatchObject({
+      surfaceMessageId: "message-42",
+      surfaceCardId: "cardkit-42",
+    });
     catalog.close();
     workItems.close();
   });

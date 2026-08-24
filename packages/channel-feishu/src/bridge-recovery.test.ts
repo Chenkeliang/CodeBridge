@@ -15,6 +15,19 @@ const channel = vi.hoisted(() => ({
   connect: vi.fn().mockResolvedValue(undefined),
   disconnect: vi.fn().mockResolvedValue(undefined),
   updateCard: vi.fn().mockResolvedValue(undefined),
+  rawClient: {
+    cardkit: {
+      v1: {
+        card: {
+          idConvert: vi.fn().mockResolvedValue({
+            code: 0,
+            data: { card_id: "cardkit-resolved" },
+          }),
+          update: vi.fn().mockResolvedValue({ code: 0 }),
+        },
+      },
+    },
+  },
 }));
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
@@ -79,6 +92,7 @@ describe("FeishuBridge interrupted stream recovery", () => {
         conversationId: "chat-1|",
         replyToMessageId: "source-1",
         surfaceMessageId: "card-terminal",
+        surfaceCardId: "cardkit-terminal",
         claimOwner: "feishu:old:run_1",
         claimExpiresAt: null,
         acceptedSequence: 0,
@@ -121,13 +135,41 @@ describe("FeishuBridge interrupted stream recovery", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
-    expect(JSON.stringify(channel.updateCard.mock.calls[0]?.[1])).toContain(
+    expect(JSON.stringify(
+      channel.rawClient.cardkit.v1.card.update.mock.calls[0]?.[0],
+    )).toContain(
       "✅ **已完成**",
+    );
+    expect(channel.rawClient.cardkit.v1.card.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { card_id: "cardkit-terminal" },
+      }),
     );
     expect(completeDelivery).toHaveBeenCalledWith(
       "turn_1",
       "feishu:old:run_1",
     );
+    await bridge.disconnect();
+  });
+
+  it("treats a nonzero CardKit response as a failed surface write", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-recovery-"));
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir,
+    });
+    await bridge.connect();
+    channel.rawClient.cardkit.v1.card.update.mockResolvedValueOnce({
+      code: 999,
+      msg: "rejected",
+    });
+    const host = (bridge as unknown as {
+      cardHost(): { updateCard(cardId: string, card: object): Promise<void> };
+    }).cardHost();
+
+    await expect(host.updateCard("cardkit-1", { schema: "2.0" }))
+      .rejects.toThrow("CardKit update failed (999): rejected");
+
     await bridge.disconnect();
   });
 });

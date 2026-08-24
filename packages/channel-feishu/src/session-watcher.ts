@@ -54,7 +54,9 @@ export interface PendingFeishuStream {
 export interface FeishuCardHost {
   channel?: LarkChannel;
   sendMarkdown(chatId: string, markdown: string, replyTo?: string): Promise<void>;
-  updateCard(messageId: string, card: object): Promise<void>;
+  resolveCardId?(messageId: string): Promise<string>;
+  /** Update the CardKit instance itself, never the referencing IM message. */
+  updateCard(cardId: string, card: object): Promise<void>;
   registerPendingStream(messageId: string, entry: PendingFeishuStream): void;
   clearPendingStream(messageId: string): void;
   log(message: string): void;
@@ -131,6 +133,7 @@ export class FeishuRunCard {
   private quietNotifiedActivityVersion = -1;
   private lastWriteError?: unknown;
   private streamMessageId?: string;
+  private streamCardId?: string;
   private queueRender: (statusOnly: boolean) => void = () => {};
   private done = false;
 
@@ -159,12 +162,20 @@ export class FeishuRunCard {
     return this.streamMessageId;
   }
 
+  get cardInstanceId(): string | undefined {
+    return this.streamCardId;
+  }
+
   async open(): Promise<void> {
     if (!this.host.channel) return;
     void this.host.channel.stream(
       this.chatId,
       {
         markdown: async (s) => {
+          const cardId = (s as unknown as { cardId?: unknown }).cardId;
+          if (typeof cardId === "string" && cardId) {
+            this.streamCardId = cardId;
+          }
           this.streamMessageId = s.messageId;
           this.host.registerPendingStream(s.messageId, {
             chatId: this.chatId,
@@ -378,6 +389,7 @@ export interface PendingTurn {
 
 interface ResumedFeishuCard {
   surfaceMessageId: string;
+  surfaceCardId: string;
   projector: ChannelStreamProjector;
   flowProjector: ChannelFlowProjector;
   runStatus: FeishuRunStatus;
@@ -440,6 +452,7 @@ export class FeishuSessionWatcher {
     turnId: string,
     owner: string,
     showThinking: boolean,
+    surfaceCardId: string,
   ): void {
     const existing = this.resumedCards.get(runId);
     if (existing) {
@@ -449,6 +462,7 @@ export class FeishuSessionWatcher {
     const runStatus = createFeishuRunStatus();
     this.resumedCards.set(runId, {
       surfaceMessageId,
+      surfaceCardId,
       projector: createChannelStreamProjector({
         showThinking,
         maxProgressChars: FEISHU_LIVE_PROGRESS_CHARS,
@@ -467,8 +481,8 @@ export class FeishuSessionWatcher {
     inboundState: FeishuConnectionState,
   ): Promise<void> {
     if (
-      delivery.surfaceMessageId &&
-      this.permanentlyInvalidCardIds.has(delivery.surfaceMessageId)
+      delivery.surfaceCardId &&
+      this.permanentlyInvalidCardIds.has(delivery.surfaceCardId)
     ) {
       return;
     }
@@ -480,12 +494,43 @@ export class FeishuSessionWatcher {
     if (!delivery.surfaceMessageId) {
       await this.openCardForRun(delivery.runId, turn);
     } else {
+      let surfaceCardId = delivery.surfaceCardId;
+      if (!surfaceCardId) {
+        try {
+          if (!this.host.resolveCardId) {
+            throw new Error("CardKit id resolver is unavailable");
+          }
+          surfaceCardId = await this.host.resolveCardId(
+            delivery.surfaceMessageId,
+          );
+          const persisted = await this.ingress.ackDelivery(
+            delivery.turnId,
+            delivery.claimOwner ?? "",
+            delivery.surfaceMessageId,
+            surfaceCardId,
+          );
+          if (!persisted) {
+            throw new Error("resolved CardKit id could not be persisted");
+          }
+        } catch (error) {
+          this.host.log(JSON.stringify({
+            event: "feishu_card_id_recovery_failed",
+            channel: "feishu",
+            sessionId: this.sessionId,
+            runId: delivery.runId,
+            surfaceMessageId: delivery.surfaceMessageId,
+            message: error instanceof Error ? error.message : String(error),
+          }));
+          return;
+        }
+      }
       this.resumeCardForRun(
         delivery.runId,
         delivery.surfaceMessageId,
         delivery.turnId,
         delivery.claimOwner ?? "",
         turn.showThinking,
+        surfaceCardId,
       );
     }
 
@@ -665,10 +710,10 @@ export class FeishuSessionWatcher {
     runId: string | undefined,
     resumed: ResumedFeishuCard,
   ): Promise<boolean> {
-    if (this.permanentlyInvalidCardIds.has(resumed.surfaceMessageId)) return false;
+    if (this.permanentlyInvalidCardIds.has(resumed.surfaceCardId)) return false;
     try {
       await this.host.updateCard(
-        resumed.surfaceMessageId,
+        resumed.surfaceCardId,
         this.resumedCardBody(resumed),
       );
       setHttpWrite(resumed.runStatus, "healthy");
@@ -676,7 +721,7 @@ export class FeishuSessionWatcher {
     } catch (error) {
       if (this.recordPermanentCardFailure(
         runId,
-        resumed.surfaceMessageId,
+        resumed.surfaceCardId,
         error,
       )) {
         setHttpWrite(resumed.runStatus, "unavailable");
@@ -729,13 +774,15 @@ export class FeishuSessionWatcher {
       }
       await card.open();
       const cardId = card.cardMessageId;
-      if (!cardId) {
+      const cardInstanceId = card.cardInstanceId;
+      if (!cardId || !cardInstanceId) {
         throw new Error(`card did not produce a message id for run ${runId}`);
       }
       const acked = await this.ingress.ackDelivery(
         turn.turnId,
         owner,
         cardId,
+        cardInstanceId,
       );
       if (!acked) {
         throw new Error(`ack delivery failed for run ${runId}`);
