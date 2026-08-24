@@ -12,6 +12,7 @@ import { SessionQueue } from "@/components/session-queue";
 import { SessionTimeline } from "@/components/session-timeline";
 import { FlowDetail } from "@/components/flow-detail";
 import { FlowControlPanel } from "@/components/flow-control-panel";
+import { FlowBatchPanel } from "@/components/flow-batch-panel";
 import { SettingsPage } from "@/components/settings-page";
 import { PixelMark } from "@/components/pixel-mark";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
@@ -27,6 +28,8 @@ import type {
   ConfigOption,
   FlowRecord,
   FlowCapability,
+  FlowBatchDraft,
+  FlowBatchSnapshot,
   FlowProposal,
   FlowRecommendation,
   FlowReviewContext,
@@ -73,6 +76,10 @@ export function Workbench() {
   const [flowRecommendations, setFlowRecommendations] = useState<FlowRecommendation[]>([]);
   const [savingGuideRunId, setSavingGuideRunId] = useState<string | null>(null);
   const [flowMismatch, setFlowMismatch] = useState<FlowRevisionMismatch | null>(null);
+  const [flowBatchDraft, setFlowBatchDraft] = useState<FlowBatchDraft | null>(null);
+  const [flowBatch, setFlowBatch] = useState<FlowBatchSnapshot | null>(null);
+  const [flowBatchBusy, setFlowBatchBusy] = useState(false);
+  const [flowBatchError, setFlowBatchError] = useState<string | null>(null);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
   const [approvalStatusOverrides, setApprovalStatusOverrides] = useState<Record<string, RuntimeApprovalStatus>>({});
   const [paramValues, setParamValues] = useState<Record<string, unknown>>({});
@@ -215,8 +222,9 @@ export function Workbench() {
     if (loading || deepLinkHandled.current) return;
     const params = new URLSearchParams(window.location.search);
     const flowId = params.get("flow");
+    const batchId = params.get("batch");
     const sessionId = params.get("session");
-    if (!flowId && !sessionId) return;
+    if (!flowId && !batchId && !sessionId) return;
     deepLinkHandled.current = true;
     queueMicrotask(() => {
       if (sessionId) {
@@ -232,6 +240,7 @@ export function Workbench() {
         setArea("flows");
         void openFlow(flowId);
       }
+      if (batchId) void openFlowBatch({ batchId });
     });
   }, [loading, notify, sessions]);
 
@@ -271,6 +280,22 @@ export function Workbench() {
     });
     return () => { active = false; };
   }, [selectedSessionId, waitingRuntimeApprovals]);
+
+  useEffect(() => {
+    if (!flowBatch || !["queued", "running"].includes(flowBatch.status)) return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void api.flowBatch(flowBatch.batch_id).then((snapshot) => {
+        if (active) setFlowBatch(snapshot);
+      }).catch((caught) => {
+        if (active) setFlowBatchError(messageOf(caught));
+      });
+    }, 1500);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [flowBatch?.batch_id, flowBatch?.status]);
 
   useEffect(() => {
     window.localStorage.setItem("codebridge:web-theme", theme);
@@ -1150,6 +1175,126 @@ export function Workbench() {
     }
   }
 
+  async function openFlowBatch(reference: { draftId?: string; batchId?: string }) {
+    setFlowBatchBusy(true);
+    setFlowBatchError(null);
+    try {
+      if (reference.batchId) {
+        const snapshot = await api.flowBatch(reference.batchId);
+        setFlowBatch(snapshot);
+        setFlowBatchDraft(null);
+        const url = new URL(window.location.href);
+        url.searchParams.set("batch", snapshot.batch_id);
+        if (snapshot.session_id) url.searchParams.set("session", snapshot.session_id);
+        window.history.replaceState(null, "", url);
+      } else if (reference.draftId) {
+        const nextDraft = await api.flowBatchDraft(reference.draftId);
+        setFlowBatchDraft(nextDraft);
+        setFlowBatch(null);
+      }
+    } catch (caught) {
+      setFlowBatchError(messageOf(caught));
+    } finally {
+      setFlowBatchBusy(false);
+    }
+  }
+
+  function closeFlowBatch() {
+    setFlowBatchDraft(null);
+    setFlowBatch(null);
+    setFlowBatchError(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("batch");
+    window.history.replaceState(null, "", url);
+  }
+
+  async function saveFlowBatchDraft(next: FlowBatchDraft) {
+    setFlowBatchBusy(true);
+    setFlowBatchError(null);
+    try {
+      setFlowBatchDraft(await api.updateFlowBatchDraft(next));
+      notify("批量参数已重新校验并保存");
+    } catch (caught) {
+      setFlowBatchError(messageOf(caught));
+    } finally {
+      setFlowBatchBusy(false);
+    }
+  }
+
+  async function confirmFlowBatch(concurrency: number) {
+    if (!flowBatchDraft) return;
+    setFlowBatchBusy(true);
+    setFlowBatchError(null);
+    try {
+      const snapshot = await api.confirmFlowBatchDraft(
+        flowBatchDraft.draft_id,
+        flowBatchDraft.revision,
+        crypto.randomUUID(),
+        concurrency,
+      );
+      setFlowBatchDraft(null);
+      setFlowBatch(snapshot);
+      notify(`已交给 Runtime 执行 ${snapshot.counts.total} 项`);
+    } catch (caught) {
+      setFlowBatchError(messageOf(caught));
+    } finally {
+      setFlowBatchBusy(false);
+    }
+  }
+
+  async function cancelFlowBatchDraft() {
+    if (!flowBatchDraft) return;
+    setFlowBatchBusy(true);
+    try {
+      setFlowBatchDraft(await api.cancelFlowBatchDraft(flowBatchDraft.draft_id));
+    } catch (caught) {
+      setFlowBatchError(messageOf(caught));
+    } finally {
+      setFlowBatchBusy(false);
+    }
+  }
+
+  async function cancelFlowBatch() {
+    if (!flowBatch) return;
+    setFlowBatchBusy(true);
+    try {
+      setFlowBatch(await api.cancelFlowBatch(flowBatch.batch_id));
+    } catch (caught) {
+      setFlowBatchError(messageOf(caught));
+    } finally {
+      setFlowBatchBusy(false);
+    }
+  }
+
+  async function retryFailedFlowBatch() {
+    if (!flowBatch) return;
+    setFlowBatchBusy(true);
+    try {
+      setFlowBatch(await api.retryFailedFlowBatch(flowBatch.batch_id, crypto.randomUUID()));
+    } catch (caught) {
+      setFlowBatchError(messageOf(caught));
+    } finally {
+      setFlowBatchBusy(false);
+    }
+  }
+
+  const flowBatchSurface = flowBatchDraft || flowBatch ? <FlowBatchPanel
+    batch={flowBatch}
+    busy={flowBatchBusy}
+    draft={flowBatchDraft}
+    error={flowBatchError}
+    onCancelBatch={() => { void cancelFlowBatch(); }}
+    onCancelDraft={() => { void cancelFlowBatchDraft(); }}
+    onClose={closeFlowBatch}
+    onConfirm={(concurrency) => { void confirmFlowBatch(concurrency); }}
+    onOpenRun={(runId) => {
+      void navigator.clipboard?.writeText(runId);
+      notify(`Run ${runId} 已复制，可在运行日志中定位`);
+    }}
+    onRetryFailed={() => { void retryFailedFlowBatch(); }}
+    onSave={(next) => { void saveFlowBatchDraft(next); }}
+  /> : null;
+
   const flowDetailSurface = detailFlow ? <div className="mb-4"><FlowDetail
     flow={detailFlow}
     management={flowReviewContext?.flow.flow_id === detailFlow.flow_id ? <FlowControlPanel
@@ -1374,6 +1519,7 @@ export function Workbench() {
                   <span className="min-w-0 flex-1 truncate">已绑定 Flow · {selectedSession.flow_id}</span>
                   <button className="text-ink hover:opacity-80" onClick={() => void unbindSelectedFlow()} type="button">解绑</button>
                 </div>}
+                {flowBatchSurface}
                 {flowDetailSurface}
                 {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
                   <SessionTimeline
@@ -1391,6 +1537,7 @@ export function Workbench() {
                     onCreateGuide={(runId) => { void createGuideFromRun(runId); }}
                     onUseFlowRecommendation={(recommendation) => { void openFlowRecommendation(recommendation); }}
                     onDismissFlowRecommendation={(recommendation) => { void dismissFlowRecommendation(recommendation); }}
+                    onOpenFlowBatch={(reference) => { void openFlowBatch(reference); }}
                     onResolveApproval={(action, approve) => void resolveRuntimeApproval(action, approve)}
                     resolvingApprovalId={resolvingApprovalId}
                     savingCandidateRunId={savingCandidateRunId}

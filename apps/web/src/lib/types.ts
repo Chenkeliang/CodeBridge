@@ -313,11 +313,78 @@ export interface TimelineSegmentView {
 export interface TimelineBlockView {
   block_id: string;
   block_index: number;
-  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error" | "flow_param" | "flow_step" | "flow_run" | "flow_failure";
+  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error" | "flow_param" | "flow_step" | "flow_run" | "flow_failure" | "flow_batch";
   status: string;
   metadata: Record<string, unknown>;
   segments: TimelineSegmentView[];
   next_segment_cursor: number | null;
+}
+
+export interface FlowBatchIssue {
+  code: "missing" | "ambiguous" | "invalid_type" | "invalid_value" | "duplicate" | "conflict";
+  field: string | null;
+  message: string;
+  blocking: boolean;
+}
+
+export interface FlowBatchEvidence {
+  source: "user" | "agent_extracted" | "context" | "default";
+  evidence_ref: string;
+  inferred: boolean;
+}
+
+export interface FlowBatchDraftItem {
+  item_id: string;
+  ordinal: number;
+  label: string | null;
+  inputs: Record<string, unknown>;
+  evidence: Record<string, FlowBatchEvidence>;
+  issues: FlowBatchIssue[];
+}
+
+export interface FlowBatchDraft {
+  schema_version: 1;
+  draft_id: string;
+  session_id: string;
+  source_run_id: string;
+  flow_id: string;
+  definition_revision: string;
+  status: "needs_input" | "ready" | "confirmed" | "stale" | "cancelled";
+  revision: number;
+  global_inputs: Record<string, unknown>;
+  items: FlowBatchDraftItem[];
+  source_refs: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FlowBatchItemSnapshot {
+  item_id: string;
+  ordinal: number;
+  attempt: number;
+  run_id: string;
+  input_hash: string;
+  inputs: Record<string, unknown>;
+  status: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  terminal_reason: string | null;
+  supersedes_run_id: string | null;
+}
+
+export interface FlowBatchSnapshot {
+  batch_id: string;
+  draft_id: string;
+  session_id: string;
+  flow_id: string;
+  definition_revision: string;
+  plan_ir_hash: string;
+  concurrency: number;
+  failure_policy: "continue";
+  cancel_requested_at: string | null;
+  status: "queued" | "running" | "succeeded" | "partial_succeeded" | "failed" | "cancelled";
+  counts: Record<FlowBatchItemSnapshot["status"] | "total", number>;
+  items: FlowBatchItemSnapshot[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TimelineTurnView {

@@ -7,6 +7,8 @@ import type {
   ApprovalRecord,
   ConfigOption,
   FlowCapability,
+  FlowBatchDraft,
+  FlowBatchSnapshot,
   FlowProposal,
   FlowRecommendation,
   FlowRecord,
@@ -353,6 +355,42 @@ export const api = {
   unbindFlow: (sessionId: string) =>
     request<AgentSession>(`/v1/sessions/${encodeURIComponent(sessionId)}/flow`, {
       method: "DELETE",
+    }),
+  flowBatchDraft: (draftId: string) =>
+    request<FlowBatchDraft>(`/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}`),
+  updateFlowBatchDraft: (draft: Pick<FlowBatchDraft, "draft_id" | "revision" | "global_inputs" | "items" | "source_refs">) =>
+    request<FlowBatchDraft>(`/v1/flow-invocation-drafts/${encodeURIComponent(draft.draft_id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        draft_revision: draft.revision,
+        global_inputs: draft.global_inputs,
+        items: draft.items,
+        source_refs: draft.source_refs,
+      }),
+    }),
+  confirmFlowBatchDraft: (draftId: string, revision: number, key: string, concurrency?: number) =>
+    request<FlowBatchSnapshot>(`/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}/confirm`, {
+      method: "POST",
+      headers: { "Idempotency-Key": key },
+      body: JSON.stringify({ draft_revision: revision, ...(concurrency ? { concurrency } : {}) }),
+    }),
+  cancelFlowBatchDraft: (draftId: string) =>
+    request<FlowBatchDraft>(`/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}/cancel`, {
+      method: "POST",
+      body: "{}",
+    }),
+  flowBatch: (batchId: string) =>
+    request<FlowBatchSnapshot>(`/v1/flow-batches/${encodeURIComponent(batchId)}`),
+  cancelFlowBatch: (batchId: string) =>
+    request<FlowBatchSnapshot>(`/v1/flow-batches/${encodeURIComponent(batchId)}/cancel`, {
+      method: "POST",
+      body: "{}",
+    }),
+  retryFailedFlowBatch: (batchId: string, key: string) =>
+    request<FlowBatchSnapshot>(`/v1/flow-batches/${encodeURIComponent(batchId)}/retry-failed`, {
+      method: "POST",
+      headers: { "Idempotency-Key": key },
+      body: "{}",
     }),
   configOptions: async (id: string) =>
     (await request<{ options?: ConfigOption[] }>(`/v1/sessions/${encodeURIComponent(id)}/config-options`)).options ?? [],
