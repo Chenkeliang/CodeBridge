@@ -210,6 +210,15 @@ describe("FeishuBridge streaming", () => {
       }),
       listRuntimeApprovals: vi.fn().mockResolvedValue([]),
       resolveRuntimeApproval: vi.fn(),
+      getFlowBatchDraft: vi.fn().mockResolvedValue({
+        draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
+        definitionRevision: "sha256:one", status: "ready", revision: 1, total: 2, blocking: 0,
+      }),
+      confirmFlowBatchDraft: vi.fn().mockResolvedValue({
+        batchId: "batch_1", draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
+        definitionRevision: "sha256:one", status: "running",
+        counts: { total: 2, queued: 1, running: 1, waiting: 0, succeeded: 0, failed: 0, cancelled: 0 },
+      }),
       events: async function* () {
         await new Promise(() => {});
       },
@@ -251,9 +260,11 @@ describe("FeishuBridge streaming", () => {
     await bridge.handleMessage(message("m3", "/flow set oid=1644460"));
     await bridge.handleMessage(message("m4", "/flow run"));
     await bridge.handleMessage(message("m5", "/flow confirm"));
+    await bridge.handleMessage(message("m6", "/flow batch confirm batch_draft_1"));
 
     expect(replies.join("\n")).toContain("订单排查");
     expect(replies.join("\n")).toContain("runbook/candidate");
+    expect(replies.join("\n")).toContain("已开始批量执行 2 项");
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       channel: "feishu",

@@ -53,6 +53,15 @@ describe("TelegramBridge inbound commands", () => {
         }),
         listRuntimeApprovals: vi.fn().mockResolvedValue([]),
         resolveRuntimeApproval: vi.fn(),
+        getFlowBatchDraft: vi.fn().mockResolvedValue({
+          draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
+          definitionRevision: "sha256:one", status: "ready", revision: 1, total: 2, blocking: 0,
+        }),
+        confirmFlowBatchDraft: vi.fn().mockResolvedValue({
+          batchId: "batch_1", draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
+          definitionRevision: "sha256:one", status: "running",
+          counts: { total: 2, queued: 1, running: 1, waiting: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        }),
         events: async function* () {
           await new Promise(() => {});
         },
@@ -78,10 +87,16 @@ describe("TelegramBridge inbound commands", () => {
     await bridge.handleUpdate(update(3, "/flow set oid=1644460"));
     await bridge.handleUpdate(update(4, "/flow run"));
     await bridge.handleUpdate(update(5, "/flow confirm"));
+    await bridge.handleUpdate(update(6, "/flow batch confirm batch_draft_1"));
 
     expect(sendMessage).toHaveBeenCalledWith(
       "telegram:42",
       expect.stringContaining("订单排查"),
+      undefined,
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "telegram:42",
+      expect.stringContaining("已开始批量执行 2 项"),
       undefined,
     );
     expect(sendMessage).toHaveBeenCalledWith(

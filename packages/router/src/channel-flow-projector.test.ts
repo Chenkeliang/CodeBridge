@@ -27,6 +27,25 @@ function event(
 }
 
 describe("createChannelFlowProjector", () => {
+  it("projects batch draft and aggregate Runtime status without item-level domain logic", () => {
+    const projector = createChannelFlowProjector();
+    projector.apply(event("FLOW_BATCH_DRAFTED", "batch_draft_1", {
+      draft_id: "batch_draft_1", flow_id: "flow_order", status: "ready", total: 3, blocking: 0,
+    }));
+    expect(renderChannelFlowLive(projector.snapshot())).toContain("可处理 3");
+    expect(renderChannelFlowLive(projector.snapshot())).toContain("/flow batch show batch_draft_1");
+
+    projector.apply(event("FLOW_BATCH_UPDATED", "batch_1", {
+      batch_id: "batch_1", draft_id: "batch_draft_1", status: "running",
+      counts: { total: 3, queued: 0, running: 1, waiting: 0, succeeded: 2, failed: 0 },
+    }));
+    expect(projector.snapshot().batch).toMatchObject({
+      batchId: "batch_1", status: "running", total: 3, succeeded: 2, active: 1,
+    });
+    expect(renderChannelFlowLive(projector.snapshot())).toContain("成功 2 · 运行 1 · 失败 0 · 共 3");
+    expect(renderChannelFlowFinal(projector.snapshot())).toContain("/flow batch show batch_1");
+  });
+
   it("projects steps, artifacts, verification, and the final snapshot", () => {
     const projector = createChannelFlowProjector();
     const events = [

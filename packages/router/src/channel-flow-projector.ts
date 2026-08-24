@@ -46,6 +46,19 @@ export interface ChannelFlowSnapshot {
   approvals: ChannelFlowApprovalSnapshot[];
   verificationFailure: ChannelFlowVerificationFailure | null;
   outcome: "succeeded" | "failed" | null;
+  batch: ChannelFlowBatchProjection | null;
+}
+
+export interface ChannelFlowBatchProjection {
+  draftId: string | null;
+  batchId: string | null;
+  flowId: string | null;
+  status: string;
+  total: number;
+  blocking: number;
+  succeeded: number;
+  failed: number;
+  active: number;
 }
 
 export interface ChannelFlowProjector {
@@ -82,6 +95,7 @@ export function createChannelFlowProjector(): ChannelFlowProjector {
   let flowRevision: string | null = null;
   let verificationFailure: ChannelFlowVerificationFailure | null = null;
   let outcome: "succeeded" | "failed" | null = null;
+  let batch: ChannelFlowBatchProjection | null = null;
 
   const snapshot = (): ChannelFlowSnapshot => ({
     flowId,
@@ -91,11 +105,30 @@ export function createChannelFlowProjector(): ChannelFlowProjector {
     approvals: Array.from(approvals.values(), (approval) => ({ ...approval })),
     verificationFailure: verificationFailure ? { ...verificationFailure } : null,
     outcome,
+    batch: batch ? { ...batch } : null,
   });
 
   return {
     apply(event) {
       const payload = record(event.payload);
+      if (event.type.startsWith("FLOW_BATCH_")) {
+        const counts = record(payload.counts);
+        batch = {
+          draftId: stringValue(payload.draft_id) ?? batch?.draftId ?? null,
+          batchId: stringValue(payload.batch_id) ?? batch?.batchId ?? null,
+          flowId: stringValue(payload.flow_id) ?? batch?.flowId ?? null,
+          status: stringValue(payload.status) ?? batch?.status ?? "queued",
+          total: numberValue(payload.total) ?? numberValue(counts.total) ?? batch?.total ?? 0,
+          blocking: numberValue(payload.blocking) ?? batch?.blocking ?? 0,
+          succeeded: numberValue(counts.succeeded) ?? batch?.succeeded ?? 0,
+          failed: numberValue(counts.failed) ?? batch?.failed ?? 0,
+          active: [counts.queued, counts.running, counts.waiting]
+            .map(numberValue)
+            .filter((value): value is number => value !== null)
+            .reduce((sum, value) => sum + value, 0),
+        };
+        return snapshot();
+      }
       const status = stepStatusFor(event.type);
       if (status && event.target) {
         const previous = steps.get(event.target);
@@ -224,6 +257,7 @@ export function renderChannelFlowLive(snapshot: ChannelFlowSnapshot): string {
         ? ["⛔ **Flow 步骤审批已拒绝**"]
         : [];
   return [
+    snapshot.batch ? renderBatch(snapshot.batch) : undefined,
     snapshot.steps.length ? `**Flow 进度 · ${completed} / ${snapshot.steps.length}**` : undefined,
     ...recentSteps,
     ...approvalLines,
@@ -231,7 +265,7 @@ export function renderChannelFlowLive(snapshot: ChannelFlowSnapshot): string {
 }
 
 export function renderChannelFlowFinal(snapshot: ChannelFlowSnapshot): string {
-  if (!snapshot.outcome && !snapshot.steps.length && !snapshot.artifacts.length) return "";
+  if (!snapshot.outcome && !snapshot.steps.length && !snapshot.artifacts.length && !snapshot.batch) return "";
   const passed = snapshot.steps.filter((step) => step.verificationStatus === "passed").length;
   const stepLines = snapshot.steps.map((step) => {
     const details = [step.error, step.outputRef].filter(Boolean).join(" · ");
@@ -249,7 +283,8 @@ export function renderChannelFlowFinal(snapshot: ChannelFlowSnapshot): string {
     `产物：${artifact.name}${artifact.resultRef ? ` · ${artifact.resultRef}` : ""}`
   );
   return [
-    `**Flow 结果 · ${snapshot.outcome === "failed" ? "失败" : "成功"}**`,
+    snapshot.outcome ? `**Flow 结果 · ${snapshot.outcome === "failed" ? "失败" : "成功"}**` : undefined,
+    snapshot.batch ? renderBatch(snapshot.batch) : undefined,
     snapshot.flowId
       ? `${snapshot.flowId}${snapshot.flowRevision ? ` · ${snapshot.flowRevision}` : ""}`
       : undefined,
@@ -258,4 +293,23 @@ export function renderChannelFlowFinal(snapshot: ChannelFlowSnapshot): string {
     ...failureLines,
     ...artifactLines,
   ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function renderBatch(batch: ChannelFlowBatchProjection): string {
+  if (!batch.batchId) {
+    return [
+      `**Flow 批量草稿 · ${batch.status}**`,
+      `可处理 ${batch.total - batch.blocking} · 需补充 ${batch.blocking} · 共 ${batch.total}`,
+      batch.draftId ? `查看或确认：/flow batch show ${batch.draftId}` : undefined,
+    ].filter((line): line is string => Boolean(line)).join("\n");
+  }
+  return [
+    `**Flow 批量执行 · ${batch.status}**`,
+    `成功 ${batch.succeeded} · 运行 ${batch.active} · 失败 ${batch.failed} · 共 ${batch.total}`,
+    `查看：/flow batch show ${batch.batchId}`,
+  ].join("\n");
 }
