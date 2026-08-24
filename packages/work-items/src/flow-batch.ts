@@ -473,6 +473,12 @@ export class FlowBatchStore {
     `).all(sessionId) as Row[]).map(toBatch);
   }
 
+  listBatches(): FlowBatchRun[] {
+    return (this.database.prepare(`
+      SELECT * FROM flow_batch_runs ORDER BY created_at ASC, batch_id ASC
+    `).all() as Row[]).map(toBatch);
+  }
+
   listBatchItems(batchId: string): FlowBatchItemRun[] {
     return (this.database.prepare(`
       SELECT * FROM flow_batch_items
@@ -480,11 +486,20 @@ export class FlowBatchStore {
     `).all(batchId) as Row[]).map(toBatchItem);
   }
 
-  markItemMaterialized(batchId: string, itemId: string): void {
+  markItemMaterialized(batchId: string, itemId: string, attempt: number): void {
     this.database.prepare(`
       UPDATE flow_batch_items SET materialized_at = ?
-      WHERE batch_id = ? AND item_id = ? AND materialized_at IS NULL
-    `).run(new Date().toISOString(), batchId, itemId);
+      WHERE batch_id = ? AND item_id = ? AND attempt = ?
+        AND materialized_at IS NULL
+    `).run(new Date().toISOString(), batchId, itemId, attempt);
+  }
+
+  markItemCancelled(batchId: string, itemId: string, attempt: number): void {
+    this.database.prepare(`
+      UPDATE flow_batch_items SET cancelled_at = ?
+      WHERE batch_id = ? AND item_id = ? AND attempt = ?
+        AND cancelled_at IS NULL
+    `).run(new Date().toISOString(), batchId, itemId, attempt);
   }
 
   reserveRetry(input: ReserveFlowBatchRetryInput): FlowBatchItemRun[] {
