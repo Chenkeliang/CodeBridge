@@ -228,6 +228,11 @@ export class TelegramBridge {
           getFlowReviewSummary: this.sessionIngress.getFlowReviewSummary,
           updateCandidateSummary: this.sessionIngress.updateCandidateSummary,
           rejectCandidate: this.sessionIngress.rejectCandidate,
+          getFlowBatchDraft: this.sessionIngress.getFlowBatchDraft,
+          confirmFlowBatchDraft: this.sessionIngress.confirmFlowBatchDraft,
+          getFlowBatch: this.sessionIngress.getFlowBatch,
+          cancelFlowBatch: this.sessionIngress.cancelFlowBatch,
+          retryFailedFlowBatch: this.sessionIngress.retryFailedFlowBatch,
           getActiveRunId: async () => {
             const context = await this.sessionIngress!.getSlotCommandContext(
               this.buildFullSlot(chatId, topicId),

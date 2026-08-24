@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   ChannelConsumableFlow,
+  ChannelFlowBatchDraft,
+  ChannelFlowBatchSnapshot,
   ChannelFlowReviewSummary,
   ChannelManageableFlow,
   ChannelRuntimeApproval,
@@ -50,6 +52,13 @@ function context(
       update?: ReturnType<typeof vi.fn>;
       reject?: ReturnType<typeof vi.fn>;
     };
+    batch?: {
+      draft: ChannelFlowBatchDraft;
+      snapshot: ChannelFlowBatchSnapshot;
+      confirm?: ReturnType<typeof vi.fn>;
+      cancel?: ReturnType<typeof vi.fn>;
+      retry?: ReturnType<typeof vi.fn>;
+    };
   } = {},
 ) {
   return controller.handle({
@@ -62,6 +71,11 @@ function context(
     getFlowReviewSummary: options.management ? async () => options.management!.review : undefined,
     updateCandidateSummary: options.management?.update,
     rejectCandidate: options.management?.reject,
+    getFlowBatchDraft: options.batch ? async () => options.batch!.draft : undefined,
+    confirmFlowBatchDraft: options.batch?.confirm ?? (options.batch ? async () => options.batch!.snapshot : undefined),
+    getFlowBatch: options.batch ? async () => options.batch!.snapshot : undefined,
+    cancelFlowBatch: options.batch?.cancel ?? (options.batch ? async () => options.batch!.snapshot : undefined),
+    retryFailedFlowBatch: options.batch?.retry ?? (options.batch ? async () => options.batch!.snapshot : undefined),
     getActiveRunId: async () => options.activeRunId ?? null,
     listApprovals: async () => options.approvals ?? [],
     resolveApproval: options.resolveApproval ?? vi.fn(),
@@ -69,6 +83,45 @@ function context(
 }
 
 describe("ChannelFlowController", () => {
+  it("confirms and controls a ready batch through the shared channel contract", async () => {
+    const controller = new ChannelFlowController();
+    const draft: ChannelFlowBatchDraft = {
+      draftId: "batch_draft_1", sessionId: "sess_1", flowId: "flow_order",
+      definitionRevision: "sha256:one", status: "ready", revision: 2, total: 3, blocking: 0,
+    };
+    const snapshot: ChannelFlowBatchSnapshot = {
+      batchId: "batch_1", draftId: draft.draftId, sessionId: draft.sessionId,
+      flowId: draft.flowId, definitionRevision: draft.definitionRevision, status: "running",
+      counts: { total: 3, queued: 2, running: 1, waiting: 0, succeeded: 0, failed: 0, cancelled: 0 },
+    };
+    const confirm = vi.fn(async () => snapshot);
+    const retry = vi.fn(async () => ({ ...snapshot, status: "queued" as const }));
+    const batch = { draft, snapshot, confirm, retry };
+
+    await expect(context(controller, `/flow batch show ${draft.draftId}`, { batch })).resolves.toMatchObject({ text: expect.stringContaining("可处理 3") });
+    await expect(context(controller, `/flow batch confirm ${draft.draftId}`, { batch })).resolves.toMatchObject({ text: expect.stringContaining("已开始批量执行 3 项") });
+    expect(confirm).toHaveBeenCalledWith(draft.draftId, 2, expect.stringMatching(/^flow-batch:/));
+    await expect(context(controller, "/flow batch show batch_1", { batch })).resolves.toMatchObject({ text: expect.stringContaining("运行 3") });
+    await context(controller, "/flow batch retry-failed batch_1", { batch });
+    expect(retry).toHaveBeenCalledWith("batch_1", expect.stringMatching(/^flow-batch-retry:/));
+  });
+
+  it("blocks channel confirmation while a batch draft needs input", async () => {
+    const controller = new ChannelFlowController();
+    const draft: ChannelFlowBatchDraft = {
+      draftId: "batch_draft_2", sessionId: "sess_1", flowId: "flow_order",
+      definitionRevision: "sha256:one", status: "needs_input", revision: 1, total: 2, blocking: 1,
+    };
+    const snapshot = {
+      batchId: "batch_2", draftId: draft.draftId, sessionId: draft.sessionId,
+      flowId: draft.flowId, definitionRevision: draft.definitionRevision, status: "queued" as const,
+      counts: { total: 2, queued: 2, running: 0, waiting: 0, succeeded: 0, failed: 0, cancelled: 0 },
+    };
+    const confirm = vi.fn(async () => snapshot);
+    await expect(context(controller, `/flow batch confirm ${draft.draftId}`, { batch: { draft, snapshot, confirm } })).resolves.toMatchObject({ text: expect.stringContaining("尚未就绪") });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("routes management commands without exposing publish approval", async () => {
     const controller = new ChannelFlowController();
     const flow: ChannelManageableFlow = {

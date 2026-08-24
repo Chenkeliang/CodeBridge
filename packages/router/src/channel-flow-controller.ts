@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
   ChannelConsumableFlow,
+  ChannelFlowBatchDraft,
+  ChannelFlowBatchSnapshot,
   ChannelFlowInput,
   ChannelFlowReviewSummary,
   ChannelManageableFlow,
@@ -33,6 +35,11 @@ export interface ChannelFlowCommandInput {
   getFlowReviewSummary?(flowId: string): Promise<ChannelFlowReviewSummary>;
   updateCandidateSummary?(flowId: string, patch: { name?: string; description?: string }): Promise<ChannelManageableFlow>;
   rejectCandidate?(flowId: string): Promise<ChannelManageableFlow>;
+  getFlowBatchDraft?(draftId: string): Promise<ChannelFlowBatchDraft>;
+  confirmFlowBatchDraft?(draftId: string, revision: number, idempotencyKey: string): Promise<ChannelFlowBatchSnapshot>;
+  getFlowBatch?(batchId: string): Promise<ChannelFlowBatchSnapshot>;
+  cancelFlowBatch?(batchId: string): Promise<ChannelFlowBatchSnapshot>;
+  retryFailedFlowBatch?(batchId: string, idempotencyKey: string): Promise<ChannelFlowBatchSnapshot>;
   getActiveRunId(): Promise<string | null>;
   listApprovals(runId: string): Promise<ChannelRuntimeApproval[]>;
   resolveApproval(
@@ -120,6 +127,10 @@ export class ChannelFlowController {
       const sessionId = await input.getSessionId();
       const query = new URLSearchParams({ flow: remainder, ...(sessionId ? { session: sessionId } : {}) });
       return { type: "reply", text: `在 Web Workbench 打开：/workbench/?${query.toString()}` };
+    }
+
+    if (lowerAction === "batch") {
+      return this.handleBatch(input, rest);
     }
 
     if (lowerAction === "set") {
@@ -279,6 +290,47 @@ export class ChannelFlowController {
         : `已拒绝 Runtime 步骤：${label}（${resolved.status}）`,
     };
   }
+
+  private async handleBatch(
+    input: ChannelFlowCommandInput,
+    arguments_: string[],
+  ): Promise<ChannelFlowCommandResult> {
+    const [action = "", identifier = ""] = arguments_;
+    if (!action || !identifier) {
+      return { type: "reply", text: "用法：/flow batch show|confirm|cancel|retry-failed <draft_id|batch_id>" };
+    }
+    if (action === "show") {
+      if (identifier.includes("draft")) {
+        if (!input.getFlowBatchDraft) return batchUnavailable();
+        return { type: "reply", text: formatBatchDraft(await input.getFlowBatchDraft(identifier)) };
+      }
+      if (!input.getFlowBatch) return batchUnavailable();
+      return { type: "reply", text: formatBatchSnapshot(await input.getFlowBatch(identifier)) };
+    }
+    if (action === "confirm") {
+      if (!input.getFlowBatchDraft || !input.confirmFlowBatchDraft) return batchUnavailable();
+      const draft = await input.getFlowBatchDraft(identifier);
+      if (draft.status !== "ready" || draft.blocking > 0) {
+        return { type: "reply", text: `${formatBatchDraft(draft)}\n草稿尚未就绪，请先在 Web 修正阻断项。` };
+      }
+      const batch = await input.confirmFlowBatchDraft(
+        draft.draftId,
+        draft.revision,
+        `flow-batch:${randomUUID()}`,
+      );
+      return { type: "reply", text: `已开始批量执行 ${batch.counts.total} 项。\n${formatBatchSnapshot(batch)}` };
+    }
+    if (action === "cancel") {
+      if (!input.cancelFlowBatch) return batchUnavailable();
+      return { type: "reply", text: formatBatchSnapshot(await input.cancelFlowBatch(identifier)) };
+    }
+    if (action === "retry-failed") {
+      if (!input.retryFailedFlowBatch) return batchUnavailable();
+      const batch = await input.retryFailedFlowBatch(identifier, `flow-batch-retry:${randomUUID()}`);
+      return { type: "reply", text: `已只重试失败项。\n${formatBatchSnapshot(batch)}` };
+    }
+    return { type: "reply", text: "用法：/flow batch show|confirm|cancel|retry-failed <draft_id|batch_id>" };
+  }
 }
 
 function requiredUserInputs(flow: ChannelConsumableFlow): ChannelFlowInput[] {
@@ -423,6 +475,34 @@ function flowHelp(): string {
     "/flow guide save — 保存最近一次成功 Run 为 Guide",
     "/flow diff | review | reject | open <Flow ID> — 管理 Candidate（批准发布仅限 Web）",
     "/flow edit <Flow ID> name=<名称> — 编辑 Candidate 摘要",
+    "/flow batch show|confirm|cancel|retry-failed <ID> — 查看和控制批量调用",
+  ].join("\n");
+}
+
+function batchUnavailable(): ChannelFlowCommandResult {
+  return { type: "reply", text: "Flow 批量调用入口尚未就绪，请前往 Web Workbench。" };
+}
+
+function formatBatchDraft(draft: ChannelFlowBatchDraft): string {
+  const query = new URLSearchParams({ session: draft.sessionId });
+  return [
+    `Flow 批量草稿：${draft.draftId}`,
+    `${draft.flowId} · ${draft.definitionRevision}`,
+    `状态：${draft.status} · 可处理 ${draft.total - draft.blocking} · 需补充 ${draft.blocking} · 共 ${draft.total}`,
+    draft.status === "ready"
+      ? `发送 /flow batch confirm ${draft.draftId} 一次确认并执行。`
+      : `在 Web Workbench 修正参数：/workbench/?${query.toString()}`,
+  ].join("\n");
+}
+
+function formatBatchSnapshot(batch: ChannelFlowBatchSnapshot): string {
+  const active = batch.counts.queued + batch.counts.running + batch.counts.waiting;
+  const query = new URLSearchParams({ batch: batch.batchId, session: batch.sessionId });
+  return [
+    `Flow 批次：${batch.batchId}`,
+    `状态：${batch.status}`,
+    `成功 ${batch.counts.succeeded} · 运行 ${active} · 失败 ${batch.counts.failed} · 共 ${batch.counts.total}`,
+    `Web：/workbench/?${query.toString()}`,
   ].join("\n");
 }
 
