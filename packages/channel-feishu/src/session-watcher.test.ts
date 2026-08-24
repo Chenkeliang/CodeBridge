@@ -244,9 +244,10 @@ describe("FeishuSessionWatcher", () => {
     w.abort();
   });
 
-  it("shows genuine no-output only after an empty persisted replay succeeds", async () => {
+  it("shows genuine no-output only after persisted replay includes the matching terminal event", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
+    ingress.replayEvents.mockResolvedValue([terminalEvent(9)]);
     const w = watcher(ingress, host);
 
     await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
@@ -258,6 +259,26 @@ describe("FeishuSessionWatcher", () => {
       "turn_1",
       "feishu:old:run_1",
     );
+    w.abort();
+  });
+
+  it("keeps a terminal delivery recoverable when replay lacks the matching terminal event", async () => {
+    const logs: string[] = [];
+    const { host } = makeHost();
+    host.log = (message) => logs.push(message);
+    const ingress = makeIngress();
+    ingress.replayEvents.mockResolvedValue([]);
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+
+    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+    expect(final).toContain("结果恢复中");
+    expect(final).not.toContain("本次无输出");
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    expect(logs.some((line) =>
+      line.includes("matching terminal event is missing")
+    )).toBe(true);
     w.abort();
   });
 

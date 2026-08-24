@@ -599,6 +599,18 @@ export class FeishuSessionWatcher {
       for (const event of events) {
         this.applyRecoveredEvent(delivery.runId, resumed, event);
       }
+      const expectedTerminalState = delivery.runSnapshot?.status;
+      const hasMatchingTerminalEvent = events.some((event) =>
+        event.runId === delivery.runId
+        && terminalStateForEvent(event.type) === expectedTerminalState
+      );
+      if (!hasMatchingTerminalEvent) {
+        this.logResultRecoveryFailure(
+          delivery,
+          "matching terminal event is missing from finite replay",
+        );
+        return;
+      }
       resumed.resultRecovery = "confirmed";
     } catch (error) {
       this.logResultRecoveryFailure(
