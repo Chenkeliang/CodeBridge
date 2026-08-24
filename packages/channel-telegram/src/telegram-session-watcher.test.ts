@@ -260,7 +260,10 @@ describe("TelegramSessionWatcher", () => {
       flowEvent(5, "STEP_SUCCEEDED", "deploy"),
       artifact,
       { ...artifact, sequence: 7 },
-      flowEvent(8, "RUN_SNAPSHOT", "run_1", {
+      flowEvent(8, "FLOW_BATCH_DRAFTED", "batch_draft_1", {
+        draft_id: "batch_draft_1", flow_id: "flow_deploy", status: "ready", total: 3, blocking: 0,
+      }),
+      flowEvent(9, "RUN_SNAPSHOT", "run_1", {
         flow_id: "flow_deploy",
         flow_revision: "sha256:revision",
         outcome: "succeeded",
@@ -271,7 +274,7 @@ describe("TelegramSessionWatcher", () => {
           verification_status: "passed",
         }],
       }),
-      terminalEvent(9),
+      terminalEvent(10),
     ]);
 
     const w = watcher(ingress, api);
@@ -296,6 +299,7 @@ describe("TelegramSessionWatcher", () => {
     })).toBe(true);
     const finalText = String(api.editMessage.mock.calls.at(-1)?.[2]);
     expect(finalText).toContain("Flow 结果 · 成功");
+    expect(finalText).toContain("Flow 批量草稿 · ready");
     expect(finalText.match(/deploy\.output\.json/g)).toHaveLength(1);
     expect(api.sendMessage).not.toHaveBeenCalled();
     w.abort();

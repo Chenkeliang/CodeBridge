@@ -21,6 +21,7 @@ describe("TelegramBridge inbound commands", () => {
     const config = defaultConfig();
     config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const editMessage = vi.fn().mockResolvedValue({ message_id: 8 });
     const submit = vi.fn().mockResolvedValue({
       sessionId: "sess_flow",
       turnId: "turn_flow",
@@ -32,7 +33,7 @@ describe("TelegramBridge inbound commands", () => {
     const bridge = new TelegramBridge({
       config,
       dataDir,
-      api: { sendMessage } as never,
+      api: { sendMessage, editMessage } as never,
       sessionIngress: {
         listConsumableFlows: vi.fn().mockResolvedValue([{
           flowId: "flow_order",
@@ -62,6 +63,11 @@ describe("TelegramBridge inbound commands", () => {
           definitionRevision: "sha256:one", status: "running",
           counts: { total: 2, queued: 1, running: 1, waiting: 0, succeeded: 0, failed: 0, cancelled: 0 },
         }),
+        getFlowBatch: vi.fn().mockResolvedValue({
+          batchId: "batch_1", draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
+          definitionRevision: "sha256:one", status: "succeeded",
+          counts: { total: 2, queued: 0, running: 0, waiting: 0, succeeded: 2, failed: 0, cancelled: 0 },
+        }),
         events: async function* () {
           await new Promise(() => {});
         },
@@ -88,6 +94,11 @@ describe("TelegramBridge inbound commands", () => {
     await bridge.handleUpdate(update(4, "/flow run"));
     await bridge.handleUpdate(update(5, "/flow confirm"));
     await bridge.handleUpdate(update(6, "/flow batch confirm batch_draft_1"));
+    await vi.waitFor(() => expect(editMessage).toHaveBeenCalledWith(
+      "telegram:42",
+      8,
+      expect.stringContaining("状态：succeeded"),
+    ));
 
     expect(sendMessage).toHaveBeenCalledWith(
       "telegram:42",

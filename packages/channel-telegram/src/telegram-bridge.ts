@@ -5,6 +5,7 @@ import {
   MentionRegistry,
   formatMentionGuidance,
   type AppConfig,
+  type ChannelFlowBatchSnapshot,
   type ChannelSessionIngress,
   type ChannelSlot,
 } from "@codebridge/core";
@@ -12,7 +13,9 @@ import {
   RunOrchestrator,
   ChannelFlowController,
   createChannelStreamProjector,
+  formatChannelFlowBatchSnapshot,
   handleSlashCommand,
+  isTerminalChannelFlowBatch,
 } from "@codebridge/router";
 import {
   TelegramApi,
@@ -82,6 +85,18 @@ export interface TelegramBridgeOptions {
   onLog?: (message: string) => void;
   api?: TelegramTransport;
   sessionIngress?: ChannelSessionIngress;
+}
+
+function waitForBatchPoll(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 1_000);
+    timer.unref?.();
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }
 
 export class TelegramBridge {
@@ -250,6 +265,9 @@ export class TelegramBridge {
       : null;
     if (flowCommand?.type === "reply") {
       await this.sendText(chatId, flowCommand.text, topicId);
+      if (flowCommand.batch) {
+        this.monitorFlowBatch(flowCommand.batch, chatId, topicId);
+      }
       return;
     }
     if (flowCommand?.type === "invoke") {
@@ -651,6 +669,41 @@ export class TelegramBridge {
     for (const chunk of chunkTelegramText(text)) {
       await this.api.sendMessage(chatId, chunk, topicId);
     }
+  }
+
+  private monitorFlowBatch(
+    initial: ChannelFlowBatchSnapshot,
+    chatId: string,
+    topicId: string | undefined,
+  ): void {
+    const getBatch = this.sessionIngress?.getFlowBatch;
+    if (!getBatch || isTerminalChannelFlowBatch(initial)) return;
+    const task = (async () => {
+      const message = await this.api.sendMessage(
+        chatId,
+        formatChannelFlowBatchSnapshot(initial),
+        topicId,
+      );
+      let snapshot = initial;
+      let lastContent = formatChannelFlowBatchSnapshot(initial);
+      const signal = this.pollAbort?.signal;
+      while (!signal?.aborted) {
+        snapshot = await getBatch(initial.batchId);
+        const content = formatChannelFlowBatchSnapshot(snapshot);
+        if (content !== lastContent) {
+          await this.api.editMessage(chatId, message.message_id, content);
+          lastContent = content;
+        }
+        if (isTerminalChannelFlowBatch(snapshot)) return;
+        await waitForBatchPoll(signal);
+      }
+    })();
+    this.activeReplies.add(task);
+    void task.catch((error) => {
+      this.options.onLog?.(
+        `Telegram Flow 批量状态消息失败: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }).finally(() => this.activeReplies.delete(task));
   }
 
   private readOffset(): number {

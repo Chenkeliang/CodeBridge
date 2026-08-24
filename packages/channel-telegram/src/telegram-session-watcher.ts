@@ -122,6 +122,10 @@ const STRUCTURED_FLOW_EVENTS = new Set([
   "APPROVAL_GRANTED",
   "APPROVAL_REJECTED",
   "RUN_SNAPSHOT",
+  "FLOW_BATCH_DRAFTED",
+  "FLOW_BATCH_CONFIRMED",
+  "FLOW_BATCH_UPDATED",
+  "FLOW_BATCH_COMPLETED",
 ]);
 
 function isStructuredFlowEvent(event: ChannelSessionEvent): boolean {

@@ -403,7 +403,10 @@ describe("FeishuSessionWatcher", () => {
       flowEvent(10, "STEP_SUCCEEDED", "deploy"),
       artifact,
       artifact,
-      flowEvent(12, "RUN_SNAPSHOT", "run_1", {
+      flowEvent(12, "FLOW_BATCH_DRAFTED", "batch_draft_1", {
+        draft_id: "batch_draft_1", flow_id: "flow_deploy", status: "ready", total: 3, blocking: 0,
+      }),
+      flowEvent(13, "RUN_SNAPSHOT", "run_1", {
         flow_id: "flow_deploy",
         flow_revision: "sha256:revision",
         outcome: "succeeded",
@@ -414,7 +417,7 @@ describe("FeishuSessionWatcher", () => {
           verification_status: "passed",
         }],
       }),
-      terminalEvent(13),
+      terminalEvent(14),
     ]);
 
     const w = watcher(ingress, host);
@@ -430,6 +433,7 @@ describe("FeishuSessionWatcher", () => {
     )).toBe(true);
     const final = updates.at(-1)!;
     expect(final).toContain("Flow 结果 · 成功");
+    expect(final).toContain("Flow 批量草稿 · ready");
     expect(final).toContain("flow_deploy");
     expect(final).toContain("deploy.output.json");
     expect(final.match(/deploy.output.json/g)).toHaveLength(1);

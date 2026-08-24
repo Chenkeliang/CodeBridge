@@ -401,3 +401,34 @@ Web 是完整批量控制面：
 - Telegram 正式部署启用。
 
 实施顺序必须先完成共享领域合同和持久化，再接 Web，最后接飞书/Telegram；不得从通道卡片反推或复制后端规则。
+
+## 16. 实施与验收记录（2026-08-24）
+
+### 16.1 已实现范围
+
+- `FlowBatchStore` 持久化 draft、batch、item attempt、幂等键和冻结的 Flow snapshot；Bridge 启动时恢复非终态批次。
+- `FlowBatchService` 完成 Schema/证据校验、一次确认、一项一个无 Session Runtime Run、并发调度、取消和失败项重试。
+- Agent guidance 与 `fcb flow batch <draft-json-file>` 已接通。真实飞书测试曾暴露 evidence 结构不明确，现已补充逐字段 JSON 示例；后端证据门禁未放宽。
+- Web 已挂载批量预览/编辑/排除/确认/取消/状态/失败项重试面板，并保留 Candidate Dry-run 管理入口。
+- 飞书与 Telegram 共用 `ChannelFlowController`、Bridge DTO 和 `ChannelFlowProjector`；两端 watcher 均消费四类 `FLOW_BATCH_*` 事件。`confirm/retry-failed` 额外启动只读批次状态卡，持续读取 Bridge snapshot 并更新到终态，不复制批次状态机。
+- Telegram 代码和合同测试已完成，部署仍保持 disabled；正式启用后的 bot 凭证、菜单和真实聊天验收是明确收尾项。
+
+### 16.2 目标级证据
+
+- 自动化目标测试使用本地 `RunExecutor` 和纯内存 capability，覆盖 Markdown/CSV/JSON evidence、三项独立 Run、2 成功 1 失败、只重试失败项、确认幂等、stale revision、501 项拒绝、secret 拦截、取消和重启恢复；网络请求被测试级 spy 禁止。
+- 全量门禁：127 个测试文件、1151 项测试全部通过；TypeScript/ESLint 无 error（5 条既有 React effect warning）；20 个 workspace package 构建通过。
+- 真实飞书安全测试：普通消息明确引用 `商品状态变更方案模拟与验证`，LLM 抽取 3 行参数并生成 `ready` 草稿；`/flow batch show` 显示 3 可处理、0 阻断；`/flow batch confirm` 产生 3 个独立 Runtime Run，最终 3/3 succeeded。该 Flow 的 4 个 capability 均为 `demo.catalog.*`、`read_only`、`side_effects=false`，全过程未连接或更新线上系统。
+- 首次真实测试得到 `needs_input`，根因为 Agent 未按对象结构填写 evidence；修复 guidance 后，同一自然语言路径生成 `ready`，证明结果不是绕过 LLM 直接写 draft。
+- 真实测试同时发现“批次后端已终态、飞书仍停在 running”；已增加独立终态状态卡和两端活跃适配测试。修复后在小V真实确认新草稿，批次 `batch_fac678344b05415a83d4d8c241ace257` 的状态卡由 running 自动更新为 succeeded，显示 3/3 成功；未重复写入未变化状态。
+- Web 生产 Workbench 已用隔离本地浏览器打开上述真实批次深链：显示 3/3 succeeded、三项实际参数与三个子 Run 入口；点击首项“打开 Run”后成功定位 `run_ab8c4019ae724903bce64f178e0b3db2`。
+
+### 16.3 Surface Matrix
+
+| Surface | implemented | reachable | closed-loop | planned / 证据 |
+|---|---|---|---|---|
+| Web | 是 | 是，Workbench 生产入口已挂载 | 是，真实批次深链展示 3/3 终态、逐项参数和子 Run 下钻；控制面回归测试覆盖预览/编辑/确认/取消/重试 | P2 继续增强大批量编辑体验，不建设 DAG |
+| Agent | 是 | 是，真实飞书 Cursor Agent 已调用 `fcb flow batch` | 是，只能生成 draft，不能确认或执行；真实 `ready` 草稿证据 | 后续只优化解析质量，不授予 Catalog/Runtime 执行权 |
+| 飞书 | 是 | 是，真实 `/flow`、普通消息、show、confirm 均已验证 | 是，真实批次 3/3 成功，独立状态卡自动到 succeeded，且未重复写入未变化状态 | 继续保留活跃适配回归测试 |
+| Telegram | 是 | 否，配置 disabled | 否，不声称真实可用 | 正式启用时补 bot、菜单、权限和真实会话验收 |
+
+Web 和飞书已完成真实活跃入口的 closed-loop 验收。Telegram 仍按 V1 定案保持 disabled，不虚报为 reachable 或 closed-loop。

@@ -17,7 +17,7 @@ interface FlowDraft {
 }
 
 export type ChannelFlowCommandResult =
-  | { type: "reply"; text: string }
+  | { type: "reply"; text: string; batch?: ChannelFlowBatchSnapshot }
   | {
       type: "invoke";
       flow: ChannelConsumableFlow;
@@ -318,16 +318,21 @@ export class ChannelFlowController {
         draft.revision,
         `flow-batch:${randomUUID()}`,
       );
-      return { type: "reply", text: `已开始批量执行 ${batch.counts.total} 项。\n${formatBatchSnapshot(batch)}` };
+      return {
+        type: "reply",
+        text: `已开始批量执行 ${batch.counts.total} 项。\n${formatBatchSnapshot(batch)}`,
+        batch,
+      };
     }
     if (action === "cancel") {
       if (!input.cancelFlowBatch) return batchUnavailable();
-      return { type: "reply", text: formatBatchSnapshot(await input.cancelFlowBatch(identifier)) };
+      const batch = await input.cancelFlowBatch(identifier);
+      return { type: "reply", text: formatBatchSnapshot(batch), batch };
     }
     if (action === "retry-failed") {
       if (!input.retryFailedFlowBatch) return batchUnavailable();
       const batch = await input.retryFailedFlowBatch(identifier, `flow-batch-retry:${randomUUID()}`);
-      return { type: "reply", text: `已只重试失败项。\n${formatBatchSnapshot(batch)}` };
+      return { type: "reply", text: `已只重试失败项。\n${formatBatchSnapshot(batch)}`, batch };
     }
     return { type: "reply", text: "用法：/flow batch show|confirm|cancel|retry-failed <draft_id|batch_id>" };
   }
@@ -504,6 +509,21 @@ function formatBatchSnapshot(batch: ChannelFlowBatchSnapshot): string {
     `成功 ${batch.counts.succeeded} · 运行 ${active} · 失败 ${batch.counts.failed} · 共 ${batch.counts.total}`,
     `Web：/workbench/?${query.toString()}`,
   ].join("\n");
+}
+
+export function formatChannelFlowBatchSnapshot(
+  batch: ChannelFlowBatchSnapshot,
+): string {
+  return formatBatchSnapshot(batch);
+}
+
+export function isTerminalChannelFlowBatch(
+  batch: ChannelFlowBatchSnapshot,
+): boolean {
+  return batch.status === "succeeded"
+    || batch.status === "partial_succeeded"
+    || batch.status === "failed"
+    || batch.status === "cancelled";
 }
 
 function managementUnavailable(): ChannelFlowCommandResult {
