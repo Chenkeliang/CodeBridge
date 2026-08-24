@@ -361,6 +361,10 @@ export interface ChannelSessionIngress {
     sessionId: string,
     opts: { afterSequence: number; signal: AbortSignal },
   ): AsyncGenerator<ChannelSessionEvent>;
+  replayEvents?(
+    sessionId: string,
+    opts: { afterSequence: number },
+  ): Promise<ChannelSessionEvent[]>;
   listDeliveries(channel: string): Promise<ChannelDeliveryRow[]>;
   claimDelivery(turnId: string, owner: string): Promise<boolean>;
   ackDelivery(

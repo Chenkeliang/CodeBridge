@@ -401,6 +401,43 @@ describe("channel session ingress", () => {
     ]);
   });
 
+  it("replays a finite persisted event history without opening a live stream", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", (c) => {
+      expect(c.req.param("session")).toBe("sess_1");
+      expect(c.req.query("after_sequence")).toBe("625");
+      expect(c.req.query("live")).toBeUndefined();
+      return sse([
+        '{"type":"AGENT_EVENT","sequence":626,"run_id":"run_1","occurred_at":"2026-08-24T03:17:11.000Z","target":null,"result_ref":null,"payload":{"event":{"type":"text_delta","text":"final answer"}}}',
+        '{"type":"RUN_SUCCEEDED","sequence":627,"run_id":"run_1","occurred_at":"2026-08-24T03:17:12.000Z","target":null,"result_ref":null,"payload":{}}',
+      ]);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+
+    const events = await ingress.replayEvents!("sess_1", {
+      afterSequence: 625,
+    });
+
+    expect(events.map((event) => event.sequence)).toEqual([626, 627]);
+    expect(events[0]).toMatchObject({
+      type: "AGENT_EVENT",
+      runId: "run_1",
+      payload: { event: { type: "text_delta", text: "final answer" } },
+    });
+  });
+
+  it("reports a finite event replay transport failure", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", () =>
+      new Response("unavailable", { status: 503 }),
+    );
+    const ingress = createChannelSessionIngress(app, "token");
+
+    await expect(ingress.replayEvents!("sess_1", {
+      afterSequence: 625,
+    })).rejects.toThrow("Channel event replay failed (503)");
+  });
+
   it("claims, acks and completes a delivery through the delivery routes", async () => {
     const app = new Hono();
     app.post("/v1/deliveries/:turn/claim", async (c) => {

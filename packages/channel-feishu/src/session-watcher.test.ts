@@ -46,6 +46,7 @@ function makeIngress() {
     events: vi.fn(async function* () {
       await new Promise(() => {});
     }),
+    replayEvents: vi.fn(async (): Promise<ChannelSessionEvent[]> => []),
     claimDelivery: vi.fn(async () => true),
     ackDelivery: vi.fn(async () => true),
     completeDelivery: vi.fn(async () => true),
@@ -187,21 +188,30 @@ describe("FeishuSessionWatcher", () => {
     );
   });
 
-  it("renders a restored terminal snapshot but waits for the terminal event before completion", async () => {
+  it("restores persisted final output and completes without a terminal SSE event", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
-    ingress.events = blockingEvents([terminalEvent(9)]);
+    ingress.replayEvents.mockResolvedValue([
+      {
+        type: "AGENT_EVENT",
+        sequence: 7,
+        runId: "run_1",
+        occurredAt: "2026-08-21T10:00:07.000Z",
+        target: null,
+        resultRef: null,
+        payload: { event: { type: "text_delta", text: "persisted final answer" } },
+      },
+      terminalEvent(9),
+    ]);
     const w = watcher(ingress, host);
 
     await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
 
-    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain(
-      "✅ **已完成**",
-    );
-    expect(ingress.completeDelivery).not.toHaveBeenCalled();
-
-    w.start(0);
-    await waitUntil(() => ingress.completeDelivery.mock.calls.length === 1);
+    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+    expect(final).toContain("✅ **已完成**");
+    expect(final).toContain("persisted final answer");
+    expect(final).not.toContain("本次无输出");
+    expect(ingress.events).not.toHaveBeenCalled();
     expect(ingress.completeDelivery).toHaveBeenCalledWith(
       "turn_1",
       "feishu:old:run_1",
@@ -209,9 +219,121 @@ describe("FeishuSessionWatcher", () => {
     w.abort();
   });
 
+  it("keeps a terminal delivery recoverable when persisted replay fails", async () => {
+    const logs: string[] = [];
+    const { host } = makeHost();
+    host.log = (message) => logs.push(message);
+    const ingress = makeIngress();
+    ingress.replayEvents.mockRejectedValue(new Error("history unavailable"));
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+
+    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+    expect(final).toContain("结果恢复中");
+    expect(final).not.toContain("本次无输出");
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    expect(logs.some((line) => line.includes("feishu_terminal_result_recovery_failed"))).toBe(true);
+    w.abort();
+  });
+
+  it("shows genuine no-output only after an empty persisted replay succeeds", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+
+    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+    expect(final).toContain("本次无输出");
+    expect(final).not.toContain("结果恢复中");
+    expect(ingress.completeDelivery).toHaveBeenCalledWith(
+      "turn_1",
+      "feishu:old:run_1",
+    );
+    w.abort();
+  });
+
+  it("restores a structured Flow result from persisted events", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    ingress.replayEvents.mockResolvedValue([
+      flowEvent(7, "STEP_STARTED", "deploy", {
+        capability_id: "deploy.production",
+      }),
+      flowEvent(8, "STEP_SUCCEEDED", "deploy"),
+      flowEvent(9, "RUN_SNAPSHOT", "run_1", {
+        flow_id: "flow_deploy",
+        flow_revision: "sha256:revision",
+        outcome: "succeeded",
+        steps: [{
+          step_id: "deploy",
+          capability_id: "deploy.production",
+          verification_status: "passed",
+        }],
+      }),
+      terminalEvent(10),
+    ]);
+    const w = watcher(ingress, host);
+
+    await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+
+    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+    expect(final).toContain("Flow 结果 · 成功");
+    expect(final).toContain("flow_deploy");
+    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
+    w.abort();
+  });
+
+  it("deduplicates an event observed by both live SSE and persisted replay", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    const repeated: ChannelSessionEvent = {
+      type: "AGENT_EVENT",
+      sequence: 7,
+      runId: "run_1",
+      occurredAt: "2026-08-21T10:00:07.000Z",
+      target: null,
+      resultRef: null,
+      payload: { event: { type: "text_delta", text: "exactly once" } },
+    };
+    ingress.events = blockingEvents([repeated]);
+    ingress.replayEvents.mockResolvedValue([repeated, terminalEvent(9)]);
+    const w = watcher(ingress, host);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false);
+    w.start(0);
+    await waitUntil(() => ingress.events.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+
+    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+    expect(final.match(/exactly once/g)).toHaveLength(1);
+    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
+    w.abort();
+  });
+
+  it("does not complete recovered delivery when the terminal card patch fails", async () => {
+    const { host } = makeHost();
+    host.updateCard = vi.fn(async () => {
+      throw new Error("update boom");
+    });
+    const ingress = makeIngress();
+    ingress.replayEvents.mockResolvedValue([terminalEvent(9)]);
+    const w = watcher(ingress, host);
+
+    await expect(
+      w.reconcileDelivery(delivery("succeeded"), turn(), "connected"),
+    ).rejects.toThrow("update boom");
+
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    w.abort();
+  });
+
   it("never lets a stale live snapshot reverse a terminal card", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
+    ingress.replayEvents.mockRejectedValue(new Error("history unavailable"));
     const w = watcher(ingress, host);
 
     await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
