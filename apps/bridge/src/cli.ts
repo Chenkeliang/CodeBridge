@@ -52,6 +52,7 @@ import {
   createChannelSessionIngress,
 } from "./channel-ingress.js";
 import { createMcpApp } from "./mcp-api.js";
+import { createSkillApp } from "./skill-api.js";
 import { resolveStartupSurfaces } from "./startup-surfaces.js";
 import { SessionRuntimeMigration } from "./session-runtime-migration.js";
 import { buildFlowRecommendationGuidance } from "./flow-recommendation-guidance.js";
@@ -161,6 +162,7 @@ program
       baseUrl: config.runner.url,
       token: config.runner.token,
     });
+    const skillApp = createSkillApp(runnerClient, config.runner.token);
     const sessionCoordinator = new SessionCoordinator(workItemStore, {
       maxQueuedTurns:
         config.orchestration?.session?.maxQueuedTurns ?? 100,
@@ -520,6 +522,7 @@ program
         flowCatalogApp,
         flowBatchApp,
         mcpApp,
+        skillApp,
       ).fetch,
       hostname: "127.0.0.1",
       port: apiPort,

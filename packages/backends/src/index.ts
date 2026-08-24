@@ -55,6 +55,25 @@ export { testProviderConnection, type ProviderConnectionProbe } from "./provider
 export { listCodexSkillCommands } from "./codex-skill-commands.js";
 
 export {
+  SKILL_AGENT_IDS,
+  SkillControlPlane,
+  SkillControlPlaneError,
+  type SkillAgentId,
+  type SkillAssignmentAction,
+  type SkillAssignmentInput,
+  type SkillAssignmentPreview,
+  type SkillAssignmentResult,
+  type SkillCatalogEntry,
+  type SkillCatalogSnapshot,
+  type SkillControlPlaneErrorCode,
+  type SkillControlPlaneOptions,
+  type SkillProjectionState,
+  type SkillSourceKind,
+  type SkillTargetDefinition,
+  type SkillTargetView,
+} from "./skill-control-plane.js";
+
+export {
   closePiSession,
   deletePiSession,
   forkPiSession,

@@ -30,6 +30,64 @@ describe("RunnerClient steering", () => {
   });
 });
 
+describe("RunnerClient Skill control plane", () => {
+  it("relays Skill scan and assignment requests without changing the contract", async () => {
+    const snapshot = {
+      skills: [],
+      targets: [],
+      summary: { total: 0, sources: 0, linked: 0, issues: 0 },
+      scanned_at: "2026-08-24T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(snapshot)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(snapshot)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ action: "create_link" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ action: "create_link", state: "linked" })));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner/", token: "token" });
+    const input = { skill_id: "skill-1", agent_id: "codex" as const, enabled: true };
+
+    await expect(client.listSkills()).resolves.toEqual(snapshot);
+    await expect(client.addSkillSource("/source")).resolves.toEqual(snapshot);
+    await expect(client.previewSkillAssignment(input)).resolves.toMatchObject({ action: "create_link" });
+    await expect(client.applySkillAssignment(input)).resolves.toMatchObject({ state: "linked" });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://runner/skills",
+      "http://runner/skills/sources",
+      "http://runner/skills/assignments/preview",
+      "http://runner/skills/assignments/apply",
+    ]);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://runner/skills/sources", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ path: "/source" }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://runner/skills/assignments/preview", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify(input),
+    }));
+  });
+
+  it("preserves Runner Skill conflict status and error code", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "skill_target_conflict",
+      message: "target occupied",
+    }), { status: 409 })));
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+
+    await expect(client.applySkillAssignment({
+      skill_id: "skill-1",
+      agent_id: "codex",
+      enabled: true,
+    })).rejects.toMatchObject({
+      name: "RunnerApiError",
+      status: 409,
+      code: "skill_target_conflict",
+      message: "target occupied",
+    });
+  });
+});
+
 describe("RunnerClient session history", () => {
   it("loads provider history with the Session workspace", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

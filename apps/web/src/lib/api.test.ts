@@ -75,6 +75,40 @@ function snapshotResponse(sessionId: string): SessionCompositeSnapshot {
 }
 
 describe("workbench API client", () => {
+  it("uses the Skill catalog and assignment contracts", async () => {
+    const snapshot = {
+      skills: [], targets: [],
+      summary: { total: 0, sources: 0, linked: 0, issues: 0 },
+      scanned_at: "2026-08-24T00:00:00.000Z",
+    };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json(snapshot))
+      .mockResolvedValueOnce(Response.json(snapshot))
+      .mockResolvedValueOnce(Response.json({ action: "create_link" }))
+      .mockResolvedValueOnce(Response.json({ action: "create_link", state: "linked" }));
+    vi.stubGlobal("fetch", fetch);
+    const input = { skill_id: "skill-1", agent_id: "codex" as const, enabled: true };
+
+    await api.skills();
+    await api.pickSkillSource();
+    await api.previewSkillAssignment(input);
+    await api.applySkillAssignment(input);
+
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      "/v1/skills",
+      "/v1/skills/sources/pick",
+      "/v1/skills/assignments/preview",
+      "/v1/skills/assignments/apply",
+    ]);
+    expect(fetch).toHaveBeenNthCalledWith(2, "/v1/skills/sources/pick", expect.objectContaining({
+      method: "POST",
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(3, "/v1/skills/assignments/preview", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify(input),
+    }));
+  });
+
   it("confirms a batch draft with its revision and idempotency key", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ batch_id: "batch_1" }));
     vi.stubGlobal("fetch", fetch);

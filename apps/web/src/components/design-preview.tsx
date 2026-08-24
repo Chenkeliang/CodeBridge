@@ -3,6 +3,7 @@ import { CommandPalette } from "@/components/command-palette";
 import { Composer } from "@/components/composer";
 import { LoadingConversation, ProjectionItem } from "@/components/conversation";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
+import { SkillControlPlanePage } from "@/components/skill-control-plane";
 import type { ConversationProjection } from "@/lib/events";
 import type { AgentCommand, AgentProfile, AgentSession, ApprovalRecord, ConfigOption, FlowRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -213,7 +214,7 @@ export function DesignPreview() {
   const session = sessions.find((candidate) => candidate.session_id === activeSession) ?? null;
   const agentSessions = sessions.filter((candidate) => candidate.agent_id === activeAgent);
 
-  return <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
+  return <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && (area === "agents" || area === "flows") ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
     <AgentRail
       agents={agents}
       area={area}
@@ -223,7 +224,7 @@ export function DesignPreview() {
       onArea={setArea}
       onTheme={() => setTheme((current) => current === "paper" ? "carbon" : "paper")}
     />
-    {panelOpen && <SessionPanel
+    {panelOpen && (area === "agents" || area === "flows") && <SessionPanel
       agent={agent}
       activeSessionCount={agentSessions.length}
       archivedSessionCount={0}
@@ -245,7 +246,7 @@ export function DesignPreview() {
       onUpdateSession={noopAsync}
     />}
     <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", "bg-canvas text-ink")}>
-      <SessionHeader
+      {(area === "agents" || area === "flows") && <SessionHeader
         agent={agent}
         menuOpen={false}
         menuView={"actions" as MenuView}
@@ -259,8 +260,8 @@ export function DesignPreview() {
         onRenameDraft={noop}
         onTogglePanel={() => setPanelOpen((current) => !current)}
         onUpdate={noop}
-      />
-      <section aria-label="预览对话" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7">
+      />}
+      {area === "skills" ? <SkillControlPlanePage onNotify={noop} /> : <section aria-label="预览对话" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7">
         {new URLSearchParams(window.location.search).get("state") === "states" ? (
           <div className="mx-auto grid w-full max-w-[880px] gap-8 pb-7">
             {stateShowcase.map((block) => <div key={block.title}><p className={cn("mb-2 text-xs font-semibold uppercase tracking-[0.1em]", "text-faint")}>{block.title}</p>{block.node}</div>)}
@@ -270,8 +271,8 @@ export function DesignPreview() {
             {projections.map((item, index) => <ProjectionItem approvals={approvals} cwd={session?.cwd ?? null} item={item} key={index} onApproval={noopAsync} />)}
           </div>
         )}
-      </section>
-      <footer className="px-8 pb-5 pt-3">
+      </section>}
+      {area !== "skills" && <footer className="px-8 pb-5 pt-3">
         <div className="mx-auto w-full max-w-[880px]">
           <Composer
             attachments={[]}
@@ -313,7 +314,7 @@ export function DesignPreview() {
             onSubmit={() => setDraft("")}
           />
         </div>
-      </footer>
+      </footer>}
     </main>
     {paletteOpen && <CommandPalette agents={agents} canCreate onClose={() => setPaletteOpen(false)} onCreateSession={noop} onSelectAgent={setActiveAgent} onSelectSession={(value) => setActiveSession(value.session_id)} onToggleTheme={() => setTheme((current) => current === "paper" ? "carbon" : "paper")} sessions={agentSessions} />}
   </div>;

@@ -26,6 +26,10 @@ import type {
   SessionTimelinePage,
   SessionTurnView,
   SendMessageInput,
+  SkillAssignmentInput,
+  SkillAssignmentPreview,
+  SkillAssignmentResult,
+  SkillCatalogSnapshot,
   TimelineSegmentPage,
   WorkspaceListing,
 } from "./types";
@@ -237,6 +241,21 @@ async function startRun(id: string, flowId: string | null, model: string | null,
 }
 
 export const api = {
+  skills: () => request<SkillCatalogSnapshot>("/v1/skills"),
+  pickSkillSource: () => request<SkillCatalogSnapshot | { cancelled: true }>(
+    "/v1/skills/sources/pick",
+    { method: "POST", body: "{}" },
+  ),
+  previewSkillAssignment: (input: SkillAssignmentInput) =>
+    request<SkillAssignmentPreview>("/v1/skills/assignments/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  applySkillAssignment: (input: SkillAssignmentInput) =>
+    request<SkillAssignmentResult>("/v1/skills/assignments/apply", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   agents: () => request<AgentListResponse>("/v1/agents"),
   fetchFlow: (flowId: string) =>
     request<FlowRecord>("/v1/flows/" + encodeURIComponent(flowId)),

@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import { SessionPanel } from "./session-chrome";
+import { AgentRail, SessionPanel } from "./session-chrome";
 import type { AgentProfile, AgentSession } from "@/lib/types";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -62,6 +62,21 @@ function panelProps(): ComponentProps<typeof SessionPanel> {
 }
 
 describe("SessionPanel menus", () => {
+  it("opens Skills as a first-class vertical rail area", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onArea = vi.fn();
+    act(() => root.render(<AgentRail agents={[agent]} area="agents" selectedAgentId="pi" theme="paper" onAgent={vi.fn()} onArea={onArea} onTheme={vi.fn()} />));
+
+    const button = host.querySelector('button[aria-label="Skills"]');
+    expect(button).not.toBeNull();
+    act(() => button!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onArea).toHaveBeenCalledWith("skills");
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
   it("offers Guide creation only from the Flow management surface", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
