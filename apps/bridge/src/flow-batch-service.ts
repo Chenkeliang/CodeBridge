@@ -76,6 +76,18 @@ export class FlowBatchService {
     executor: FlowBatchRunExecutor;
   }) {}
 
+  getDraft(draftId: string): FlowBatchDraft | undefined {
+    return this.options.batches.getDraft(draftId);
+  }
+
+  listDraftsForSession(sessionId: string): FlowBatchDraft[] {
+    return this.options.batches.listDraftsForSession(sessionId);
+  }
+
+  cancelDraft(draftId: string): FlowBatchDraft {
+    return this.options.batches.cancelDraft(draftId);
+  }
+
   createDraft(input: {
     sessionId: string;
     sourceRunId: string;

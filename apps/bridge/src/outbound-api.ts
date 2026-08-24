@@ -39,6 +39,7 @@ export function createBridgeApp(
   webWorkbenchApp?: Hono,
   sessionCatalogApp?: Hono,
   flowCatalogApp?: Hono,
+  flowBatchApp?: Hono,
   mcpApp?: Hono,
 ) {
   const app = createOutboundApp(bridge, token, {
@@ -47,6 +48,7 @@ export function createBridgeApp(
   app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
   if (sessionCatalogApp) app.route("/", sessionCatalogApp);
   if (flowCatalogApp) app.route("/", flowCatalogApp);
+  if (flowBatchApp) app.route("/", flowBatchApp);
   if (mcpApp) app.route("/", mcpApp);
   if (projectCatalogApp) app.route("/", projectCatalogApp);
   if (webWorkbenchApp) {

@@ -4,6 +4,8 @@ import type {
   ChannelConsumableFlow,
   ChannelDeliveryRow,
   ChannelFlowInput,
+  ChannelFlowBatchDraft,
+  ChannelFlowBatchSnapshot,
   ChannelFlowReviewSummary,
   ChannelManageableFlow,
   ChannelRuntimeApproval,
@@ -39,10 +41,12 @@ function toChannelSessionEvent(event: SessionEventWire): ChannelSessionEvent {
 export function createChannelIngressApi(
   sessionApp: Hono,
   flowApp: Hono,
+  flowBatchApp?: Hono,
 ): Hono {
   const app = new Hono();
   app.route("/", sessionApp);
   app.route("/", flowApp);
+  if (flowBatchApp) app.route("/", flowBatchApp);
   return app;
 }
 
@@ -312,6 +316,88 @@ export function createChannelSessionIngress(
       targetResource: null,
       expiresAt: null,
     };
+  };
+
+  const getFlowBatchDraft = async (
+    draftId: string,
+  ): Promise<ChannelFlowBatchDraft> => {
+    const response = await app.request(
+      `/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}`,
+      { headers: auth },
+    );
+    if (!response.ok) {
+      throw new Error(`read Flow batch draft failed (${response.status}): ${await response.text()}`);
+    }
+    return toChannelFlowBatchDraft(await response.json() as Record<string, unknown>);
+  };
+
+  const confirmFlowBatchDraft = async (
+    draftId: string,
+    revision: number,
+    idempotencyKey: string,
+  ): Promise<ChannelFlowBatchSnapshot> => {
+    const response = await app.request(
+      `/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}/confirm`,
+      {
+        method: "POST",
+        headers: {
+          ...auth,
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+        },
+        body: JSON.stringify({
+          draft_revision: revision,
+          created_by: "channel",
+        }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`confirm Flow batch failed (${response.status}): ${await response.text()}`);
+    }
+    return toChannelFlowBatchSnapshot(await response.json() as Record<string, unknown>);
+  };
+
+  const getFlowBatch = async (
+    batchId: string,
+  ): Promise<ChannelFlowBatchSnapshot> => {
+    const response = await app.request(
+      `/v1/flow-batches/${encodeURIComponent(batchId)}`,
+      { headers: auth },
+    );
+    if (!response.ok) {
+      throw new Error(`read Flow batch failed (${response.status}): ${await response.text()}`);
+    }
+    return toChannelFlowBatchSnapshot(await response.json() as Record<string, unknown>);
+  };
+
+  const cancelFlowBatch = async (
+    batchId: string,
+  ): Promise<ChannelFlowBatchSnapshot> => {
+    const response = await app.request(
+      `/v1/flow-batches/${encodeURIComponent(batchId)}/cancel`,
+      { method: "POST", headers: auth },
+    );
+    if (!response.ok) {
+      throw new Error(`cancel Flow batch failed (${response.status}): ${await response.text()}`);
+    }
+    return toChannelFlowBatchSnapshot(await response.json() as Record<string, unknown>);
+  };
+
+  const retryFailedFlowBatch = async (
+    batchId: string,
+    idempotencyKey: string,
+  ): Promise<ChannelFlowBatchSnapshot> => {
+    const response = await app.request(
+      `/v1/flow-batches/${encodeURIComponent(batchId)}/retry-failed`,
+      {
+        method: "POST",
+        headers: { ...auth, "idempotency-key": idempotencyKey },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`retry Flow batch failed (${response.status}): ${await response.text()}`);
+    }
+    return toChannelFlowBatchSnapshot(await response.json() as Record<string, unknown>);
   };
 
   const events = async function* (
@@ -610,6 +696,11 @@ export function createChannelSessionIngress(
     rejectCandidate,
     listRuntimeApprovals,
     resolveRuntimeApproval,
+    getFlowBatchDraft,
+    confirmFlowBatchDraft,
+    getFlowBatch,
+    cancelFlowBatch,
+    retryFailedFlowBatch,
     events,
     listDeliveries,
     claimDelivery,
@@ -644,6 +735,54 @@ function toChannelRuntimeApproval(input: {
     environment: input.environment ?? null,
     targetResource: input.target_resource ?? null,
     expiresAt: input.expires_at ?? null,
+  };
+}
+
+function toChannelFlowBatchDraft(
+  input: Record<string, unknown>,
+): ChannelFlowBatchDraft {
+  const items = Array.isArray(input.items) ? input.items : [];
+  const blocking = items.filter((item) =>
+    item && typeof item === "object" && Array.isArray((item as Record<string, unknown>).issues)
+      && ((item as Record<string, unknown>).issues as unknown[]).some((issue) =>
+        issue && typeof issue === "object"
+          && (issue as Record<string, unknown>).blocking === true
+      )
+  ).length;
+  return {
+    draftId: String(input.draft_id ?? ""),
+    sessionId: String(input.session_id ?? ""),
+    flowId: String(input.flow_id ?? ""),
+    definitionRevision: String(input.definition_revision ?? ""),
+    status: input.status as ChannelFlowBatchDraft["status"],
+    revision: Number(input.revision ?? 0),
+    total: items.length,
+    blocking,
+  };
+}
+
+function toChannelFlowBatchSnapshot(
+  input: Record<string, unknown>,
+): ChannelFlowBatchSnapshot {
+  const counts = input.counts && typeof input.counts === "object"
+    ? input.counts as Record<string, unknown>
+    : {};
+  return {
+    batchId: String(input.batch_id ?? ""),
+    draftId: String(input.draft_id ?? ""),
+    sessionId: String(input.session_id ?? ""),
+    flowId: String(input.flow_id ?? ""),
+    definitionRevision: String(input.definition_revision ?? ""),
+    status: input.status as ChannelFlowBatchSnapshot["status"],
+    counts: {
+      total: Number(counts.total ?? 0),
+      queued: Number(counts.queued ?? 0),
+      running: Number(counts.running ?? 0),
+      waiting: Number(counts.waiting ?? 0),
+      succeeded: Number(counts.succeeded ?? 0),
+      failed: Number(counts.failed ?? 0),
+      cancelled: Number(counts.cancelled ?? 0),
+    },
   };
 }
 
