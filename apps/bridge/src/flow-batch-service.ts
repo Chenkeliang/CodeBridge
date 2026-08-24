@@ -89,20 +89,23 @@ export class FlowBatchService {
   }
 
   createDraft(input: {
-    sessionId: string;
+    sessionId?: string;
     sourceRunId: string;
     flowId: string;
     definitionRevision: string;
     candidate: unknown;
   }): FlowBatchDraft {
     const sourceRun = this.options.workItems.getRun(input.sourceRunId);
-    if (!sourceRun || sourceRun.sessionId !== input.sessionId) {
+    if (
+      !sourceRun?.sessionId
+      || (input.sessionId !== undefined && sourceRun.sessionId !== input.sessionId)
+    ) {
       throw new FlowBatchServiceError("source_run_not_found");
     }
     const flow = this.requireCurrentFlow(input.flowId, input.definitionRevision);
     const validated = validateFlowBatchDraft(flow, input.candidate);
     const draft = this.options.batches.createDraft({
-      sessionId: input.sessionId,
+      sessionId: sourceRun.sessionId,
       sourceRunId: input.sourceRunId,
       flowId: flow.flowId,
       definitionRevision: flow.definitionRevision,

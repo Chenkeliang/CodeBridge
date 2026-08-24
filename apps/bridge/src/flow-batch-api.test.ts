@@ -87,7 +87,6 @@ describe("Flow batch API", () => {
   it("creates and confirms a ready batch draft", async () => {
     const { app, flow } = harness();
     const created = await app.request("/v1/flow-invocation-drafts", post({
-      session_id: "sess_batch",
       source_run_id: "run_source",
       flow_id: flow.flowId,
       definition_revision: flow.definitionRevision,

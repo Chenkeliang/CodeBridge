@@ -24,6 +24,9 @@ describe("buildFlowRecommendationGuidance", () => {
     ]);
     expect(text).toContain("订单核验 | flow_demo | sha256:one");
     expect(text).toContain("fcb flow suggest");
+    expect(text).toContain("fcb flow batch <draft-json-file>");
+    expect(text).toContain("用户明确引用");
+    expect(text).toContain("提交成功后停止调用业务工具");
     expect(text).toContain("高置信");
     expect(text).not.toContain("sha256:guide");
     expect(text).not.toContain("sha256:candidate");
