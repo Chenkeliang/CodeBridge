@@ -59,6 +59,16 @@ describe("Workbench component policy", () => {
     expect(styles).toContain("--color-surface: var(--agnet-surface)");
   });
 
+  it("mounts Skill management as a first-class workbench surface", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const rail = readFileSync(new URL("./session-chrome.tsx", import.meta.url), "utf8");
+
+    expect(workbench).toContain('import { SkillControlPlanePage } from "@/components/skill-control-plane"');
+    expect(workbench).toContain('area === "skills"');
+    expect(workbench).toContain("<SkillControlPlanePage onNotify={notify} />");
+    expect(rail).toContain('onArea("skills")');
+  });
+
   it("renders working activity separately from final Agent messages", () => {
     const source = readSource();
 

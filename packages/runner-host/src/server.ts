@@ -8,6 +8,13 @@ import {
   AcpSessionPool,
   BackendRegistry,
   AgentSetupService,
+  SKILL_AGENT_IDS,
+  SkillControlPlane,
+  type SkillAgentId,
+  type SkillAssignmentInput,
+  type SkillAssignmentPreview,
+  type SkillAssignmentResult,
+  type SkillCatalogSnapshot,
   type AgentSetupInstallResult,
   type AgentSetupRecord,
   deleteAcpSession,
@@ -77,6 +84,11 @@ export interface RunnerHostOptions {
   directoryPicker?: () => Promise<string | null>;
   /** Test/embedding hook for Codex app-server Skill discovery. */
   codexSkillLister?: (cwd: string) => Promise<AgentAvailableCommand[]>;
+  /** Test/embedding hook; production owns local Skill filesystem projection here. */
+  skillControlPlane?: Pick<
+    SkillControlPlane,
+    "scan" | "addSource" | "preview" | "apply"
+  >;
 }
 
 interface ActiveRun {
@@ -197,6 +209,10 @@ export class RunnerHost {
   /** 长驻 ACP 会话池：同会话消息复用适配器进程（kill switch: runnerHost.acpSessionPool） */
   private readonly sessionPool: AcpSessionPool;
   private readonly agentSetup: AgentSetupService;
+  private readonly skillControlPlane: Pick<
+    SkillControlPlane,
+    "scan" | "addSource" | "preview" | "apply"
+  >;
   /**
    * prompt_feishu：每个 run 的挂起权限请求队列（FIFO）。claude 通常一次只挂一个，
    * 但并行工具可能并发请求——用队列而非单槽，避免互相覆盖、/approve 只回给最早的那个。
@@ -209,6 +225,9 @@ export class RunnerHost {
   constructor(private readonly options: RunnerHostOptions) {
     this.maxConcurrent = options.maxConcurrentRuns ?? 4;
     this.dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
+    this.skillControlPlane = options.skillControlPlane ?? new SkillControlPlane({
+      dataDir: this.dataDir,
+    });
     this.acpPermissionPolicy =
       options.config.runnerHost?.acpPermissionPolicy ?? "auto_allow";
     const rh = options.config.runnerHost;
@@ -678,6 +697,22 @@ export class RunnerHost {
     }
   }
 
+  scanSkills(): SkillCatalogSnapshot {
+    return this.skillControlPlane.scan();
+  }
+
+  addSkillSource(sourcePath: string): SkillCatalogSnapshot {
+    return this.skillControlPlane.addSource(sourcePath);
+  }
+
+  previewSkillAssignment(input: SkillAssignmentInput): SkillAssignmentPreview {
+    return this.skillControlPlane.preview(input);
+  }
+
+  applySkillAssignment(input: SkillAssignmentInput): SkillAssignmentResult {
+    return this.skillControlPlane.apply(input);
+  }
+
   async *executeRun(request: RunRequest): AsyncGenerator<AgentEvent> {
     const lifecycle =
       this.runLifecycles.get(request.runId) ?? this.createRunLifecycle(request.runId);
@@ -1066,6 +1101,50 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
   });
 
+  app.get("/skills", (c) => {
+    try {
+      return c.json(host.scanSkills());
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/sources", async (c) => {
+    const body = await c.req.json().catch(() => null) as { path?: unknown } | null;
+    if (!body || typeof body.path !== "string" || !body.path.trim()) {
+      return c.json({ error: "invalid_skill_source", message: "path is required" }, 400);
+    }
+    try {
+      return c.json(host.addSkillSource(body.path.trim()));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/assignments/preview", async (c) => {
+    const input = await readSkillAssignment(c);
+    if (!input) {
+      return c.json({ error: "invalid_skill_assignment" }, 400);
+    }
+    try {
+      return c.json(host.previewSkillAssignment(input));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/assignments/apply", async (c) => {
+    const input = await readSkillAssignment(c);
+    if (!input) {
+      return c.json({ error: "invalid_skill_assignment" }, 400);
+    }
+    try {
+      return c.json(host.applySkillAssignment(input));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
   // Pi provider management (docs/orchestration/agent-providers.md).
   // models.json lives on this host; bridge proxies and never persists it.
   app.get("/pi/providers/presets", (c) => c.json({ presets: PI_PROVIDER_PRESETS }));
@@ -1320,4 +1399,42 @@ function agentSetupErrorResponse(
     return c.json({ error: "install_strategy_not_found" }, strategyStatus);
   }
   return c.json({ error: "agent_setup_failed", message }, 500);
+}
+
+async function readSkillAssignment(c: {
+  req: { json: () => Promise<unknown> };
+}): Promise<SkillAssignmentInput | null> {
+  const body = await c.req.json().catch(() => null) as {
+    skill_id?: unknown;
+    agent_id?: unknown;
+    enabled?: unknown;
+  } | null;
+  if (
+    !body
+    || typeof body.skill_id !== "string"
+    || !body.skill_id.trim()
+    || typeof body.agent_id !== "string"
+    || !SKILL_AGENT_IDS.includes(body.agent_id as SkillAgentId)
+    || typeof body.enabled !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    skill_id: body.skill_id.trim(),
+    agent_id: body.agent_id as SkillAgentId,
+    enabled: body.enabled,
+  };
+}
+
+function skillControlPlaneErrorResponse(
+  c: { json: (body: unknown, status?: number) => Response },
+  error: unknown,
+) {
+  const value = error as { code?: unknown; status?: unknown; message?: unknown };
+  const code = typeof value?.code === "string" ? value.code : "skill_control_plane_failed";
+  const status = value?.status === 400 || value?.status === 404 || value?.status === 409
+    ? value.status
+    : 500;
+  const message = typeof value?.message === "string" ? value.message : String(error);
+  return c.json({ error: code, message }, status);
 }

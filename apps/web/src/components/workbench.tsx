@@ -14,6 +14,7 @@ import { FlowDetail } from "@/components/flow-detail";
 import { FlowControlPanel } from "@/components/flow-control-panel";
 import { FlowBatchPanel } from "@/components/flow-batch-panel";
 import { SettingsPage } from "@/components/settings-page";
+import { SkillControlPlanePage } from "@/components/skill-control-plane";
 import { PixelMark } from "@/components/pixel-mark";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
 import { api } from "@/lib/api";
@@ -1325,7 +1326,7 @@ export function Workbench() {
   /></div> : null;
 
   return (
-    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && area !== "settings" ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
+    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && (area === "agents" || area === "flows") ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
       <AgentRail
         agents={agents}
         area={area}
@@ -1336,7 +1337,7 @@ export function Workbench() {
         onTheme={toggleTheme}
       />
 
-      {panelOpen && area !== "settings" && <SessionPanel
+      {panelOpen && (area === "agents" || area === "flows") && <SessionPanel
         agent={selectedAgent}
         activeSessionCount={activeSessionCount}
         area={area}
@@ -1374,7 +1375,7 @@ export function Workbench() {
 
       <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", "bg-canvas text-ink")}>
         {pixelWipe > 0 && <PixelWipe key={pixelWipe} seed={pixelWipe} />}
-        {area !== "settings" && <SessionHeader
+        {(area === "agents" || area === "flows") && <SessionHeader
           agent={selectedAgent}
           session={selectedSession}
           runState={runState}
@@ -1398,7 +1399,9 @@ export function Workbench() {
           <button className="rounded border border-line px-2 py-1" onClick={() => void unbindSelectedFlow()} type="button">解绑</button>
         </div>}
 
-        {area === "settings" ? (
+        {area === "skills" ? (
+          <SkillControlPlanePage onNotify={notify} />
+        ) : area === "settings" ? (
           <section aria-label="设置" className="min-h-0 flex-1 overflow-y-auto">
             <SettingsPage
               density={density}

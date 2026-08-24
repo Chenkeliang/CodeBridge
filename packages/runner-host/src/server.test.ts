@@ -162,6 +162,133 @@ describe("RunnerHost Agent setup", () => {
   });
 });
 
+describe("RunnerHost Skill control plane", () => {
+  it("exposes authenticated scan, source, preview, and apply routes", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-skills-"));
+    tmpDirs.push(dataDir);
+    const snapshot = {
+      skills: [],
+      targets: [],
+      summary: { total: 0, sources: 0, linked: 0, issues: 0 },
+      scanned_at: "2026-08-24T00:00:00.000Z",
+    };
+    const skillControlPlane = {
+      scan: vi.fn(() => snapshot),
+      addSource: vi.fn(() => snapshot),
+      preview: vi.fn(() => ({
+        skill_id: "skill-1",
+        skill_name: "Skill One",
+        agent_id: "codex",
+        enabled: true,
+        source_path: "/source/skill-one",
+        target_path: "/target/skill-one",
+        current_state: "absent",
+        action: "create_link",
+        detail: null,
+        can_apply: true,
+      })),
+      apply: vi.fn(() => ({
+        skill_id: "skill-1",
+        skill_name: "Skill One",
+        agent_id: "codex",
+        enabled: true,
+        source_path: "/source/skill-one",
+        target_path: "/target/skill-one",
+        current_state: "absent",
+        action: "create_link",
+        detail: null,
+        can_apply: true,
+        state: "linked",
+      })),
+    };
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      skillControlPlane: skillControlPlane as never,
+    });
+    const app = createRunnerApp(host, "token");
+
+    const unauthorized = await app.request("/skills");
+    expect(unauthorized.status).toBe(401);
+
+    const list = await app.request("/skills", {
+      headers: { authorization: "Bearer token" },
+    });
+    expect(list.status).toBe(200);
+    expect(await list.json()).toEqual(snapshot);
+
+    const source = await app.request("/skills/sources", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ path: "/source" }),
+    });
+    expect(source.status).toBe(200);
+    expect(skillControlPlane.addSource).toHaveBeenCalledWith("/source");
+
+    const preview = await app.request("/skills/assignments/preview", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ skill_id: "skill-1", agent_id: "codex", enabled: true }),
+    });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({ action: "create_link" });
+
+    const apply = await app.request("/skills/assignments/apply", {
+      method: "POST",
+      headers: { authorization: "Bearer token", "content-type": "application/json" },
+      body: JSON.stringify({ skill_id: "skill-1", agent_id: "codex", enabled: true }),
+    });
+    expect(apply.status).toBe(200);
+    expect(await apply.json()).toMatchObject({ state: "linked" });
+    host.shutdown();
+  });
+
+  it("validates assignment bodies and returns structured domain errors", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-skills-"));
+    tmpDirs.push(dataDir);
+    const skillControlPlane = {
+      scan: vi.fn(),
+      addSource: vi.fn(() => {
+        const error = new Error("invalid source") as Error & { code: string; status: number };
+        error.code = "skill_source_invalid";
+        error.status = 400;
+        throw error;
+      }),
+      preview: vi.fn(),
+      apply: vi.fn(),
+    };
+    const host = new RunnerHost({
+      token: "token",
+      config: defaultConfig(),
+      dataDir,
+      skillControlPlane: skillControlPlane as never,
+    });
+    const app = createRunnerApp(host, "token");
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
+
+    const malformed = await app.request("/skills/assignments/preview", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ skill_id: "skill-1", agent_id: "codex" }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ error: "invalid_skill_assignment" });
+
+    const invalidSource = await app.request("/skills/sources", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path: "/missing" }),
+    });
+    expect(invalidSource.status).toBe(400);
+    expect(await invalidSource.json()).toEqual({
+      error: "skill_source_invalid",
+      message: "invalid source",
+    });
+    host.shutdown();
+  });
+});
+
 describe("RunnerHost cwd validation", () => {
   it("returns Codex ACP built-in commands without opening the provider Session", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));

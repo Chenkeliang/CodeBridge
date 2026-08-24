@@ -223,6 +223,66 @@ export interface AgentCommand {
   input?: { hint: string };
 }
 
+export type SkillAgentId = "codex" | "claude" | "cursor" | "opencode" | "pi";
+export type SkillSourceKind = "shared" | "adopted" | "agent_native";
+export type SkillProjectionState = "linked" | "absent" | "conflict" | "broken" | "native";
+export type SkillAssignmentAction = "create_link" | "remove_link" | "noop" | "conflict";
+
+export interface SkillTargetView {
+  agent_id: SkillAgentId;
+  target_path: string;
+  state: SkillProjectionState;
+  detail: string | null;
+}
+
+export interface SkillCatalogEntry {
+  id: string;
+  name: string;
+  description: string | null;
+  source_path: string;
+  source_kind: SkillSourceKind;
+  revision: string;
+  tags: string[];
+  updated_at: string;
+  targets: SkillTargetView[];
+}
+
+export interface SkillTargetDefinition {
+  agent_id: SkillAgentId;
+  display_name: string;
+  root_path: string;
+}
+
+export interface SkillCatalogSnapshot {
+  skills: SkillCatalogEntry[];
+  targets: SkillTargetDefinition[];
+  summary: { total: number; sources: number; linked: number; issues: number };
+  scanned_at: string;
+}
+
+export interface SkillAssignmentInput {
+  skill_id: string;
+  agent_id: SkillAgentId;
+  enabled: boolean;
+}
+
+export interface SkillAssignmentPreview {
+  skill_id: string;
+  skill_name: string;
+  agent_id: SkillAgentId;
+  enabled: boolean;
+  source_path: string;
+  target_path: string;
+  current_state: SkillProjectionState;
+  action: SkillAssignmentAction;
+  detail: string | null;
+  can_apply: boolean;
+}
+
+export interface SkillAssignmentResult extends SkillAssignmentPreview {
+  state: SkillProjectionState;
+}
+
 export interface WorkspaceEntry {
   name: string;
   path: string;

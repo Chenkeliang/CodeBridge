@@ -9,6 +9,10 @@ import type {
   AgentSetupRecord,
   CliSessionSummary,
   ProviderSessionHistoryEvent,
+  SkillAssignmentInput,
+  SkillAssignmentPreview,
+  SkillAssignmentResult,
+  SkillCatalogSnapshot,
 } from "@codebridge/backends";
 
 export interface RunnerClientOptions {
@@ -18,7 +22,14 @@ export interface RunnerClientOptions {
   sessionHistoryTimeoutMs?: number;
 }
 
-export type { CliSessionSummary, ProviderSessionHistoryEvent };
+export type {
+  CliSessionSummary,
+  ProviderSessionHistoryEvent,
+  SkillAssignmentInput,
+  SkillAssignmentPreview,
+  SkillAssignmentResult,
+  SkillCatalogSnapshot,
+};
 
 export interface WorkspaceDirectoryEntry {
   name: string;
@@ -162,6 +173,38 @@ export class RunnerClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ strategy_id: strategyId }),
+    });
+  }
+
+  async listSkills(): Promise<SkillCatalogSnapshot> {
+    return this.requestSetup<SkillCatalogSnapshot>("/skills");
+  }
+
+  async addSkillSource(sourcePath: string): Promise<SkillCatalogSnapshot> {
+    return this.requestSetup<SkillCatalogSnapshot>("/skills/sources", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: sourcePath }),
+    });
+  }
+
+  async previewSkillAssignment(
+    input: SkillAssignmentInput,
+  ): Promise<SkillAssignmentPreview> {
+    return this.requestSetup<SkillAssignmentPreview>("/skills/assignments/preview", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  async applySkillAssignment(
+    input: SkillAssignmentInput,
+  ): Promise<SkillAssignmentResult> {
+    return this.requestSetup<SkillAssignmentResult>("/skills/assignments/apply", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
     });
   }
 
@@ -514,5 +557,5 @@ function setupErrorFromResponse(status: number, body: unknown): RunnerApiError {
   const payload = body && typeof body === "object" ? body as SetupErrorPayload : null;
   const message = payload?.message ?? payload?.error ?? `Runner error: ${status}`;
   const details = payload?.details;
-  return new RunnerApiError(message, status, details, payload?.code);
+  return new RunnerApiError(message, status, details, payload?.code ?? payload?.error);
 }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { Hono } from "hono";
 import { SqliteEventStore } from "@codebridge/work-items";
 import {
   createBridgeApp,
@@ -141,6 +142,34 @@ describe("createOutboundApp", () => {
     expect(response.status).toBe(201);
     store.close();
     fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("mounts the Skill control plane on the Bridge app", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const { bridge } = makeApp();
+    const skillApp = new Hono().get("/v1/skills", (c) => c.json({ skills: [] }));
+    const app = createBridgeApp(
+      bridge,
+      TOKEN,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      skillApp,
+    );
+
+    const response = await app.request("/v1/skills", {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ skills: [] });
+    store.close();
   });
 
   it("serves the Workbench shell without a bearer token", async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Archive, ChevronDown, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Sun, Trash2, Upload, Workflow } from "lucide-react";
+import { Archive, BookOpen, ChevronDown, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Sun, Trash2, Upload, Workflow } from "lucide-react";
 import { BrandAgentIcon, agentTintClass } from "@/components/brand-agent-icon";
 import { PixelMark } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,7 @@ export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onAre
     </div>
     <div className={cn("my-2 h-px w-8 border-t", "border-line")} />
     <button aria-label="Flows" aria-pressed={area === "flows"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "flows" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("flows")} title="Flows" type="button"><Workflow className="size-3.5" /></button>
+    <button aria-label="Skills" aria-pressed={area === "skills"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "skills" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("skills")} title="Skills" type="button"><BookOpen className="size-3.5" /></button>
     <div className="flex-1" />
     <button aria-label="设置" aria-pressed={area === "settings"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "settings" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("settings")} title="设置" type="button"><Settings2 className="size-3.5" /></button>
     <button aria-label="切换主题" className={cn("grid size-9 place-items-center rounded-md transition-all hover:-translate-y-px hover:opacity-80", "text-muted")} onClick={onTheme} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-3.5" /></button>
