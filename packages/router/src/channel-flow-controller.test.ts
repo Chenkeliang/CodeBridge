@@ -99,7 +99,10 @@ describe("ChannelFlowController", () => {
     const batch = { draft, snapshot, confirm, retry };
 
     await expect(context(controller, `/flow batch show ${draft.draftId}`, { batch })).resolves.toMatchObject({ text: expect.stringContaining("可处理 3") });
-    await expect(context(controller, `/flow batch confirm ${draft.draftId}`, { batch })).resolves.toMatchObject({ text: expect.stringContaining("已开始批量执行 3 项") });
+    await expect(context(controller, `/flow batch confirm ${draft.draftId}`, { batch })).resolves.toMatchObject({
+      text: expect.stringContaining("已开始批量执行 3 项"),
+      batch: snapshot,
+    });
     expect(confirm).toHaveBeenCalledWith(draft.draftId, 2, expect.stringMatching(/^flow-batch:/));
     await expect(context(controller, "/flow batch show batch_1", { batch })).resolves.toMatchObject({ text: expect.stringContaining("运行 3") });
     await context(controller, "/flow batch retry-failed batch_1", { batch });

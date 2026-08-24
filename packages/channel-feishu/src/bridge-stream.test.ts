@@ -219,6 +219,11 @@ describe("FeishuBridge streaming", () => {
         definitionRevision: "sha256:one", status: "running",
         counts: { total: 2, queued: 1, running: 1, waiting: 0, succeeded: 0, failed: 0, cancelled: 0 },
       }),
+      getFlowBatch: vi.fn().mockResolvedValue({
+        batchId: "batch_1", draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
+        definitionRevision: "sha256:one", status: "succeeded",
+        counts: { total: 2, queued: 0, running: 0, waiting: 0, succeeded: 2, failed: 0, cancelled: 0 },
+      }),
       events: async function* () {
         await new Promise(() => {});
       },
@@ -238,12 +243,25 @@ describe("FeishuBridge streaming", () => {
           input: { markdown: string },
           options: unknown,
         ): Promise<void>;
+        stream(
+          chatId: string,
+          input: StreamInput,
+          options: { replyTo: string },
+        ): Promise<void>;
       };
     };
     const replies: string[] = [];
+    const batchCards: string[] = [];
     bridge.channel = {
       async send(_chatId, input) {
         replies.push(input.markdown);
+      },
+      async stream(_chatId, input) {
+        await input.markdown({
+          messageId: "batch-card-1",
+          async append() {},
+          async setContent(full) { batchCards.push(full); },
+        });
       },
     };
     const message = (messageId: string, content: string): FeishuMessage => ({
@@ -261,10 +279,12 @@ describe("FeishuBridge streaming", () => {
     await bridge.handleMessage(message("m4", "/flow run"));
     await bridge.handleMessage(message("m5", "/flow confirm"));
     await bridge.handleMessage(message("m6", "/flow batch confirm batch_draft_1"));
+    await vi.waitFor(() => expect(batchCards.join("\n")).toContain("状态：succeeded"));
 
     expect(replies.join("\n")).toContain("订单排查");
     expect(replies.join("\n")).toContain("runbook/candidate");
     expect(replies.join("\n")).toContain("已开始批量执行 2 项");
+    expect(batchCards.join("\n")).toContain("成功 2 · 运行 0 · 失败 0 · 共 2");
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       channel: "feishu",

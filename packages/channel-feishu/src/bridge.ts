@@ -13,6 +13,7 @@ import {
   resolveRequireMention,
   type AgentEvent,
   type AppConfig,
+  type ChannelFlowBatchSnapshot,
   type ChannelSessionEvent,
   type ChannelSessionIngress,
   type ChannelSlot,
@@ -24,9 +25,11 @@ import {
   ChannelFlowController,
   checkAccess,
   createChannelStreamProjector,
+  formatChannelFlowBatchSnapshot,
   formatElapsed,
   formatWelcomeMessage,
   handleSlashCommand,
+  isTerminalChannelFlowBatch,
 } from "@codebridge/router";
 import { registerFeishuExtraEvents } from "./feishu-extra-events.js";
 import { ChainTopicTracker } from "./chain-topics.js";
@@ -149,6 +152,18 @@ export function chunkMarkdown(text: string, maxLen: number): string[] {
   }
   if (cur) chunks.push(cur);
   return chunks;
+}
+
+function waitForBatchPoll(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 1_000);
+    timer.unref?.();
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }
 
 export class FeishuBridge {
@@ -490,6 +505,9 @@ export class FeishuBridge {
       : null;
     if (flowCommand?.type === "reply") {
       await this.sendMarkdown(msg.chatId, flowCommand.text, msg.messageId);
+      if (flowCommand.batch) {
+        this.monitorFlowBatch(flowCommand.batch, msg.chatId, msg.messageId);
+      }
       return;
     }
     if (flowCommand?.type === "invoke") {
@@ -1135,6 +1153,62 @@ export class FeishuBridge {
   ): Promise<void> {
     if (!this.channel) return;
     await this.channel.send(chatId, { markdown }, { replyTo });
+  }
+
+  private monitorFlowBatch(
+    initial: ChannelFlowBatchSnapshot,
+    chatId: string,
+    replyTo: string,
+  ): void {
+    const channel = this.channel;
+    const getBatch = this.sessionIngress?.getFlowBatch;
+    if (!channel || !getBatch || isTerminalChannelFlowBatch(initial)) return;
+    const abortController = new AbortController();
+    this.activeAborts.add(abortController);
+    void channel.stream(
+      chatId,
+      {
+        markdown: async (stream) => {
+          this.pendingStreams.update((all) => ({
+            ...all,
+            [stream.messageId]: {
+              chatId,
+              sourceMessageId: replyTo,
+              startedAt: new Date().toISOString(),
+            },
+          }));
+          try {
+            let snapshot = initial;
+            let lastContent = "";
+            while (!abortController.signal.aborted) {
+              snapshot = await getBatch(initial.batchId);
+              const content = formatChannelFlowBatchSnapshot(snapshot);
+              if (content !== lastContent) {
+                await stream.setContent(content);
+                lastContent = content;
+              }
+              if (isTerminalChannelFlowBatch(snapshot)) return;
+              await waitForBatchPoll(abortController.signal);
+            }
+          } finally {
+            this.pendingStreams.update((all) => {
+              const next = { ...all };
+              delete next[stream.messageId];
+              return next;
+            });
+          }
+        },
+      },
+      { replyTo },
+    ).catch((error) => {
+      if (!abortController.signal.aborted) {
+        this.options.onLog?.(
+          `飞书 Flow 批量状态卡失败: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }).finally(() => {
+      this.activeAborts.delete(abortController);
+    });
   }
 
   /**

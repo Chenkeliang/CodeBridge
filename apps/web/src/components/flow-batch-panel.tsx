@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { revisionTail } from "@/lib/revision-tail";
 import type {
@@ -25,12 +25,6 @@ export function FlowBatchPanel(props: {
   const [globalText, setGlobalText] = useState(() => pretty(props.draft?.global_inputs ?? {}));
   const [concurrency, setConcurrency] = useState(props.batch?.concurrency ?? 3);
   const [parseError, setParseError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setItems(props.draft?.items ?? []);
-    setGlobalText(pretty(props.draft?.global_inputs ?? {}));
-    setParseError(null);
-  }, [props.draft]);
 
   const blocking = useMemo(
     () => items.filter((item) => item.issues.some((issue) => issue.blocking)).length,
@@ -91,7 +85,7 @@ export function FlowBatchPanel(props: {
       <section className="grid gap-2" aria-label="批量参数项">
         {items.map((item, index) => <DraftRow
           item={item}
-          key={item.item_id}
+          key={`${item.item_id}:${JSON.stringify(item.inputs)}`}
           onChange={(next) => setItems((current) => current.map((value) =>
             value.item_id === next.item_id ? next : value
           ))}
@@ -156,7 +150,6 @@ function DraftRow(props: {
 }) {
   const [text, setText] = useState(() => pretty(props.item.inputs));
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => setText(pretty(props.item.inputs)), [props.item.inputs]);
   function commit() {
     try {
       const inputs = parseObject(text);

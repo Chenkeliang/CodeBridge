@@ -118,6 +118,8 @@ export function Workbench() {
     openSession: api.openSession,
   }), []);
   const sessionView = useSessionView(selectedSessionId);
+  const activeFlowBatchId = flowBatch?.batch_id ?? null;
+  const activeFlowBatchStatus = flowBatch?.status ?? null;
   const proposalRunKey = sessionView?.snapshot.timeline.turns
     .map((turn) => `${turn.run_id}:${turn.status}`)
     .join("|") ?? "";
@@ -282,10 +284,10 @@ export function Workbench() {
   }, [selectedSessionId, waitingRuntimeApprovals]);
 
   useEffect(() => {
-    if (!flowBatch || !["queued", "running"].includes(flowBatch.status)) return;
+    if (!activeFlowBatchId || !activeFlowBatchStatus || !["queued", "running"].includes(activeFlowBatchStatus)) return;
     let active = true;
     const timer = window.setInterval(() => {
-      void api.flowBatch(flowBatch.batch_id).then((snapshot) => {
+      void api.flowBatch(activeFlowBatchId).then((snapshot) => {
         if (active) setFlowBatch(snapshot);
       }).catch((caught) => {
         if (active) setFlowBatchError(messageOf(caught));
@@ -295,7 +297,7 @@ export function Workbench() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [flowBatch?.batch_id, flowBatch?.status]);
+  }, [activeFlowBatchId, activeFlowBatchStatus]);
 
   useEffect(() => {
     window.localStorage.setItem("codebridge:web-theme", theme);
@@ -1283,6 +1285,7 @@ export function Workbench() {
     busy={flowBatchBusy}
     draft={flowBatchDraft}
     error={flowBatchError}
+    key={flowBatchDraft ? `${flowBatchDraft.draft_id}:${flowBatchDraft.revision}` : flowBatch?.batch_id}
     onCancelBatch={() => { void cancelFlowBatch(); }}
     onCancelDraft={() => { void cancelFlowBatchDraft(); }}
     onClose={closeFlowBatch}

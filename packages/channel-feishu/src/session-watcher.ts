@@ -83,7 +83,11 @@ function isStructuredFlowEvent(type: string): boolean {
     || type === "RUN_SNAPSHOT"
     || type === "APPROVAL_REQUESTED"
     || type === "APPROVAL_GRANTED"
-    || type === "APPROVAL_REJECTED";
+    || type === "APPROVAL_REJECTED"
+    || type === "FLOW_BATCH_DRAFTED"
+    || type === "FLOW_BATCH_CONFIRMED"
+    || type === "FLOW_BATCH_UPDATED"
+    || type === "FLOW_BATCH_COMPLETED";
 }
 
 function composeFeishuRunBody(agentText: string, flowText: string): string {
