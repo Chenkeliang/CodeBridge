@@ -13,8 +13,11 @@ function fixture(overrides: Record<string, unknown> = {}) {
   const runner = {
     listSkills: vi.fn().mockResolvedValue(snapshot),
     addSkillSource: vi.fn().mockResolvedValue(snapshot),
-    previewSkillAssignment: vi.fn().mockResolvedValue({ action: "create_link" }),
-    applySkillAssignment: vi.fn().mockResolvedValue({ action: "create_link", state: "linked" }),
+    previewSkillAdopt: vi.fn().mockResolvedValue({ plan_id: "plan-1", kind: "adopt" }),
+    previewSkillAssignment: vi.fn().mockResolvedValue({ plan_id: "plan-1", kind: "assignment" }),
+    previewSkillGlobalState: vi.fn().mockResolvedValue({ plan_id: "plan-1", kind: "global_state" }),
+    previewSkillUnmanage: vi.fn().mockResolvedValue({ plan_id: "plan-1", kind: "unmanage" }),
+    applySkillPlan: vi.fn().mockResolvedValue({ plan_id: "plan-1", transaction_id: "tx-1", snapshot }),
     pickDirectory: vi.fn().mockResolvedValue({ ok: true, path: "/picked/skill" }),
     ...overrides,
   };
@@ -27,7 +30,7 @@ const headers = {
 };
 
 describe("Skill Bridge API", () => {
-  it("protects and proxies scan, source, preview, and apply", async () => {
+  it("protects and proxies scan, source, previews, and plan apply", async () => {
     const { app, runner, snapshot } = fixture();
     expect((await app.request("/v1/skills")).status).toBe(401);
 
@@ -42,22 +45,28 @@ describe("Skill Bridge API", () => {
     expect(source.status).toBe(200);
     expect(runner.addSkillSource).toHaveBeenCalledWith("/source");
 
-    const input = { skill_id: "skill-1", agent_id: "codex", enabled: true };
+    const adopt = await app.request("/v1/skills/skill-1/adopt/preview", {
+      method: "POST",
+      headers,
+    });
+    expect(adopt.status).toBe(200);
+    expect(runner.previewSkillAdopt).toHaveBeenCalledWith("skill-1", "local:web");
+
+    const input = { skill_id: "skill-1", agent_id: "claude", enabled: true };
     const preview = await app.request("/v1/skills/assignments/preview", {
       method: "POST",
       headers,
       body: JSON.stringify(input),
     });
     expect(preview.status).toBe(200);
-    expect(runner.previewSkillAssignment).toHaveBeenCalledWith(input);
+    expect(runner.previewSkillAssignment).toHaveBeenCalledWith({ ...input, actor_id: "local:web" });
 
-    const apply = await app.request("/v1/skills/assignments/apply", {
+    const apply = await app.request("/v1/skills/assignment-plans/plan-1/apply", {
       method: "POST",
       headers,
-      body: JSON.stringify(input),
     });
     expect(apply.status).toBe(200);
-    expect(runner.applySkillAssignment).toHaveBeenCalledWith(input);
+    expect(runner.applySkillPlan).toHaveBeenCalledWith("assignment", "plan-1", "local:web");
   });
 
   it("uses the Runner-native picker before adopting a Source", async () => {
@@ -93,19 +102,18 @@ describe("Skill Bridge API", () => {
       status: 409,
       code: "skill_target_conflict",
     });
-    const { app } = fixture({ applySkillAssignment: vi.fn().mockRejectedValue(conflict) });
+    const { app } = fixture({ applySkillPlan: vi.fn().mockRejectedValue(conflict) });
 
-    const malformed = await app.request("/v1/skills/assignments/apply", {
+    const malformed = await app.request("/v1/skills/assignments/preview", {
       method: "POST",
       headers,
       body: JSON.stringify({ skill_id: "skill-1" }),
     });
     expect(malformed.status).toBe(400);
 
-    const response = await app.request("/v1/skills/assignments/apply", {
+    const response = await app.request("/v1/skills/assignment-plans/plan-1/apply", {
       method: "POST",
       headers,
-      body: JSON.stringify({ skill_id: "skill-1", agent_id: "codex", enabled: true }),
     });
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
