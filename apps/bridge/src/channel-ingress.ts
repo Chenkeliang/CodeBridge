@@ -416,6 +416,24 @@ export function createChannelSessionIngress(
     }
   };
 
+  const replayEvents = async (
+    sessionId: string,
+    opts: { afterSequence: number },
+  ): Promise<ChannelSessionEvent[]> => {
+    const response = await app.request(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/events?after_sequence=${opts.afterSequence}`,
+      { headers: auth },
+    );
+    if (!response.ok || !response.body) {
+      throw new Error(`Channel event replay failed (${response.status})`);
+    }
+    const events: ChannelSessionEvent[] = [];
+    for await (const event of readSessionEvents(response.body)) {
+      events.push(toChannelSessionEvent(event));
+    }
+    return events;
+  };
+
   const listDeliveries = async (
     channel: string,
   ): Promise<ChannelDeliveryRow[]> => {
@@ -702,6 +720,7 @@ export function createChannelSessionIngress(
     cancelFlowBatch,
     retryFailedFlowBatch,
     events,
+    replayEvents,
     listDeliveries,
     claimDelivery,
     ackDelivery,

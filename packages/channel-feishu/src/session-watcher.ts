@@ -376,6 +376,24 @@ export interface PendingTurn {
   showThinking: boolean;
 }
 
+interface ResumedFeishuCard {
+  surfaceMessageId: string;
+  projector: ChannelStreamProjector;
+  flowProjector: ChannelFlowProjector;
+  runStatus: FeishuRunStatus;
+  resultRecovery: "pending" | "confirmed";
+  projectedSequences: Set<number>;
+}
+
+function isTerminalRunSnapshot(
+  snapshot: ChannelDeliveryRunSnapshot | null,
+): boolean {
+  return snapshot !== null
+    && snapshot.status !== "queued"
+    && snapshot.status !== "running"
+    && snapshot.status !== "waiting";
+}
+
 /** 每 Session 一个持久 events 订阅，单订阅统一路由 Turn / Run / Delivery。 */
 export class FeishuSessionWatcher {
   private readonly abortController = new AbortController();
@@ -387,15 +405,7 @@ export class FeishuSessionWatcher {
     string,
     { turnId: string; owner: string }
   >();
-  private readonly resumedCards = new Map<
-    string,
-    {
-      surfaceMessageId: string;
-      projector: ChannelStreamProjector;
-      flowProjector: ChannelFlowProjector;
-      runStatus: FeishuRunStatus;
-    }
-  >();
+  private readonly resumedCards = new Map<string, ResumedFeishuCard>();
   private readonly fatalAgentErrorRuns = new Set<string>();
   private readonly permanentlyInvalidCardIds = new Set<string>();
   private readonly loggedPermanentCardIds = new Set<string>();
@@ -445,6 +455,8 @@ export class FeishuSessionWatcher {
       }),
       flowProjector: createChannelFlowProjector(),
       runStatus,
+      resultRecovery: "pending",
+      projectedSequences: new Set<number>(),
     });
     this.deliveries.set(runId, { turnId, owner });
   }
@@ -502,6 +514,10 @@ export class FeishuSessionWatcher {
     const resumed = this.resumedCards.get(delivery.runId);
     if (resumed) {
       setInboundWebSocket(resumed.runStatus, inboundState);
+      const terminal = isTerminalRunSnapshot(delivery.runSnapshot);
+      if (terminal) {
+        await this.restorePersistedResult(delivery, resumed);
+      }
       if (delivery.runSnapshot) {
         applyRunSnapshot(resumed.runStatus, delivery.runSnapshot);
         if (
@@ -515,8 +531,90 @@ export class FeishuSessionWatcher {
           );
         }
       }
-      await this.writeResumedCard(delivery.runId, resumed);
+      const written = await this.writeResumedCard(delivery.runId, resumed);
+      if (terminal && resumed.resultRecovery === "confirmed" && written) {
+        await this.completeDeliveryForRun(delivery.runId);
+      }
     }
+  }
+
+  private async restorePersistedResult(
+    delivery: ChannelDeliveryRow,
+    resumed: ResumedFeishuCard,
+  ): Promise<void> {
+    if (resumed.resultRecovery === "confirmed") return;
+    if (!delivery.runId || !this.ingress.replayEvents) {
+      this.logResultRecoveryFailure(delivery, "finite replay is unavailable");
+      return;
+    }
+    try {
+      const events = await this.ingress.replayEvents(delivery.sessionId, {
+        afterSequence: delivery.acceptedSequence,
+      });
+      for (const event of events) {
+        this.applyRecoveredEvent(delivery.runId, resumed, event);
+      }
+      resumed.resultRecovery = "confirmed";
+    } catch (error) {
+      this.logResultRecoveryFailure(
+        delivery,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private applyRecoveredEvent(
+    runId: string,
+    resumed: ResumedFeishuCard,
+    event: ChannelSessionEvent,
+  ): void {
+    if (
+      event.runId !== runId
+      || resumed.projectedSequences.has(event.sequence)
+    ) return;
+    if (event.type === "AGENT_EVENT") {
+      const agentEvent = event.payload.event as AgentEvent | undefined;
+      if (!agentEvent) return;
+      if (agentEvent.type === "error" && agentEvent.fatal) {
+        this.fatalAgentErrorRuns.add(runId);
+      }
+      recordFeishuRunActivity(resumed.runStatus, agentEvent);
+      resumed.projector.apply(agentEvent);
+      resumed.projectedSequences.add(event.sequence);
+      return;
+    }
+    if (isStructuredFlowEvent(event.type)) {
+      resumed.flowProjector.apply(event);
+      if (event.type !== "STEP_FAILED") {
+        resumed.projectedSequences.add(event.sequence);
+        return;
+      }
+    }
+    if (event.type === "STEP_FAILED" && !this.fatalAgentErrorRuns.has(runId)) {
+      resumed.projector.apply({
+        type: "error",
+        message: String(
+          (event.payload as Record<string, unknown>)?.error ?? "Step failed",
+        ),
+      });
+    }
+    if (event.type === "STEP_FAILED") {
+      resumed.projectedSequences.add(event.sequence);
+    }
+  }
+
+  private logResultRecoveryFailure(
+    delivery: ChannelDeliveryRow,
+    message: string,
+  ): void {
+    this.host.log(JSON.stringify({
+      event: "feishu_terminal_result_recovery_failed",
+      channel: "feishu",
+      sessionId: delivery.sessionId,
+      runId: delivery.runId,
+      turnId: delivery.turnId,
+      message,
+    }));
   }
 
   async setInboundWebSocketState(state: FeishuConnectionState): Promise<void> {
@@ -565,12 +663,7 @@ export class FeishuSessionWatcher {
 
   private async writeResumedCard(
     runId: string | undefined,
-    resumed: {
-      surfaceMessageId: string;
-      projector: ChannelStreamProjector;
-      flowProjector: ChannelFlowProjector;
-      runStatus: FeishuRunStatus;
-    },
+    resumed: ResumedFeishuCard,
   ): Promise<boolean> {
     if (this.permanentlyInvalidCardIds.has(resumed.surfaceMessageId)) return false;
     try {
@@ -595,11 +688,7 @@ export class FeishuSessionWatcher {
   }
 
   private resumedCardBody(
-    resumed: {
-      projector: ChannelStreamProjector;
-      flowProjector: ChannelFlowProjector;
-      runStatus: FeishuRunStatus;
-    },
+    resumed: ResumedFeishuCard,
   ): object {
     const status = renderFeishuRunStatus(resumed.runStatus);
     const snapshot = resumed.projector.snapshot();
@@ -609,9 +698,11 @@ export class FeishuSessionWatcher {
       : renderChannelFlowFinal(flowSnapshot);
     const agentText = resumed.runStatus.state === "running"
       ? snapshot.liveText
-      : flowText && !snapshot.result.trim()
-        ? ""
-        : snapshot.finalText;
+      : resumed.resultRecovery === "pending"
+        ? "⏳ 结果恢复中"
+        : flowText && !snapshot.result.trim()
+          ? ""
+          : snapshot.finalText;
     const body = composeFeishuRunBody(agentText, flowText);
     const markdown = status && body
       ? `${status}\n\n---\n\n${body}`
@@ -699,8 +790,7 @@ export class FeishuSessionWatcher {
         this.fatalAgentErrorRuns.add(event.runId);
       }
       if (resumed && agentEvent) {
-        recordFeishuRunActivity(resumed.runStatus, agentEvent);
-        resumed.projector.apply(agentEvent);
+        this.applyRecoveredEvent(event.runId, resumed, event);
       }
       if (card && agentEvent && agentEvent.type !== "done") {
         await card.onAgentEvent(agentEvent);
@@ -712,7 +802,7 @@ export class FeishuSessionWatcher {
       if (card) await card.onDomainEvent(event);
       const resumed = this.resumedCards.get(event.runId);
       if (resumed) {
-        resumed.flowProjector.apply(event);
+        this.applyRecoveredEvent(event.runId, resumed, event);
         await this.writeResumedCard(event.runId, resumed);
       }
       if (event.type !== "STEP_FAILED") return;
@@ -722,10 +812,6 @@ export class FeishuSessionWatcher {
         (event.payload as Record<string, unknown>)?.error ?? "Step failed",
       );
       if (!this.fatalAgentErrorRuns.has(event.runId)) {
-        const resumed = this.resumedCards.get(event.runId);
-        if (resumed) {
-          resumed.projector.apply({ type: "error", message });
-        }
         const card = this.cards.get(event.runId);
         if (card) await card.onAgentEvent({ type: "error", message });
       }
@@ -754,26 +840,27 @@ export class FeishuSessionWatcher {
       }
       const resumed = this.resumedCards.get(event.runId);
       if (resumed) {
+        resumed.resultRecovery = "confirmed";
         finishFeishuRunStatus(resumed.runStatus, terminalState);
         const written = await this.writeResumedCard(event.runId, resumed);
         if (!written) return;
       }
-      const delivery = this.deliveries.get(event.runId);
-      if (delivery) {
-        const completed = await this.ingress.completeDelivery(
-          delivery.turnId,
-          delivery.owner,
-        );
-        if (completed) {
-          this.deliveries.delete(event.runId);
-          this.resumedCards.delete(event.runId);
-        } else {
-          throw new Error(
-            `complete delivery returned false for run ${event.runId}`,
-          );
-        }
-      }
+      await this.completeDeliveryForRun(event.runId);
     }
+  }
+
+  private async completeDeliveryForRun(runId: string): Promise<void> {
+    const delivery = this.deliveries.get(runId);
+    if (!delivery) return;
+    const completed = await this.ingress.completeDelivery(
+      delivery.turnId,
+      delivery.owner,
+    );
+    if (!completed) {
+      throw new Error(`complete delivery returned false for run ${runId}`);
+    }
+    this.deliveries.delete(runId);
+    this.resumedCards.delete(runId);
   }
 
   abort(): void {
