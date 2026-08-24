@@ -75,6 +75,19 @@ function snapshotResponse(sessionId: string): SessionCompositeSnapshot {
 }
 
 describe("workbench API client", () => {
+  it("confirms a batch draft with its revision and idempotency key", async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({ batch_id: "batch_1" }));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.confirmFlowBatchDraft("draft_1", 3, "confirm-1");
+
+    const init = fetch.mock.calls[0]?.[1] as RequestInit;
+    expect(fetch.mock.calls[0]?.[0]).toBe("/v1/flow-invocation-drafts/draft_1/confirm");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe("confirm-1");
+    expect(init.body).toBe(JSON.stringify({ draft_revision: 3 }));
+  });
+
   it("uses the existing Runtime approval query and write contracts", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(Response.json({ approvals: [{ id: "approval_1", status: "requested" }] }))

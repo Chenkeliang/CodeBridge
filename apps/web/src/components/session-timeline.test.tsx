@@ -67,6 +67,36 @@ function timelineTurn(kind: TimelineBlockView["kind"], segments: TimelineSegment
 }
 
 describe("SessionTimeline", () => {
+  it("opens a projected Flow batch from the active timeline", () => {
+    const open = vi.fn();
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      onOpenFlowBatch={open}
+      turns={[{
+        timeline_index: 0,
+        turn_id: "turn-batch",
+        run_id: "run-source",
+        status: "succeeded",
+        blocks: [{
+          block_id: "flow_batch:batch_1",
+          block_index: 0,
+          kind: "flow_batch",
+          status: "running",
+          metadata: { draft_id: "draft_1", batch_id: "batch_1", total: 3, succeeded: 1, failed: 0 },
+          segments: [],
+          next_segment_cursor: null,
+        }],
+      }]}
+    />));
+    expect(host.querySelector("[data-flow-batch-card]")).not.toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>("[data-flow-batch-card] button")?.click());
+    expect(open).toHaveBeenCalledWith({ draftId: "draft_1", batchId: "batch_1" });
+    act(() => root.unmount());
+    host.remove();
+  });
+
   it("mounts only the server-provided Turn window", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);

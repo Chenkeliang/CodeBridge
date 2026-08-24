@@ -42,6 +42,7 @@ export function SessionTimeline(props: {
   flowRecommendations?: FlowRecommendation[];
   onUseFlowRecommendation?: (recommendation: FlowRecommendation) => void;
   onDismissFlowRecommendation?: (recommendation: FlowRecommendation) => void;
+  onOpenFlowBatch?: (reference: { draftId?: string; batchId?: string }) => void;
 }) {
   const timelineRoot = useRef<HTMLDivElement | null>(null);
   const seenSegmentIds = useRef<Set<string> | null>(null);
@@ -121,6 +122,7 @@ export function SessionTimeline(props: {
               solidifiableFlowIds={props.solidifiableFlowIds ?? []}
               savingCandidateRunId={props.savingCandidateRunId ?? null}
               onCreateCandidate={props.onCreateCandidate}
+              onOpenFlowBatch={props.onOpenFlowBatch}
               runId={turn.run_id}
             />)}
         {guideProposal && guide && <div className="ml-auto flex max-w-[780px] items-center gap-3 rounded-lg border border-line bg-surface-soft px-3.5 py-3 text-xs text-muted">
@@ -172,6 +174,7 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   solidifiableFlowIds: string[];
   savingCandidateRunId: string | null;
   onCreateCandidate?: (runId: string) => void;
+  onOpenFlowBatch?: (reference: { draftId?: string; batchId?: string }) => void;
 }) {
   const { block } = props;
   if (isEmptyProcessBlock(block) && !props.isLive) return null;
@@ -203,6 +206,9 @@ const TimelineBlock = memo(function TimelineBlock(props: {
       solidifiableFlowIds={props.solidifiableFlowIds}
     />;
   }
+  if (block.kind === "flow_batch") {
+    return <FlowBatchTimelineCard block={block} onOpen={props.onOpenFlowBatch} />;
+  }
   if (block.kind === "approval") {
     const approvalId = typeof block.metadata.approval_id === "string"
       ? block.metadata.approval_id
@@ -222,6 +228,31 @@ const TimelineBlock = memo(function TimelineBlock(props: {
     onLoadSegments={props.onLoadSegments}
   />;
 });
+
+function FlowBatchTimelineCard({ block, onOpen }: {
+  block: TimelineBlockView;
+  onOpen?: (reference: { draftId?: string; batchId?: string }) => void;
+}) {
+  const draftId = typeof block.metadata.draft_id === "string" ? block.metadata.draft_id : undefined;
+  const batchId = typeof block.metadata.batch_id === "string" ? block.metadata.batch_id : undefined;
+  const counts = block.metadata.counts && typeof block.metadata.counts === "object"
+    ? block.metadata.counts as Record<string, unknown>
+    : {};
+  const total = Number(block.metadata.total ?? counts.total ?? block.metadata.item_count ?? 0);
+  const succeeded = Number(counts.succeeded ?? block.metadata.succeeded ?? 0);
+  const failed = Number(counts.failed ?? block.metadata.failed ?? 0);
+  return <div className="grid max-w-[780px] gap-3 rounded-lg border border-line-strong bg-surface px-3.5 py-3 shadow-card" data-flow-batch-card>
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-xs font-semibold text-ink">Flow 批量调用</p>
+        <p className="mt-1 font-mono text-[11px] text-muted">{batchId ?? draftId ?? "等待建立草稿"}</p>
+      </div>
+      <span className="rounded-md bg-surface-tint px-2 py-1 font-mono text-[11px] text-muted">{block.status}</span>
+    </div>
+    {total > 0 && <p className="font-mono text-xs text-muted">成功 {succeeded} · 失败 {failed} · 共 {total}</p>}
+    <Button className="justify-self-start" disabled={!draftId && !batchId} onClick={() => onOpen?.({ draftId, batchId })} size="sm" variant="outline">查看参数与进度</Button>
+  </div>;
+}
 
 function ProcessBlock(props: {
   blocks: TimelineBlockView[];
@@ -401,6 +432,7 @@ function blockLabel(kind: TimelineBlockView["kind"]): string {
     case "flow_param": return "参数";
     case "flow_run": return "Run 快照";
     case "flow_failure": return "验证失败";
+    case "flow_batch": return "批量 Flow";
   }
 }
 
