@@ -172,34 +172,30 @@ describe("RunnerHost Skill control plane", () => {
       summary: { total: 0, sources: 0, linked: 0, issues: 0 },
       scanned_at: "2026-08-24T00:00:00.000Z",
     };
+    const plan = {
+      plan_id: "plan-1",
+      actor_id: "local:web",
+      kind: "assignment",
+      skill_id: "skill-1",
+      package_revision: "revision",
+      source_path: "/source/skill-one",
+      target_path: "/target/skill-one",
+      source_fingerprint: "source",
+      target_fingerprint: "absent",
+      expires_at: "2026-08-24T01:00:00.000Z",
+      steps: [],
+      can_apply: true,
+      detail: null,
+      request: { enabled: true, agent_id: "claude" },
+    };
     const skillControlPlane = {
       scan: vi.fn(() => snapshot),
       addSource: vi.fn(() => snapshot),
-      preview: vi.fn(() => ({
-        skill_id: "skill-1",
-        skill_name: "Skill One",
-        agent_id: "codex",
-        enabled: true,
-        source_path: "/source/skill-one",
-        target_path: "/target/skill-one",
-        current_state: "absent",
-        action: "create_link",
-        detail: null,
-        can_apply: true,
-      })),
-      apply: vi.fn(() => ({
-        skill_id: "skill-1",
-        skill_name: "Skill One",
-        agent_id: "codex",
-        enabled: true,
-        source_path: "/source/skill-one",
-        target_path: "/target/skill-one",
-        current_state: "absent",
-        action: "create_link",
-        detail: null,
-        can_apply: true,
-        state: "linked",
-      })),
+      previewAdopt: vi.fn(() => ({ ...plan, kind: "adopt" })),
+      previewAssignment: vi.fn(() => plan),
+      previewGlobalState: vi.fn(() => ({ ...plan, kind: "global_state" })),
+      previewUnmanage: vi.fn(() => ({ ...plan, kind: "unmanage" })),
+      applyPlan: vi.fn(() => ({ plan_id: "plan-1", transaction_id: "tx-1", snapshot })),
     };
     const host = new RunnerHost({
       token: "token",
@@ -229,18 +225,20 @@ describe("RunnerHost Skill control plane", () => {
     const preview = await app.request("/skills/assignments/preview", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
-      body: JSON.stringify({ skill_id: "skill-1", agent_id: "codex", enabled: true }),
+      body: JSON.stringify({
+        skill_id: "skill-1", agent_id: "claude", enabled: true, actor_id: "local:web",
+      }),
     });
     expect(preview.status).toBe(200);
-    expect(await preview.json()).toMatchObject({ action: "create_link" });
+    expect(await preview.json()).toMatchObject({ plan_id: "plan-1" });
 
-    const apply = await app.request("/skills/assignments/apply", {
+    const apply = await app.request("/skills/assignment-plans/plan-1/apply", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
-      body: JSON.stringify({ skill_id: "skill-1", agent_id: "codex", enabled: true }),
+      body: JSON.stringify({ actor_id: "local:web" }),
     });
     expect(apply.status).toBe(200);
-    expect(await apply.json()).toMatchObject({ state: "linked" });
+    expect(await apply.json()).toMatchObject({ transaction_id: "tx-1" });
     host.shutdown();
   });
 
@@ -255,8 +253,11 @@ describe("RunnerHost Skill control plane", () => {
         error.status = 400;
         throw error;
       }),
-      preview: vi.fn(),
-      apply: vi.fn(),
+      previewAdopt: vi.fn(),
+      previewAssignment: vi.fn(),
+      previewGlobalState: vi.fn(),
+      previewUnmanage: vi.fn(),
+      applyPlan: vi.fn(),
     };
     const host = new RunnerHost({
       token: "token",

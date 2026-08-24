@@ -11,10 +11,9 @@ import {
   SKILL_AGENT_IDS,
   SkillControlPlane,
   type SkillAgentId,
-  type SkillAssignmentInput,
-  type SkillAssignmentPreview,
-  type SkillAssignmentResult,
   type SkillCatalogSnapshot,
+  type SkillMutationPlan,
+  type SkillMutationResult,
   type AgentSetupInstallResult,
   type AgentSetupRecord,
   deleteAcpSession,
@@ -87,7 +86,8 @@ export interface RunnerHostOptions {
   /** Test/embedding hook; production owns local Skill filesystem projection here. */
   skillControlPlane?: Pick<
     SkillControlPlane,
-    "scan" | "addSource" | "preview" | "apply"
+    "scan" | "addSource" | "previewAdopt" | "previewAssignment"
+    | "previewGlobalState" | "previewUnmanage" | "applyPlan"
   >;
 }
 
@@ -211,7 +211,8 @@ export class RunnerHost {
   private readonly agentSetup: AgentSetupService;
   private readonly skillControlPlane: Pick<
     SkillControlPlane,
-    "scan" | "addSource" | "preview" | "apply"
+    "scan" | "addSource" | "previewAdopt" | "previewAssignment"
+    | "previewGlobalState" | "previewUnmanage" | "applyPlan"
   >;
   /**
    * prompt_feishu：每个 run 的挂起权限请求队列（FIFO）。claude 通常一次只挂一个，
@@ -705,12 +706,37 @@ export class RunnerHost {
     return this.skillControlPlane.addSource(sourcePath);
   }
 
-  previewSkillAssignment(input: SkillAssignmentInput): SkillAssignmentPreview {
-    return this.skillControlPlane.preview(input);
+  previewSkillAdopt(skillId: string, actorId: string): SkillMutationPlan {
+    return this.skillControlPlane.previewAdopt({ skill_id: skillId, actor_id: actorId });
   }
 
-  applySkillAssignment(input: SkillAssignmentInput): SkillAssignmentResult {
-    return this.skillControlPlane.apply(input);
+  previewSkillAssignment(input: {
+    skill_id: string;
+    agent_id: SkillAgentId;
+    enabled: boolean;
+    actor_id: string;
+  }): SkillMutationPlan {
+    return this.skillControlPlane.previewAssignment(input);
+  }
+
+  previewSkillGlobalState(
+    skillId: string,
+    enabled: boolean,
+    actorId: string,
+  ): SkillMutationPlan {
+    return this.skillControlPlane.previewGlobalState({
+      skill_id: skillId,
+      enabled,
+      actor_id: actorId,
+    });
+  }
+
+  previewSkillUnmanage(skillId: string, actorId: string): SkillMutationPlan {
+    return this.skillControlPlane.previewUnmanage({ skill_id: skillId, actor_id: actorId });
+  }
+
+  applySkillPlan(planId: string, actorId: string): SkillMutationResult {
+    return this.skillControlPlane.applyPlan({ plan_id: planId, actor_id: actorId });
   }
 
   async *executeRun(request: RunRequest): AsyncGenerator<AgentEvent> {
@@ -1121,6 +1147,32 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
   });
 
+  app.post("/skills/:skillId/adopt/preview", async (c) => {
+    const actorId = await readSkillActor(c);
+    if (!actorId) return c.json({ error: "invalid_skill_actor" }, 400);
+    try {
+      return c.json(host.previewSkillAdopt(c.req.param("skillId"), actorId));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/:skillId/global-state/preview", async (c) => {
+    const body = await c.req.json().catch(() => null) as { actor_id?: unknown; enabled?: unknown } | null;
+    if (!body || typeof body.actor_id !== "string" || !body.actor_id.trim() || typeof body.enabled !== "boolean") {
+      return c.json({ error: "invalid_skill_global_state" }, 400);
+    }
+    try {
+      return c.json(host.previewSkillGlobalState(
+        c.req.param("skillId"),
+        body.enabled,
+        body.actor_id.trim(),
+      ));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
   app.post("/skills/assignments/preview", async (c) => {
     const input = await readSkillAssignment(c);
     if (!input) {
@@ -1133,17 +1185,27 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
   });
 
-  app.post("/skills/assignments/apply", async (c) => {
-    const input = await readSkillAssignment(c);
-    if (!input) {
-      return c.json({ error: "invalid_skill_assignment" }, 400);
-    }
+  app.post("/skills/:skillId/unmanage/preview", async (c) => {
+    const actorId = await readSkillActor(c);
+    if (!actorId) return c.json({ error: "invalid_skill_actor" }, 400);
     try {
-      return c.json(host.applySkillAssignment(input));
+      return c.json(host.previewSkillUnmanage(c.req.param("skillId"), actorId));
     } catch (error) {
       return skillControlPlaneErrorResponse(c, error);
     }
   });
+
+  for (const kind of ["adopt", "global-state", "assignment", "unmanage"] as const) {
+    app.post(`/skills/${kind}-plans/:planId/apply`, async (c) => {
+      const actorId = await readSkillActor(c);
+      if (!actorId) return c.json({ error: "invalid_skill_actor" }, 400);
+      try {
+        return c.json(host.applySkillPlan(c.req.param("planId"), actorId));
+      } catch (error) {
+        return skillControlPlaneErrorResponse(c, error);
+      }
+    });
+  }
 
   // Pi provider management (docs/orchestration/agent-providers.md).
   // models.json lives on this host; bridge proxies and never persists it.
@@ -1403,11 +1465,17 @@ function agentSetupErrorResponse(
 
 async function readSkillAssignment(c: {
   req: { json: () => Promise<unknown> };
-}): Promise<SkillAssignmentInput | null> {
+}): Promise<{
+  skill_id: string;
+  agent_id: SkillAgentId;
+  enabled: boolean;
+  actor_id: string;
+} | null> {
   const body = await c.req.json().catch(() => null) as {
     skill_id?: unknown;
     agent_id?: unknown;
     enabled?: unknown;
+    actor_id?: unknown;
   } | null;
   if (
     !body
@@ -1416,6 +1484,8 @@ async function readSkillAssignment(c: {
     || typeof body.agent_id !== "string"
     || !SKILL_AGENT_IDS.includes(body.agent_id as SkillAgentId)
     || typeof body.enabled !== "boolean"
+    || typeof body.actor_id !== "string"
+    || !body.actor_id.trim()
   ) {
     return null;
   }
@@ -1423,7 +1493,17 @@ async function readSkillAssignment(c: {
     skill_id: body.skill_id.trim(),
     agent_id: body.agent_id as SkillAgentId,
     enabled: body.enabled,
+    actor_id: body.actor_id.trim(),
   };
+}
+
+async function readSkillActor(c: {
+  req: { json: () => Promise<unknown> };
+}): Promise<string | null> {
+  const body = await c.req.json().catch(() => null) as { actor_id?: unknown } | null;
+  return body && typeof body.actor_id === "string" && body.actor_id.trim()
+    ? body.actor_id.trim()
+    : null;
 }
 
 function skillControlPlaneErrorResponse(
@@ -1432,7 +1512,7 @@ function skillControlPlaneErrorResponse(
 ) {
   const value = error as { code?: unknown; status?: unknown; message?: unknown };
   const code = typeof value?.code === "string" ? value.code : "skill_control_plane_failed";
-  const status = value?.status === 400 || value?.status === 404 || value?.status === 409
+  const status = value?.status === 400 || value?.status === 404 || value?.status === 409 || value?.status === 422
     ? value.status
     : 500;
   const message = typeof value?.message === "string" ? value.message : String(error);

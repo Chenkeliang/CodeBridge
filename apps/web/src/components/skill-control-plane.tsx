@@ -15,10 +15,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { api } from "@/lib/api";
 import type {
   SkillAgentId,
-  SkillAssignmentInput,
-  SkillAssignmentPreview,
   SkillCatalogEntry,
   SkillCatalogSnapshot,
+  SkillMutationKind,
+  SkillMutationPlan,
   SkillProjectionState,
   SkillSourceKind,
 } from "@/lib/types";
@@ -29,16 +29,17 @@ type ActivityEntry = { id: string; label: string; detail: string; kind: "ok" | "
 
 const SOURCE_LABELS: Record<SkillSourceKind, string> = {
   shared: "共享主目录",
+  disabled: "全局停用目录",
   adopted: "已登记目录",
   agent_native: "Agent 原生",
 };
 
 const STATE_LABELS: Record<SkillProjectionState, string> = {
+  follows_global: "跟随全局",
   linked: "目录可见",
   absent: "未分发",
   conflict: "目标冲突",
   broken: "软链断开",
-  native: "原生管理",
 };
 
 export function SkillControlPlanePage({ onNotify }: {
@@ -53,7 +54,7 @@ export function SkillControlPlanePage({ onNotify }: {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SkillCatalogEntry | null>(null);
-  const [preview, setPreview] = useState<SkillAssignmentPreview | null>(null);
+  const [preview, setPreview] = useState<SkillMutationPlan | null>(null);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
@@ -76,7 +77,10 @@ export function SkillControlPlanePage({ onNotify }: {
     const normalized = query.trim().toLowerCase();
     return (snapshot?.skills ?? []).filter((skill) => {
       if (source !== "all" && skill.source_kind !== source) return false;
-      const hasIssue = skill.targets.some((target) => target.state === "conflict" || target.state === "broken");
+      const hasIssue = !skill.can_apply
+        || skill.global_state === "split_brain"
+        || skill.global_state === "invalid"
+        || skill.targets.some((target) => target.state === "conflict" || target.state === "broken");
       if (state === "healthy" && hasIssue) return false;
       if (state === "issue" && !hasIssue) return false;
       if (!normalized) return true;
@@ -90,6 +94,9 @@ export function SkillControlPlanePage({ onNotify }: {
       .filter((target) => target.state === "conflict" || target.state === "broken")
       .map((target) => ({ skill, target })),
   ), [snapshot]);
+  const packageIssues = useMemo(() => (snapshot?.skills ?? []).filter((skill) => (
+    !skill.can_apply || skill.global_state === "split_brain" || skill.global_state === "invalid"
+  )), [snapshot]);
 
   function record(label: string, detail: string, kind: ActivityEntry["kind"] = "ok") {
     setActivities((current) => [
@@ -117,7 +124,7 @@ export function SkillControlPlanePage({ onNotify }: {
     }
   }
 
-  async function requestPreview(skill: SkillCatalogEntry, agentId: SkillAgentId, enabled: boolean) {
+  async function requestAssignmentPreview(skill: SkillCatalogEntry, agentId: SkillAgentId, enabled: boolean) {
     const key = `${skill.id}:${agentId}`;
     setPreviewing(key);
     setError(null);
@@ -136,28 +143,40 @@ export function SkillControlPlanePage({ onNotify }: {
     }
   }
 
-  async function applyAssignment() {
-    if (!preview) return;
-    const input: SkillAssignmentInput = {
-      skill_id: preview.skill_id,
-      agent_id: preview.agent_id,
-      enabled: preview.enabled,
-    };
-    setApplying(true);
+  async function requestSkillPreview(skill: SkillCatalogEntry, kind: Exclude<SkillMutationKind, "assignment">) {
+    setPreviewing(`${skill.id}:${kind}`);
     setError(null);
     try {
-      const result = await api.applySkillAssignment(input);
-      record(
-        result.enabled ? "Skill 已分发" : "Skill 分发已移除",
-        `${result.skill_name} → ${agentName(snapshot, result.agent_id)}`,
-      );
-      setPreview(null);
-      await load(true);
-      onNotify(result.enabled ? "Skill 目录投影已创建" : "Skill 目录投影已移除");
+      const next = kind === "adopt"
+        ? await api.previewSkillAdopt(skill.id)
+        : kind === "unmanage"
+          ? await api.previewSkillUnmanage(skill.id)
+          : await api.previewSkillGlobalState(skill.id, skill.global_state !== "enabled");
+      setPreview(next);
     } catch (caught) {
       const message = messageOf(caught);
       setError(message);
-      record("分发失败", message, "error");
+      onNotify(message, "error");
+    } finally {
+      setPreviewing(null);
+    }
+  }
+
+  async function applyMutation() {
+    if (!preview) return;
+    setApplying(true);
+    setError(null);
+    try {
+      const result = await api.applySkillPlan(preview.kind, preview.plan_id);
+      setSnapshot(result.snapshot);
+      record("Skill 变更已应用", `${preview.skill_id} · ${preview.kind}`);
+      setPreview(null);
+      setSelected(null);
+      onNotify("Skill 变更已应用");
+    } catch (caught) {
+      const message = messageOf(caught);
+      setError(message);
+      record("Skill 变更失败", message, "error");
       onNotify(message, "error");
     } finally {
       setApplying(false);
@@ -215,15 +234,20 @@ export function SkillControlPlanePage({ onNotify }: {
       {tab === "assignment" && <AssignmentView
         previewing={previewing}
         snapshot={snapshot}
-        onPreview={(skill, agentId, enabled) => void requestPreview(skill, agentId, enabled)}
+        onPreview={(skill, agentId, enabled) => void requestAssignmentPreview(skill, agentId, enabled)}
       />}
 
-      {tab === "reconcile" && <ReconcileView issues={issues} />}
+      {tab === "reconcile" && <ReconcileView issues={issues} packageIssues={packageIssues} />}
       {tab === "activity" && <ActivityView activities={activities} scannedAt={snapshot?.scanned_at ?? null} />}
     </div>
 
-    {selected && <SkillDrawer skill={selected} onClose={() => setSelected(null)} />}
-    {preview && <PreviewDialog applying={applying} preview={preview} onApply={() => void applyAssignment()} onClose={() => setPreview(null)} />}
+    {selected && <SkillDrawer
+      previewing={previewing}
+      skill={selected}
+      onClose={() => setSelected(null)}
+      onPreview={(kind) => void requestSkillPreview(selected, kind)}
+    />}
+    {preview && <PreviewDialog applying={applying} preview={preview} onApply={() => void applyMutation()} onClose={() => setPreview(null)} />}
   </section>;
 }
 
@@ -251,7 +275,7 @@ function CatalogView({ filtered, loading, query, source, state, total, onQuery, 
       <label className={cn("flex h-9 min-w-0 items-center gap-2 rounded-md border px-3", "bg-surface border-line")}><Search className={cn("size-3.5 shrink-0", "text-faint")} /><input aria-label="搜索 Skill" className={cn("min-w-0 flex-1 bg-transparent text-xs outline-none", "text-ink placeholder:text-faint")} onChange={(event) => onQuery(event.target.value)} placeholder="搜索名称、说明、标签或来源" value={query} /></label>
       <FilterSelect
         label="筛选 Skill 来源"
-        options={[["all", "全部来源"], ["shared", "共享主目录"], ["adopted", "已登记目录"], ["agent_native", "Agent 原生"]]}
+        options={[["all", "全部来源"], ["shared", "共享主目录"], ["disabled", "全局停用"], ["adopted", "已登记目录"], ["agent_native", "Agent 原生"]]}
         value={source}
         onValue={(value) => onSource(value as "all" | SkillSourceKind)}
       />
@@ -268,13 +292,14 @@ function CatalogView({ filtered, loading, query, source, state, total, onQuery, 
 }
 
 function SkillCard({ skill, onSelect }: { skill: SkillCatalogEntry; onSelect: (skill: SkillCatalogEntry) => void }) {
-  const issueCount = skill.targets.filter((target) => target.state === "conflict" || target.state === "broken").length;
-  const visibleCount = skill.targets.filter((target) => target.state === "linked" || target.state === "native").length;
+  const issueCount = skill.targets.filter((target) => target.state === "conflict" || target.state === "broken").length
+    + (skill.can_apply ? 0 : 1);
+  const visibleCount = skill.targets.filter((target) => target.state === "linked" || target.state === "follows_global").length;
   return <button className={cn("group flex min-h-48 min-w-0 flex-col rounded-md border p-4 text-left transition-all hover:-translate-y-px hover:opacity-90", "bg-surface border-line hover:border-line-strong")} onClick={() => onSelect(skill)} type="button">
     <div className="flex min-w-0 items-start gap-3"><span className={cn("grid size-9 shrink-0 place-items-center rounded-md border", "bg-surface-soft border-line-strong text-muted")}><BookOpen className="size-4" /></span><div className="min-w-0 flex-1"><h2 className={cn("truncate text-sm font-semibold", "text-ink")}>{skill.name}</h2><p className={cn("mt-0.5 truncate font-mono text-[10px]", "text-faint")}>{SOURCE_LABELS[skill.source_kind]} · {shortPath(skill.source_path)}</p></div><StatePill issue={issueCount > 0} label={issueCount ? `${issueCount} 项异常` : "正常"} /></div>
     <p className={cn("my-4 line-clamp-2 min-h-10 text-xs leading-5", "text-muted")}>{skill.description || "未提供说明"}</p>
     <div className="flex flex-wrap gap-1.5">{skill.tags.slice(0, 4).map((tag) => <span className={cn("rounded border px-1.5 py-0.5 font-mono text-[9px]", "bg-canvas border-line text-faint")} key={tag}>{tag}</span>)}</div>
-    <div className={cn("mt-auto flex items-center justify-between border-t pt-3 text-[10px]", "border-line text-faint")}><span className="font-mono">{skill.revision.slice(0, 8)}</span><span>{visibleCount} / {skill.targets.length} 个目标可见</span></div>
+    <div className={cn("mt-auto flex items-center justify-between border-t pt-3 text-[10px]", "border-line text-faint")}><span className="font-mono">{skill.package_revision.slice(0, 8)}</span><span>{globalStateLabel(skill.global_state)} · {visibleCount} 个目标</span></div>
   </button>;
 }
 
@@ -284,25 +309,28 @@ function AssignmentView({ snapshot, previewing, onPreview }: {
   onPreview: (skill: SkillCatalogEntry, agentId: SkillAgentId, enabled: boolean) => void;
 }) {
   return <>
-    <div className={cn("mb-3 flex items-start gap-2 border-l-2 px-3 py-2.5 text-xs leading-5", "bg-surface border-accent text-muted")}><Link2 className="mt-0.5 size-3.5 shrink-0 text-accent" /><span><strong className="text-ink">开关只管理软链投影。</strong>每次修改先展示 Source、Target 和动作；“目录可见”不等于正在运行的 Agent 已热加载。</span></div>
+    <div className={cn("mb-3 flex items-start gap-2 border-l-2 px-3 py-2.5 text-xs leading-5", "bg-surface border-accent text-muted")}><Link2 className="mt-0.5 size-3.5 shrink-0 text-accent" /><span><strong className="text-ink">共享原生 Agent 跟随全局状态。</strong>只有 Claude Code 使用独立软链开关；目录正确不代表运行中的 Agent 已热加载。</span></div>
     <div className={cn("w-full max-w-full overflow-x-auto overflow-y-hidden rounded-md border", "border-line")}>
       <table className="w-full min-w-[1080px] table-fixed border-collapse">
         <thead><tr>{["Skill", ...(snapshot?.targets.map((target) => target.display_name) ?? [])].map((label, index) => <th className={cn("h-12 border-b border-r px-3 text-left text-[10px] last:border-r-0", "bg-surface-tint border-line text-muted", index === 0 && "sticky left-0 z-10 w-[250px]")} key={label}>{label}</th>)}</tr></thead>
         <tbody>{snapshot?.skills.map((skill) => <tr key={skill.id}><td className={cn("sticky left-0 z-10 h-[68px] w-[250px] border-b border-r px-3", "bg-surface border-line")}><div className="flex min-w-0 items-center gap-2"><span className={cn("grid size-8 shrink-0 place-items-center rounded-md border", "bg-surface-soft border-line text-muted")}><BookOpen className="size-3.5" /></span><div className="min-w-0"><div className="truncate text-xs font-medium">{skill.name}</div><div className={cn("truncate font-mono text-[9px]", "text-faint")}>{skill.revision.slice(0, 8)}</div></div></div></td>{snapshot.targets.map((definition) => {
           const target = skill.targets.find((candidate) => candidate.agent_id === definition.agent_id)!;
-          const enabled = target.state === "linked" || target.state === "native";
-          const immutable = target.state === "native";
+          const enabled = target.state === "linked";
+          const immutable = !target.mutable;
           const key = `${skill.id}:${definition.agent_id}`;
-          return <td className={cn("h-[68px] border-b border-r px-3 last:border-r-0", "bg-surface border-line")} key={definition.agent_id}><div className="flex items-center justify-between gap-2"><div className="min-w-0"><div className={cn("truncate text-[11px]", stateTone(target.state))}>{STATE_LABELS[target.state]}</div><div className={cn("truncate text-[9px]", "text-faint")}>{immutable ? "只读观察" : target.state === "linked" ? "SKILL.md 可读" : target.state === "absent" ? "不写入目录" : target.detail}</div></div><button aria-label={`${enabled ? "移除" : "分发"} ${skill.name} ${enabled ? "从" : "到"} ${definition.display_name}`} aria-pressed={enabled} className={cn("relative h-[18px] w-[30px] shrink-0 rounded-full border", enabled ? "border-accent/50 bg-accent/20" : "bg-surface-soft border-line-strong", immutable && "cursor-not-allowed opacity-50")} disabled={immutable || previewing === key} onClick={() => onPreview(skill, definition.agent_id, !enabled)} type="button"><span className={cn("absolute top-[3px] size-[10px] rounded-full transition-transform", enabled ? "left-[15px] bg-accent" : "left-[3px] bg-faint")} /></button></div></td>;
+          return <td className={cn("h-[68px] border-b border-r px-3 last:border-r-0", "bg-surface border-line")} key={definition.agent_id}><div className="flex items-center justify-between gap-2"><div className="min-w-0"><div className={cn("truncate text-[11px]", stateTone(target.state))}>{STATE_LABELS[target.state]}</div><div className={cn("truncate text-[9px]", "text-faint")}>{immutable ? globalStateLabel(skill.global_state) : target.state === "linked" ? "受管软链可读" : target.state === "absent" ? "未创建软链" : target.detail}</div></div>{immutable ? <span className={cn("shrink-0 rounded border px-1.5 py-0.5 text-[9px]", "border-line text-faint")}>只读</span> : <button aria-label={`${enabled ? "移除" : "分发"} ${skill.name} ${enabled ? "从" : "到"} ${definition.display_name}`} aria-pressed={enabled} className={cn("relative h-[18px] w-[30px] shrink-0 rounded-full border", enabled ? "border-accent/50 bg-accent/20" : "bg-surface-soft border-line-strong")} disabled={previewing === key || skill.ownership !== "codebridge_managed"} onClick={() => onPreview(skill, definition.agent_id, !enabled)} type="button"><span className={cn("absolute top-[3px] size-[10px] rounded-full transition-transform", enabled ? "left-[15px] bg-accent" : "left-[3px] bg-faint")} /></button>}</div></td>;
         })}</tr>)}</tbody>
       </table>
     </div>
   </>;
 }
 
-function ReconcileView({ issues }: { issues: Array<{ skill: SkillCatalogEntry; target: SkillCatalogEntry["targets"][number] }> }) {
-  if (!issues.length) return <div className={cn("grid min-h-48 place-items-center rounded-md border text-xs", "bg-surface border-line text-muted")}><div className="flex items-center gap-2"><Check className="size-4 text-success" />当前没有软链冲突或断链</div></div>;
-  return <div className={cn("overflow-hidden rounded-md border", "bg-surface border-line")}>{issues.map(({ skill, target }) => <div className={cn("grid min-w-0 grid-cols-[minmax(160px,1fr)_minmax(220px,1.6fr)_110px] items-center gap-4 border-b px-4 py-3 last:border-b-0 max-md:grid-cols-[minmax(0,1fr)_100px]", "border-line")} key={`${skill.id}:${target.agent_id}`}><div className="min-w-0"><div className="truncate text-xs font-medium">{skill.name} → {target.agent_id}</div><div className={cn("mt-0.5 truncate text-[10px]", "text-faint")}>{target.detail}</div></div><div className={cn("truncate font-mono text-[10px] max-md:hidden", "text-muted")}>{target.target_path}</div><div className={cn("flex items-center gap-1.5 text-[11px]", stateTone(target.state))}><AlertTriangle className="size-3.5" />{STATE_LABELS[target.state]}</div></div>)}</div>;
+function ReconcileView({ issues, packageIssues }: {
+  issues: Array<{ skill: SkillCatalogEntry; target: SkillCatalogEntry["targets"][number] }>;
+  packageIssues: SkillCatalogEntry[];
+}) {
+  if (!issues.length && !packageIssues.length) return <div className={cn("grid min-h-48 place-items-center rounded-md border text-xs", "bg-surface border-line text-muted")}><div className="flex items-center gap-2"><Check className="size-4 text-success" />当前没有包冲突、软链冲突或断链</div></div>;
+  return <div className={cn("overflow-hidden rounded-md border", "bg-surface border-line")}>{packageIssues.map((skill) => <div className={cn("grid min-w-0 grid-cols-[minmax(160px,1fr)_minmax(220px,1.6fr)_110px] items-center gap-4 border-b px-4 py-3 max-md:grid-cols-[minmax(0,1fr)_100px]", "border-line")} key={`${skill.id}:package`}><div className="min-w-0"><div className="truncate text-xs font-medium">{skill.name} · Package</div><div className={cn("mt-0.5 truncate text-[10px]", "text-faint")}>需要人工处理，CodeBridge 不会自动选边或覆盖</div></div><div className={cn("truncate font-mono text-[10px] max-md:hidden", "text-muted")}>{skill.source_path}</div><div className="flex items-center gap-1.5 text-[11px] text-warning"><AlertTriangle className="size-3.5" />{globalStateLabel(skill.global_state)}</div></div>)}{issues.map(({ skill, target }) => <div className={cn("grid min-w-0 grid-cols-[minmax(160px,1fr)_minmax(220px,1.6fr)_110px] items-center gap-4 border-b px-4 py-3 last:border-b-0 max-md:grid-cols-[minmax(0,1fr)_100px]", "border-line")} key={`${skill.id}:${target.agent_id}`}><div className="min-w-0"><div className="truncate text-xs font-medium">{skill.name} → {target.agent_id}</div><div className={cn("mt-0.5 truncate text-[10px]", "text-faint")}>{target.detail}</div></div><div className={cn("truncate font-mono text-[10px] max-md:hidden", "text-muted")}>{target.target_path}</div><div className={cn("flex items-center gap-1.5 text-[11px]", stateTone(target.state))}><AlertTriangle className="size-3.5" />{STATE_LABELS[target.state]}</div></div>)}</div>;
 }
 
 function ActivityView({ activities, scannedAt }: { activities: ActivityEntry[]; scannedAt: string | null }) {
@@ -310,16 +338,21 @@ function ActivityView({ activities, scannedAt }: { activities: ActivityEntry[]; 
   return <div className={cn("overflow-hidden rounded-md border", "bg-surface border-line")}>{rows.map((activity) => <div className={cn("flex items-center gap-3 border-b px-4 py-3 last:border-b-0", "border-line")} key={activity.id}><span className={cn("grid size-7 shrink-0 place-items-center rounded-full", activity.kind === "ok" ? "bg-success/10 text-success" : "bg-danger-soft text-danger")}>{activity.kind === "ok" ? <Check className="size-3.5" /> : <AlertTriangle className="size-3.5" />}</span><div className="min-w-0"><div className="text-xs font-medium">{activity.label}</div><div className={cn("mt-0.5 truncate text-[10px]", "text-faint")}>{activity.detail}</div></div></div>)}</div>;
 }
 
-function SkillDrawer({ skill, onClose }: { skill: SkillCatalogEntry; onClose: () => void }) {
+function SkillDrawer({ skill, previewing, onClose, onPreview }: {
+  skill: SkillCatalogEntry;
+  previewing: string | null;
+  onClose: () => void;
+  onPreview: (kind: "adopt" | "global_state" | "unmanage") => void;
+}) {
+  const managed = skill.ownership === "codebridge_managed";
   return <div className="fixed inset-y-0 left-[60px] right-0 z-40 bg-black/60" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className={cn("ml-auto flex h-full w-[min(450px,calc(100vw-60px))] flex-col border-l", "bg-surface border-line-strong")}>
     <header className={cn("flex min-h-[72px] items-center justify-between border-b px-5", "border-line")}><h2 className="font-brand text-sm">Skill 详情</h2><button aria-label="关闭 Skill 详情" className={iconButtonClass()} onClick={onClose} type="button"><X className="size-4" /></button></header>
-    <div className="min-h-0 flex-1 overflow-y-auto p-5"><div className="flex items-center gap-3"><span className={cn("grid size-11 place-items-center rounded-md border", "bg-surface-soft border-line-strong text-muted")}><BookOpen className="size-5" /></span><div className="min-w-0"><h3 className="truncate text-base font-semibold">{skill.name}</h3><p className={cn("truncate font-mono text-[10px]", "text-faint")}>{SOURCE_LABELS[skill.source_kind]}</p></div></div><p className={cn("my-5 text-xs leading-6", "text-muted")}>{skill.description || "未提供说明"}</p><DetailSection title="包信息"><Fact label="Source" value={skill.source_path} mono /><Fact label="Revision" value={skill.revision} mono /><Fact label="更新时间" value={new Date(skill.updated_at).toLocaleString()} /></DetailSection><DetailSection title="Agent 目录状态">{skill.targets.map((target) => <div className="flex items-center justify-between gap-3 py-2" key={target.agent_id}><div className="flex min-w-0 items-center gap-2"><span className={cn("grid size-6 shrink-0 place-items-center rounded border", "border-line text-muted")}><BrandAgentIcon agentId={target.agent_id} className="size-3" /></span><div className="min-w-0"><div className="text-xs">{target.agent_id}</div><div className={cn("truncate font-mono text-[9px]", "text-faint")}>{target.target_path}</div></div></div><span className={cn("shrink-0 text-[10px]", stateTone(target.state))}>{STATE_LABELS[target.state]}</span></div>)}</DetailSection></div>
+    <div className="min-h-0 flex-1 overflow-y-auto p-5"><div className="flex items-center gap-3"><span className={cn("grid size-11 place-items-center rounded-md border", "bg-surface-soft border-line-strong text-muted")}><BookOpen className="size-5" /></span><div className="min-w-0"><h3 className="truncate text-base font-semibold">{skill.name}</h3><p className={cn("truncate font-mono text-[10px]", "text-faint")}>{SOURCE_LABELS[skill.source_kind]} · {globalStateLabel(skill.global_state)}</p></div></div><p className={cn("my-5 text-xs leading-6", "text-muted")}>{skill.description || "未提供说明"}</p><div className="mb-5 flex flex-wrap gap-2">{!managed && skill.ownership !== "native_managed" && <button className={actionClass(true)} disabled={!skill.can_apply || previewing !== null} onClick={() => onPreview("adopt")} type="button">纳管 Skill</button>}{managed && <button className={actionClass(true)} disabled={!skill.can_apply || previewing !== null} onClick={() => onPreview("global_state")} type="button">{skill.global_state === "enabled" ? "全局停用" : "全局启用"}</button>}{managed && <button className={actionClass(false)} disabled={previewing !== null} onClick={() => onPreview("unmanage")} type="button">取消纳管</button>}</div><DetailSection title="包信息"><Fact label="Source" value={skill.source_path} mono /><Fact label="Revision" value={skill.package_revision} mono /><Fact label="Ownership" value={skill.ownership} /><Fact label="更新时间" value={new Date(skill.updated_at).toLocaleString()} /></DetailSection><DetailSection title="Agent 目录状态">{skill.targets.map((target) => <div className="flex items-center justify-between gap-3 py-2" key={target.agent_id}><div className="flex min-w-0 items-center gap-2"><span className={cn("grid size-6 shrink-0 place-items-center rounded border", "border-line text-muted")}><BrandAgentIcon agentId={target.agent_id} className="size-3" /></span><div className="min-w-0"><div className="text-xs">{target.agent_id}</div><div className={cn("truncate font-mono text-[9px]", "text-faint")}>{target.target_path}</div></div></div><span className={cn("shrink-0 text-[10px]", stateTone(target.state))}>{STATE_LABELS[target.state]}</span></div>)}</DetailSection></div>
   </aside></div>;
 }
 
-function PreviewDialog({ preview, applying, onApply, onClose }: { preview: SkillAssignmentPreview; applying: boolean; onApply: () => void; onClose: () => void }) {
-  const verb = preview.enabled ? "分发" : "移除";
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"><section aria-modal="true" className={cn("w-full max-w-[560px] overflow-hidden rounded-lg border", "bg-surface border-line-strong")} role="dialog"><header className={cn("flex items-center justify-between border-b px-5 py-4", "border-line")}><div><p className={cn("font-brand text-[10px] uppercase tracking-[0.1em]", "text-muted")}>变更预览</p><h2 className="mt-1 text-base font-semibold">{verb} {preview.skill_name}</h2></div><button aria-label="关闭变更预览" className={iconButtonClass()} onClick={onClose} type="button"><X className="size-4" /></button></header><div className="space-y-4 p-5"><div className={cn("grid grid-cols-[88px_minmax(0,1fr)] gap-2 rounded-md border p-3 text-xs", "bg-canvas border-line")}><span className="text-faint">Source</span><code className="min-w-0 break-all text-ink-soft">{preview.source_path}</code><span className="text-faint">Target</span><code className="min-w-0 break-all text-ink-soft">{preview.target_path}</code><span className="text-faint">动作</span><span>{preview.action}</span><span className="text-faint">当前状态</span><span>{STATE_LABELS[preview.current_state]}</span></div>{!preview.can_apply && <div className={cn("flex gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-warning-soft border-warning/30 text-warning")}><AlertTriangle className="size-4 shrink-0" />{preview.detail || "Target 存在冲突，禁止覆盖"}</div>}<p className={cn("text-xs leading-5", "text-muted")}>{preview.enabled ? "确认后 Runner 只在 Target 不存在时创建目录软链。" : "确认后 Runner 只移除仍指向当前 Source 的受管软链。"}</p></div><footer className={cn("flex justify-end gap-2 border-t px-5 py-4", "border-line")}><button className={actionClass(false)} onClick={onClose} type="button">取消</button><button className={actionClass(true)} disabled={!preview.can_apply || applying} onClick={onApply} type="button">{applying && <LoaderCircle className="size-4 animate-spin" />}确认{verb}</button></footer></section></div>;
+function PreviewDialog({ preview, applying, onApply, onClose }: { preview: SkillMutationPlan; applying: boolean; onApply: () => void; onClose: () => void }) {
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"><section aria-modal="true" className={cn("w-full max-w-[600px] overflow-hidden rounded-lg border", "bg-surface border-line-strong")} role="dialog"><header className={cn("flex items-center justify-between border-b px-5 py-4", "border-line")}><div><p className={cn("font-brand text-[10px] uppercase tracking-[0.1em]", "text-muted")}>变更预览</p><h2 className="mt-1 text-base font-semibold">{mutationLabel(preview.kind)} · {preview.skill_id}</h2></div><button aria-label="关闭变更预览" className={iconButtonClass()} onClick={onClose} type="button"><X className="size-4" /></button></header><div className="max-h-[65vh] space-y-4 overflow-y-auto p-5"><div className={cn("grid grid-cols-[88px_minmax(0,1fr)] gap-2 rounded-md border p-3 text-xs", "bg-canvas border-line")}><span className="text-faint">Source</span><code className="min-w-0 break-all text-ink-soft">{preview.source_path}</code><span className="text-faint">Target</span><code className="min-w-0 break-all text-ink-soft">{preview.target_path}</code><span className="text-faint">Revision</span><code className="min-w-0 break-all text-ink-soft">{preview.package_revision}</code><span className="text-faint">有效期</span><span>{new Date(preview.expires_at).toLocaleString()}</span></div><div className="space-y-2">{preview.steps.map((step, index) => <div className={cn("flex gap-3 rounded-md border px-3 py-2.5 text-xs", "border-line bg-surface-soft")} key={`${step.action}:${index}`}><span className="font-mono text-faint">{index + 1}</span><div><div className="font-medium">{step.action}</div><div className="mt-0.5 text-muted">{step.detail}</div></div></div>)}</div>{!preview.can_apply && <div className={cn("flex gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-warning-soft border-warning/30 text-warning")}><AlertTriangle className="size-4 shrink-0" />{preview.detail || "观察到冲突，禁止 Apply"}</div>}<p className={cn("text-xs leading-5", "text-muted")}>Apply 会重新校验 Package、Source 和 Target 指纹；预览后事实变化将返回 409，不会覆盖。</p></div><footer className={cn("flex justify-end gap-2 border-t px-5 py-4", "border-line")}><button className={actionClass(false)} onClick={onClose} type="button">取消</button><button className={actionClass(true)} disabled={!preview.can_apply || applying} onClick={onApply} type="button">{applying && <LoaderCircle className="size-4 animate-spin" />}确认应用</button></footer></section></div>;
 }
 
 function DetailSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className={cn("border-t py-4", "border-line")}><h4 className={cn("mb-3 font-brand text-[10px] uppercase tracking-[0.08em]", "text-muted")}>{title}</h4>{children}</section>; }
@@ -328,7 +361,8 @@ function StatePill({ label, issue }: { label: string; issue: boolean }) { return
 function FilterSelect({ label, options, value, onValue }: { label: string; options: Array<[string, string]>; value: string; onValue: (value: string) => void }) { return <Select onValueChange={onValue} value={value}><SelectTrigger aria-label={label} className="h-9 w-full min-w-0 border-line bg-surface px-2.5 text-xs text-ink shadow-none focus-visible:ring-1 max-sm:w-11 max-sm:px-2"><SelectValue /></SelectTrigger><SelectContent className="border-line-strong text-ink-soft shadow-panel" surface="frosted">{options.map(([id, optionLabel]) => <SelectItem className="data-[highlighted]:bg-surface-soft" key={id} value={id}>{optionLabel}</SelectItem>)}</SelectContent></Select>; }
 function actionClass(primary: boolean) { return cn("inline-flex h-9 min-w-9 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50", primary ? "bg-accent text-accent-ink border-accent" : "bg-surface text-ink border-line-strong"); }
 function iconButtonClass() { return cn("grid size-9 place-items-center rounded-md border transition-opacity hover:opacity-80", "border-line text-muted"); }
-function stateTone(state: SkillProjectionState) { return state === "linked" || state === "native" ? "text-success" : state === "conflict" || state === "broken" ? "text-warning" : "text-muted"; }
+function stateTone(state: SkillProjectionState) { return state === "linked" || state === "follows_global" ? "text-success" : state === "conflict" || state === "broken" ? "text-warning" : "text-muted"; }
 function shortPath(value: string) { const parts = value.split("/").filter(Boolean); return parts.length > 3 ? `…/${parts.slice(-3).join("/")}` : value; }
-function agentName(snapshot: SkillCatalogSnapshot | null, id: SkillAgentId) { return snapshot?.targets.find((target) => target.agent_id === id)?.display_name ?? id; }
+function globalStateLabel(state: SkillCatalogEntry["global_state"]) { return ({ enabled: "全局启用", disabled: "全局停用", external: "外部观察", split_brain: "启停冲突", invalid: "包无效" })[state]; }
+function mutationLabel(kind: SkillMutationKind) { return ({ adopt: "纳管", global_state: "全局状态", assignment: "Agent 分发", unmanage: "取消纳管" })[kind]; }
 function messageOf(value: unknown) { return value instanceof Error ? value.message : String(value); }

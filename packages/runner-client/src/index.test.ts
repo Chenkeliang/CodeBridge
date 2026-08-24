@@ -31,38 +31,57 @@ describe("RunnerClient steering", () => {
 });
 
 describe("RunnerClient Skill control plane", () => {
-  it("relays Skill scan and assignment requests without changing the contract", async () => {
+  it("relays Skill scan, preview, and plan apply requests without changing the contract", async () => {
     const snapshot = {
       skills: [],
       targets: [],
       summary: { total: 0, sources: 0, linked: 0, issues: 0 },
       scanned_at: "2026-08-24T00:00:00.000Z",
     };
+    const plan = { plan_id: "plan-1", kind: "assignment", can_apply: true };
+    const result = { plan_id: "plan-1", transaction_id: "tx-1", snapshot };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(snapshot)))
       .mockResolvedValueOnce(new Response(JSON.stringify(snapshot)))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ action: "create_link" })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ action: "create_link", state: "linked" })));
+      .mockResolvedValueOnce(new Response(JSON.stringify(plan)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(plan)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(plan)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(plan)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(result)));
     vi.stubGlobal("fetch", fetchMock);
     const client = new RunnerClient({ baseUrl: "http://runner/", token: "token" });
-    const input = { skill_id: "skill-1", agent_id: "codex" as const, enabled: true };
+    const input = {
+      skill_id: "skill-1",
+      agent_id: "claude" as const,
+      enabled: true,
+      actor_id: "local:web",
+    };
 
     await expect(client.listSkills()).resolves.toEqual(snapshot);
     await expect(client.addSkillSource("/source")).resolves.toEqual(snapshot);
-    await expect(client.previewSkillAssignment(input)).resolves.toMatchObject({ action: "create_link" });
-    await expect(client.applySkillAssignment(input)).resolves.toMatchObject({ state: "linked" });
+    await expect(client.previewSkillAdopt("skill-1", "local:web")).resolves.toMatchObject({ plan_id: "plan-1" });
+    await expect(client.previewSkillGlobalState({
+      skill_id: "skill-1", enabled: false, actor_id: "local:web",
+    })).resolves.toMatchObject({ plan_id: "plan-1" });
+    await expect(client.previewSkillAssignment(input)).resolves.toMatchObject({ plan_id: "plan-1" });
+    await expect(client.previewSkillUnmanage("skill-1", "local:web")).resolves.toMatchObject({ plan_id: "plan-1" });
+    await expect(client.applySkillPlan("assignment", "plan-1", "local:web"))
+      .resolves.toMatchObject({ transaction_id: "tx-1" });
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "http://runner/skills",
       "http://runner/skills/sources",
+      "http://runner/skills/skill-1/adopt/preview",
+      "http://runner/skills/skill-1/global-state/preview",
       "http://runner/skills/assignments/preview",
-      "http://runner/skills/assignments/apply",
+      "http://runner/skills/skill-1/unmanage/preview",
+      "http://runner/skills/assignment-plans/plan-1/apply",
     ]);
     expect(fetchMock).toHaveBeenNthCalledWith(2, "http://runner/skills/sources", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ path: "/source" }),
     }));
-    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://runner/skills/assignments/preview", expect.objectContaining({
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "http://runner/skills/assignments/preview", expect.objectContaining({
       method: "POST",
       body: JSON.stringify(input),
     }));
@@ -75,11 +94,8 @@ describe("RunnerClient Skill control plane", () => {
     }), { status: 409 })));
     const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
 
-    await expect(client.applySkillAssignment({
-      skill_id: "skill-1",
-      agent_id: "codex",
-      enabled: true,
-    })).rejects.toMatchObject({
+    await expect(client.applySkillPlan("assignment", "plan-1", "local:web"))
+      .rejects.toMatchObject({
       name: "RunnerApiError",
       status: 409,
       code: "skill_target_conflict",

@@ -27,9 +27,10 @@ import type {
   SessionTurnView,
   SendMessageInput,
   SkillAssignmentInput,
-  SkillAssignmentPreview,
-  SkillAssignmentResult,
   SkillCatalogSnapshot,
+  SkillMutationKind,
+  SkillMutationPlan,
+  SkillMutationResult,
   TimelineSegmentPage,
   WorkspaceListing,
 } from "./types";
@@ -247,14 +248,26 @@ export const api = {
     { method: "POST", body: "{}" },
   ),
   previewSkillAssignment: (input: SkillAssignmentInput) =>
-    request<SkillAssignmentPreview>("/v1/skills/assignments/preview", {
+    request<SkillMutationPlan>("/v1/skills/assignments/preview", {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  applySkillAssignment: (input: SkillAssignmentInput) =>
-    request<SkillAssignmentResult>("/v1/skills/assignments/apply", {
+  previewSkillAdopt: (skillId: string) =>
+    request<SkillMutationPlan>(`/v1/skills/${encodeURIComponent(skillId)}/adopt/preview`, {
       method: "POST",
-      body: JSON.stringify(input),
+    }),
+  previewSkillGlobalState: (skillId: string, enabled: boolean) =>
+    request<SkillMutationPlan>(`/v1/skills/${encodeURIComponent(skillId)}/global-state/preview`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
+  previewSkillUnmanage: (skillId: string) =>
+    request<SkillMutationPlan>(`/v1/skills/${encodeURIComponent(skillId)}/unmanage/preview`, {
+      method: "POST",
+    }),
+  applySkillPlan: (kind: SkillMutationKind, planId: string) =>
+    request<SkillMutationResult>(`/v1/skills/${kind}-plans/${encodeURIComponent(planId)}/apply`, {
+      method: "POST",
     }),
   agents: () => request<AgentListResponse>("/v1/agents"),
   fetchFlow: (flowId: string) =>

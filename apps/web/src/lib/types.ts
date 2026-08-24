@@ -224,14 +224,19 @@ export interface AgentCommand {
 }
 
 export type SkillAgentId = "codex" | "claude" | "cursor" | "opencode" | "pi";
-export type SkillSourceKind = "shared" | "adopted" | "agent_native";
-export type SkillProjectionState = "linked" | "absent" | "conflict" | "broken" | "native";
+export type SkillSourceKind = "shared" | "disabled" | "adopted" | "agent_native";
+export type SkillGlobalState = "enabled" | "disabled" | "split_brain" | "external" | "invalid";
+export type SkillDeliveryMode = "shared_native" | "symlink_projection";
+export type SkillOwnership = "codebridge_managed" | "external_observed" | "native_managed";
+export type SkillProjectionState = "follows_global" | "linked" | "absent" | "conflict" | "broken";
 export type SkillAssignmentAction = "create_link" | "remove_link" | "noop" | "conflict";
 
 export interface SkillTargetView {
   agent_id: SkillAgentId;
+  delivery_mode: SkillDeliveryMode;
   target_path: string;
   state: SkillProjectionState;
+  mutable: boolean;
   detail: string | null;
 }
 
@@ -241,7 +246,11 @@ export interface SkillCatalogEntry {
   description: string | null;
   source_path: string;
   source_kind: SkillSourceKind;
+  package_revision: string;
   revision: string;
+  global_state: SkillGlobalState;
+  ownership: SkillOwnership;
+  can_apply: boolean;
   tags: string[];
   updated_at: string;
   targets: SkillTargetView[];
@@ -251,12 +260,13 @@ export interface SkillTargetDefinition {
   agent_id: SkillAgentId;
   display_name: string;
   root_path: string;
+  delivery_mode: SkillDeliveryMode;
 }
 
 export interface SkillCatalogSnapshot {
   skills: SkillCatalogEntry[];
   targets: SkillTargetDefinition[];
-  summary: { total: number; sources: number; linked: number; issues: number };
+  summary: { total: number; sources: number; linked: number; issues: number; recovery_required?: number };
   scanned_at: string;
 }
 
@@ -281,6 +291,35 @@ export interface SkillAssignmentPreview {
 
 export interface SkillAssignmentResult extends SkillAssignmentPreview {
   state: SkillProjectionState;
+}
+
+export type SkillMutationKind = "adopt" | "global_state" | "assignment" | "unmanage";
+
+export interface SkillMutationStep {
+  action: "move" | "create_link" | "remove_link" | "set_ownership" | "set_assignment";
+  source_path?: string;
+  target_path?: string;
+  detail: string;
+}
+
+export interface SkillMutationPlan {
+  plan_id: string;
+  kind: SkillMutationKind;
+  skill_id: string;
+  package_revision: string;
+  source_path: string;
+  target_path: string;
+  expires_at: string;
+  steps: SkillMutationStep[];
+  can_apply: boolean;
+  detail: string | null;
+  request: { enabled?: boolean; agent_id?: SkillAgentId };
+}
+
+export interface SkillMutationResult {
+  plan_id: string;
+  transaction_id: string;
+  snapshot: SkillCatalogSnapshot;
 }
 
 export interface WorkspaceEntry {

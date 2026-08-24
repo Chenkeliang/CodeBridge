@@ -1,6 +1,6 @@
 # Skill Agent 分发控制面设计
 
-- Status: Review draft
+- Status: Accepted for implementation
 - Date: 2026-08-24
 - Scope: 本机个人版 CodeBridge；Codex / Claude Code / Cursor / OpenCode / Pi
 - Related:

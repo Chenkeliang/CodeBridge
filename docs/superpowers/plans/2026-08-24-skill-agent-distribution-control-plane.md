@@ -1,217 +1,119 @@
-# Skill Agent Distribution Control Plane Implementation Plan
+# Skill 共享目录控制面实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 按 `executing-plans` 逐项实施；每项先写失败测试，再写最小实现。
 
-**Goal:** Build a production Skill catalog and per-Agent symlink distribution control plane in the Web workbench while keeping all local filesystem ownership in Runner Host.
+**目标：** 将现有 Skill 控制面归一为 `~/.agents/skills` 唯一启用实体目录，并让 Web 安全管理全局启停、Claude 适配软链、外部 Skill Adopt、冲突与恢复。
 
-**Architecture:** `SkillControlPlane` in `@codebridge/backends` scans and mutates local Skill sources and Agent target directories. Runner Host exposes the local contract, `RunnerClient` and Bridge proxy it without filesystem access, and a new Web first-class page renders catalog, assignment, reconciliation, and operation feedback from real API state.
+**第一性原理：** 文件系统是 Observed State；CodeBridge 只保存 Desired State、ownership、短期 plan 和 transaction journal。Codex / Cursor / OpenCode / Pi 原生读取共享目录，只跟随全局启停；Claude Code 通过 CodeBridge-owned symlink 独立分发。任何 Apply 必须绑定 Preview 时观察到的事实并在写后重扫。
 
-**Tech Stack:** TypeScript, Node filesystem APIs, Hono, React, Tailwind CSS, Vitest, Testing Library.
+**技术栈：** TypeScript、Node.js filesystem、Hono、React、Vitest。
 
----
+## 交付边界
 
-## File structure
+- V1 包含：共享/停用目录扫描、完整包 Revision、身份校验、全局启停、Claude 分发、外部 Skill Adopt、预览令牌、ownership、transaction journal、冲突展示与恢复。
+- V1 不包含：Git、市场、自动升级、永久删除、批量 Apply、Agent 热加载、Skill ACL、MCP 管理。
+- 不修改 Flow、Runtime、Agent 执行或飞书/Telegram 链路。
 
-- Create `packages/backends/src/skill-control-plane.ts`: filesystem domain service, metadata parsing, source registry, target adapters, preview/apply safety.
-- Create `packages/backends/src/skill-control-plane.test.ts`: temporary-directory filesystem tests.
-- Modify `packages/backends/src/index.ts`: export the service and types.
-- Modify `packages/runner-host/src/server.ts`: own the service and expose Runner-local routes.
-- Modify `packages/runner-host/src/server.test.ts`: Runner route contract tests.
-- Modify `packages/runner-client/src/index.ts`: typed Runner proxy methods.
-- Modify `packages/runner-client/src/index.test.ts`: proxy request/response tests.
-- Create `apps/bridge/src/skill-api.ts`: Bridge `/v1/skills/*` proxy only.
-- Create `apps/bridge/src/skill-api.test.ts`: auth, validation, and error mapping tests.
-- Modify `apps/bridge/src/outbound-api.ts`: mount the Skill API.
-- Modify `apps/bridge/src/cli.ts`: construct and pass the Skill API.
-- Modify `apps/web/src/lib/types.ts`: Web Skill API view types.
-- Modify `apps/web/src/lib/api.ts`: Skill API client methods.
-- Modify `apps/web/src/lib/api.test.ts`: request contract tests.
-- Create `apps/web/src/components/skill-control-plane.tsx`: production Skill page.
-- Create `apps/web/src/components/skill-control-plane.test.tsx`: active-surface interaction tests.
-- Modify `apps/web/src/components/workbench-shared.ts`: add the `skills` first-class area.
-- Modify `apps/web/src/components/session-chrome.tsx`: add the Rail entry.
-- Modify `apps/web/src/components/workbench.tsx`: route the first-class area without a Session panel/header.
-- Modify `apps/web/src/components/session-chrome.test.tsx`: navigation regression coverage.
-- Modify `apps/web/src/components/workbench-component-policy.test.ts`: active production mount coverage.
+## Task 1：后端领域模型与完整包指纹
 
-### Task 1: Runner filesystem domain
+**文件：** `packages/backends/src/skill-control-plane.ts`、`packages/backends/src/skill-control-plane.test.ts`、`packages/backends/src/index.ts`
 
-- [ ] **Step 1: Write failing service tests**
-
-Cover a shared root, an adopted single-Skill root, frontmatter fallback, real-path deduplication, `absent`, `linked`, `conflict`, `broken`, and `native` states with temporary HOME/data directories.
-
-- [ ] **Step 2: Run the focused test and confirm failure**
-
-Run: `pnpm vitest run packages/backends/src/skill-control-plane.test.ts`
-
-Expected: FAIL because `SkillControlPlane` does not exist.
-
-- [ ] **Step 3: Implement catalog scanning and source persistence**
-
-Add the exact public surface:
+- [ ] 先写失败测试：身份三等式；完整包 Revision；active/disabled split-brain；shared-native 与 symlink-projection 两种 delivery mode。
+- [ ] 运行 `pnpm vitest run packages/backends/src/skill-control-plane.test.ts`，确认新断言失败。
+- [ ] 将公开模型收敛为：
 
 ```ts
-export class SkillControlPlane {
-  constructor(options: SkillControlPlaneOptions);
-  scan(): SkillCatalogSnapshot;
-  addSource(rawPath: string): SkillCatalogSnapshot;
-  preview(input: SkillAssignmentInput): SkillAssignmentPreview;
-  apply(input: SkillAssignmentInput): SkillAssignmentResult;
+export type SkillGlobalState = "enabled" | "disabled" | "split_brain" | "external" | "invalid";
+export type SkillDeliveryMode = "shared_native" | "symlink_projection";
+export type SkillOwnership = "codebridge_managed" | "external_observed" | "native_managed";
+
+export interface SkillTargetView {
+  agent_id: SkillAgentId;
+  delivery_mode: SkillDeliveryMode;
+  state: "follows_global" | "linked" | "absent" | "conflict" | "broken";
+  mutable: boolean;
+  target_path: string;
+  detail: string | null;
 }
 ```
 
-Use `JsonArrayStore<string>` for `<dataDir>/skill-sources.json`, SHA-256 for IDs/revisions, and Node filesystem functions only.
+- [ ] 实现确定性目录遍历和完整包 SHA-256；哈希相对路径、文件内容、可执行位、内部软链目标；拒绝越界软链、特殊文件及身份不一致。
+- [ ] 运行后端测试并确认通过。
 
-- [ ] **Step 4: Implement safe preview/apply**
+## Task 2：Desired State、Preview 令牌与事务写入
 
-Recompute state inside `apply`; create only missing target symlinks; unlink only a symlink that resolves to the requested Source; reject all conflicts with stable error codes.
+**文件：** `packages/backends/src/skill-control-plane.ts`、`packages/backends/src/skill-control-plane.test.ts`
 
-- [ ] **Step 5: Run focused tests**
+- [ ] 为 plan 过期、actor 不匹配、package/source/target 指纹变化、状态丢失、重复 Apply 写失败测试。
+- [ ] 在 `<dataDir>/skills/` 持久化 `ownership.json`、`assignments.json`、`plans.json`、`transactions.json`。
+- [ ] 实现有时效的 plan：
 
-Run: `pnpm vitest run packages/backends/src/skill-control-plane.test.ts`
-
-Expected: PASS.
-
-### Task 2: Runner Host contract
-
-- [ ] **Step 1: Run GitNexus impact for `RunnerHost` and `createRunnerApp`**
-
-Run:
-
-```bash
-npx gitnexus impact -r CodeBridge --depth 3 --include-tests RunnerHost
-npx gitnexus impact -r CodeBridge --depth 3 --include-tests createRunnerApp
+```ts
+export interface SkillMutationPlan {
+  plan_id: string;
+  actor_id: string;
+  kind: "global_state" | "assignment" | "adopt" | "unmanage";
+  skill_id: string;
+  package_revision: string;
+  source_fingerprint: string;
+  target_fingerprint: string;
+  expires_at: string;
+  steps: SkillMutationStep[];
+  can_apply: boolean;
+}
 ```
 
-Expected: review direct consumers before edits; stop and warn on HIGH/CRITICAL.
+- [ ] `apply(plan_id, actor_id)` 重新验证全部事实，不接受客户端重传 mutation input。
+- [ ] 全局停用原子移动到 `skills-disabled` 并移除 CodeBridge-owned Claude link；重新启用时按 desired assignment 恢复。
+- [ ] Adopt：共享目录内条目只登记 ownership；Claude/外部条目移动到共享目录并在原位置回链；冲突不覆盖。
+- [ ] 写操作先记 pending transaction，写后重扫再标 completed；异常保留 journal。
+- [ ] 运行后端测试并确认通过。
 
-- [ ] **Step 2: Write failing Runner route tests**
+## Task 3：Runner、Bridge 与 Web API 合同
 
-Test authenticated `GET /skills`, `POST /skills/sources`, `POST /skills/assignments/preview`, and `POST /skills/assignments/apply`, plus malformed bodies and structured service errors.
+**文件：** `packages/runner-host/src/server.ts`、`packages/runner-host/src/server.test.ts`、`packages/runner-client/src/index.ts`、`packages/runner-client/src/index.test.ts`、`apps/bridge/src/skill-api.ts`、`apps/bridge/src/skill-api.test.ts`、`apps/web/src/lib/types.ts`、`apps/web/src/lib/api.ts`、`apps/web/src/lib/api.test.ts`
 
-- [ ] **Step 3: Add the injected/default Skill service and routes**
+- [ ] 对 `RunnerHost`、`RunnerClient`、`createSkillApp` 分别做 upstream impact；HIGH/CRITICAL 时先停下报告。
+- [ ] 先写失败合同测试：鉴权、actor 传递、404 plan、409 facts changed、422 invalid package、503 Runner unavailable。
+- [ ] 以 Accepted spec 的路径替换旧直接 Apply：
 
-Extend `RunnerHostOptions` with an injectable service for tests, instantiate the production service with Runner `dataDir`, and keep all filesystem work behind host methods.
-
-- [ ] **Step 4: Run Runner tests**
-
-Run: `pnpm vitest run packages/runner-host/src/server.test.ts`
-
-Expected: PASS.
-
-### Task 3: RunnerClient and Bridge proxy
-
-- [ ] **Step 1: Run GitNexus impact for `RunnerClient` and `createBridgeApp`**
-
-Run:
-
-```bash
-npx gitnexus impact -r CodeBridge --depth 3 --include-tests RunnerClient
-npx gitnexus impact -r CodeBridge --depth 3 --include-tests createBridgeApp
+```text
+GET  /v1/skills
+POST /v1/skills/sources
+POST /v1/skills/:skill_id/adopt/preview
+POST /v1/skills/adopt-plans/:plan_id/apply
+POST /v1/skills/:skill_id/global-state/preview
+POST /v1/skills/global-state-plans/:plan_id/apply
+POST /v1/skills/assignments/preview
+POST /v1/skills/assignment-plans/:plan_id/apply
+POST /v1/skills/:skill_id/unmanage/preview
+POST /v1/skills/unmanage-plans/:plan_id/apply
 ```
 
-- [ ] **Step 2: Write failing RunnerClient and Bridge API tests**
+- [ ] Bridge 只做鉴权、输入验证和 Runner 代理，不推导路径、不判断冲突、不写文件。
+- [ ] 运行 Runner/Client/Bridge/Web API 聚焦测试。
 
-Lock request methods, URL paths, snake-case JSON payloads, Bearer auth, Runner-unavailable mapping, and conflict status propagation.
+## Task 4：Web 活跃表面
 
-- [ ] **Step 3: Add typed RunnerClient methods**
+**文件：** `apps/web/src/components/skill-control-plane.tsx`、`apps/web/src/components/skill-control-plane.test.tsx`
 
-Add `listSkills`, `addSkillSource`, `previewSkillAssignment`, and `applySkillAssignment` using a shared request helper that preserves Runner error code/status.
+- [ ] 对 `SkillControlPlanePage` 做 upstream impact。
+- [ ] 先写失败交互测试：共享原生 Agent 仅显示“跟随全局”；Claude 有独立开关；全局启停 Preview→Apply；409 刷新；冲突可见；external 可 Adopt；受管 Skill 可取消纳管但不删除内容。
+- [ ] 重构页面为“目录 / 分发 / 冲突 / 活动”四视图，所有写操作复用统一 Preview 对话框。
+- [ ] 保留一级导航与响应式布局，只有矩阵内部允许横向滚动。
+- [ ] 运行 Web API、页面、导航与 component-policy 测试。
 
-- [ ] **Step 4: Implement and mount `createSkillApp`**
+## Task 5：对抗验证与提交
 
-The Bridge app must validate request shape, call only `RunnerClient`, and return Runner responses unchanged except for a stable `runner_unavailable` 503.
+- [ ] 阅读并执行 `verification-before-completion`。
+- [ ] 运行聚焦 Vitest 与五个受影响 package build。
+- [ ] 用临时 HOME 验证：重复 Apply、状态丢失、目录占用、外部换链、断链、split-brain、Preview 后包变化、重启恢复。
+- [ ] 在 `/workbench/` 验证 1440 / 960 / 720 三档，无页面级横向溢出。
+- [ ] 运行 `npx gitnexus detect-changes -r CodeBridge --scope all`；出现 Flow/Runtime/Channel 执行链影响则停止提交。
+- [ ] 仅提交本计划列出的文件，不包含现有 `AGENTS.md`、`.claude/`、生成物或无关 Flow 文档。
 
-- [ ] **Step 5: Run focused contract tests**
+建议提交拆分：
 
-Run:
-
-```bash
-pnpm vitest run packages/runner-client/src/index.test.ts apps/bridge/src/skill-api.test.ts apps/bridge/src/outbound-api.test.ts
-```
-
-Expected: PASS.
-
-### Task 4: Web API and Skill page
-
-- [ ] **Step 1: Write failing Web API and active-surface tests**
-
-Assert the page loads real catalog data, filters cards, switches four views, opens detail, previews before Apply, refreshes after Apply, renders conflict errors, and never writes desired state before a successful response.
-
-- [ ] **Step 2: Add Web types and API methods**
-
-Use the accepted snake-case response contract without recomputing target paths or projection state in the browser.
-
-- [ ] **Step 3: Implement `SkillControlPlanePage`**
-
-Match `docs/orchestration/DESIGN.md`: semantic tokens only, Chinese UI, 36px controls, no emoji, local matrix horizontal scrolling, bounded drawer, and `aria-label` on icon-only actions. The Add action uses the Runner directory picker through a dedicated Skill endpoint and only exposes local-directory adoption in V1.
-
-- [ ] **Step 4: Run focused Web tests**
-
-Run:
-
-```bash
-pnpm vitest run apps/web/src/lib/api.test.ts apps/web/src/components/skill-control-plane.test.tsx
-```
-
-Expected: PASS.
-
-### Task 5: First-class navigation integration
-
-- [ ] **Step 1: Re-run and report HIGH-risk `AgentRail` impact**
-
-Run: `npx gitnexus impact -r CodeBridge --depth 3 --include-tests AgentRail`
-
-Expected: Workbench and DesignPreview are direct consumers; both remain valid after the prop-compatible area extension.
-
-- [ ] **Step 2: Write failing navigation tests**
-
-Assert Agent, Flow, Skill, Settings order; `aria-pressed`; no Session panel/header for Skill; and the Skill page is mounted in the production Workbench branch.
-
-- [ ] **Step 3: Add the `skills` area and mount the page**
-
-Extend `PanelArea`, add a BookOpen-style Rail icon after Flow, keep the existing 60px Rail, and render Skill as a full-width primary page rather than Settings or Session content.
-
-- [ ] **Step 4: Run navigation and component-policy tests**
-
-Run:
-
-```bash
-pnpm vitest run apps/web/src/components/session-chrome.test.tsx apps/web/src/components/workbench-component-policy.test.ts
-```
-
-Expected: PASS.
-
-### Task 6: End-to-end verification and delivery
-
-- [ ] **Step 1: Run all focused tests and type checks**
-
-Run:
-
-```bash
-pnpm vitest run packages/backends/src/skill-control-plane.test.ts packages/runner-host/src/server.test.ts packages/runner-client/src/index.test.ts apps/bridge/src/skill-api.test.ts apps/web/src/lib/api.test.ts apps/web/src/components/skill-control-plane.test.tsx apps/web/src/components/session-chrome.test.tsx apps/web/src/components/workbench-component-policy.test.ts
-pnpm -r run build
-pnpm lint
-```
-
-Expected: PASS with zero TypeScript or ESLint errors.
-
-- [ ] **Step 2: Run filesystem adversarial tests**
-
-Verify repeat Apply, ordinary-directory collision, foreign symlink, broken link, moved Source, invalid path, same-name Sources, and disable of native directories all fail safely or remain idempotent as specified.
-
-- [ ] **Step 3: Run active Web surface QA**
-
-Start the local stack, open `/workbench/`, select Skill, and verify 1440, 960, and 720 widths. Expected: no outer horizontal overflow; only the assignment matrix scrolls horizontally.
-
-- [ ] **Step 4: Run GitNexus change detection before commit**
-
-Run: `npx gitnexus detect-changes -r CodeBridge --scope all`
-
-Expected: only Skill filesystem control, Runner/Bridge proxy, Web Skill surface, and first-class navigation are affected. Investigate any Flow/Session/Channel execution-flow impact before commit.
-
-- [ ] **Step 5: Commit implementation**
-
-Stage only files listed in this plan. Do not stage existing `AGENTS.md`, `.claude/`, `.playwright-cli/`, `.superpowers/`, generated Vite timestamps, `output/`, `test-results/`, or unrelated Flow documents.
-
-Commit message: `feat(skills): add agent distribution control plane`
+1. `feat(skills): adopt shared skill directory model`
+2. `feat(skills): expose transactional skill operations`
+3. `feat(web): manage shared skills and claude projections`

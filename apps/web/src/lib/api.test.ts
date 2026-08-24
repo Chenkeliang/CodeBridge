@@ -75,7 +75,7 @@ function snapshotResponse(sessionId: string): SessionCompositeSnapshot {
 }
 
 describe("workbench API client", () => {
-  it("uses the Skill catalog and assignment contracts", async () => {
+  it("uses the Skill catalog, preview, and plan apply contracts", async () => {
     const snapshot = {
       skills: [], targets: [],
       summary: { total: 0, sources: 0, linked: 0, issues: 0 },
@@ -84,21 +84,21 @@ describe("workbench API client", () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(Response.json(snapshot))
       .mockResolvedValueOnce(Response.json(snapshot))
-      .mockResolvedValueOnce(Response.json({ action: "create_link" }))
-      .mockResolvedValueOnce(Response.json({ action: "create_link", state: "linked" }));
+      .mockResolvedValueOnce(Response.json({ plan_id: "plan-1", kind: "assignment" }))
+      .mockResolvedValueOnce(Response.json({ plan_id: "plan-1", transaction_id: "tx-1" }));
     vi.stubGlobal("fetch", fetch);
-    const input = { skill_id: "skill-1", agent_id: "codex" as const, enabled: true };
+    const input = { skill_id: "skill-1", agent_id: "claude" as const, enabled: true };
 
     await api.skills();
     await api.pickSkillSource();
     await api.previewSkillAssignment(input);
-    await api.applySkillAssignment(input);
+    await api.applySkillPlan("assignment", "plan-1");
 
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       "/v1/skills",
       "/v1/skills/sources/pick",
       "/v1/skills/assignments/preview",
-      "/v1/skills/assignments/apply",
+      "/v1/skills/assignment-plans/plan-1/apply",
     ]);
     expect(fetch).toHaveBeenNthCalledWith(2, "/v1/skills/sources/pick", expect.objectContaining({
       method: "POST",

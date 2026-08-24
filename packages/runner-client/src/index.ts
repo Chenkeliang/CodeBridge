@@ -9,10 +9,10 @@ import type {
   AgentSetupRecord,
   CliSessionSummary,
   ProviderSessionHistoryEvent,
-  SkillAssignmentInput,
-  SkillAssignmentPreview,
-  SkillAssignmentResult,
+  SkillAgentId,
   SkillCatalogSnapshot,
+  SkillMutationPlan,
+  SkillMutationResult,
 } from "@codebridge/backends";
 
 export interface RunnerClientOptions {
@@ -25,10 +25,10 @@ export interface RunnerClientOptions {
 export type {
   CliSessionSummary,
   ProviderSessionHistoryEvent,
-  SkillAssignmentInput,
-  SkillAssignmentPreview,
-  SkillAssignmentResult,
+  SkillAgentId,
   SkillCatalogSnapshot,
+  SkillMutationPlan,
+  SkillMutationResult,
 };
 
 export interface WorkspaceDirectoryEntry {
@@ -188,24 +188,69 @@ export class RunnerClient {
     });
   }
 
-  async previewSkillAssignment(
-    input: SkillAssignmentInput,
-  ): Promise<SkillAssignmentPreview> {
-    return this.requestSetup<SkillAssignmentPreview>("/skills/assignments/preview", {
+  async previewSkillAdopt(skillId: string, actorId: string): Promise<SkillMutationPlan> {
+    return this.requestSetup<SkillMutationPlan>(
+      `/skills/${encodeURIComponent(skillId)}/adopt/preview`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actor_id: actorId }),
+      },
+    );
+  }
+
+  async previewSkillAssignment(input: {
+    skill_id: string;
+    agent_id: SkillAgentId;
+    enabled: boolean;
+    actor_id: string;
+  }): Promise<SkillMutationPlan> {
+    return this.requestSetup<SkillMutationPlan>("/skills/assignments/preview", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
   }
 
-  async applySkillAssignment(
-    input: SkillAssignmentInput,
-  ): Promise<SkillAssignmentResult> {
-    return this.requestSetup<SkillAssignmentResult>("/skills/assignments/apply", {
+  async previewSkillGlobalState(input: {
+    skill_id: string;
+    enabled: boolean;
+    actor_id: string;
+  }): Promise<SkillMutationPlan> {
+    return this.requestSetup<SkillMutationPlan>(
+      `/skills/${encodeURIComponent(input.skill_id)}/global-state/preview`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: input.enabled, actor_id: input.actor_id }),
+      },
+    );
+  }
+
+  async previewSkillUnmanage(skillId: string, actorId: string): Promise<SkillMutationPlan> {
+    return this.requestSetup<SkillMutationPlan>(
+      `/skills/${encodeURIComponent(skillId)}/unmanage/preview`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actor_id: actorId }),
+      },
+    );
+  }
+
+  async applySkillPlan(
+    kind: "adopt" | "global-state" | "assignment" | "unmanage",
+    planId: string,
+    actorId: string,
+  ): Promise<SkillMutationResult> {
+    return this.requestSetup<SkillMutationResult>(
+      `/skills/${kind}-plans/${encodeURIComponent(planId)}/apply`,
+      {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    });
+        body: JSON.stringify({ actor_id: actorId }),
+      },
+    );
   }
 
   async listPiProviders(): Promise<unknown> {
