@@ -29,6 +29,8 @@ import type {
   SessionRuntimeTransaction,
 } from "./session-runtime.js";
 
+export * from "./flow-batch.js";
+
 export type {
   ChannelDeliveryInput,
   ChannelDeliveryRow,
