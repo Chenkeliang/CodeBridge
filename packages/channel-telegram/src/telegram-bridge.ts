@@ -347,7 +347,10 @@ export class TelegramBridge {
       },
       resumeQueue: async (sessionId) => {
         if (!this.sessionIngress) return { queueState: "paused" };
-        return this.sessionIngress.resumeQueue(sessionId);
+        return this.sessionIngress.resumeQueue(
+          sessionId,
+          `telegram:${update.update_id}`,
+        );
       },
       steerActiveRun: async (runId, prompt) => {
         if (!this.sessionIngress) {

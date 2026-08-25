@@ -393,7 +393,10 @@ export interface ChannelSessionIngress {
     prompt: string,
   ): Promise<{ ok: boolean; outcome?: string; error?: string }>;
   resolvePermission(runId: string, approve: boolean): Promise<boolean>;
-  resumeQueue(sessionId: string): Promise<{ queueState: "ready" | "paused" }>;
+  resumeQueue(
+    sessionId: string,
+    commandId: string,
+  ): Promise<{ queueState: "ready" | "paused" }>;
   resetSlot(slot: ChannelSlot): Promise<boolean>;
 }
 

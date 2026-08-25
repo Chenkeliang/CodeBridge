@@ -308,6 +308,48 @@ describe("SessionCoordinator submit", () => {
     expect(resumed.runtime.queueState).toBe("ready");
   });
 
+  it("applies one resume command once without blocking a later resume command", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    const second = submit(coordinator, "second", "二");
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "failed",
+      reason: "provider_failed",
+    });
+
+    const resumedByA = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "resume:feishu:message-A",
+    });
+    expect(resumedByA.dispatched?.turn.turnId).toBe(second.turn.turnId);
+    expect(resumedByA.runtime.queueState).toBe("ready");
+
+    coordinator.pauseQueue({ sessionId: "sess_1", reason: "stale" });
+    const pausedVersion = store.getSessionRuntime("sess_1")!.version;
+    const replayedA = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion: pausedVersion,
+      idempotencyKey: "resume:feishu:message-A",
+    });
+    expect(replayedA).toEqual(resumedByA);
+    expect(store.getSessionRuntime("sess_1")).toMatchObject({
+      queueState: "paused",
+      version: pausedVersion,
+    });
+
+    const resumedByB = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion: pausedVersion,
+      idempotencyKey: "resume:feishu:message-B",
+    });
+    expect(resumedByB.runtime.queueState).toBe("ready");
+    expect(store.getSessionRuntime("sess_1")?.queueState).toBe("ready");
+    store.close();
+  });
+
   it("keeps new submissions queued while paused", () => {
     const { coordinator } = setup();
     const first = submit(coordinator, "first", "一");
