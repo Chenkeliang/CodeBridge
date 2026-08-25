@@ -84,6 +84,60 @@ function snapshot(value: MockSession, imported = false) {
   };
 }
 
+function hostileSnapshot(value: MockSession) {
+  const hostile = [
+    "中".repeat(2_500),
+    "english".repeat(1_250),
+    "x".repeat(10_000),
+    "https://example.com/" + "path/".repeat(1_000),
+    JSON.stringify({ markdown: "**bold**", code: "`const value = true`" }).repeat(250),
+  ].join("\n");
+  const queueTurns = Array.from({ length: 100 }, (_, index) => ({
+    turn_id: `queued-${index}`,
+    queue_position: index + 1,
+    status: "queued",
+    version: 1,
+    message: { text: `${index + 1} ${hostile}`, attachment_ids: [] },
+    created_at: "2026-08-25T00:00:00.000Z",
+  }));
+  return {
+    ...snapshot(value),
+    runtime: {
+      active_run: { run_id: "run-active", turn_id: "turn-active", status: "running", started_at: "2026-08-25T00:00:00.000Z" },
+      queue_state: "ready",
+      queue_pause_reason: null,
+      queue: { turns: queueTurns, total: queueTurns.length, next_cursor: null },
+      version: 2,
+      last_event_sequence: 2,
+    },
+    timeline: {
+      turns: [{
+        timeline_index: 1,
+        turn_id: "turn-hostile",
+        run_id: "run-hostile",
+        status: "completed",
+        blocks: [{
+          block_id: "user-hostile",
+          block_index: 0,
+          kind: "user_message",
+          status: "completed",
+          metadata: {},
+          segments: [{
+            segment_id: "segment-hostile",
+            segment_index: 0,
+            content: hostile,
+            byte_length: hostile.length,
+            sealed: true,
+          }],
+          next_segment_cursor: null,
+        }],
+      }],
+      previous_cursor: null,
+      truncated_block_ids: [],
+    },
+  };
+}
+
 async function installWorkbenchRoutes(page: Page, sessions: MockSession[], isImported: (id: string) => boolean) {
   await page.addInitScript((sessionId) => {
     (globalThis as typeof globalThis & { process?: { env: Record<string, string> } }).process = { env: {} };
@@ -259,3 +313,37 @@ test("history Import retries an unknown result with the same caller key", async 
   expect(keys[0]).toBeTruthy();
   expect(keys[1]).toBe(keys[0]);
 });
+
+for (const width of [320, 768, 1280, 1536]) {
+  test(`overflow contains hostile content at ${width}px`, async ({ page }) => {
+    const value = session("sess_hostile", "标题".repeat(5_000));
+    await page.setViewportSize({ width, height: 900 });
+    await installWorkbenchRoutes(page, [value], () => false);
+    await page.route("**/v1/sessions/sess_hostile", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(hostileSnapshot(value)),
+    }));
+    await page.route("**/v1/sessions/sess_hostile/provider-history/preview", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        providerSessionId: value.provider_session_id,
+        importedPosition: 2,
+        providerPosition: 2,
+        importableEvents: 0,
+        nextDigest: "sha256:same",
+      }),
+    }));
+
+    await page.goto("/workbench/");
+    const metrics = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(metrics.scrollWidth).toBe(metrics.clientWidth);
+    await expect(page.getByRole("button", { name: "Session 操作" })).toBeInViewport();
+    await expect(page.getByRole("button", { name: /取消排队消息/ }).first()).toBeInViewport();
+    await expect(page.getByRole("textbox", { name: "消息" })).toBeInViewport();
+  });
+}

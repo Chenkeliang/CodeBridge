@@ -44,4 +44,44 @@ describe("SessionQueue", () => {
     act(() => root.unmount());
     host.remove();
   });
+
+  it("contains hostile queue text without removing its cancel action", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionQueue
+      cancellingTurnId={null}
+      loadingMore={false}
+      onCancel={vi.fn()}
+      onLoadMore={vi.fn()}
+      onResume={vi.fn()}
+      runtime={{
+        active_run: null,
+        queue_state: "ready",
+        queue_pause_reason: null,
+        queue: { turns: [], total: 1, next_cursor: null },
+        version: 1,
+        last_event_sequence: 1,
+      }}
+      turns={[{
+        turn_id: "turn-hostile",
+        queue_position: 1,
+        status: "queued",
+        version: 1,
+        message: { text: "x".repeat(10_000), attachment_ids: [] },
+        created_at: "2026-08-25T00:00:00.000Z",
+      }]}
+    />));
+
+    expect(host.querySelector("section")?.className).toContain("min-w-0");
+    expect(host.querySelector("section")?.className).toContain("overflow-hidden");
+    expect(host.querySelector("ol")?.className).toContain("min-w-0");
+    expect(host.querySelector("li")?.className).toContain("grid-cols-[auto_minmax(0,1fr)_auto]");
+    const message = host.querySelector("li span:nth-child(2)");
+    expect(message?.className).toContain("line-clamp-2");
+    expect(message?.className).toContain("[overflow-wrap:anywhere]");
+    expect(host.querySelector('[aria-label="取消排队消息 1"]')).not.toBeNull();
+
+    act(() => root.unmount());
+    host.remove();
+  });
 });
