@@ -12,6 +12,28 @@ function sse(events: string[]): Response {
   );
 }
 
+function sessionEventWire(
+  sequence: number,
+  type: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    event_id: `evt_${sequence}`,
+    sequence,
+    work_item_id: "work_1",
+    run_id: "run_1",
+    type,
+    occurred_at: `2026-08-24T03:17:${String(sequence % 60).padStart(2, "0")}.000Z`,
+    actor: "runtime",
+    target: null,
+    input_hash: null,
+    result_ref: null,
+    payload: {},
+    ...overrides,
+  };
+}
+
 describe("channel session ingress", () => {
   it("mounts both Session and Flow APIs for production channel commands", async () => {
     const sessionApp = new Hono();
@@ -362,8 +384,20 @@ describe("channel session ingress", () => {
       expect(c.req.query("after_sequence")).toBe("3");
       expect(c.req.query("live")).toBe("true");
       return sse([
-        '{"type":"ARTIFACT_CREATED","sequence":4,"run_id":"run_1","occurred_at":"2026-08-21T10:00:00.000Z","target":"artifact_1","result_ref":"artifact://artifact_1","payload":{"artifact_id":"artifact_1","step_id":"deploy","name":"deploy.output.json","mime_type":"application/json"}}',
-        '{"type":"RUN_SUCCEEDED","sequence":5,"run_id":"run_1","occurred_at":"2026-08-21T10:00:01.000Z","target":null,"result_ref":null,"payload":{}}',
+        JSON.stringify(sessionEventWire(4, "ARTIFACT_CREATED", {
+          occurred_at: "2026-08-21T10:00:00.000Z",
+          target: "artifact_1",
+          result_ref: "artifact://artifact_1",
+          payload: {
+            artifact_id: "artifact_1",
+            step_id: "deploy",
+            name: "deploy.output.json",
+            mime_type: "application/json",
+          },
+        })),
+        JSON.stringify(sessionEventWire(5, "RUN_SUCCEEDED", {
+          occurred_at: "2026-08-21T10:00:01.000Z",
+        })),
       ]);
     });
     const ingress = createChannelSessionIngress(app, "token");
@@ -405,12 +439,30 @@ describe("channel session ingress", () => {
     const app = new Hono();
     app.get("/v1/sessions/:session/events", (c) => {
       expect(c.req.param("session")).toBe("sess_1");
-      expect(c.req.query("after_sequence")).toBe("625");
+      expect(c.req.query("limit")).toBe("500");
       expect(c.req.query("live")).toBeUndefined();
-      return sse([
-        '{"type":"AGENT_EVENT","sequence":626,"run_id":"run_1","occurred_at":"2026-08-24T03:17:11.000Z","target":null,"result_ref":null,"payload":{"event":{"type":"text_delta","text":"final answer"}}}',
-        '{"type":"RUN_SUCCEEDED","sequence":627,"run_id":"run_1","occurred_at":"2026-08-24T03:17:12.000Z","target":null,"result_ref":null,"payload":{}}',
-      ]);
+      if (c.req.query("after_sequence") === "625") {
+        return c.json({
+          events: [
+            sessionEventWire(626, "AGENT_EVENT", {
+              occurred_at: "2026-08-24T03:17:11.000Z",
+              payload: { event: { type: "text_delta", text: "final answer" } },
+            }),
+          ],
+          next_sequence: 626,
+          has_more: true,
+        });
+      }
+      expect(c.req.query("after_sequence")).toBe("626");
+      return c.json({
+        events: [
+          sessionEventWire(627, "RUN_SUCCEEDED", {
+            occurred_at: "2026-08-24T03:17:12.000Z",
+          }),
+        ],
+        next_sequence: 627,
+        has_more: false,
+      });
     });
     const ingress = createChannelSessionIngress(app, "token");
 
@@ -424,6 +476,101 @@ describe("channel session ingress", () => {
       runId: "run_1",
       payload: { event: { type: "text_delta", text: "final answer" } },
     });
+  });
+
+  it("rejects an SSE response for finite replay", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", () => sse([]));
+    const ingress = createChannelSessionIngress(app, "token");
+
+    await expect(ingress.replayEvents!("sess_1", {
+      afterSequence: 625,
+    })).rejects.toThrow("session_event_transport_mismatch");
+  });
+
+  it("rejects a JSON response for the live event stream", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", (c) => c.json({ events: [] }));
+    const ingress = createChannelSessionIngress(app, "token");
+    const read = async () => {
+      for await (const event of ingress.events("sess_1", {
+        afterSequence: 0,
+        signal: new AbortController().signal,
+      })) {
+        void event;
+      }
+    };
+
+    await expect(read()).rejects.toThrow("session_event_transport_mismatch");
+  });
+
+  it("cancels the live SSE body when its consumer stops", async () => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", () => new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify(sessionEventWire(1, "RUN_SUCCEEDED"))}\n\n`,
+          ));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    ));
+    const ingress = createChannelSessionIngress(app, "token");
+    const iterator = ingress.events("sess_1", {
+      afterSequence: 0,
+      signal: new AbortController().signal,
+    })[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: "RUN_SUCCEEDED", runId: "run_1" },
+    });
+    await iterator.return?.(undefined);
+
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels the live SSE body when its abort signal fires", async () => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", () => new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify(sessionEventWire(1, "AGENT_EVENT"))}\n\n`,
+          ));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    ));
+    const ingress = createChannelSessionIngress(app, "token");
+    const abortController = new AbortController();
+    const iterator = ingress.events("sess_1", {
+      afterSequence: 0,
+      signal: abortController.signal,
+    })[Symbol.asyncIterator]();
+
+    await iterator.next();
+    const next = iterator.next();
+    abortController.abort();
+
+    await expect(Promise.race([
+      next,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error("abort did not stop SSE reader")),
+        250,
+      )),
+    ])).resolves.toMatchObject({ done: true });
+    expect(cancelled).toBe(true);
   });
 
   it("reports a finite event replay transport failure", async () => {

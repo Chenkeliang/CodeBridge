@@ -69,16 +69,43 @@ function snapshot(sessionId: string, lastEventSequence: number): SessionSnapshot
 
 function deltaEvent(sessionId: string, sequence: number, text: string, type: "text_delta" | "thought_delta" = "text_delta"): SessionEvent {
   return {
+    schema_version: 1,
     event_id: `${sessionId}-event-${sequence}`,
     sequence,
+    work_item_id: `${sessionId}-work`,
     run_id: `${sessionId}-run`,
     type: "AGENT_EVENT",
     occurred_at: `2026-08-14T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+    actor: "agent",
+    target: type,
+    input_hash: null,
+    result_ref: null,
     payload: {
       event: type === "text_delta"
         ? { type, phase: "final_answer", text }
         : { type, text },
     },
+  };
+}
+
+function wireEvent(
+  sessionId: string,
+  sequence: number,
+  runId: string,
+): SessionEvent {
+  return {
+    schema_version: 1,
+    event_id: `${sessionId}-event-${sequence}`,
+    sequence,
+    work_item_id: `${sessionId}-work`,
+    run_id: runId,
+    type: "RUN_STARTED",
+    occurred_at: `2026-08-14T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+    actor: "system",
+    target: null,
+    input_hash: null,
+    result_ref: null,
+    payload: {},
   };
 }
 
@@ -133,26 +160,21 @@ describe("SessionViewStore", () => {
     const store = new SessionViewStore({ schedule: (flush) => flush() });
     store.hydrate(snapshot("sess_1", 10));
     expect(store.receive("sess_1", {
+      ...wireEvent("sess_1", 11, "sess_1-run-2"),
       event_id: "sess_1-user-11",
-      sequence: 11,
-      run_id: "sess_1-run-2",
       type: "MESSAGE_RECEIVED",
-      occurred_at: "2026-08-14T00:00:11.000Z",
       payload: { message: "离散分布呢" },
     })).toBe("applied");
     expect(store.receive("sess_1", {
+      ...wireEvent("sess_1", 12, "sess_1-run-2"),
       event_id: "sess_1-run-12",
-      sequence: 12,
-      run_id: "sess_1-run-2",
-      type: "RUN_STARTED",
-      occurred_at: "2026-08-14T00:00:12.000Z",
     })).toBe("refresh_required");
     expect(store.receive("sess_1", {
+      ...wireEvent("sess_1", 13, "sess_1-run-2"),
       event_id: "sess_1-thought-13",
-      sequence: 13,
-      run_id: "sess_1-run-2",
       type: "AGENT_EVENT",
-      occurred_at: "2026-08-14T00:00:13.000Z",
+      actor: "agent",
+      target: "thought_delta",
       payload: { event: { type: "thought_delta", text: "正在推理" } },
     })).toBe("applied");
 

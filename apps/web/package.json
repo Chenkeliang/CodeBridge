@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codebridge/core": "workspace:*",
     "@radix-ui/react-popover": "^1.1.23",
     "@radix-ui/react-select": "^2.3.7",
     "@radix-ui/react-slider": "^1.4.7",

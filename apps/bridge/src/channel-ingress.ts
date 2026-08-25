@@ -15,27 +15,29 @@ import type {
   ChannelSlot,
   ChannelSubmitReceipt,
 } from "@codebridge/core";
+import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
 
-interface SessionEventWire {
-  type?: string;
-  sequence?: number;
-  run_id?: string | null;
-  occurred_at?: string | null;
-  target?: string | null;
-  result_ref?: string | null;
-  payload?: Record<string, unknown>;
+function toChannelSessionEvent(input: unknown): ChannelSessionEvent {
+  const event = parseSessionEventWire(input);
+  return {
+    type: event.type,
+    sequence: event.sequence,
+    runId: event.run_id,
+    occurredAt: event.occurred_at,
+    target: event.target,
+    resultRef: event.result_ref,
+    payload: event.payload,
+  };
 }
 
-function toChannelSessionEvent(event: SessionEventWire): ChannelSessionEvent {
-  return {
-    type: String(event.type ?? ""),
-    sequence: Number(event.sequence ?? 0),
-    runId: typeof event.run_id === "string" ? event.run_id : null,
-    occurredAt: typeof event.occurred_at === "string" ? event.occurred_at : null,
-    target: typeof event.target === "string" ? event.target : null,
-    resultRef: typeof event.result_ref === "string" ? event.result_ref : null,
-    payload: event.payload ?? {},
-  };
+function requireSessionEventContentType(
+  response: Response,
+  expected: "text/event-stream" | "application/json",
+): void {
+  const actual = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!actual.includes(expected)) {
+    throw new Error("session_event_transport_mismatch");
+  }
 }
 
 export function createChannelIngressApi(
@@ -411,7 +413,8 @@ export function createChannelSessionIngress(
     if (!response.ok || !response.body) {
       throw new Error(`Channel event stream failed (${response.status})`);
     }
-    for await (const event of readSessionEvents(response.body)) {
+    requireSessionEventContentType(response, "text/event-stream");
+    for await (const event of readSessionEvents(response.body, opts.signal)) {
       yield toChannelSessionEvent(event);
     }
   };
@@ -420,18 +423,31 @@ export function createChannelSessionIngress(
     sessionId: string,
     opts: { afterSequence: number },
   ): Promise<ChannelSessionEvent[]> => {
-    const response = await app.request(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/events?after_sequence=${opts.afterSequence}`,
-      { headers: auth },
-    );
-    if (!response.ok || !response.body) {
-      throw new Error(`Channel event replay failed (${response.status})`);
+    const replayed: ChannelSessionEvent[] = [];
+    let cursor = opts.afterSequence;
+    while (true) {
+      const response = await app.request(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/events?after_sequence=${cursor}&limit=500`,
+        { headers: auth },
+      );
+      if (!response.ok) {
+        throw new Error(`Channel event replay failed (${response.status})`);
+      }
+      requireSessionEventContentType(response, "application/json");
+      const page = await response.json() as Record<string, unknown>;
+      if (
+        !Array.isArray(page.events)
+        || !Number.isInteger(page.next_sequence)
+        || typeof page.has_more !== "boolean"
+      ) {
+        throw new Error("session_event_schema_mismatch");
+      }
+      replayed.push(...page.events.map(toChannelSessionEvent));
+      if (!page.has_more) return replayed;
+      const next = page.next_sequence as number;
+      if (next <= cursor) throw new Error("session_event_schema_mismatch");
+      cursor = next;
     }
-    const events: ChannelSessionEvent[] = [];
-    for await (const event of readSessionEvents(response.body)) {
-      events.push(toChannelSessionEvent(event));
-    }
-    return events;
   };
 
   const listDeliveries = async (
@@ -828,10 +844,16 @@ function toChannelManageableFlow(input: Record<string, unknown>): ChannelManagea
 
 async function* readSessionEvents(
   body: ReadableStream<Uint8Array>,
-): AsyncGenerator<SessionEventWire> {
+  signal?: AbortSignal,
+): AsyncGenerator<unknown> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const abort = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -845,12 +867,14 @@ async function* readSessionEvents(
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice("data:".length).trimStart())
           .join("\n");
-        if (data) yield JSON.parse(data) as SessionEventWire;
+        if (data) yield JSON.parse(data) as unknown;
         boundary = buffer.indexOf("\n\n");
       }
       if (done) return;
     }
   } finally {
+    signal?.removeEventListener("abort", abort);
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }
