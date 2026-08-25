@@ -239,7 +239,6 @@ export class TelegramBridge {
             return context.sessionId;
           },
           listManageableFlows: this.sessionIngress.listManageableFlows,
-          saveLatestGuide: this.sessionIngress.saveLatestGuide,
           getFlowReviewSummary: this.sessionIngress.getFlowReviewSummary,
           updateCandidateSummary: this.sessionIngress.updateCandidateSummary,
           rejectCandidate: this.sessionIngress.rejectCandidate,

@@ -342,7 +342,6 @@ export interface ChannelSessionIngress {
   submit(message: ChannelSessionMessage): Promise<ChannelSubmitReceipt>;
   listConsumableFlows(): Promise<ChannelConsumableFlow[]>;
   listManageableFlows?(): Promise<ChannelManageableFlow[]>;
-  saveLatestGuide?(sessionId: string): Promise<ChannelManageableFlow>;
   getFlowReviewSummary?(flowId: string): Promise<ChannelFlowReviewSummary>;
   updateCandidateSummary?(flowId: string, patch: { name?: string; description?: string }): Promise<ChannelManageableFlow>;
   rejectCandidate?(flowId: string): Promise<ChannelManageableFlow>;
