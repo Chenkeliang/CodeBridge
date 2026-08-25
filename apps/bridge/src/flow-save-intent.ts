@@ -873,7 +873,8 @@ function extractObservedTrace(
     ) return [];
     return [agentEvent.toolCallId];
   }));
-  const toolNames = input.events.flatMap((event) => {
+  const seenInvocationIds = new Set<string>();
+  const toolCalls = input.events.flatMap((event) => {
     const agentEvent = agentEventValue(event);
     if (agentEvent?.type !== "tool_start" || typeof agentEvent.name !== "string") return [];
     if (
@@ -884,16 +885,41 @@ function extractObservedTrace(
         && managementToolCallIds.has(agentEvent.toolCallId)
       )
     ) return [];
-    return [agentEvent.name];
+    const toolCallId = typeof agentEvent.toolCallId === "string"
+      && agentEvent.toolCallId.trim()
+      ? agentEvent.toolCallId
+      : null;
+    const invocationId = toolCallId
+      ? `tool:${toolCallId}`
+      : `event:${event.eventId || `${event.workItemId}:${event.sequence}`}`;
+    if (seenInvocationIds.has(invocationId)) return [];
+    seenInvocationIds.add(invocationId);
+    return [{
+      name: agentEvent.name,
+      isTrustedAcpExecute: agentEvent.kind === "execute",
+    }];
   });
-  if (toolNames.length < 2) return null;
+  if (toolCalls.length < 2) return null;
 
-  const boundedPurposes = toolNames.map((name) => boundPurpose(sanitizeToolPurpose(name)));
+  const boundedPurposes = toolCalls.map(({ name, isTrustedAcpExecute }) => {
+    return {
+      ...boundPurpose(
+        isTrustedAcpExecute
+          ? "执行受控命令"
+          : sanitizeToolPurpose(name),
+      ),
+      preservesInvocationIdentity: isTrustedAcpExecute,
+    };
+  });
   const purposeTruncated = boundedPurposes.some((purpose) => purpose.truncated);
-  const purposes = boundedPurposes
-    .map((purpose) => purpose.value)
-    .filter((purpose, index, values) => index === 0 || purpose !== values[index - 1])
-    .slice(0, 12);
+  const purposes = boundedPurposes.reduce<string[]>((values, purpose) => {
+    if (
+      !purpose.preservesInvocationIdentity
+      && values.at(-1) === purpose.value
+    ) return values;
+    values.push(purpose.value);
+    return values;
+  }, []).slice(0, 12);
   if (purposes.length < 2) return null;
 
   const steps = purposes.map((purpose, index) => ({
@@ -980,7 +1006,14 @@ function parseFlowSaveToolOutput(
   }
   if (!output || typeof output !== "object") return null;
   const value = output as Record<string, unknown>;
-  for (const key of ["structuredContent", "details", "content", "output", "text"] as const) {
+  for (const key of [
+    "structuredContent",
+    "details",
+    "content",
+    "output",
+    "result",
+    "text",
+  ] as const) {
     if (!Object.hasOwn(value, key)) continue;
     const parsed = parseFlowSaveToolOutput(value[key], traversal, depth + 1);
     if (parsed) return parsed;

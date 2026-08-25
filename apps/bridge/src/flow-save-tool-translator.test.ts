@@ -272,6 +272,56 @@ describe("FlowSaveToolTranslator", () => {
     expect(requests(target)).toHaveLength(1);
   });
 
+  it("creates one request from the canonical ACP result wrapper", () => {
+    const target = fixture();
+    seedRun(target, {
+      id: "run_source",
+      status: "succeeded",
+      tools: ["Read File", "Search"],
+    });
+    const current = seedRun(target, { id: "run_current", text: "把刚才任务存为 Flow" });
+    translatePersisted(target, current, startEvent());
+    const marker = {
+      codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+      accepted: true,
+      source_scope: "previous_completed_run",
+    };
+
+    const created = translatePersisted(target, current, endEvent({
+      name: "mcp.codebridge-internal.codebridge.request_flow_save",
+      output: {
+        result: { content: [{ type: "text", text: JSON.stringify(marker) }] },
+      },
+    }));
+
+    expect(created).toMatchObject({
+      requestRunId: current.id,
+      sourceRunId: "run_source",
+      source: "agent_intent",
+    });
+    expect(requests(target)).toHaveLength(1);
+  });
+
+  it("does not translate a marker beyond the canonical result wrapper depth limit", () => {
+    const target = fixture();
+    seedRun(target, {
+      id: "run_source",
+      status: "succeeded",
+      tools: ["Read File", "Search"],
+    });
+    const current = seedRun(target, { id: "run_current" });
+    translatePersisted(target, current, startEvent());
+    let payload: unknown = {
+      codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+      accepted: true,
+      source_scope: "previous_completed_run",
+    };
+    for (let depth = 0; depth < 8; depth += 1) payload = { result: payload };
+
+    expect(translatePersisted(target, current, endEvent({ output: payload }))).toBeNull();
+    expect(requests(target)).toHaveLength(0);
+  });
+
   it("returns the same request when a Provider completion is replayed", () => {
     const target = fixture();
     seedRun(target, {
