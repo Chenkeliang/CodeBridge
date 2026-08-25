@@ -128,9 +128,10 @@ export function createWorkItemApp(
     if (
       !body ||
       typeof body.mode !== "string" ||
-      !WORK_ITEM_MODES.includes(body.mode as WorkItemMode)
+      !WORK_ITEM_MODES.includes(body.mode as WorkItemMode) ||
+      (body.execution_kind !== "agent" && body.execution_kind !== "flow")
     ) {
-      return errorResponse(c, 400, "invalid_run", "mode 必须是有效的 Run 模式");
+      return errorResponse(c, 400, "invalid_run", "mode 与 execution_kind 必须有效");
     }
     if (
       body.plan_id !== undefined &&
@@ -150,6 +151,7 @@ export function createWorkItemApp(
       const run = store.createRun({
         workItemId,
         mode: body.mode as WorkItemMode,
+        executionKind: body.execution_kind,
         planId: (body.plan_id as string | null | undefined) ?? null,
       });
       if (executor) {
@@ -158,7 +160,11 @@ export function createWorkItemApp(
           // is the durable error channel for clients that created the Run.
         });
       }
-      const response = { run_id: run.id, status: run.status };
+      const response = {
+        run_id: run.id,
+        status: run.status,
+        execution_kind: run.executionKind,
+      };
       if (idempotencyKey) store.putIdempotencyResponse(`run:${workItemId}`, idempotencyKey, response);
       return c.json(response, 202);
     } catch (error) {

@@ -12,6 +12,7 @@ import type {
   DomainEvent,
   DomainEventActor,
   DomainEventType,
+  ExecutionKind,
   PersistedPlanStep,
   MessageAttachmentRecord,
   RiskLevel,
@@ -65,6 +66,7 @@ export interface SessionTurnMessage {
   permissionMode: string | null;
   actorRef?: FlowActorRef;
   flowInvocationSource?: "none" | "request" | "binding";
+  executionKind: ExecutionKind;
   plan: {
     planId: string;
     source: "workflow" | "agent_generated";
@@ -73,6 +75,14 @@ export interface SessionTurnMessage {
     planIrHash: string | null;
     steps: PersistedPlanStep[];
   } | null;
+}
+
+export function parseSessionTurnMessage(value: string): SessionTurnMessage {
+  const message = JSON.parse(value) as Record<string, unknown>;
+  if (message.executionKind !== "agent" && message.executionKind !== "flow") {
+    throw new Error("Invalid Session Turn execution kind");
+  }
+  return message as unknown as SessionTurnMessage;
 }
 
 export interface SessionTurn {
@@ -179,6 +189,7 @@ export interface SessionRunSpec {
   sessionId: string;
   turnId: string;
   mode: WorkItemMode;
+  executionKind: ExecutionKind;
   agentId: string | null;
   planId: string | null;
   planIrHash: string | null;
@@ -690,11 +701,11 @@ export function createSqliteSessionRuntimeTransaction(
         .prepare(
           `INSERT INTO runs (
             id, schema_version, work_item_id, session_id, turn_id, mode,
-            status, agent_id, plan_id, plan_ir_hash, workflow_revision,
+            status, execution_kind, agent_id, plan_id, plan_ir_hash, workflow_revision,
             terminal_reason, replay_safety, lease_owner, lease_expires_at,
             cancel_requested_at, cancel_deadline_at, provider_session_id,
             created_at, updated_at
-          ) VALUES (?, 1, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, NULL, 'safe',
+          ) VALUES (?, 1, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, NULL, 'safe',
             NULL, NULL, NULL, NULL, ?, ?, ?)`,
         )
         .run(
@@ -703,6 +714,7 @@ export function createSqliteSessionRuntimeTransaction(
           input.sessionId,
           input.turnId,
           input.mode,
+          input.executionKind,
           agentId,
           input.planId,
           input.planIrHash,
@@ -759,6 +771,7 @@ export function createSqliteSessionRuntimeTransaction(
           agent_id: input.agentId,
           plan_id: input.planId,
           workflow_revision: input.workflowRevision,
+          execution_kind: input.executionKind,
         },
       });
       if (input.planId) {
@@ -808,6 +821,7 @@ export function createSqliteSessionRuntimeTransaction(
         sessionId,
         turnId: turn.turnId,
         mode: workItem.mode,
+        executionKind: turn.message.executionKind,
         agentId: workItem.agentId,
         planId: plan?.planId ?? null,
         planIrHash: plan?.planIrHash ?? null,
@@ -1024,10 +1038,10 @@ export function createSqliteSessionRuntimeTransaction(
         .prepare(
           `INSERT INTO runs (
             id, schema_version, work_item_id, session_id, turn_id, mode,
-            status, agent_id, plan_id, plan_ir_hash, workflow_revision,
+            status, execution_kind, agent_id, plan_id, plan_ir_hash, workflow_revision,
             terminal_reason, replay_safety, lease_owner, lease_expires_at,
             cancel_requested_at, cancel_deadline_at, created_at, updated_at
-          ) VALUES (?, 1, ?, ?, ?, 'auto', 'running', NULL, NULL, NULL,
+          ) VALUES (?, 1, ?, ?, ?, 'auto', 'running', 'agent', NULL, NULL, NULL,
             NULL, NULL, 'safe', NULL, NULL, NULL, NULL, ?, ?)`,
         )
         .run(
@@ -1347,6 +1361,7 @@ export function appendSessionEventInTransaction(
   if (workItem.session_id !== input.sessionId) {
     throw new Error("WorkItem Session does not match event Session");
   }
+  const executionKind = resolveRunExecutionKind(database, input.runId ?? null);
   if (input.runId && isExecutionEvent(input.type)) {
     const run = database
       .prepare("SELECT status FROM runs WHERE id = ?")
@@ -1376,6 +1391,7 @@ export function appendSessionEventInTransaction(
     sequence: Number(sequenceRow?.next_sequence ?? 1),
     workItemId: input.workItemId,
     runId: input.runId ?? null,
+    executionKind,
     type: input.type,
     occurredAt: new Date().toISOString(),
     actor: input.actor,
@@ -1387,9 +1403,9 @@ export function appendSessionEventInTransaction(
   database
     .prepare(
       `INSERT INTO domain_events (
-        event_id, schema_version, sequence, work_item_id, run_id, type,
+        event_id, schema_version, sequence, work_item_id, run_id, execution_kind, type,
         occurred_at, actor, target, input_hash, result_ref, payload
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       event.eventId,
@@ -1397,6 +1413,7 @@ export function appendSessionEventInTransaction(
       event.sequence,
       event.workItemId,
       event.runId,
+      event.executionKind,
       event.type,
       event.occurredAt,
       event.actor,
@@ -1422,6 +1439,21 @@ export function appendSessionEventInTransaction(
   }
   projectSessionEvent(database, input.sessionId, event);
   return event;
+}
+
+export function resolveRunExecutionKind(
+  database: DatabaseSync,
+  runId: string | null,
+): ExecutionKind | null {
+  if (runId === null) return null;
+  const row = database
+    .prepare("SELECT execution_kind FROM runs WHERE id = ?")
+    .get(runId) as { execution_kind?: unknown } | undefined;
+  if (!row) throw new Error(`Run not found: ${runId}`);
+  if (row.execution_kind === "agent" || row.execution_kind === "flow") {
+    return row.execution_kind;
+  }
+  throw new Error(`Invalid Run execution kind: ${runId}`);
 }
 
 export function importProviderHistory(
@@ -1508,6 +1540,7 @@ export function importProviderHistory(
         text: message ?? "",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -1659,7 +1692,7 @@ function toSessionTurn(row: SqliteRow): SessionTurn {
     sessionId: String(row.session_id),
     queuePosition: Number(row.queue_position),
     status: String(row.status) as SessionTurnStatus,
-    message: JSON.parse(String(row.message_json)) as SessionTurnMessage,
+    message: parseSessionTurnMessage(String(row.message_json)),
     version: Number(row.version),
     dispatchedRunId: nullableString(row.dispatched_run_id),
     createdAt: String(row.created_at),
@@ -1677,6 +1710,7 @@ function toRun(row: SqliteRow): Run {
     turnId: nullableString(row.turn_id),
     mode: String(row.mode) as WorkItemMode,
     status: String(row.status) as Run["status"],
+    executionKind: executionKind(row.execution_kind, String(row.id)),
     agentId: nullableString(row.agent_id),
     planId: nullableString(row.plan_id),
     planIrHash: nullableString(row.plan_ir_hash),
@@ -1691,6 +1725,11 @@ function toRun(row: SqliteRow): Run {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function executionKind(value: unknown, runId: string): ExecutionKind {
+  if (value === "agent" || value === "flow") return value;
+  throw new Error(`Invalid Run execution kind: ${runId}`);
 }
 
 function nullableString(value: unknown): string | null {

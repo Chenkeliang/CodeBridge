@@ -253,6 +253,7 @@ async function createReadOnlyMatrixFixture() {
       text: "请读取这个上下文",
       attachmentIds: [],
       flowId: null,
+      executionKind: "agent",
       model: null,
       effort: null,
       permissionMode: null,
@@ -276,6 +277,7 @@ async function createReadOnlyMatrixFixture() {
       text: "继续追踪",
       attachmentIds: [],
       flowId: null,
+      executionKind: "agent",
       model: null,
       effort: null,
       permissionMode: null,
@@ -2731,6 +2733,12 @@ describe("session API", () => {
       workspaceScope: [],
       riskLevel: "read_only",
     });
+    workItems.createRun({
+      id: "run_contract",
+      workItemId: workItem.id,
+      mode: "auto",
+      executionKind: "agent",
+    });
     const event = workItems.appendEvent({
       workItemId: workItem.id,
       runId: "run_contract",
@@ -2764,6 +2772,7 @@ describe("session API", () => {
       sequence: event.sequence,
       work_item_id: workItem.id,
       run_id: "run_contract",
+      execution_kind: "agent",
       type: "AGENT_EVENT",
       occurred_at: event.occurredAt,
       result_ref: "result://contract",
@@ -2784,6 +2793,12 @@ describe("session API", () => {
       conversationId: "live-contract",
       workspaceScope: [],
       riskLevel: "read_only",
+    });
+    workItems.createRun({
+      id: "run_contract",
+      workItemId: workItem.id,
+      mode: "auto",
+      executionKind: "agent",
     });
     const event = workItems.appendEvent({
       workItemId: workItem.id,
@@ -2818,6 +2833,7 @@ describe("session API", () => {
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(text).toContain(`\"event_id\":\"${event.eventId}\"`);
     expect(text).toContain(`\"run_id\":\"run_contract\"`);
+    expect(text).toContain(`\"execution_kind\":\"agent\"`);
     expect(text).toContain(`\"occurred_at\":\"${event.occurredAt}\"`);
     expect(text).toContain(`\"result_ref\":\"result://contract\"`);
     expect(text).not.toContain("\"runId\"");

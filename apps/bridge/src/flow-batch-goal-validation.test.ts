@@ -107,6 +107,7 @@ function harness(options: { hold?: boolean } = {}) {
   });
   const sourceRun = workItems.createRun({
     id: "run_source", workItemId: sourceWorkItem.id, sessionId: "session_1", mode: "auto",
+    executionKind: "agent",
   });
   workItems.updateRunStatus(sourceRun.id, "succeeded");
   const service = new FlowBatchService({

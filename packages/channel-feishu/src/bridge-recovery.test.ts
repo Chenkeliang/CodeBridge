@@ -79,6 +79,7 @@ describe("FeishuBridge interrupted stream recovery", () => {
       type: "RUN_SUCCEEDED",
       sequence: 9,
       runId: "run_1",
+      executionKind: "agent",
       occurredAt: new Date(5_000).toISOString(),
       target: null,
       resultRef: null,

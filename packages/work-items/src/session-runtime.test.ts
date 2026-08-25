@@ -55,12 +55,14 @@ describe("Session runtime schema", () => {
       workItemId: item.id,
       sessionId: "sess_1",
       mode: "auto",
+      executionKind: "agent",
     });
     expect(() => store.createRun({
       id: "run_2",
       workItemId: item.id,
       sessionId: "sess_1",
       mode: "auto",
+      executionKind: "agent",
     })).toThrow();
     store.close();
   });
@@ -79,6 +81,7 @@ describe("Session runtime schema", () => {
       sessionId: "sess_1",
       turnId: "turn_1",
       mode: "auto",
+      executionKind: "agent",
     });
     store.updateRunControl(run.id, {
       status: "interrupted",
@@ -112,6 +115,7 @@ describe("Session runtime schema", () => {
         text: "检查",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -123,6 +127,7 @@ describe("Session runtime schema", () => {
         sessionId: "sess_1",
         turnId: turn.turnId,
         mode: "auto",
+        executionKind: "agent",
         agentId: "cursor",
         planId: null,
         planIrHash: null,
@@ -152,6 +157,7 @@ describe("Session runtime schema", () => {
         text: "检查",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -163,6 +169,7 @@ describe("Session runtime schema", () => {
         sessionId: "sess_1",
         turnId: turn.turnId,
         mode: "auto",
+        executionKind: "agent",
         agentId: "pi",
         planId: null,
         planIrHash: null,
@@ -208,6 +215,7 @@ describe("Session runtime schema", () => {
         text: "run",
         attachmentIds: [],
         flowId: "flow_demo",
+        executionKind: "flow",
         model: null,
         effort: null,
         permissionMode: null,
@@ -219,6 +227,7 @@ describe("Session runtime schema", () => {
         sessionId: "sess_1",
         turnId: first.turnId,
         mode: "auto",
+        executionKind: "flow",
         agentId: "pi",
         planId: plan.planId,
         planIrHash: plan.planIrHash,
@@ -228,6 +237,7 @@ describe("Session runtime schema", () => {
         text: "again",
         attachmentIds: [],
         flowId: "flow_demo",
+        executionKind: "flow",
         model: null,
         effort: null,
         permissionMode: null,

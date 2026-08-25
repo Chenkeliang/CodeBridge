@@ -19,6 +19,7 @@ function event(
     type,
     sequence,
     runId: "run_1",
+    executionKind: "flow",
     occurredAt: `2026-08-21T10:00:${String(sequence).padStart(2, "0")}.000Z`,
     target,
     resultRef,

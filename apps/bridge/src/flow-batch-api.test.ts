@@ -66,6 +66,7 @@ function harness() {
     workItemId: source.id,
     sessionId: "sess_batch",
     mode: "auto",
+    executionKind: "agent",
   });
   const flow = fixtureFlow();
   const executor: FlowBatchRunExecutor = {

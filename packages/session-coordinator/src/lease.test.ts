@@ -15,6 +15,7 @@ function setupQueuedRun() {
       text: "检查项目",
       attachmentIds: [],
       flowId: null,
+      executionKind: "agent",
       model: null,
       effort: null,
       permissionMode: null,

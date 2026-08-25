@@ -9,6 +9,8 @@ import {
   appendSessionEventInTransaction,
   createSqliteSessionRuntimeTransaction,
   importProviderHistory,
+  parseSessionTurnMessage,
+  resolveRunExecutionKind,
 } from "./session-runtime.js";
 import type {
   ChannelDeliveryRow,
@@ -178,6 +180,7 @@ export interface DomainEvent {
   sequence: number;
   workItemId: string;
   runId: string | null;
+  executionKind: ExecutionKind | null;
   type: DomainEventType;
   occurredAt: string;
   actor: DomainEventActor;
@@ -207,6 +210,8 @@ export type RunStatus =
   | "cancelled"
   | "interrupted";
 
+export type ExecutionKind = "agent" | "flow";
+
 export interface Run {
   schemaVersion: 1;
   id: string;
@@ -215,6 +220,7 @@ export interface Run {
   turnId: string | null;
   mode: WorkItemMode;
   status: RunStatus;
+  executionKind: ExecutionKind;
   agentId: string | null;
   planId: string | null;
   planIrHash: string | null;
@@ -236,6 +242,7 @@ export interface CreateRunInput {
   sessionId?: string | null;
   turnId?: string | null;
   mode: WorkItemMode;
+  executionKind: ExecutionKind;
   agentId?: string | null;
   planId?: string | null;
   planIrHash?: string | null;
@@ -406,6 +413,7 @@ export class SqliteEventStore {
         sequence INTEGER NOT NULL,
         work_item_id TEXT NOT NULL,
         run_id TEXT,
+        execution_kind TEXT CHECK (execution_kind IN ('agent', 'flow') OR execution_kind IS NULL),
         type TEXT NOT NULL,
         occurred_at TEXT NOT NULL,
         actor TEXT NOT NULL,
@@ -426,6 +434,8 @@ export class SqliteEventStore {
         work_item_id TEXT NOT NULL,
         mode TEXT NOT NULL,
         status TEXT NOT NULL,
+        execution_kind TEXT NOT NULL DEFAULT 'agent'
+          CHECK (execution_kind IN ('agent', 'flow')),
         agent_id TEXT,
         plan_id TEXT,
         workflow_revision TEXT,
@@ -1472,6 +1482,7 @@ export class SqliteEventStore {
       turnId: input.turnId ?? null,
       mode: input.mode,
       status: "queued",
+      executionKind: input.executionKind,
       agentId: input.agentId ?? workItem.agentId,
       planId: input.planId ?? null,
       planIrHash: input.planIrHash ?? plan?.planIrHash ?? null,
@@ -1493,10 +1504,10 @@ export class SqliteEventStore {
         .prepare(
           `INSERT INTO runs (
             id, schema_version, work_item_id, session_id, turn_id, mode, status,
-            agent_id, plan_id, plan_ir_hash, workflow_revision, terminal_reason,
+            execution_kind, agent_id, plan_id, plan_ir_hash, workflow_revision, terminal_reason,
             replay_safety, lease_owner, lease_expires_at, cancel_requested_at,
             cancel_deadline_at, provider_session_id, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           run.id,
@@ -1506,6 +1517,7 @@ export class SqliteEventStore {
           run.turnId,
           run.mode,
           run.status,
+          run.executionKind,
           run.agentId,
           run.planId,
           run.planIrHash,
@@ -1531,6 +1543,7 @@ export class SqliteEventStore {
           agent_id: run.agentId,
           plan_id: run.planId,
           workflow_revision: run.workflowRevision,
+          execution_kind: run.executionKind,
         },
       });
       if (plan) {
@@ -2058,6 +2071,10 @@ export class SqliteEventStore {
       sequence,
       workItemId: input.workItemId,
       runId: input.runId ?? null,
+      executionKind: resolveRunExecutionKind(
+        this.database,
+        input.runId ?? null,
+      ),
       type: input.type,
       occurredAt: new Date().toISOString(),
       actor: input.actor,
@@ -2070,9 +2087,9 @@ export class SqliteEventStore {
     this.database
       .prepare(
         `INSERT INTO domain_events (
-          event_id, schema_version, sequence, work_item_id, run_id, type,
+          event_id, schema_version, sequence, work_item_id, run_id, execution_kind, type,
           occurred_at, actor, target, input_hash, result_ref, payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.eventId,
@@ -2080,6 +2097,7 @@ export class SqliteEventStore {
         event.sequence,
         event.workItemId,
         event.runId,
+        event.executionKind,
         event.type,
         event.occurredAt,
         event.actor,
@@ -2137,6 +2155,7 @@ function createLegacySyntheticRun(input: {
     turnId: input.turnId,
     mode: "auto",
     status: "succeeded",
+    executionKind: "agent",
     agentId: null,
     planId: null,
     planIrHash: null,
@@ -2164,6 +2183,7 @@ function legacyTurnMessageFromEvent(event: DomainEvent): SessionTurnMessage {
       ? payload.attachment_ids.map((value) => String(value))
       : [],
     flowId: null,
+    executionKind: "agent",
     model: null,
     effort: null,
     permissionMode: null,
@@ -2176,6 +2196,7 @@ function emptyLegacyTurnMessage(): SessionTurnMessage {
     text: "",
     attachmentIds: [],
     flowId: null,
+    executionKind: "agent",
     model: null,
     effort: null,
     permissionMode: null,
@@ -2266,10 +2287,10 @@ function upsertLegacyRunTurn(
     .prepare(
       `INSERT INTO runs (
         id, schema_version, work_item_id, session_id, turn_id, mode, status,
-        agent_id, plan_id, plan_ir_hash, workflow_revision, terminal_reason,
+        execution_kind, agent_id, plan_id, plan_ir_hash, workflow_revision, terminal_reason,
         replay_safety, lease_owner, lease_expires_at, cancel_requested_at,
         cancel_deadline_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         work_item_id = excluded.work_item_id,
         session_id = excluded.session_id,
@@ -2283,6 +2304,7 @@ function upsertLegacyRunTurn(
       input.turnId,
       run.mode,
       run.status,
+      run.executionKind,
       run.agentId,
       run.planId,
       run.planIrHash,
@@ -2521,12 +2543,14 @@ function toWorkItem(row: SqliteRow): WorkItem {
 }
 
 function toDomainEvent(row: SqliteRow): DomainEvent {
+  const runId = row.run_id === null ? null : String(row.run_id);
   return {
     schemaVersion: Number(row.schema_version) as 1,
     eventId: String(row.event_id),
     sequence: Number(row.sequence),
     workItemId: String(row.work_item_id),
-    runId: row.run_id === null ? null : String(row.run_id),
+    runId,
+    executionKind: executionKindValue(row.execution_kind, runId),
     type: String(row.type) as DomainEventType,
     occurredAt: String(row.occurred_at),
     actor: String(row.actor) as DomainEventActor,
@@ -2550,6 +2574,7 @@ function toRun(row: SqliteRow): Run {
       : String(row.turn_id),
     mode: String(row.mode) as WorkItemMode,
     status: String(row.status) as RunStatus,
+    executionKind: executionKindValue(row.execution_kind, String(row.id))!,
     agentId: row.agent_id === null ? null : String(row.agent_id),
     planId: row.plan_id === null ? null : String(row.plan_id),
     planIrHash: row.plan_ir_hash === null || row.plan_ir_hash === undefined ? null : String(row.plan_ir_hash),
@@ -2587,6 +2612,18 @@ function toRun(row: SqliteRow): Run {
   };
 }
 
+function executionKindValue(
+  value: unknown,
+  runId: string | null,
+): ExecutionKind | null {
+  if (runId === null) {
+    if (value === null || value === undefined) return null;
+    throw new Error("Runless event cannot have an execution kind");
+  }
+  if (value === "agent" || value === "flow") return value;
+  throw new Error(`Invalid Run execution kind: ${runId}`);
+}
+
 function toSessionRuntime(row: SqliteRow): SessionRuntime {
   return {
     sessionId: String(row.session_id),
@@ -2611,7 +2648,7 @@ function toSessionTurn(row: SqliteRow): SessionTurn {
     sessionId: String(row.session_id),
     queuePosition: Number(row.queue_position),
     status: String(row.status) as SessionTurnStatus,
-    message: JSON.parse(String(row.message_json)) as SessionTurnMessage,
+    message: parseSessionTurnMessage(String(row.message_json)),
     version: Number(row.version),
     dispatchedRunId:
       row.dispatched_run_id === null || row.dispatched_run_id === undefined

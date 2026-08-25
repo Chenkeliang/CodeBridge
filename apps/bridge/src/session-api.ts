@@ -969,6 +969,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       id: runId,
       workItemId: task.id,
       mode: "auto",
+      executionKind: flowResolution.kind === "flow" ? "flow" : "agent",
       agentId: session.agentId,
       planId: plan?.planId ?? null,
       planIrHash: flow?.planIrHash ?? null,

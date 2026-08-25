@@ -62,6 +62,7 @@ describe("reclaimQueuedRuns", () => {
         text: "卡住了？",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,

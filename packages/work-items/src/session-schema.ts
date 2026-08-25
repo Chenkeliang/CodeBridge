@@ -29,6 +29,31 @@ export function initializeSessionRuntimeSchema(
   addColumn(database, "ALTER TABLE runs ADD COLUMN cancel_requested_at TEXT");
   addColumn(database, "ALTER TABLE runs ADD COLUMN cancel_deadline_at TEXT");
   addColumn(database, "ALTER TABLE runs ADD COLUMN provider_session_id TEXT");
+  addColumn(
+    database,
+    "ALTER TABLE runs ADD COLUMN execution_kind TEXT NOT NULL DEFAULT 'agent' CHECK (execution_kind IN ('agent', 'flow'))",
+  );
+  addColumn(
+    database,
+    "ALTER TABLE domain_events ADD COLUMN execution_kind TEXT CHECK (execution_kind IN ('agent', 'flow') OR execution_kind IS NULL)",
+  );
+  database.exec(`
+    UPDATE runs
+    SET execution_kind = 'flow'
+    WHERE workflow_revision IS NOT NULL;
+
+    UPDATE domain_events
+    SET execution_kind = (
+      SELECT runs.execution_kind
+      FROM runs
+      WHERE runs.id = domain_events.run_id
+    )
+    WHERE run_id IS NOT NULL;
+
+    UPDATE domain_events
+    SET execution_kind = NULL
+    WHERE run_id IS NULL;
+  `);
 
   database.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS work_items_one_per_session
@@ -174,6 +199,21 @@ export function initializeSessionRuntimeSchema(
     );
     CREATE INDEX IF NOT EXISTS channel_delivery_pending
       ON channel_turn_delivery (channel, status);
+  `);
+
+  database.exec(`
+    UPDATE session_turns
+    SET message_json = json_set(
+      message_json,
+      '$.executionKind',
+      CASE
+        WHEN json_extract(message_json, '$.flowInvocationSource') IN ('request', 'binding')
+          OR json_extract(message_json, '$.plan') IS NOT NULL
+        THEN 'flow'
+        ELSE 'agent'
+      END
+    )
+    WHERE json_extract(message_json, '$.executionKind') IS NULL;
   `);
 
   // 迁移已有库：session_runtime 表在此处才被 CREATE，故 provider_session_id

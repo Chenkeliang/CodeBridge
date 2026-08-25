@@ -47,6 +47,7 @@ function createFixture() {
     id: "run_legacy",
     workItemId: workItem.id,
     mode: "auto",
+    executionKind: "agent",
   });
   return {
     dataDir,
@@ -246,11 +247,13 @@ describe("Session runtime migration", () => {
       id: "run_conflict_1",
       workItemId: fixture.workItem.id,
       mode: "auto",
+      executionKind: "agent",
     });
     fixture.store.createRun({
       id: "run_conflict_2",
       workItemId: fixture.workItem.id,
       mode: "auto",
+      executionKind: "agent",
     });
     const before = fixture.store.countAllChanges();
 
@@ -321,6 +324,7 @@ describe("Session runtime migration", () => {
       id: "run_second",
       workItemId: fixture.workItem.id,
       mode: "auto",
+      executionKind: "agent",
     });
     fixture.store.updateRunStatus(fixture.run.id, "succeeded");
     fixture.store.updateRunStatus(secondRun.id, "succeeded");

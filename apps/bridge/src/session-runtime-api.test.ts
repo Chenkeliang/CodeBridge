@@ -132,6 +132,7 @@ describe("Session runtime command API", () => {
         text: "检查项目",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -924,6 +925,8 @@ describe("Session runtime command API", () => {
     await vi.waitFor(() => {
       expect(fixture.runner.requests.length).toBeGreaterThanOrEqual(1);
     });
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    expect(fixture.workItems.listRuns(workItemId).at(-1)?.executionKind).toBe("agent");
     fixture.registry.close();
     fixture.catalog.close();
     fixture.workItems.close();
@@ -988,7 +991,11 @@ describe("Session runtime command API", () => {
   it("does not persist a candidate flowId onto the session after dry-run", async () => {
     const flows = new FlowCatalogStore(":memory:");
     savePublishedDemoEcho(flows);
-    savePublishedDemoEcho(flows, { status: "candidate", flowId: "flow_demo_echo_cand" });
+    savePublishedDemoEcho(flows, {
+      status: "candidate",
+      flowId: "flow_demo_echo_cand",
+      source: "agent_generated",
+    });
     const fixture = setupRuntimeLoop({ flows });
     expect(fixture.catalog.getSession(fixture.session.id)?.flowId ?? null).toBeNull();
     const unbound = await fixture.app.request(
@@ -1010,6 +1017,8 @@ describe("Session runtime command API", () => {
     );
     expect(unbound.status).toBe(202);
     expect(fixture.catalog.getSession(fixture.session.id)?.flowId ?? null).toBeNull();
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    expect(fixture.workItems.listRuns(workItemId).at(-1)?.executionKind).toBe("flow");
 
     bindCatalogFlow(fixture.catalog, fixture.session.id, flows, "flow_demo_echo");
     const overlay = await fixture.app.request(
@@ -1137,7 +1146,12 @@ describe("Session runtime command API", () => {
 
 function savePublishedDemoEcho(
   flows: FlowCatalogStore,
-  inputExtra: { default?: string; status?: "candidate" | "published"; flowId?: string } = {},
+  inputExtra: {
+    default?: string;
+    status?: "candidate" | "published";
+    flowId?: string;
+    source?: "user_selected" | "agent_generated";
+  } = {},
 ) {
   const flowId = inputExtra.flowId ?? "flow_demo_echo";
   const definition = {
@@ -1160,8 +1174,9 @@ function savePublishedDemoEcho(
       success_when: "output.text exists",
     }],
   };
+  const source = inputExtra.source ?? "user_selected";
   const plan = compileWorkflow(definition, {
-    source: "workflow",
+    source: source === "agent_generated" ? "agent_generated" : "workflow",
     definitionRevision: definitionHash(definition),
     planId: catalogPlanId(flowId),
   });
@@ -1170,7 +1185,7 @@ function savePublishedDemoEcho(
     name: "demo",
     kind: "runbook",
     status: inputExtra.status ?? "published",
-    source: "user_selected",
+    source,
     definitionRevision: definitionHash(definition),
     planIrHash: definitionHash(plan),
     inputs: plan.inputs,

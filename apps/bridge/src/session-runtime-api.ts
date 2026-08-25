@@ -155,6 +155,7 @@ export function registerSessionRuntimeCommandRoutes(
           flowInvocationSource: resolution.kind === "flow"
             ? resolution.source
             : "none",
+          executionKind: resolution.kind === "flow" ? "flow" : "agent",
           plan: frozenPlan
             ? {
                 ...frozenPlan,

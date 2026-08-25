@@ -40,7 +40,7 @@ function setup() {
     workspaceScope: ["/tmp/project"],
     riskLevel: "read_only",
   });
-  const run = store.createRun({ workItemId: item.id, mode: item.mode });
+  const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "agent" });
   return { store, item, run };
 }
 
@@ -56,6 +56,7 @@ function setupSessionRun() {
       text: "调查",
       attachmentIds: [],
       flowId: null,
+      executionKind: "agent",
       model: null,
       effort: null,
       permissionMode: null,
@@ -182,6 +183,7 @@ describe("RunExecutor", () => {
         text: "调查",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -242,6 +244,7 @@ describe("RunExecutor", () => {
         text: "调查",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -333,6 +336,7 @@ describe("RunExecutor", () => {
           text,
           attachmentIds: [],
           flowId: null,
+          executionKind: "agent",
           model: null,
           effort: null,
           permissionMode: null,
@@ -402,6 +406,7 @@ describe("RunExecutor", () => {
           text,
           attachmentIds: [],
           flowId: null,
+          executionKind: "agent",
           model: null,
           effort: null,
           permissionMode: null,
@@ -485,6 +490,7 @@ describe("RunExecutor", () => {
           text: "调查",
           attachmentIds: [],
           flowId: null,
+          executionKind: "agent",
           model: null,
           effort: null,
           permissionMode: null,
@@ -613,6 +619,7 @@ describe("RunExecutor", () => {
         text: "继续",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -693,6 +700,7 @@ describe("RunExecutor", () => {
         text: "调查",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -750,6 +758,7 @@ describe("RunExecutor", () => {
         text: "调查",
         attachmentIds: [],
         flowId: null,
+        executionKind: "agent",
         model: null,
         effort: null,
         permissionMode: null,
@@ -1068,7 +1077,7 @@ describe("RunExecutor", () => {
       workspaceScope: ["/tmp/project"],
       riskLevel: "production_write",
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "agent" });
     const approvals = new ApprovalService(store, ":memory:");
     const executor = new RunExecutor(store, new FakeRunner([{ type: "done", exitCode: 0 }]), {
       approvals,
@@ -1132,7 +1141,7 @@ describe("RunExecutor", () => {
         },
       ],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
     const registry = new CapabilityRegistry([
       { id: "context.inspect", risk: "read_only", adapter: "context.inspect" },
@@ -1184,7 +1193,7 @@ describe("RunExecutor", () => {
         purpose: null,
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const capabilities = new CapabilityRegistry();
     const executor = new RunExecutor(store, new FakeRunner([{ type: "done", exitCode: 0 }]), {
       policy: new PolicyEngine(capabilities),
@@ -1234,7 +1243,7 @@ describe("RunExecutor", () => {
         purpose: null,
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
     const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
     const runtime = new CapabilityRuntime([
@@ -1303,7 +1312,7 @@ describe("RunExecutor", () => {
         retry: { maxAttempts: 2, delayMs: 0 },
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
     let attempts = 0;
     const runtime = new CapabilityRuntime([
@@ -1361,7 +1370,7 @@ describe("RunExecutor", () => {
       definitionRevision: "git:one",
       steps: [step],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const approvals = new ApprovalService(store, ":memory:");
     const executor = new RunExecutor(store, new FakeRunner([{ type: "done", exitCode: 0 }]), {
       approvals,
@@ -1441,7 +1450,7 @@ describe("RunExecutor", () => {
         },
       ],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
     const registry = new CapabilityRegistry([
       { id: "fallback.inspect", risk: "read_only", adapter: "fallback.inspect" },
@@ -1511,7 +1520,7 @@ describe("RunExecutor", () => {
         },
       ],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const executor = new RunExecutor(store, new FakeRunner([]), {
       resolveRequest: () => ({
         runId: run.id,
@@ -1566,7 +1575,7 @@ describe("RunExecutor", () => {
       steps: [{ id: "s", capabilityId: "c.d", risk: "read_only", dependsOn: [], guard: null, approval: "none", branches: [], purpose: null }],
     });
     const run = store.createRun({
-      workItemId: item.id, mode: "auto", planId: "plan_1", planIrHash: "sha256:other",
+      workItemId: item.id, mode: "auto", executionKind: "flow", planId: "plan_1", planIrHash: "sha256:other",
     });
     const executor = new RunExecutor(store, new FakeRunner([{ type: "done", exitCode: 0 }]), {
       resolveRequest: () => ({ runId: run.id, sessionKey: { chatId: "c", backendId: "pi", cwd: "/tmp" }, prompt: "x" }),
@@ -1609,9 +1618,9 @@ describe("RunExecutor", () => {
       }),
     });
 
-    const run1 = store.createRun({ workItemId: item.id, mode: item.mode, planId: "plan_deliver" });
+    const run1 = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: "plan_deliver" });
     await executor.execute(run1.id);
-    const run2 = store.createRun({ workItemId: item.id, mode: item.mode, planId: "plan_deliver" });
+    const run2 = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: "plan_deliver" });
     await executor.execute(run2.id);
 
     expect(invocations).toBe(1);
@@ -1633,7 +1642,7 @@ describe("RunExecutor", () => {
         successWhen: "output.order_id != null",
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const registry = new CapabilityRegistry([{ id: "equity.deliver", risk: "read_only", adapter: "local.deliver" }]);
     const runtime = new CapabilityRuntime([
       new FunctionCapabilityAdapter("local.deliver", () => ({ output: {} })),
@@ -1702,7 +1711,7 @@ describe("RunExecutor", () => {
       }],
     });
     const run = store.createRun({
-      workItemId: item.id, mode: "auto", planId: plan.planId, planIrHash: "sha256:plan",
+      workItemId: item.id, mode: "auto", executionKind: "flow", planId: plan.planId, planIrHash: "sha256:plan",
     });
     const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
     const registry = new CapabilityRegistry();
@@ -1734,7 +1743,7 @@ describe("RunExecutor", () => {
       }],
     });
     const run = store.createRun({
-      workItemId: item.id, mode: "auto", planId: plan.planId, planIrHash: "sha256:plan",
+      workItemId: item.id, mode: "auto", executionKind: "flow", planId: plan.planId, planIrHash: "sha256:plan",
     });
     const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
     const registry = new CapabilityRegistry();
@@ -1781,7 +1790,7 @@ describe("RunExecutor", () => {
         return { output: { text: input.text } };
       }),
     ]);
-    const run = store.createRun({ workItemId: item.id, mode: "auto", planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: "auto", executionKind: "flow", planId: plan.planId });
     const executor = new RunExecutor(store, new FakeRunner([]), {
       policy: new PolicyEngine(registry),
       capabilities: runtime,
@@ -1811,7 +1820,7 @@ describe("RunExecutor", () => {
         successWhen: "output.ok exists",
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const registry = new CapabilityRegistry([{ id: "equity.deliver", risk: "read_only", adapter: "local.deliver" }]);
     const runtime = new CapabilityRuntime([
       new FunctionCapabilityAdapter("local.deliver", () => ({ output: { text: huge } })),
@@ -1859,7 +1868,7 @@ describe("RunExecutor", () => {
         retry: { maxAttempts: 2, delayMs: 0 },
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
     let attempts = 0;
     const runtime = new CapabilityRuntime([
@@ -1915,7 +1924,7 @@ describe("RunExecutor", () => {
         purpose: null,
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
     const runtime = new CapabilityRuntime([
       new FunctionCapabilityAdapter("local.lookup", () => {
@@ -1967,7 +1976,7 @@ describe("RunExecutor", () => {
         purpose: null,
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const registry = new CapabilityRegistry([{ id: "catalog.lookup", risk: "read_only", adapter: "local.lookup" }]);
     const runtime = new CapabilityRuntime([
       new FunctionCapabilityAdapter("local.lookup", () => {
@@ -2024,7 +2033,7 @@ describe("RunExecutor", () => {
         successWhen: "output.text exists",
       }],
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode, planId: plan.planId });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: plan.planId });
     const registry = new CapabilityRegistry([{ id: "demo.echo", risk: "read_only", adapter: "demo.echo" }]);
     const runtime = new CapabilityRuntime([
       new FunctionCapabilityAdapter("demo.echo", ({ input }) => ({ output: { text: input.text } })),
@@ -2082,7 +2091,7 @@ describe("RunExecutor", () => {
       }],
     });
     const run = store.createRun({
-      workItemId: item.id, mode: "auto", planId: plan.planId, planIrHash: "sha256:plan",
+      workItemId: item.id, mode: "auto", executionKind: "flow", planId: plan.planId, planIrHash: "sha256:plan",
     });
     const registry = new CapabilityRegistry();
     const runtime = new CapabilityRuntime();
@@ -2150,10 +2159,10 @@ describe("RunExecutor", () => {
       }),
     });
 
-    const run1 = store.createRun({ workItemId: item.id, mode: item.mode, planId: "plan_deliver_window" });
+    const run1 = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: "plan_deliver_window" });
     await executor.execute(run1.id);
     now = new Date("2026-08-02T01:00:00.000Z");
-    const run2 = store.createRun({ workItemId: item.id, mode: item.mode, planId: "plan_deliver_window" });
+    const run2 = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "flow", planId: "plan_deliver_window" });
     await executor.execute(run2.id);
 
     expect(invocations).toBe(2);

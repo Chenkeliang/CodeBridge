@@ -4,6 +4,7 @@ export interface SessionEventWire {
   sequence: number;
   work_item_id: string;
   run_id: string | null;
+  execution_kind: "agent" | "flow" | null;
   type: string;
   occurred_at: string;
   actor: string;
@@ -24,6 +25,12 @@ export function parseSessionEventWire(input: unknown): SessionEventWire {
     || !Number.isInteger(event.sequence)
     || typeof event.work_item_id !== "string"
     || !(typeof event.run_id === "string" || event.run_id === null)
+    || !(
+      event.execution_kind === "agent"
+      || event.execution_kind === "flow"
+      || event.execution_kind === null
+    )
+    || (event.run_id === null) !== (event.execution_kind === null)
     || typeof event.type !== "string"
     || typeof event.occurred_at !== "string"
     || typeof event.actor !== "string"

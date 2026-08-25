@@ -107,6 +107,7 @@ function harness(itemCount = 3, concurrency = 2) {
     workItemId: sourceWorkItem.id,
     sessionId: "sess_batch",
     mode: "auto",
+    executionKind: "agent",
   });
   workItems.updateRunStatus(sourceRun.id, "succeeded");
   const flow = publishedFlow();
