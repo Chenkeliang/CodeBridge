@@ -10,8 +10,8 @@ import {
 import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
 import { compileWorkflow, definitionHash, validatePostcondition, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
-import type { SqliteEventStore } from "@codebridge/work-items";
-import type { DomainEvent } from "@codebridge/work-items";
+import type { DomainEvent, Run, SqliteEventStore } from "@codebridge/work-items";
+import { extractRunDefinition } from "./flow-save-intent.js";
 
 export interface FlowApiOptions {
   sessions?: SessionCatalogStore;
@@ -730,144 +730,51 @@ function proposalsForSession(
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .map((run) => proposalForRun(
       sessionId,
-      run.id,
-      run.agentId ?? agentId,
-      run.status,
+      agentId,
       workItem.title,
+      run,
       sessionEvents.filter((event) => event.runId === run.id),
     ));
 }
 
 function proposalForRun(
   sessionId: string,
-  runId: string,
   agentId: string,
-  runStatus: string,
   title: string,
+  run: Run,
   runEvents: ReturnType<SqliteEventStore["listEvents"]>,
 ): AgentFlowProposal {
-  if (runStatus !== "succeeded") {
-    return unavailableProposal(sessionId, runId, agentId, runStatus, "Run 未成功，不能沉淀为 Guide");
-  }
-  const structured = [...runEvents].reverse().find((event) =>
-    event.type === "FLOW_PROPOSED" && event.payload.flow && typeof event.payload.flow === "object"
-  );
-  if (structured) {
-    const payload = structured.payload as Record<string, unknown>;
-    const flow = payload.flow as Record<string, unknown>;
-    const rawSteps = Array.isArray(flow.steps) ? flow.steps : [];
-    const steps = rawSteps.flatMap((raw, index) => {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
-      const step = raw as Record<string, unknown>;
-      const purpose = typeof step.purpose === "string" ? step.purpose.trim() : "";
-      if (!purpose) return [];
-      const id = typeof step.id === "string" && step.id.trim()
-        ? step.id.trim()
-        : `step_${index + 1}`;
-      return [{
-        id,
-        purpose,
-        dependsOn: Array.isArray(step.depends_on)
-          ? step.depends_on.filter((value): value is string => typeof value === "string")
-          : index ? [`step_${index}`] : [],
-      }];
-    });
-    const sourceFlowId = typeof flow.workflow_id === "string"
-      ? flow.workflow_id
-      : `flow_ephemeral_${runId}`;
-    const sourceDefinitionRevision = typeof payload.definition_revision === "string"
-      ? payload.definition_revision
-      : `agent:${definitionHash({ runId, steps })}`;
-    if (steps.length > 0) {
-      return {
-        sessionId,
-        runId,
-        agentId,
-        runStatus,
-        kind: "structured_plan",
-        saveable: true,
-        reason: null,
-        sourceFlowId,
-        sourceDefinitionRevision,
-        guide: {
-          name: sanitizedGuideName(
-            typeof flow.name === "string" && flow.name.trim() ? flow.name : title,
-            `${agentId} Run Guide`,
-          ),
-          description: `基于 ${agentId} 成功 Run 的结构化 Agent 计划整理。`,
-          steps,
-        },
-      };
-    }
-  }
-
-  const toolNames = runEvents.flatMap((event) => {
-    if (event.type !== "AGENT_EVENT") return [];
-    const agentEvent = event.payload.event;
-    if (!agentEvent || typeof agentEvent !== "object" || Array.isArray(agentEvent)) return [];
-    const value = agentEvent as Record<string, unknown>;
-    return value.type === "tool_start" && typeof value.name === "string"
-      ? [value.name]
-      : [];
+  const extracted = extractRunDefinition({
+    session: { id: sessionId, agentId },
+    run,
+    title,
+    events: runEvents,
   });
-  if (toolNames.length >= 2) {
-    const purposes = toolNames
-      .map(sanitizedToolPurpose)
-      .filter((purpose, index, values) => index === 0 || purpose !== values[index - 1])
-      .slice(0, 12);
-    const steps = purposes.map((purpose, index) => ({
-      id: `step_${index + 1}`,
-      purpose,
-      dependsOn: index ? [`step_${index}`] : [],
-    }));
-    const sourceDefinitionRevision = `trace:${definitionHash({ runId, purposes })}`;
-    return {
+  if (!extracted.ok) {
+    return unavailableProposal(
       sessionId,
-      runId,
-      agentId,
-      runStatus,
-      kind: "observed_trace",
-      saveable: true,
-      reason: "基于实际工具轨迹生成，未映射 Capability，需人工整理",
-      sourceFlowId: `flow_ephemeral_${runId}`,
-      sourceDefinitionRevision,
-      guide: {
-        name: sanitizedGuideName(title, `${agentId} Run Guide`),
-        description: `基于 ${agentId} 成功 Run 的已执行工具轨迹整理；参数已移除。`,
-        steps,
-      },
-    };
+      run.id,
+      run.agentId ?? agentId,
+      run.status,
+      extracted.reason,
+    );
   }
-  return unavailableProposal(
+  return {
     sessionId,
-    runId,
-    agentId,
-    runStatus,
-    "Run 没有结构化 Agent 计划，也没有足够的工具调用证据",
-  );
-}
-
-function sanitizedToolPurpose(name: string): string {
-  const skillScript = name.match(/\/skills\/([^/\s]+)\/scripts\/([^/\s`]+)/i);
-  if (skillScript) {
-    const script = skillScript[2]!.replace(/\.(?:py|js|ts|sh)$/i, "");
-    return `使用 ${skillScript[1]} · ${script}`;
-  }
-  const plain = name.trim();
-  if (/^[\p{L}\p{N} _.-]{1,48}$/u.test(plain)) return `使用 ${plain}`;
-  return "执行受控工具步骤";
-}
-
-function sanitizedGuideName(value: string, fallback: string): string {
-  const firstLine = value.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? fallback;
-  const redacted = firstLine
-    .replace(/https?:\/\/\S+/gi, "链接")
-    .replace(/(?:\/Users|\/home|[A-Za-z]:\\)[^\s]+/g, "本地路径")
-    .replace(/\b(?=[A-Za-z0-9_-]{6,}\b)(?=[A-Za-z0-9_-]*\d{6,})[A-Za-z0-9_-]+\b/g, "参数")
-    .replace(/\s+/g, " ")
-    .trim();
-  const characters = Array.from(redacted || fallback);
-  return characters.length > 60 ? `${characters.slice(0, 60).join("")}…` : characters.join("");
+    runId: run.id,
+    agentId: run.agentId ?? agentId,
+    runStatus: run.status,
+    kind: extracted.kind,
+    saveable: true,
+    reason: extracted.warnings[0] ?? null,
+    sourceFlowId: extracted.sourceFlowId,
+    sourceDefinitionRevision: extracted.sourceDefinitionRevision,
+    guide: {
+      name: extracted.name,
+      description: extracted.description,
+      steps: extracted.steps,
+    },
+  };
 }
 
 function unavailableProposal(

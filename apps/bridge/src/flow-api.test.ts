@@ -420,6 +420,37 @@ describe("flow API", () => {
     catalog.close();
   });
 
+  it("keeps the legacy proposal response while excluding the Flow save management tool", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    const fixture = seedAgentRun(sessions, events, {
+      agentId: "codex",
+      title: "读取一次后请求保存",
+      tools: ["Read File", "codebridge.request_flow_save"],
+    });
+    const app = createFlowApp(catalog, "token", { sessions, events });
+
+    const response = await app.request(
+      `/v1/sessions/${fixture.session.id}/flow-proposals`,
+      { headers: { authorization: "Bearer token" } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      proposals: [{
+        run_id: fixture.run.id,
+        kind: "unavailable",
+        saveable: false,
+        guide: null,
+      }],
+    });
+
+    events.close();
+    sessions.close();
+    catalog.close();
+  });
+
   it("saves an Agent proposal as one idempotent Guide with server provenance", async () => {
     const catalog = new FlowCatalogStore(":memory:");
     const sessions = new SessionCatalogStore(":memory:");
