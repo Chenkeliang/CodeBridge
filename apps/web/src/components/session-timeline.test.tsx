@@ -67,6 +67,20 @@ function timelineTurn(kind: TimelineBlockView["kind"], segments: TimelineSegment
 }
 
 describe("SessionTimeline", () => {
+  it("keeps Flow save requests hidden until the W1 card renderer lands", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      turns={timelineTurn("flow_save_request", [])}
+    />));
+
+    expect(host.querySelector("details")).toBeNull();
+    expect(host.textContent).not.toContain("整理为 Guide");
+    act(() => root.unmount());
+    host.remove();
+  });
+
   it("opens a projected Flow batch from the active timeline", () => {
     const open = vi.fn();
     const host = document.body.appendChild(document.createElement("div"));

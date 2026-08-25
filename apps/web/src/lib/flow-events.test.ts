@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFlowEvent } from "./flow-events";
+import { applyFlowEvent, applyFlowSaveIntentEvent } from "./flow-events";
 import type { SessionEvent, TimelineTurnView } from "./types";
 
 function turn(runId: string): TimelineTurnView {
@@ -102,5 +102,263 @@ describe("applyFlowEvent", () => {
     const input = [turn("run_1")];
     const output = applyFlowEvent(input, event({ type: "MESSAGE_RECEIVED", payload: { message: "hi" } }));
     expect(output).toBe(input);
+  });
+});
+
+describe("applyFlowSaveIntentEvent", () => {
+  it("projects requested and terminal events onto one stable block", () => {
+    let turns = [turn("run_1")];
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_SAVE_REQUESTED",
+      execution_kind: "agent",
+      sequence: 10,
+      payload: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        source_imported: false,
+      },
+    }));
+    expect(turns[0]!.blocks).toHaveLength(1);
+    expect(turns[0]!.blocks[0]).toMatchObject({
+      block_id: "flow_save:fsr_one",
+      kind: "flow_save_request",
+      status: "pending",
+      metadata: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        source_imported: false,
+      },
+    });
+
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_SAVE_DISMISSED",
+      execution_kind: "agent",
+      sequence: 11,
+      payload: { request_id: "fsr_one", source_run_id: "run_source" },
+    }));
+    expect(turns[0]!.blocks).toHaveLength(1);
+    expect(turns[0]!.blocks[0]).toMatchObject({
+      block_id: "flow_save:fsr_one",
+      status: "dismissed",
+    });
+
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_SAVE_FAILED",
+      execution_kind: "agent",
+      sequence: 12,
+      payload: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        code: "source_run_not_extractable",
+      },
+    }));
+    expect(turns[0]!.blocks).toHaveLength(1);
+    expect(turns[0]!.blocks[0]).toMatchObject({
+      block_id: "flow_save:fsr_one",
+      status: "failed",
+      metadata: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        source_imported: false,
+        code: "source_run_not_extractable",
+      },
+    });
+
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_CANDIDATE_CREATED",
+      execution_kind: "agent",
+      sequence: 13,
+      payload: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        flow_id: "flow_candidate",
+        definition_revision: "sha256:definition",
+      },
+    }));
+    expect(turns[0]!.blocks).toHaveLength(1);
+    expect(turns[0]!.blocks[0]).toMatchObject({
+      block_id: "flow_save:fsr_one",
+      status: "completed",
+      metadata: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        source_imported: false,
+        flow_id: "flow_candidate",
+        definition_revision: "sha256:definition",
+      },
+    });
+  });
+
+  it("does not let an older event regress a completed request", () => {
+    let turns = [turn("run_1")];
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_SAVE_REQUESTED",
+      execution_kind: "agent",
+      sequence: 10,
+      payload: { request_id: "fsr_one", source_run_id: "run_source" },
+    }));
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_CANDIDATE_CREATED",
+      execution_kind: "agent",
+      sequence: 12,
+      payload: { request_id: "fsr_one", flow_id: "flow_candidate" },
+    }));
+    const completed = turns;
+
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_SAVE_DISMISSED",
+      execution_kind: "agent",
+      sequence: 11,
+      payload: { request_id: "fsr_one" },
+    }));
+
+    expect(turns).toBe(completed);
+    expect(turns[0]!.blocks[0]?.status).toBe("completed");
+  });
+
+  it("updates an existing request across windowed Turns but never falls back to the latest Turn", () => {
+    const current = turn("run_current");
+    current.turn_id = "turn_current";
+    const unmatched = event({
+      type: "FLOW_SAVE_REQUESTED",
+      execution_kind: "agent",
+      run_id: "run_old",
+      sequence: 20,
+      payload: {
+        request_id: "fsr_windowed",
+        request_turn_id: "turn_old",
+        source_run_id: "run_source",
+      },
+    });
+
+    const unmatchedInput = [current];
+    const unchanged = applyFlowSaveIntentEvent(unmatchedInput, unmatched);
+    expect(unchanged).toBe(unmatchedInput);
+    expect(unchanged[0]!.blocks).toHaveLength(0);
+
+    const withExisting = [
+      {
+        ...current,
+        blocks: [{
+          block_id: "flow_save:fsr_windowed",
+          block_index: 0,
+          kind: "flow_save_request" as const,
+          status: "pending",
+          metadata: {
+            request_id: "fsr_windowed",
+            source_run_id: "run_source",
+            event_sequence: 19,
+          },
+          segments: [],
+          next_segment_cursor: null,
+        }],
+      },
+    ];
+    const updated = applyFlowSaveIntentEvent(withExisting, event({
+      type: "FLOW_SAVE_DISMISSED",
+      execution_kind: "agent",
+      run_id: "run_old",
+      sequence: 21,
+      payload: { request_id: "fsr_windowed", source_run_id: "run_source" },
+    }));
+    expect(updated[0]!.blocks).toHaveLength(1);
+    expect(updated[0]!.blocks[0]).toMatchObject({
+      block_id: "flow_save:fsr_windowed",
+      status: "dismissed",
+    });
+
+    const createdByTurnId = applyFlowSaveIntentEvent([current], event({
+      type: "FLOW_SAVE_REQUESTED",
+      execution_kind: "agent",
+      run_id: "run_old",
+      sequence: 22,
+      payload: {
+        request_id: "fsr_by_turn",
+        request_turn_id: "turn_current",
+        source_run_id: "run_source",
+      },
+    }));
+    expect(createdByTurnId[0]!.blocks[0]?.block_id).toBe("flow_save:fsr_by_turn");
+  });
+
+  it("bounds display fields without dropping Flow save identity or terminal metadata", () => {
+    const large = "x".repeat(17_000);
+    let turns = [turn("run_1")];
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_SAVE_REQUESTED",
+      execution_kind: "agent",
+      sequence: 30,
+      payload: {
+        request_id: "fsr_large",
+        request_turn_id: "run_1",
+        source_run_id: "run_source",
+        source_imported: true,
+        user_message: large,
+        intent_summary: large,
+        name_hint: large,
+      },
+    }));
+    turns = applyFlowSaveIntentEvent(turns, event({
+      type: "FLOW_SAVE_FAILED",
+      execution_kind: "agent",
+      sequence: 31,
+      payload: {
+        request_id: "fsr_large",
+        source_run_id: "run_source",
+        code: "source_run_not_extractable",
+      },
+    }));
+
+    const block = turns[0]!.blocks[0]!;
+    expect(block.status).toBe("failed");
+    expect(block.metadata).toMatchObject({
+      request_id: "fsr_large",
+      source_run_id: "run_source",
+      source_imported: true,
+      status: "failed",
+      error_code: "source_run_not_extractable",
+      truncated: true,
+    });
+    expect(String(block.metadata.user_message)).toHaveLength(2_048);
+    expect(String(block.metadata.intent_summary)).toHaveLength(2_048);
+    expect(String(block.metadata.name_hint)).toHaveLength(2_048);
+
+    let candidateTurns = [turn("run_1")];
+    candidateTurns = applyFlowSaveIntentEvent(candidateTurns, event({
+      type: "FLOW_SAVE_REQUESTED",
+      execution_kind: "agent",
+      sequence: 40,
+      payload: {
+        request_id: "fsr_large_candidate",
+        request_turn_id: "run_1",
+        source_run_id: "run_source",
+        source_imported: false,
+        user_message: large,
+        intent_summary: large,
+        name_hint: large,
+      },
+    }));
+    candidateTurns = applyFlowSaveIntentEvent(candidateTurns, event({
+      type: "FLOW_CANDIDATE_CREATED",
+      execution_kind: "agent",
+      sequence: 41,
+      payload: {
+        request_id: "fsr_large_candidate",
+        source_run_id: "run_source",
+        flow_id: "flow_candidate",
+        definition_revision: "sha256:definition",
+      },
+    }));
+    expect(candidateTurns[0]!.blocks[0]).toMatchObject({
+      status: "completed",
+      metadata: {
+        request_id: "fsr_large_candidate",
+        source_run_id: "run_source",
+        source_imported: false,
+        status: "completed",
+        flow_id: "flow_candidate",
+        truncated: true,
+      },
+    });
   });
 });

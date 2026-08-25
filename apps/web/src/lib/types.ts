@@ -391,7 +391,7 @@ export interface TimelineSegmentView {
 export interface TimelineBlockView {
   block_id: string;
   block_index: number;
-  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error" | "flow_param" | "flow_step" | "flow_run" | "flow_failure" | "flow_batch";
+  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error" | "flow_param" | "flow_step" | "flow_run" | "flow_failure" | "flow_batch" | "flow_save_request";
   status: string;
   metadata: Record<string, unknown>;
   segments: TimelineSegmentView[];
