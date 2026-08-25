@@ -67,16 +67,182 @@ function timelineTurn(kind: TimelineBlockView["kind"], segments: TimelineSegment
 }
 
 describe("SessionTimeline", () => {
-  it("keeps Flow save requests hidden until the W1 card renderer lands", () => {
+  it("renders a persisted Flow save request through the W1 card", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
     act(() => root.render(<SessionTimeline
       {...timelineProps}
-      turns={timelineTurn("flow_save_request", [])}
+      turns={[{
+        ...timelineTurn("flow_save_request", [])[0]!,
+        blocks: [{
+          ...timelineTurn("flow_save_request", [])[0]!.blocks[0]!,
+          status: "pending",
+          metadata: {
+            request_id: "fsr_one",
+            source_run_id: "run-1",
+            user_message: "查询公司权益",
+            source_imported: false,
+          },
+        }],
+      }]}
     />));
 
-    expect(host.querySelector("details")).toBeNull();
-    expect(host.textContent).not.toContain("整理为 Guide");
+    expect(host.querySelector("[data-flow-save-request]")).not.toBeNull();
+    expect(host.textContent).toContain("存为 Flow？");
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("offers an accessible per-Turn save action only for eligible Agent replies", async () => {
+    const onRequestFlowSave = vi.fn();
+    const eligible = timelineTurn("assistant", [segment("answer", "已完成")]);
+    const ineligibleUserOnly = timelineTurn("user_message", [segment("user", "只含用户输入")]);
+    ineligibleUserOnly[0]!.turn_id = "turn-user";
+    ineligibleUserOnly[0]!.run_id = "run-user";
+    const ineligibleFailed = timelineTurn("assistant", [segment("failed", "失败")]);
+    ineligibleFailed[0]!.turn_id = "turn-failed";
+    ineligibleFailed[0]!.run_id = "run-failed";
+    ineligibleFailed[0]!.status = "failed";
+    const ineligibleRunning = timelineTurn("assistant", [segment("running", "执行中", false)]);
+    ineligibleRunning[0]!.turn_id = "turn-running";
+    ineligibleRunning[0]!.run_id = "run-running";
+    ineligibleRunning[0]!.status = "running";
+    const ineligibleCancelled = timelineTurn("assistant", [segment("cancelled", "已取消")]);
+    ineligibleCancelled[0]!.turn_id = "turn-cancelled";
+    ineligibleCancelled[0]!.run_id = "run-cancelled";
+    ineligibleCancelled[0]!.status = "cancelled";
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      onRequestFlowSave={onRequestFlowSave}
+      turns={[
+        ...eligible,
+        ...ineligibleUserOnly,
+        ...ineligibleFailed,
+        ...ineligibleRunning,
+        ...ineligibleCancelled,
+      ]}
+    />));
+
+    const menus = host.querySelectorAll<HTMLButtonElement>('[aria-label="Turn 操作"]');
+    expect(menus).toHaveLength(1);
+    await act(async () => { menus[0]!.click(); });
+    const save = Array.from(document.body.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent === "存为 Flow");
+    expect(save).toBeDefined();
+    await act(async () => { save?.click(); });
+    expect(onRequestFlowSave).toHaveBeenCalledWith("run-1");
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("excludes Flow Runtime, approval-only, management, and already-requested source Turns", () => {
+    const assistant = timelineTurn("assistant", [segment("answer", "已完成")])[0]!;
+    const flowRuntime = {
+      ...assistant,
+      turn_id: "turn-flow",
+      run_id: "run-flow",
+      blocks: [
+        ...assistant.blocks,
+        { ...assistant.blocks[0]!, block_id: "flow_run:run-flow:snapshot", kind: "flow_run" as const },
+      ],
+    };
+    const approvalOnly = {
+      ...assistant,
+      turn_id: "turn-approval",
+      run_id: "run-approval",
+      blocks: [{ ...assistant.blocks[0]!, block_id: "approval:one", kind: "approval" as const }],
+    };
+    const requestedSource = {
+      ...assistant,
+      turn_id: "turn-source",
+      run_id: "run-source",
+    };
+    const management = {
+      ...assistant,
+      turn_id: "turn-management",
+      run_id: "run-management",
+      blocks: [
+        ...assistant.blocks,
+        {
+          ...assistant.blocks[0]!,
+          block_id: "flow_save:fsr_management",
+          kind: "flow_save_request" as const,
+          status: "dismissed",
+          metadata: {
+            request_id: "fsr_management",
+            request_run_id: "run-management",
+            source_run_id: "run-source",
+          },
+        },
+      ],
+    };
+    const requestedBlock = {
+      ...assistant.blocks[0]!,
+      block_id: "flow_save:fsr_source",
+      kind: "flow_save_request" as const,
+      status: "pending",
+      metadata: { request_id: "fsr_source", source_run_id: "run-source" },
+    };
+    const completedBlock = {
+      ...requestedBlock,
+      block_id: "flow_save:fsr_completed",
+      status: "completed",
+      metadata: { request_id: "fsr_completed", source_run_id: "run-completed" },
+    };
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      onRequestFlowSave={vi.fn()}
+      turns={[flowRuntime, approvalOnly, requestedSource, management, {
+        ...assistant,
+        turn_id: "turn-request-anchor",
+        run_id: "run-request-anchor",
+        blocks: [requestedBlock],
+      }, {
+        ...assistant,
+        turn_id: "turn-completed",
+        run_id: "run-completed",
+        blocks: [...assistant.blocks, completedBlock],
+      }]}
+    />));
+
+    expect(host.querySelectorAll('[aria-label="Turn 操作"]')).toHaveLength(0);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("allows a new explicit action after a dismissed or failed request", () => {
+    const assistant = timelineTurn("assistant", [segment("answer", "已完成")])[0]!;
+    const withTerminalRequest = (status: "dismissed" | "failed", requestId: string) => ({
+      ...assistant,
+      turn_id: `turn-${status}`,
+      run_id: `run-${status}`,
+      blocks: [
+        ...assistant.blocks,
+        {
+          ...assistant.blocks[0]!,
+          block_id: `flow_save:${requestId}`,
+          kind: "flow_save_request" as const,
+          status,
+          metadata: { request_id: requestId, source_run_id: `run-${status}` },
+        },
+      ],
+    });
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionTimeline
+      {...timelineProps}
+      onRequestFlowSave={vi.fn()}
+      turns={[
+        withTerminalRequest("dismissed", "fsr_dismissed"),
+        withTerminalRequest("failed", "fsr_failed"),
+      ]}
+    />));
+
+    expect(host.querySelectorAll('[aria-label="Turn 操作"]')).toHaveLength(2);
     act(() => root.unmount());
     host.remove();
   });
