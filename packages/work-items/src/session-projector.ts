@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { isFlowProjectionEvent } from "@codebridge/core";
+import { flowSaveIntentProjection, isFlowProjectionEvent } from "@codebridge/core";
 import type { DomainEvent } from "./index.js";
 
 type SqliteRow = Record<string, unknown>;
@@ -188,6 +188,12 @@ export function projectSessionEvent(
       );
       break;
     }
+    case "FLOW_SAVE_REQUESTED":
+    case "FLOW_SAVE_DISMISSED":
+    case "FLOW_CANDIDATE_CREATED":
+    case "FLOW_SAVE_FAILED":
+      projectFlowSaveIntent(database, sessionId, event);
+      break;
     // 已知但有意不进时间线的类型：显式 no-op（cursor 正常前进）。
     case "WORK_ITEM_CREATED":
     case "TURN_QUEUED":
@@ -198,10 +204,6 @@ export function projectSessionEvent(
     case "FLOW_PROPOSED":
     case "FLOW_SELECTED":
     case "FLOW_SAVED_AS_CANDIDATE":
-    case "FLOW_SAVE_REQUESTED":
-    case "FLOW_SAVE_DISMISSED":
-    case "FLOW_CANDIDATE_CREATED":
-    case "FLOW_SAVE_FAILED":
     case "PROJECT_CANDIDATE_FOUND":
     case "ARTIFACT_CREATED":
     case "VERIFICATION_COMPLETED":
@@ -777,6 +779,97 @@ function approvalIdOf(event: DomainEvent): string {
 
 function approvalBlockId(event: DomainEvent): string {
   return `approval:${approvalIdOf(event)}`;
+}
+
+function projectFlowSaveIntent(
+  database: DatabaseSync,
+  sessionId: string,
+  event: DomainEvent,
+): void {
+  const payload = asRecord(event.payload);
+  const projection = flowSaveIntentProjection({
+    type: event.type,
+    sequence: event.sequence,
+    occurredAt: event.occurredAt,
+    payload,
+  });
+  if (!projection) {
+    throw new Error(`Flow save event missing request_id: ${event.eventId}`);
+  }
+  upsertFlowSaveIntentBlock(
+    database,
+    sessionId,
+    event,
+    projection,
+  );
+}
+
+function upsertFlowSaveIntentBlock(
+  database: DatabaseSync,
+  sessionId: string,
+  event: DomainEvent,
+  projection: NonNullable<ReturnType<typeof flowSaveIntentProjection>>,
+): void {
+  const blockId = `flow_save:${projection.requestId}`;
+  const existing = database
+    .prepare("SELECT metadata_json FROM session_timeline_blocks WHERE block_id = ?")
+    .get(blockId) as { metadata_json?: string } | undefined;
+  if (existing) {
+    const current = JSON.parse(existing.metadata_json ?? "{}") as Record<string, unknown>;
+    database
+      .prepare(
+        `UPDATE session_timeline_blocks
+         SET status = ?, metadata_json = ?
+         WHERE block_id = ?`,
+      )
+      .run(
+        projection.status,
+        JSON.stringify(boundMetadata({ ...current, ...projection.metadata })),
+        blockId,
+      );
+    return;
+  }
+
+  let turn = event.runId ? findTimelineTurn(database, event.runId) : undefined;
+  const requestTurnId = projection.metadata.request_turn_id;
+  if (!turn && typeof requestTurnId === "string") {
+    turn = database
+      .prepare(
+        `SELECT * FROM session_timeline_turns
+         WHERE session_id = ? AND turn_id = ?`,
+      )
+      .get(sessionId, requestTurnId) as SqliteRow | undefined;
+  }
+  if (!turn) return;
+
+  const turnId = String(turn.turn_id);
+  const runId = String(turn.run_id);
+  const row = database
+    .prepare(
+      `SELECT COALESCE(MAX(block_index), -1) + 1 AS next_index
+       FROM session_timeline_blocks
+       WHERE turn_id = ?`,
+    )
+    .get(turnId) as { next_index?: number } | undefined;
+  database
+    .prepare(
+      `INSERT INTO session_timeline_blocks (
+        block_id, session_id, turn_id, run_id, block_index, kind, status,
+        metadata_json
+      ) VALUES (?, ?, ?, ?, ?, 'flow_save_request', ?, ?)`,
+    )
+    .run(
+      blockId,
+      sessionId,
+      turnId,
+      runId,
+      Number(row?.next_index ?? 0),
+      projection.status,
+      JSON.stringify(boundMetadata({
+        ...projection.metadata,
+        started_at: event.occurredAt,
+      })),
+    );
 }
 
 function updateApprovalBlock(

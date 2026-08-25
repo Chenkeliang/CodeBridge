@@ -152,6 +152,8 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   onOpenFlowBatch?: (reference: { draftId?: string; batchId?: string }) => void;
 }) {
   const { block } = props;
+  // S4 only projects the persisted state; W1 installs the interactive card.
+  if (block.kind === "flow_save_request") return null;
   if (isEmptyProcessBlock(block) && !props.isLive) return null;
   const more = block.next_segment_cursor !== null && !props.isLive && <Button disabled={props.loading} onClick={() => props.onLoadSegments(block.block_id, block.next_segment_cursor!)} size="sm" variant="ghost">
     {props.loading ? "正在加载…" : "加载更多输出"}
@@ -408,6 +410,7 @@ function blockLabel(kind: TimelineBlockView["kind"]): string {
     case "flow_run": return "Run 快照";
     case "flow_failure": return "验证失败";
     case "flow_batch": return "批量 Flow";
+    case "flow_save_request": return "存为 Flow";
   }
 }
 
