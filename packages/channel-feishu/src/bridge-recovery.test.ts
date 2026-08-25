@@ -77,7 +77,7 @@ describe("FeishuBridge interrupted stream recovery", () => {
     const completeDelivery = vi.fn(async () => true);
     const terminal: ChannelSessionEvent = {
       type: "RUN_SUCCEEDED",
-      sequence: 9,
+      sequence: 10,
       runId: "run_1",
       executionKind: "agent",
       occurredAt: new Date(5_000).toISOString(),
@@ -144,6 +144,20 @@ describe("FeishuBridge interrupted stream recovery", () => {
           resultRef: null,
           payload: { event: { type: "text_delta", text: "public result" } },
         };
+        yield {
+          type: "FLOW_SAVE_REQUESTED",
+          sequence: 9,
+          runId: "run_1",
+          executionKind: "agent",
+          occurredAt: new Date(4_750).toISOString(),
+          target: "fsr_1",
+          resultRef: null,
+          payload: {
+            request_id: "fsr_1",
+            request_run_id: "run_1",
+            source_run_id: "run_previous",
+          },
+        };
         yield terminal;
         await new Promise<void>((resolve) =>
           options.signal.addEventListener("abort", () => resolve()),
@@ -173,6 +187,14 @@ describe("FeishuBridge interrupted stream recovery", () => {
       channel.rawClient.cardkit.v1.card.update.mock.calls,
     );
     expect(writes).toContain("public result");
+    expect(writes).toContain(
+      "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。",
+    );
+    const finalWrite = JSON.stringify(
+      channel.rawClient.cardkit.v1.card.update.mock.calls.at(-1),
+    );
+    expect(finalWrite.match(/已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。/g))
+      .toHaveLength(1);
     expect(writes).not.toContain("private reasoning");
     expect(writes).not.toContain("SecretTool");
     expect(channel.rawClient.cardkit.v1.card.update).toHaveBeenCalledWith(
