@@ -132,6 +132,7 @@ export class SessionCoordinator {
           channel: input.delivery.channel,
           conversationId: input.delivery.conversationId,
           replyToMessageId: input.delivery.replyToMessageId,
+          showThinking: input.delivery.showThinking,
           acceptedSequence: runtime.lastEventSequence,
           runId: run?.id ?? null,
           status: run ? "dispatched" : "pending",

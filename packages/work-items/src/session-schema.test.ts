@@ -49,23 +49,71 @@ describe("channel turn delivery schema migration", () => {
     expect(sql).toContain("CHECK");
 
     const row = db
-      .prepare("SELECT turn_id, status, run_id, surface_card_id FROM channel_turn_delivery")
+      .prepare("SELECT turn_id, status, run_id, surface_card_id, show_thinking FROM channel_turn_delivery")
       .get() as {
         turn_id?: string;
         status?: string;
         run_id?: string;
         surface_card_id?: string | null;
+        show_thinking?: number;
       };
     expect(row).toEqual({
       turn_id: "turn_1",
       status: "pending",
       run_id: "run_1",
       surface_card_id: null,
+      show_thinking: 0,
     });
 
     // 非法状态会被 CHECK 拒绝
     expect(() =>
       db.prepare("INSERT INTO channel_turn_delivery (turn_id, session_id, channel, conversation_id, reply_to_message_id, accepted_sequence, status, created_at, updated_at) VALUES ('turn_2', 's', 'f', 'c', 'm', 1, 'bogus', 't', 't')").run(),
+    ).toThrow();
+    db.close();
+  });
+
+  it("preserves an explicit thinking preference while adding the status constraint", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE channel_turn_delivery (
+        turn_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        reply_to_message_id TEXT NOT NULL,
+        surface_message_id TEXT,
+        surface_card_id TEXT,
+        show_thinking INTEGER NOT NULL DEFAULT 0
+          CHECK (show_thinking IN (0, 1)),
+        claim_owner TEXT,
+        claim_expires_at TEXT,
+        accepted_sequence INTEGER NOT NULL,
+        run_id TEXT,
+        run_terminal_at TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(
+      "INSERT INTO channel_turn_delivery (turn_id, session_id, channel, conversation_id, reply_to_message_id, show_thinking, accepted_sequence, status, created_at, updated_at) VALUES ('t1','s','f','c','m',1,1,'pending','t','t')",
+    ).run();
+
+    migrateChannelDeliveryStatusCheck(db);
+
+    const row = db.prepare(
+      "SELECT show_thinking FROM channel_turn_delivery WHERE turn_id = 't1'",
+    ).get() as { show_thinking: number };
+    expect(row.show_thinking).toBe(1);
+    expect(() =>
+      db.prepare(
+        "INSERT INTO channel_turn_delivery (turn_id, session_id, channel, conversation_id, reply_to_message_id, accepted_sequence, status, created_at, updated_at) VALUES ('t2','s','f','c','m',1,'bogus','t','t')",
+      ).run()
+    ).toThrow();
+    expect(() =>
+      db.prepare(
+        "UPDATE channel_turn_delivery SET show_thinking = 2 WHERE turn_id = 't1'",
+      ).run()
     ).toThrow();
     db.close();
   });

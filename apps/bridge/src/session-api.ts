@@ -364,6 +364,21 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     ) {
       return c.json({ error: "invalid_flow_invocation" }, 400);
     }
+    const hasReplyToMessageId = Object.hasOwn(body, "reply_to_message_id");
+    const hasShowThinking = Object.hasOwn(body, "show_thinking");
+    if (hasReplyToMessageId !== hasShowThinking) {
+      return c.json({ error: "channel_delivery_incomplete" }, 400);
+    }
+    if (
+      hasReplyToMessageId
+      && (
+        typeof body.reply_to_message_id !== "string"
+        || !body.reply_to_message_id.trim()
+        || typeof body.show_thinking !== "boolean"
+      )
+    ) {
+      return c.json({ error: "invalid_delivery" }, 400);
+    }
     const rawActorRef = body.actor_ref && typeof body.actor_ref === "object"
       ? body.actor_ref as Record<string, unknown>
       : null;
@@ -425,11 +440,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         ...(actorRef ? { actor_ref: actorRef } : {}),
         model: asNullableString(body.model),
         attachments: body.attachments,
-        delivery: typeof body.reply_to_message_id === "string"
+        delivery: hasReplyToMessageId
           ? {
               channel,
               conversation_id: conversationId,
-              reply_to_message_id: body.reply_to_message_id,
+              reply_to_message_id: String(body.reply_to_message_id).trim(),
+              show_thinking: body.show_thinking,
             }
           : undefined,
       }),

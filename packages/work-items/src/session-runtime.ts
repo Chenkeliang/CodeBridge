@@ -311,6 +311,7 @@ export interface SessionRuntimeTransaction {
     channel: string;
     conversationId: string;
     replyToMessageId: string;
+    showThinking: boolean;
     acceptedSequence: number;
     runId: string | null;
     status: "pending" | "dispatched";
@@ -1068,10 +1069,10 @@ export function createSqliteSessionRuntimeTransaction(
         .prepare(
           `INSERT INTO channel_turn_delivery (
             turn_id, session_id, channel, conversation_id,
-            reply_to_message_id, surface_message_id, claim_owner,
+            reply_to_message_id, show_thinking, surface_message_id, claim_owner,
             claim_expires_at, accepted_sequence, run_id, run_terminal_at,
             status, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL, ?, ?, ?)`,
         )
         .run(
           input.turnId,
@@ -1079,6 +1080,7 @@ export function createSqliteSessionRuntimeTransaction(
           input.channel,
           input.conversationId,
           input.replyToMessageId,
+          input.showThinking ? 1 : 0,
           input.acceptedSequence,
           input.runId,
           input.status,
@@ -1757,6 +1759,7 @@ function toChannelDeliveryRow(row: SqliteRow): ChannelDeliveryRow {
     channel: String(row.channel),
     conversationId: String(row.conversation_id),
     replyToMessageId: String(row.reply_to_message_id),
+    showThinking: Number(row.show_thinking) === 1,
     surfaceMessageId: nullableString(row.surface_message_id),
     surfaceCardId: nullableString(row.surface_card_id),
     claimOwner: nullableString(row.claim_owner),

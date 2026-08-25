@@ -85,6 +85,12 @@ export function createChannelSessionIngress(
     if ((message.flowId === undefined) !== (message.flowDefinitionRevision === undefined)) {
       throw new Error("flow_invocation_incomplete");
     }
+    if (
+      (message.replyToMessageId === undefined)
+      !== (message.showThinking === undefined)
+    ) {
+      throw new Error("channel_delivery_incomplete");
+    }
     const accepted = await app.request(
       `/v1/channels/${encodeURIComponent(message.channel)}/conversations/${encodeURIComponent(message.conversationId)}/messages`,
       {
@@ -109,6 +115,7 @@ export function createChannelSessionIngress(
           ...(message.actorRef !== undefined ? { actor_ref: message.actorRef } : {}),
           generation: message.generation,
           reply_to_message_id: message.replyToMessageId,
+          show_thinking: message.showThinking,
           attachments: message.attachments?.map((attachment) => ({
             name: attachment.name,
             mime_type: attachment.mimeType,

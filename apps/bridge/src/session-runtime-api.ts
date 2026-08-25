@@ -503,6 +503,7 @@ function parseDelivery(value: unknown): {
   channel: string;
   conversationId: string;
   replyToMessageId: string;
+  showThinking: boolean;
 } | null | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object") return null;
@@ -511,6 +512,7 @@ function parseDelivery(value: unknown): {
     typeof delivery.channel !== "string"
     || typeof delivery.conversation_id !== "string"
     || typeof delivery.reply_to_message_id !== "string"
+    || typeof delivery.show_thinking !== "boolean"
   ) {
     return null;
   }
@@ -518,6 +520,7 @@ function parseDelivery(value: unknown): {
     channel: delivery.channel,
     conversationId: delivery.conversation_id,
     replyToMessageId: delivery.reply_to_message_id,
+    showThinking: delivery.show_thinking,
   };
 }
 

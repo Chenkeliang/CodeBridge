@@ -1613,6 +1613,7 @@ describe("session API", () => {
           message: "继续",
           agent_id: "pi",
           reply_to_message_id: "msg-42",
+          show_thinking: false,
         }),
       },
     );
@@ -1624,6 +1625,7 @@ describe("session API", () => {
       channel: "feishu",
       conversationId: "chat",
       replyToMessageId: "msg-42",
+      showThinking: false,
       status: "dispatched",
       runSnapshot: {
         status: "queued",
@@ -1662,6 +1664,43 @@ describe("session API", () => {
       surfaceMessageId: "message-42",
       surfaceCardId: "cardkit-42",
     });
+    catalog.close();
+    workItems.close();
+  });
+
+  it.each([
+    { reply_to_message_id: "msg-42" },
+    { show_thinking: false },
+  ])("rejects an incomplete channel delivery snapshot", async (partial) => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({
+      catalog,
+      agents,
+      workItems,
+      coordinator,
+    }, TOKEN);
+
+    const response = await app.request(
+      "/v1/channels/feishu/conversations/chat/messages",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          "content-type": "application/json",
+          "idempotency-key": `incomplete-${Object.keys(partial)[0]}`,
+        },
+        body: JSON.stringify({
+          message: "继续",
+          agent_id: "pi",
+          ...partial,
+        }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "channel_delivery_incomplete" });
     catalog.close();
     workItems.close();
   });
