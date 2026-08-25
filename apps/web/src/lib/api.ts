@@ -10,7 +10,6 @@ import type {
   FlowCapability,
   FlowBatchDraft,
   FlowBatchSnapshot,
-  FlowProposal,
   FlowRecommendation,
   FlowRecord,
   FlowReviewContext,
@@ -340,10 +339,6 @@ export const api = {
     (await request<{ flows: FlowRecord[] }>(`/v1/flows?view=${view}`)).flows,
   flowCapabilities: async () =>
     (await request<{ capabilities: FlowCapability[] }>("/v1/capabilities")).capabilities,
-  flowProposals: async (sessionId: string) =>
-    (await request<{ proposals: FlowProposal[] }>(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-proposals`,
-    )).proposals,
   flowRecommendations: async (sessionId: string) =>
     (await request<{ recommendations: FlowRecommendation[] }>(
       `/v1/sessions/${encodeURIComponent(sessionId)}/flow-recommendations`,
@@ -356,11 +351,6 @@ export const api = {
         body: JSON.stringify({ session_id: sessionId, flow_id: flowId }),
       },
     ),
-  saveGuide: (sessionId: string, runId: string) =>
-    request<FlowRecord>("/v1/flows/guides", {
-      method: "POST",
-      body: JSON.stringify({ session_id: sessionId, run_id: runId }),
-    }),
   createGuide: (flow: Pick<FlowRecord, "name" | "description" | "steps">) =>
     request<FlowRecord>("/v1/flows/guides", {
       method: "POST",

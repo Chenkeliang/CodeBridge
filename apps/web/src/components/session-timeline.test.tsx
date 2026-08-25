@@ -637,45 +637,15 @@ describe("SessionTimeline", () => {
     host.remove();
   });
 
-  it("offers Guide creation only for a saveable Agent Run proposal", () => {
+  it("does not render automatic Guide save suggestions for a succeeded Agent Run", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);
-    const onCreateGuide = vi.fn();
-    const proposal = {
-      session_id: "sess_1",
-      run_id: "run-source",
-      agent_id: "cursor",
-      run_status: "succeeded",
-      kind: "observed_trace" as const,
-      saveable: true,
-      reason: "基于实际工具轨迹生成，需人工整理",
-      source_definition_revision: "sha256:source",
-      guide: {
-        name: "检查仓配订单",
-        description: "基于 Agent Run",
-        steps: [{ id: "step_1", purpose: "查询订单" }],
-      },
-    };
     act(() => root.render(<SessionTimeline
       {...timelineProps}
-      flowProposals={[proposal]}
-      onCreateGuide={onCreateGuide}
       turns={[{ timeline_index: 0, turn_id: "turn-source", run_id: "run-source", status: "succeeded", blocks: [] }]}
     />));
 
-    expect(host.textContent).toContain("可整理为 Guide");
-    expect(host.textContent).toContain("工具轨迹");
-    const button = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("整理为 Guide"));
-    expect(button).toBeTruthy();
-    act(() => button!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(onCreateGuide).toHaveBeenCalledWith("run-source");
-
-    act(() => root.render(<SessionTimeline
-      {...timelineProps}
-      flowProposals={[{ ...proposal, kind: "unavailable", saveable: false, guide: null }]}
-      onCreateGuide={onCreateGuide}
-      turns={[{ timeline_index: 0, turn_id: "turn-source", run_id: "run-source", status: "succeeded", blocks: [] }]}
-    />));
+    expect(host.textContent).not.toContain("可整理为 Guide");
     expect(host.textContent).not.toContain("整理为 Guide");
     act(() => root.unmount());
     host.remove();

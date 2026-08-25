@@ -36,7 +36,6 @@ import type {
   FlowCapability,
   FlowBatchDraft,
   FlowBatchSnapshot,
-  FlowProposal,
   FlowRecommendation,
   FlowReviewContext,
   MessageAttachmentInput,
@@ -79,9 +78,7 @@ export function Workbench() {
   const [flowControlBusy, setFlowControlBusy] = useState(false);
   const [flowControlError, setFlowControlError] = useState<string | null>(null);
   const [savingCandidateRunId, setSavingCandidateRunId] = useState<string | null>(null);
-  const [flowProposals, setFlowProposals] = useState<FlowProposal[]>([]);
   const [flowRecommendations, setFlowRecommendations] = useState<FlowRecommendation[]>([]);
-  const [savingGuideRunId, setSavingGuideRunId] = useState<string | null>(null);
   const [flowMismatch, setFlowMismatch] = useState<FlowRevisionMismatch | null>(null);
   const [flowBatchDraft, setFlowBatchDraft] = useState<FlowBatchDraft | null>(null);
   const [flowBatch, setFlowBatch] = useState<FlowBatchSnapshot | null>(null);
@@ -132,7 +129,7 @@ export function Workbench() {
   const sessionView = useSessionView(selectedSessionId);
   const activeFlowBatchId = flowBatch?.batch_id ?? null;
   const activeFlowBatchStatus = flowBatch?.status ?? null;
-  const proposalRunKey = sessionView?.snapshot.timeline.turns
+  const recommendationRunKey = sessionView?.snapshot.timeline.turns
     .map((turn) => `${turn.run_id}:${turn.status}`)
     .join("|") ?? "";
 
@@ -415,24 +412,18 @@ export function Workbench() {
     let active = true;
     if (!selectedSessionId) {
       queueMicrotask(() => {
-        if (active) setFlowProposals([]);
         if (active) setFlowRecommendations([]);
       });
       return () => { active = false; };
     }
     const sessionId = selectedSessionId;
-    void Promise.all([
-      api.flowProposals(sessionId),
-      api.flowRecommendations(sessionId),
-    ]).then(([proposals, recommendations]) => {
-      if (active) setFlowProposals(proposals);
+    void api.flowRecommendations(sessionId).then((recommendations) => {
       if (active) setFlowRecommendations(recommendations);
     }).catch(() => {
-      if (active) setFlowProposals([]);
       if (active) setFlowRecommendations([]);
     });
     return () => { active = false; };
-  }, [proposalRunKey, selectedSessionId]);
+  }, [recommendationRunKey, selectedSessionId]);
 
   const [stuckToBottom, setStuckToBottom] = useState(true);
   const sessionSwitch = useRef(true);
@@ -720,21 +711,6 @@ export function Workbench() {
       notify(messageOf(caught), "error");
     } finally {
       setSavingCandidateRunId(null);
-    }
-  }
-
-  async function createGuideFromRun(runId: string): Promise<void> {
-    if (!selectedSessionId || savingGuideRunId) return;
-    setSavingGuideRunId(runId);
-    setFlowControlError(null);
-    try {
-      const guide = await api.saveGuide(selectedSessionId, runId);
-      await refreshFlowCatalog(guide.flow_id);
-      notify(`已整理为 Guide 草稿 · ${guide.name || guide.flow_id}`);
-    } catch (caught) {
-      notify(messageOf(caught), "error");
-    } finally {
-      setSavingGuideRunId(null);
     }
   }
 
@@ -1680,16 +1656,13 @@ export function Workbench() {
                     onLoadEarlier={() => void loadEarlierTimeline()}
                     onLoadSegments={(blockId, after) => void loadBlockSegments(blockId, after)}
                     onCreateCandidate={(runId) => { void createCandidateFromRun(runId); }}
-                    flowProposals={flowProposals}
                     flowRecommendations={flowRecommendations}
-                    onCreateGuide={(runId) => { void createGuideFromRun(runId); }}
                     onUseFlowRecommendation={(recommendation) => { void openFlowRecommendation(recommendation); }}
                     onDismissFlowRecommendation={(recommendation) => { void dismissFlowRecommendation(recommendation); }}
                     onOpenFlowBatch={(reference) => { void openFlowBatch(reference); }}
                     onResolveApproval={(action, approve) => void resolveRuntimeApproval(action, approve)}
                     resolvingApprovalId={resolvingApprovalId}
                     savingCandidateRunId={savingCandidateRunId}
-                    savingGuideRunId={savingGuideRunId}
                     solidifiableFlowIds={flows
                       .filter((flow) => flow.kind === "runbook" && flow.status === "published")
                       .map((flow) => flow.flow_id)}
