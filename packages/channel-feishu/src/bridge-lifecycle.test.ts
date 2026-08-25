@@ -356,6 +356,8 @@ describe("FeishuBridge stream lifecycle", () => {
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       actorRef: { channel: "feishu", id: "user-1" },
+      replyToMessageId: "m1",
+      showThinking: false,
     }));
     expect(events).toHaveBeenCalledWith(
       "sess_1",

@@ -159,6 +159,8 @@ export function initializeSessionRuntimeSchema(
       channel TEXT NOT NULL,
       conversation_id TEXT NOT NULL,
       reply_to_message_id TEXT NOT NULL,
+      show_thinking INTEGER NOT NULL DEFAULT 0
+        CHECK (show_thinking IN (0, 1)),
       surface_message_id TEXT,
       surface_card_id TEXT,
       claim_owner TEXT,
@@ -184,6 +186,10 @@ export function initializeSessionRuntimeSchema(
     database,
     "ALTER TABLE channel_turn_delivery ADD COLUMN surface_card_id TEXT",
   );
+  addColumn(
+    database,
+    "ALTER TABLE channel_turn_delivery ADD COLUMN show_thinking INTEGER NOT NULL DEFAULT 0 CHECK (show_thinking IN (0, 1))",
+  );
 
   migrateChannelDeliveryStatusCheck(database);
 }
@@ -205,7 +211,13 @@ export function migrateChannelDeliveryStatusCheck(
     database,
     "ALTER TABLE channel_turn_delivery ADD COLUMN surface_card_id TEXT",
   );
-  if (row.sql.includes("CHECK")) return;
+  addColumn(
+    database,
+    "ALTER TABLE channel_turn_delivery ADD COLUMN show_thinking INTEGER NOT NULL DEFAULT 0 CHECK (show_thinking IN (0, 1))",
+  );
+  if (/status\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*status\s+IN/i.test(row.sql)) {
+    return;
+  }
 
   database.exec("BEGIN IMMEDIATE;");
   try {
@@ -219,6 +231,8 @@ export function migrateChannelDeliveryStatusCheck(
         channel TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
         reply_to_message_id TEXT NOT NULL,
+        show_thinking INTEGER NOT NULL DEFAULT 0
+          CHECK (show_thinking IN (0, 1)),
         surface_message_id TEXT,
         surface_card_id TEXT,
         claim_owner TEXT,
@@ -234,13 +248,13 @@ export function migrateChannelDeliveryStatusCheck(
     database.exec(`
       INSERT INTO channel_turn_delivery (
         turn_id, session_id, channel, conversation_id, reply_to_message_id,
-        surface_message_id, surface_card_id, claim_owner, claim_expires_at,
+        show_thinking, surface_message_id, surface_card_id, claim_owner, claim_expires_at,
         accepted_sequence, run_id, run_terminal_at, status, created_at,
         updated_at
       )
       SELECT
         turn_id, session_id, channel, conversation_id, reply_to_message_id,
-        surface_message_id, surface_card_id, claim_owner, claim_expires_at,
+        show_thinking, surface_message_id, surface_card_id, claim_owner, claim_expires_at,
         accepted_sequence, run_id, run_terminal_at, status, created_at,
         updated_at
       FROM channel_turn_delivery_legacy;

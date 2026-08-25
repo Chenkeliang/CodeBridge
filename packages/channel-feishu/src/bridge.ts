@@ -840,7 +840,7 @@ export class FeishuBridge {
           turnId: delivery.turnId,
           chatId,
           sourceMessageId: delivery.replyToMessageId,
-          showThinking: true,
+          showThinking: delivery.showThinking,
         };
         if (delivery.surfaceMessageId) {
           // delivering：从 legacy interrupted recovery 中剔除，避免被覆盖成“服务中断”
@@ -871,6 +871,7 @@ export class FeishuBridge {
       return;
     }
     const binding = this.orchestrator.router.getBinding(msg.chatId, topicId);
+    const showThinking = binding.showThinking ?? true;
     const slot = this.orchestrator.router.buildSlot(msg.chatId, topicId);
     const receipt = await this.sessionIngress.submit({
       channel: "feishu",
@@ -890,13 +891,14 @@ export class FeishuBridge {
       attachments: msg.attachments,
       idempotencyKey: flow?.idempotencyKey ?? msg.messageId,
       replyToMessageId: msg.messageId,
+      showThinking,
       actorRef: { channel: "feishu", id: msg.senderId },
     });
     const turn = {
       turnId: receipt.turnId,
       chatId: msg.chatId,
       sourceMessageId: msg.messageId,
-      showThinking: binding.showThinking ?? true,
+      showThinking,
     };
     const watcher = this.ensureSessionWatcher(receipt.sessionId);
     if (receipt.acceptance === "queued") {

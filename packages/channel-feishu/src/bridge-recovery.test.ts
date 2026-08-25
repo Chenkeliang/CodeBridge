@@ -91,6 +91,7 @@ describe("FeishuBridge interrupted stream recovery", () => {
         channel: "feishu",
         conversationId: "chat-1|",
         replyToMessageId: "source-1",
+        showThinking: false,
         surfaceMessageId: "card-terminal",
         surfaceCardId: "cardkit-terminal",
         claimOwner: "feishu:old:run_1",
@@ -115,6 +116,33 @@ describe("FeishuBridge interrupted stream recovery", () => {
         _sessionId: string,
         options: { signal: AbortSignal },
       ) {
+        yield {
+          type: "AGENT_EVENT",
+          sequence: 6,
+          runId: "run_1",
+          occurredAt: new Date(3_000).toISOString(),
+          target: null,
+          resultRef: null,
+          payload: { event: { type: "thought_delta", text: "private reasoning" } },
+        };
+        yield {
+          type: "AGENT_EVENT",
+          sequence: 7,
+          runId: "run_1",
+          occurredAt: new Date(4_000).toISOString(),
+          target: null,
+          resultRef: null,
+          payload: { event: { type: "tool_start", name: "SecretTool", toolCallId: "tool-1" } },
+        };
+        yield {
+          type: "AGENT_EVENT",
+          sequence: 8,
+          runId: "run_1",
+          occurredAt: new Date(4_500).toISOString(),
+          target: null,
+          resultRef: null,
+          payload: { event: { type: "text_delta", text: "public result" } },
+        };
         yield terminal;
         await new Promise<void>((resolve) =>
           options.signal.addEventListener("abort", () => resolve()),
@@ -140,6 +168,12 @@ describe("FeishuBridge interrupted stream recovery", () => {
     )).toContain(
       "✅ **已完成**",
     );
+    const writes = JSON.stringify(
+      channel.rawClient.cardkit.v1.card.update.mock.calls,
+    );
+    expect(writes).toContain("public result");
+    expect(writes).not.toContain("private reasoning");
+    expect(writes).not.toContain("SecretTool");
     expect(channel.rawClient.cardkit.v1.card.update).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { card_id: "cardkit-terminal" },

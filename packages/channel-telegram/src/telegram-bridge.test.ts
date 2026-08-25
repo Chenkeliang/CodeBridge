@@ -125,6 +125,8 @@ describe("TelegramBridge inbound commands", () => {
       inputs: { oid: 1644460 },
       actorRef: { channel: "telegram", id: "99" },
       idempotencyKey: expect.stringMatching(/^flow:/),
+      replyToMessageId: expect.any(String),
+      showThinking: true,
     }));
   });
 
@@ -489,8 +491,101 @@ describe("TelegramBridge inbound commands", () => {
         conversationId: "telegram:42|",
         message: expect.stringContaining("hello"),
         actorRef: { channel: "telegram", id: "99" },
+        idempotencyKey: "telegram:2",
+        replyToMessageId: "9",
+        showThinking: true,
       }),
     );
+    await bridge.disconnect();
+  });
+
+  it("restores a delivery with its persisted thinking preference", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const editMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const completeDelivery = vi.fn().mockResolvedValue(true);
+    const bridge = new TelegramBridge({
+      config,
+      dataDir,
+      api: { sendMessage, editMessage } as never,
+      sessionIngress: {
+        listDeliveries: vi.fn().mockResolvedValue([{
+          turnId: "turn_1",
+          sessionId: "sess_1",
+          channel: "telegram",
+          conversationId: "telegram:42|",
+          replyToMessageId: "9",
+          showThinking: false,
+          surfaceMessageId: "8",
+          surfaceCardId: null,
+          claimOwner: "telegram:old:run_1",
+          claimExpiresAt: null,
+          acceptedSequence: 0,
+          runId: "run_1",
+          runTerminalAt: null,
+          status: "delivering",
+          createdAt: new Date(1_000).toISOString(),
+          updatedAt: new Date(2_000).toISOString(),
+          runSnapshot: null,
+        }]),
+        events: async function* (
+          _sessionId: string,
+          { signal }: { signal: AbortSignal },
+        ) {
+          yield {
+            type: "AGENT_EVENT",
+            sequence: 1,
+            runId: "run_1",
+            occurredAt: null,
+            target: null,
+            resultRef: null,
+            payload: { event: { type: "thought_delta", text: "private reasoning" } },
+          };
+          yield {
+            type: "AGENT_EVENT",
+            sequence: 2,
+            runId: "run_1",
+            occurredAt: null,
+            target: null,
+            resultRef: null,
+            payload: { event: { type: "text_delta", text: "public result" } },
+          };
+          yield {
+            type: "RUN_SNAPSHOT",
+            sequence: 3,
+            runId: "run_1",
+            occurredAt: null,
+            target: null,
+            resultRef: null,
+            payload: {},
+          };
+          yield {
+            type: "RUN_SUCCEEDED",
+            sequence: 4,
+            runId: "run_1",
+            occurredAt: null,
+            target: null,
+            resultRef: null,
+            payload: {},
+          };
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve()),
+          );
+        },
+        completeDelivery,
+      } as unknown as ChannelSessionIngress,
+    });
+
+    await (bridge as unknown as { recoverDeliveries(): Promise<void> })
+      .recoverDeliveries();
+    await vi.waitFor(() => expect(completeDelivery).toHaveBeenCalled());
+
+    const writes = JSON.stringify(editMessage.mock.calls);
+    expect(writes).toContain("public result");
+    expect(writes).not.toContain("private reasoning");
     await bridge.disconnect();
   });
 });

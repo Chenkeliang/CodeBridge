@@ -246,6 +246,8 @@ export interface ChannelSessionMessage {
   generation?: number;
   /** 回复锚点：需要回复到的渠道消息 id */
   replyToMessageId?: string;
+  /** 本次 Delivery 是否展示思考/工具过程；必须与 replyToMessageId 成对提供。 */
+  showThinking?: boolean;
 }
 
 export interface ChannelSlot {
@@ -311,6 +313,7 @@ export interface ChannelDeliveryInput {
   channel: string;
   conversationId: string;
   replyToMessageId: string;
+  showThinking: boolean;
 }
 
 export interface ChannelDeliveryRow {
@@ -319,6 +322,7 @@ export interface ChannelDeliveryRow {
   channel: string;
   conversationId: string;
   replyToMessageId: string;
+  showThinking: boolean;
   surfaceMessageId: string | null;
   /** Feishu CardKit instance id; distinct from the IM message id. */
   surfaceCardId: string | null;

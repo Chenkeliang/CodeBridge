@@ -27,10 +27,16 @@ function submitWithDelivery(
   coordinator: SessionCoordinator,
   key: string,
   text: string,
-  delivery: { channel: string; conversationId: string; replyToMessageId: string } = {
+  delivery: {
+    channel: string;
+    conversationId: string;
+    replyToMessageId: string;
+    showThinking: boolean;
+  } = {
     channel: "feishu",
     conversationId: "chat:1",
     replyToMessageId: `msg_${key}`,
+    showThinking: false,
   },
 ) {
   return coordinator.submitTurn({
@@ -68,6 +74,7 @@ describe("channel turn delivery", () => {
       channel: "feishu",
       conversationId: "chat:1",
       replyToMessageId: "msg_m1",
+      showThinking: false,
       runId: first.run?.id,
       status: "dispatched",
       runSnapshot: {
@@ -92,6 +99,7 @@ describe("channel turn delivery", () => {
     const deliveries = store.listDeliveries("feishu");
     const queued = deliveries.find((d) => d.turnId === second.turn.turnId);
     expect(queued).toMatchObject({
+      showThinking: false,
       runId: null,
       status: "pending",
       runSnapshot: null,
@@ -329,11 +337,13 @@ describe("channel turn delivery", () => {
       channel: "feishu",
       conversationId: "chat:1",
       replyToMessageId: "msg_m1",
+      showThinking: false,
     });
     submitWithDelivery(coordinator, "m2", "二", {
       channel: "telegram",
       conversationId: "chat:1",
       replyToMessageId: "msg_m2",
+      showThinking: false,
     });
 
     expect(store.listDeliveries("feishu")).toHaveLength(1);

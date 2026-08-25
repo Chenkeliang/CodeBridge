@@ -170,6 +170,35 @@ describe("Session runtime command API", () => {
     fixture.workItems.close();
   });
 
+  it("rejects a delivery without an explicit boolean thinking snapshot", async () => {
+    const fixture = setup();
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + token,
+          "content-type": "application/json",
+          "Idempotency-Key": "invalid-delivery-thinking",
+        },
+        body: JSON.stringify({
+          message: "hello",
+          delivery: {
+            channel: "feishu",
+            conversation_id: "chat-1|",
+            reply_to_message_id: "message-1",
+            show_thinking: "false",
+          },
+        }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_delivery" });
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
   it("rejects candidate runbook execution without dry_run", async () => {
     const flows = new FlowCatalogStore(":memory:");
     flows.save({

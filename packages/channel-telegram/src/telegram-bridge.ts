@@ -276,6 +276,8 @@ export class TelegramBridge {
         topicId,
         `运行 Flow：${flowCommand.flow.name}`,
         senderId,
+        String(message.message_id),
+        `telegram:${update.update_id}`,
         {
           flowId: flowCommand.flow.flowId,
           definitionRevision: flowCommand.flow.definitionRevision,
@@ -392,6 +394,8 @@ export class TelegramBridge {
       topicId,
       `${prompt}\n\n${mentionGuidance}`,
       senderId,
+      String(message.message_id),
+      `telegram:${update.update_id}`,
     );
     this.activeReplies.add(task);
     void task
@@ -543,7 +547,7 @@ export class TelegramBridge {
             turnId: delivery.turnId,
             chatId,
             topicId,
-            showThinking: true,
+            showThinking: delivery.showThinking,
           };
           if (delivery.runId && delivery.surfaceMessageId === null) {
             await watcher.openRun(delivery.runId, turn);
@@ -553,7 +557,7 @@ export class TelegramBridge {
               delivery.surfaceMessageId ?? "",
               delivery.turnId,
               delivery.claimOwner ?? "",
-              true,
+              delivery.showThinking,
               chatId,
               topicId,
             );
@@ -575,6 +579,8 @@ export class TelegramBridge {
     topicId: string | undefined,
     prompt: string,
     senderId: string,
+    sourceMessageId: string,
+    idempotencyKey: string,
     flow?: ChannelFlowSubmission,
   ): Promise<void> {
     if (!this.sessionIngress) {
@@ -582,6 +588,7 @@ export class TelegramBridge {
       return;
     }
     const binding = this.orchestrator.router.getBinding(chatId, topicId);
+    const showThinking = binding.showThinking ?? true;
     const slot = this.orchestrator.router.buildSlot(chatId, topicId);
     const receipt = await this.sessionIngress.submit({
       channel: "telegram",
@@ -596,16 +603,18 @@ export class TelegramBridge {
             flowId: flow.flowId,
             flowDefinitionRevision: flow.definitionRevision,
             inputs: flow.inputs,
-            idempotencyKey: flow.idempotencyKey,
           }
         : {}),
+      idempotencyKey: flow?.idempotencyKey ?? idempotencyKey,
+      replyToMessageId: sourceMessageId,
+      showThinking,
       actorRef: { channel: "telegram", id: senderId },
     });
     const turn = {
       turnId: receipt.turnId,
       chatId,
       topicId,
-      showThinking: binding.showThinking ?? true,
+      showThinking,
     };
     const watcher = this.ensureSessionWatcher(receipt.sessionId);
     if (receipt.acceptance === "queued") {

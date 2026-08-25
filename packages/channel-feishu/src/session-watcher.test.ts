@@ -89,6 +89,7 @@ function delivery(
     channel: "feishu",
     conversationId: "chat-1|",
     replyToMessageId: "m1",
+    showThinking: false,
     surfaceMessageId: "card-old",
     surfaceCardId: "cardkit-old",
     claimOwner: "feishu:old:run_1",

@@ -109,6 +109,7 @@ async function createFixture(idempotencyKey: string) {
       channel: "feishu",
       conversationId: "chat-contract|",
       replyToMessageId: "source-message",
+      showThinking: false,
     },
   });
   catalog.updateSession(session.id, { taskRecordId: submitted.workItemId });

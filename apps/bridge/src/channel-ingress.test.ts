@@ -73,6 +73,7 @@ describe("channel session ingress", () => {
         agent_id: "pi",
         generation: 0,
         reply_to_message_id: "msg_1",
+        show_thinking: false,
       });
       expect(body).not.toHaveProperty("flow_id");
       expect(body).not.toHaveProperty("definition_revision");
@@ -93,6 +94,7 @@ describe("channel session ingress", () => {
       agentId: "pi",
       generation: 0,
       replyToMessageId: "msg_1",
+      showThinking: false,
     });
     expect(receipt).toEqual({
       sessionId: "sess_1",
@@ -102,6 +104,19 @@ describe("channel session ingress", () => {
       queueState: "ready",
       eventSequence: 3,
     });
+  });
+
+  it.each([
+    { replyToMessageId: "msg_1" },
+    { showThinking: false },
+  ])("rejects an incomplete channel delivery snapshot", async (partial) => {
+    const ingress = createChannelSessionIngress(new Hono(), "token");
+    await expect(ingress.submit({
+      channel: "feishu",
+      conversationId: "chat|topic",
+      message: "hello",
+      ...partial,
+    })).rejects.toThrow("channel_delivery_incomplete");
   });
 
   it("submits a complete Flow invocation and actor identity", async () => {
@@ -622,6 +637,7 @@ describe("channel session ingress", () => {
       return c.json({
         deliveries: [{
           turnId: "turn_1",
+          showThinking: false,
           status: "delivering",
           runSnapshot: {
             status: "succeeded",
@@ -639,6 +655,7 @@ describe("channel session ingress", () => {
     const deliveries = await ingress.listDeliveries("feishu");
     expect(deliveries).toEqual([{
       turnId: "turn_1",
+      showThinking: false,
       status: "delivering",
       runSnapshot: {
         status: "succeeded",
