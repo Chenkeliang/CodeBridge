@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FLOW_SAVE_NO_SOURCE_MESSAGE,
   FLOW_SAVE_TOOL_MARKER,
+  FLOW_SAVE_TOOL_NAME,
   PI_FLOW_SAVE_TOOL_NAME,
 } from "@codebridge/core";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
@@ -76,6 +77,22 @@ function input(
     events,
     ...overrides,
   };
+}
+
+function acpExecuteEvent(
+  sequence: number,
+  toolCallId: string,
+  command: string,
+): DomainEvent {
+  return event(sequence, "AGENT_EVENT", { event: {
+    type: "tool_start",
+    toolCallId,
+    name: command,
+    kind: "execute",
+    status: "in_progress",
+    input: { command, cwd: "/Users/alice/projects" },
+    content: [{ terminalId: toolCallId, type: "terminal" }],
+  } });
 }
 
 describe("extractRunDefinition", () => {
@@ -187,6 +204,169 @@ describe("extractRunDefinition", () => {
     expect(presentation).not.toContain(uuid);
     expect(presentation).not.toContain("~/private");
     expect(presentation).not.toContain("--user");
+  });
+
+  it("keeps distinct real ACP execute calls extractable without exposing command details", () => {
+    const uuid = "01944f05-2d18-7935-8296-773caa8165fc";
+    const secret = "private_search_term";
+    const privatePath = "/Users/alice/projects/private-repository";
+    const result = extractRunDefinition(input([
+      acpExecuteEvent(
+        1,
+        "exec-11111111-1111-4111-8111-111111111111",
+        `rtk cat ${privatePath}/AGENTS.md`,
+      ),
+      acpExecuteEvent(
+        2,
+        "exec-22222222-2222-4222-8222-222222222222",
+        `rtk rg -n "${secret}" ${privatePath} --glob '*.ts'`,
+      ),
+      acpExecuteEvent(
+        3,
+        "exec-33333333-3333-4333-8333-333333333333",
+        `rtk rg -n "flow save" ${privatePath} --context ${uuid}`,
+      ),
+    ], { title: "只读核对三个受控步骤" }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      kind: "observed_trace",
+      steps: [
+        { id: "step_1", purpose: "执行受控命令" },
+        { id: "step_2", purpose: "执行受控命令" },
+        { id: "step_3", purpose: "执行受控命令" },
+      ],
+    });
+    const presentation = JSON.stringify(result);
+    expect(presentation).not.toContain(privatePath);
+    expect(presentation).not.toContain(secret);
+    expect(presentation).not.toContain(uuid);
+    expect(presentation).not.toContain("--glob");
+    expect(presentation).not.toContain("--context");
+    expect(presentation).not.toContain("*.ts");
+  });
+
+  it("retains same-title ACP calls by distinct invocation identity", () => {
+    const command = "rtk rg -n secret /Users/alice/private --glob '*.ts'";
+    const result = extractRunDefinition(input([
+      acpExecuteEvent(1, "exec_distinct_1", command),
+      acpExecuteEvent(2, "exec_distinct_2", command),
+    ]));
+
+    expect(result).toMatchObject({
+      ok: true,
+      kind: "observed_trace",
+      steps: [
+        { id: "step_1", purpose: "执行受控命令" },
+        { id: "step_2", purpose: "执行受控命令" },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain(command);
+  });
+
+  it("retains distinct ACP execute identities even for the same single-token title", () => {
+    const result = extractRunDefinition(input([
+      acpExecuteEvent(1, "exec_bash_1", "bash"),
+      acpExecuteEvent(2, "exec_bash_2", "bash"),
+    ]));
+
+    expect(result).toMatchObject({
+      ok: true,
+      steps: [
+        { id: "step_1", purpose: "执行受控命令" },
+        { id: "step_2", purpose: "执行受控命令" },
+      ],
+    });
+  });
+
+  it("does not count replayed ACP tool_start events as new invocations", () => {
+    const command = "rtk rg -n secret /Users/alice/private --glob '*.ts'";
+
+    expect(extractRunDefinition(input([
+      acpExecuteEvent(1, "exec_replayed", command),
+      acpExecuteEvent(2, "exec_replayed", command),
+    ]))).toMatchObject({ ok: false, code: "run_not_extractable" });
+
+    const withAnotherInvocation = extractRunDefinition(input([
+      acpExecuteEvent(1, "exec_replayed", command),
+      acpExecuteEvent(2, "exec_replayed", command),
+      acpExecuteEvent(3, "exec_distinct", command),
+    ]));
+    expect(withAnotherInvocation).toMatchObject({
+      ok: true,
+      steps: [
+        { id: "step_1", purpose: "执行受控命令" },
+        { id: "step_2", purpose: "执行受控命令" },
+      ],
+    });
+  });
+
+  it("uses canonical event identity when an ACP invocation has no toolCallId", () => {
+    const command = "rtk rg -n secret /Users/alice/private --glob '*.ts'";
+    const first = event(1, "AGENT_EVENT", { event: {
+      type: "tool_start",
+      name: command,
+      kind: "execute",
+    } });
+    const second = event(2, "AGENT_EVENT", { event: {
+      type: "tool_start",
+      name: command,
+      kind: "execute",
+    } });
+    const result = extractRunDefinition(input([first, first, second]));
+
+    expect(result).toMatchObject({
+      ok: true,
+      steps: [
+        { id: "step_1", purpose: "执行受控命令" },
+        { id: "step_2", purpose: "执行受控命令" },
+      ],
+    });
+  });
+
+  it("does not trust unknown tool kinds to distinguish opaque command titles", () => {
+    const opaque = (sequence: number, name: string) => event(sequence, "AGENT_EVENT", {
+      event: {
+        type: "tool_start",
+        toolCallId: `unknown_${sequence}`,
+        name,
+        kind: "vendor_unknown",
+      },
+    });
+    expect(extractRunDefinition(input([
+      opaque(1, "lookup private-one /Users/alice/one"),
+      opaque(2, "lookup private-two /Users/alice/two"),
+    ]))).toMatchObject({ ok: false, code: "run_not_extractable" });
+  });
+
+  it("excludes the Flow save management tool from ACP invocation evidence", () => {
+    const marker = {
+      codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+      accepted: false,
+      source_scope: "previous_completed_run",
+      code: "no_extractable_previous_run",
+      message: FLOW_SAVE_NO_SOURCE_MESSAGE,
+    };
+    const result = extractRunDefinition(input([
+      acpExecuteEvent(1, "exec_business_1", "rtk rg -n one /Users/alice/private"),
+      acpExecuteEvent(2, "exec_save", `mcp.codebridge-internal.${FLOW_SAVE_TOOL_NAME}`),
+      event(3, "AGENT_EVENT", { event: {
+        type: "tool_end",
+        toolCallId: "exec_save",
+        status: "completed",
+        output: {
+          result: { content: [{ type: "text", text: JSON.stringify(marker) }] },
+        },
+      } }),
+      acpExecuteEvent(4, "exec_business_2", "rtk rg -n two /Users/alice/private"),
+    ]));
+    expect(result).toMatchObject({
+      ok: true,
+      steps: [
+        { id: "step_1", purpose: "执行受控命令" },
+        { id: "step_2", purpose: "执行受控命令" },
+      ],
+    });
   });
 
   it("extracts an observed trace from two meaningful tools without raw arguments", () => {
@@ -441,8 +621,18 @@ describe("flowSaveToolOutputFromAgentValue", () => {
     { structuredContent: accepted },
     { details: accepted },
     { content: [{ type: "text", text: JSON.stringify(accepted) }] },
+    { result: { content: [{ type: "text", text: JSON.stringify(accepted) }] } },
   ])("accepts bounded ACP and Pi result wrappers", (value) => {
     expect(flowSaveToolOutputFromAgentValue(value)).toEqual(accepted);
+  });
+
+  it("fails closed when a canonical result wrapper exceeds the traversal limits", () => {
+    let payload: unknown = accepted;
+    for (let depth = 0; depth < 8; depth += 1) {
+      payload = { result: payload };
+    }
+
+    expect(flowSaveToolOutputFromAgentValue(payload)).toBeNull();
   });
 
   it("fails closed when a marker is outside the shared traversal budget", () => {
