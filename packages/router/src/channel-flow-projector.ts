@@ -1,4 +1,7 @@
-import type { ChannelSessionEvent } from "@codebridge/core";
+import {
+  isFlowProjectionEvent,
+  type ChannelSessionEvent,
+} from "@codebridge/core";
 
 export type ChannelFlowStepStatus =
   | "running"
@@ -111,6 +114,11 @@ export function createChannelFlowProjector(): ChannelFlowProjector {
   return {
     apply(event) {
       const payload = record(event.payload);
+      if (!isFlowProjectionEvent({
+        type: event.type,
+        executionKind: event.executionKind,
+        payload,
+      })) return snapshot();
       if (event.type.startsWith("FLOW_BATCH_")) {
         const counts = record(payload.counts);
         batch = {

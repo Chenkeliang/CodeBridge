@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isFlowProjectionEvent } from "@codebridge/core";
 import type { DomainEvent } from "./index.js";
 
 type SqliteRow = Record<string, unknown>;
@@ -20,6 +21,11 @@ export function projectSessionEvent(
       | { last_projected_sequence?: number }
       | undefined;
   if ((cursor?.last_projected_sequence ?? 0) >= event.sequence) return;
+  const projectsFlow = isFlowProjectionEvent({
+    type: event.type,
+    executionKind: event.executionKind,
+    payload: event.payload,
+  });
 
   switch (event.type) {
     case "TURN_DISPATCHED":
@@ -79,6 +85,7 @@ export function projectSessionEvent(
       assertQueuedTurnHasNoTimeline(database, String(event.target));
       break;
     case "STEP_STARTED": {
+      if (!projectsFlow) break;
       upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "running", {
         step_id: targetOf(event),
         capability_id: asRecord(event.payload).capability_id ?? null,
@@ -87,6 +94,7 @@ export function projectSessionEvent(
       break;
     }
     case "STEP_RETRYING": {
+      if (!projectsFlow) break;
       upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "retrying", {
         step_id: targetOf(event),
         attempt: asRecord(event.payload).attempt ?? null,
@@ -96,6 +104,7 @@ export function projectSessionEvent(
       break;
     }
     case "STEP_SUCCEEDED": {
+      if (!projectsFlow) break;
       upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "passed", {
         step_id: targetOf(event),
         ended_at: event.occurredAt,
@@ -103,6 +112,7 @@ export function projectSessionEvent(
       break;
     }
     case "STEP_FAILED": {
+      if (!projectsFlow) break;
       upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "failed", {
         step_id: targetOf(event),
         error: asRecord(event.payload).error ?? null,
@@ -111,12 +121,14 @@ export function projectSessionEvent(
       break;
     }
     case "STEP_SKIPPED": {
+      if (!projectsFlow) break;
       upsertFlowBlock(database, sessionId, event, `flow_step:${event.runId ?? "run"}:${targetOf(event)}`, "flow_step", "skipped", {
         step_id: targetOf(event),
       });
       break;
     }
     case "PARAM_RESOLVED": {
+      if (!projectsFlow) break;
       const field = typeof asRecord(event.payload).field === "string"
         ? String(asRecord(event.payload).field)
         : targetOf(event) || "?";
@@ -131,6 +143,7 @@ export function projectSessionEvent(
       break;
     }
     case "RUN_SNAPSHOT": {
+      if (!projectsFlow) break;
       const outcome = asRecord(event.payload).outcome === "failed" ? "failed" : "succeeded";
       upsertFlowBlock(database, sessionId, event, `flow_run:${event.runId ?? "run"}:snapshot`, "flow_run", outcome, {
         flow_id: asRecord(event.payload).flow_id ?? null,
@@ -143,6 +156,7 @@ export function projectSessionEvent(
       break;
     }
     case "VERIFICATION_FAILED": {
+      if (!projectsFlow) break;
       const stepId = typeof asRecord(event.payload).step_id === "string"
         ? String(asRecord(event.payload).step_id)
         : targetOf(event);
@@ -158,6 +172,7 @@ export function projectSessionEvent(
     case "FLOW_BATCH_CONFIRMED":
     case "FLOW_BATCH_UPDATED":
     case "FLOW_BATCH_COMPLETED": {
+      if (!projectsFlow) break;
       const payload = asRecord(event.payload);
       const batchId = typeof payload.batch_id === "string"
         ? payload.batch_id

@@ -17,6 +17,7 @@ function setup() {
 function seedDispatchedTurn(
   store: SqliteEventStore,
   workItemId: string,
+  executionKind: "agent" | "flow" = "agent",
 ): void {
   store.withSessionTransaction((tx) => {
     tx.ensureRuntime("sess_1");
@@ -24,7 +25,7 @@ function seedDispatchedTurn(
       text: "检查项目",
       attachmentIds: [],
       flowId: null,
-      executionKind: "agent",
+      executionKind,
       model: null,
       effort: null,
       permissionMode: null,
@@ -36,7 +37,7 @@ function seedDispatchedTurn(
       sessionId: "sess_1",
       turnId: turn.turnId,
       mode: "auto",
-      executionKind: "agent",
+      executionKind,
       agentId: "pi",
       planId: null,
       planIrHash: null,
@@ -399,6 +400,7 @@ describe("Session projector", () => {
       payload: {
         batch_id: "batch_1",
         flow_id: "flow_orders",
+        definition_revision: "sha256:rev",
         status: "queued",
         total: 3,
       },
@@ -412,6 +414,7 @@ describe("Session projector", () => {
       payload: {
         batch_id: "batch_1",
         flow_id: "flow_orders",
+        definition_revision: "sha256:rev",
         status: "running",
         counts: { total: 3, running: 2, queued: 1 },
       },
@@ -580,7 +583,7 @@ describe("Session projector", () => {
 
   it("projects STEP_* onto one flow_step block and keeps capability_id after success", () => {
     const { store, item } = setup();
-    seedDispatchedTurn(store, item.id);
+    seedDispatchedTurn(store, item.id, "flow");
     store.appendEvent({
       workItemId: item.id,
       runId: "run_1",
@@ -609,15 +612,42 @@ describe("Session projector", () => {
     store.close();
   });
 
-  it("projects PARAM_RESOLVED, RUN_SNAPSHOT, and VERIFICATION_FAILED", () => {
+  it("does not project generic Agent STEP events as Flow blocks", () => {
     const { store, item } = setup();
     seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "STEP_STARTED",
+      actor: "agent",
+      target: "run_1",
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "STEP_SUCCEEDED",
+      actor: "agent",
+      target: "run_1",
+    });
+
+    const flowBlocks = store.listTimelineTurns("sess_1", { limit: 50 })
+      .turns[0]!.blocks.filter((block) => block.kind.startsWith("flow_"));
+    expect(flowBlocks).toEqual([]);
+    store.close();
+  });
+
+
+  it("projects PARAM_RESOLVED, RUN_SNAPSHOT, and VERIFICATION_FAILED", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id, "flow");
     store.appendEvent({
       workItemId: item.id,
       type: "PARAM_RESOLVED",
       actor: "user",
       target: "text",
       payload: {
+        flow_id: "flow_demo_echo",
+        flow_revision: "sha256:plan",
         field: "text",
         final_value: "hi",
         resolution: "confirmed",
@@ -645,6 +675,7 @@ describe("Session projector", () => {
       actor: "system",
       payload: {
         flow_id: "flow_demo_echo",
+        flow_revision: "sha256:plan",
         outcome: "succeeded",
         resolved_inputs: [{ field: "text", value: "hi" }],
         steps: [{

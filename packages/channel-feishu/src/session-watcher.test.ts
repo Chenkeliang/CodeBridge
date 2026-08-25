@@ -213,6 +213,16 @@ describe("FeishuSessionWatcher", () => {
         resultRef: null,
         payload: { event: { type: "text_delta", text: "persisted final answer" } },
       },
+      {
+        type: "STEP_STARTED",
+        sequence: 8,
+        runId: "run_1",
+        executionKind: "agent",
+        occurredAt: "2026-08-21T10:00:08.000Z",
+        target: "run_1",
+        resultRef: null,
+        payload: {},
+      },
       terminalEvent(9),
     ]);
     const w = watcher(ingress, host);
@@ -223,6 +233,8 @@ describe("FeishuSessionWatcher", () => {
     expect(final).toContain("✅ **已完成**");
     expect(final).toContain("persisted final answer");
     expect(final).not.toContain("本次无输出");
+    expect(final).not.toContain("0 / 1");
+    expect(final).not.toContain("✓ run_1");
     expect(ingress.events).not.toHaveBeenCalled();
     expect(ingress.completeDelivery).toHaveBeenCalledWith(
       "turn_1",
@@ -603,7 +615,8 @@ describe("FeishuSessionWatcher", () => {
       artifact,
       artifact,
       flowEvent(12, "FLOW_BATCH_DRAFTED", "batch_draft_1", {
-        draft_id: "batch_draft_1", flow_id: "flow_deploy", status: "ready", total: 3, blocking: 0,
+        draft_id: "batch_draft_1", flow_id: "flow_deploy",
+        definition_revision: "sha256:revision", status: "ready", total: 3, blocking: 0,
       }),
       flowEvent(13, "RUN_SNAPSHOT", "run_1", {
         flow_id: "flow_deploy",

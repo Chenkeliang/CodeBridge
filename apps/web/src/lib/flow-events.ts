@@ -1,4 +1,5 @@
 import type { SessionEvent, TimelineBlockView, TimelineTurnView } from "./types";
+import { isFlowProjectionEvent } from "@codebridge/core";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -62,6 +63,11 @@ export function applyFlowEvent(turns: TimelineTurnView[], event: SessionEvent): 
   const runId = event.run_id;
   const payload = asRecord(event.payload);
   const target = typeof event.target === "string" ? event.target : "";
+  if (!isFlowProjectionEvent({
+    type: event.type,
+    executionKind: event.execution_kind,
+    payload,
+  })) return turns;
 
   switch (event.type) {
     case "STEP_STARTED": {
