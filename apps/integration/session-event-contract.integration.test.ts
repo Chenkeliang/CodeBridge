@@ -92,6 +92,7 @@ async function createFixture(idempotencyKey: string) {
       text: "生成最终结果",
       attachmentIds: [],
       flowId: null,
+      executionKind: "agent",
       model: null,
       effort: null,
       permissionMode: null,

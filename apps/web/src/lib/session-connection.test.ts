@@ -76,6 +76,7 @@ function deltaEvent(sessionId: string, sequence: number, text: string): SessionE
     sequence,
     work_item_id: `${sessionId}-work`,
     run_id: `${sessionId}-run`,
+    execution_kind: "agent",
     type: "AGENT_EVENT",
     occurred_at: `2026-08-14T00:00:${String(sequence).padStart(2, "0")}.000Z`,
     actor: "agent",

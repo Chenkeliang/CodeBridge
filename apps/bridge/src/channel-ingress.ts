@@ -23,6 +23,7 @@ function toChannelSessionEvent(input: unknown): ChannelSessionEvent {
     type: event.type,
     sequence: event.sequence,
     runId: event.run_id,
+    executionKind: event.execution_kind,
     occurredAt: event.occurred_at,
     target: event.target,
     resultRef: event.result_ref,

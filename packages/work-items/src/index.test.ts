@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqliteEventStore } from "./index.js";
+
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
+  typeof import("node:sqlite");
 
 const tempDirectories: string[] = [];
 
@@ -19,6 +23,87 @@ function createDatabasePath(): string {
 }
 
 describe("SqliteEventStore", () => {
+  it("backfills immutable execution identity for historical Runs and events", () => {
+    const databasePath = createDatabasePath();
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      CREATE TABLE work_items (
+        id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL, mode TEXT NOT NULL, conversation_id TEXT NOT NULL,
+        session_id TEXT, agent_id TEXT, workflow_id TEXT, workflow_revision TEXT,
+        workspace_scope TEXT NOT NULL, identifiers TEXT NOT NULL,
+        context_revision INTEGER NOT NULL, risk_level TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,
+        work_item_id TEXT NOT NULL, session_id TEXT, turn_id TEXT,
+        mode TEXT NOT NULL, status TEXT NOT NULL, agent_id TEXT,
+        plan_id TEXT, plan_ir_hash TEXT, workflow_revision TEXT,
+        terminal_reason TEXT, replay_safety TEXT NOT NULL DEFAULT 'safe',
+        lease_owner TEXT, lease_expires_at TEXT, cancel_requested_at TEXT,
+        cancel_deadline_at TEXT, provider_session_id TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE domain_events (
+        event_id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,
+        sequence INTEGER NOT NULL, work_item_id TEXT NOT NULL, run_id TEXT,
+        type TEXT NOT NULL, occurred_at TEXT NOT NULL, actor TEXT NOT NULL,
+        target TEXT, input_hash TEXT, result_ref TEXT, payload TEXT NOT NULL,
+        UNIQUE(work_item_id, sequence)
+      );
+      CREATE TABLE session_turns (
+        turn_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+        queue_position INTEGER NOT NULL, status TEXT NOT NULL,
+        message_json TEXT NOT NULL, version INTEGER NOT NULL,
+        dispatched_run_id TEXT UNIQUE, created_at TEXT NOT NULL,
+        dispatched_at TEXT, cancelled_at TEXT,
+        UNIQUE(session_id, queue_position)
+      );
+      INSERT INTO work_items VALUES (
+        'wi_old', 1, 'old', 'created', 'auto', 'conv_old', NULL, NULL,
+        NULL, NULL, '[]', '{}', 1, 'read_only', 't', 't'
+      );
+      INSERT INTO runs VALUES (
+        'run_agent', 1, 'wi_old', NULL, NULL, 'auto', 'succeeded', NULL,
+        NULL, NULL, NULL, NULL, 'safe', NULL, NULL, NULL, NULL, NULL, 't', 't'
+      );
+      INSERT INTO runs VALUES (
+        'run_flow', 1, 'wi_old', NULL, NULL, 'auto', 'succeeded', NULL,
+        'plan_old', 'sha256:plan', 'sha256:def', NULL, 'safe', NULL, NULL,
+        NULL, NULL, NULL, 't', 't'
+      );
+      INSERT INTO domain_events VALUES (
+        'evt_agent', 1, 1, 'wi_old', 'run_agent', 'RUN_SUCCEEDED', 't',
+        'system', NULL, NULL, NULL, '{}'
+      );
+      INSERT INTO domain_events VALUES (
+        'evt_flow', 1, 2, 'wi_old', 'run_flow', 'RUN_SUCCEEDED', 't',
+        'system', NULL, NULL, NULL, '{}'
+      );
+      INSERT INTO session_turns VALUES (
+        'turn_agent', 'sess_old', 1, 'queued',
+        '{"text":"agent","attachmentIds":[],"flowId":null,"model":null,"effort":null,"permissionMode":null,"plan":null}',
+        1, NULL, 't', NULL, NULL
+      );
+      INSERT INTO session_turns VALUES (
+        'turn_flow', 'sess_old', 2, 'queued',
+        '{"text":"flow","attachmentIds":[],"flowId":"flow_old","flowInvocationSource":"request","model":null,"effort":null,"permissionMode":null,"plan":{"planId":"p"}}',
+        1, NULL, 't', NULL, NULL
+      );
+    `);
+    database.close();
+
+    const store = new SqliteEventStore(databasePath);
+    expect(store.getRun("run_agent")?.executionKind).toBe("agent");
+    expect(store.getRun("run_flow")?.executionKind).toBe("flow");
+    expect(store.listEvents("wi_old").map((event) => event.executionKind))
+      .toEqual(["agent", "flow"]);
+    expect(store.getTurn("turn_agent")?.message.executionKind).toBe("agent");
+    expect(store.getTurn("turn_flow")?.message.executionKind).toBe("flow");
+    store.close();
+  });
+
   it("persists a WorkItem and its creation event", () => {
     const databasePath = createDatabasePath();
     const store = new SqliteEventStore(databasePath);
@@ -178,6 +263,7 @@ describe("SqliteEventStore", () => {
     const run = store.createRun({
       workItemId: workItem.id,
       mode: "investigation",
+      executionKind: "agent",
     });
 
     expect(run).toMatchObject({
@@ -185,12 +271,14 @@ describe("SqliteEventStore", () => {
       mode: "investigation",
       agentId: "pi-investigator",
       status: "queued",
+      executionKind: "agent",
     });
     expect(store.getRun(run.id)).toEqual(run);
     expect(store.listRuns(workItem.id)).toEqual([run]);
     expect(store.listEvents(workItem.id).at(-1)).toMatchObject({
       type: "RUN_CREATED",
       target: run.id,
+      executionKind: "agent",
     });
     store.close();
   });
@@ -230,16 +318,19 @@ describe("SqliteEventStore", () => {
       id: "run_01JPLAN",
       workItemId: workItem.id,
       mode: workItem.mode,
+      executionKind: "flow",
       planId: plan.planId,
       workflowRevision: plan.definitionRevision,
     });
 
     expect(run.workflowRevision).toBe("git:abc123");
+    expect(run.executionKind).toBe("flow");
     expect(store.getPlan(plan.planId)).toEqual(plan);
     expect(store.getPlanForRun(run.id)).toEqual(plan);
     expect(store.listEvents(workItem.id).at(-1)).toMatchObject({
       type: "PLAN_VALIDATED",
       runId: run.id,
+      executionKind: "flow",
       target: plan.planId,
       payload: {
         workflow_id: "review-change",
@@ -262,7 +353,7 @@ describe("SqliteEventStore", () => {
       conversationId: "web:run",
       riskLevel: "workspace_write",
     });
-    const run = store.createRun({ workItemId: workItem.id, mode: "change" });
+    const run = store.createRun({ workItemId: workItem.id, mode: "change", executionKind: "agent" });
 
     expect(store.listEvents(workItem.id).at(-1)?.runId).toBe(run.id);
     expect(store.updateRunStatus(run.id, "running").status).toBe("running");
@@ -282,7 +373,7 @@ describe("SqliteEventStore", () => {
       conversationId: "web:recover",
       riskLevel: "read_only",
     });
-    const run = store.createRun({ workItemId: workItem.id, mode: workItem.mode });
+    const run = store.createRun({ workItemId: workItem.id, mode: workItem.mode, executionKind: "agent" });
     store.updateRunStatus(run.id, "running");
     store.putIdempotencyResponse("create-run", "key-1", { run_id: run.id });
     expect(store.getIdempotencyResponse("create-run", "key-1")).toEqual({ run_id: run.id });
@@ -326,7 +417,7 @@ describe("SqliteEventStore", () => {
       conversationId: "web:verify",
       riskLevel: "read_only",
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "agent" });
     const artifact = store.createArtifact({
       workItemId: item.id,
       runId: run.id,
@@ -388,7 +479,7 @@ describe("SqliteEventStore", () => {
       steps: [{ id: "s", capabilityId: "c.d", risk: "read_only", dependsOn: [], guard: null, approval: "none", branches: [], purpose: null }],
     });
     expect(plan.planIrHash).toBe("sha256:plan");
-    const run = store.createRun({ workItemId: item.id, planId: "plan_1", mode: "auto" });
+    const run = store.createRun({ workItemId: item.id, planId: "plan_1", mode: "auto", executionKind: "flow" });
     expect(run.planIrHash).toBe("sha256:plan");
     store.close();
   });

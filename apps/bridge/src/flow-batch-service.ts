@@ -368,6 +368,7 @@ export class FlowBatchService {
       workItemId: item.workItemId,
       sessionId: null,
       mode: "auto",
+      executionKind: "flow",
       agentId: sourceWorkItem?.agentId ?? null,
       planId: plan.planId,
       planIrHash: batch.planIrHash,

@@ -278,6 +278,7 @@ export interface ChannelSessionEvent {
   type: string;
   sequence: number;
   runId: string | null;
+  executionKind: "agent" | "flow" | null;
   occurredAt: string | null;
   target: string | null;
   resultRef: string | null;

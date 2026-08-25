@@ -8,6 +8,7 @@ function wireEvent(): Record<string, unknown> {
     sequence: 1,
     work_item_id: "work_1",
     run_id: "run_1",
+    execution_kind: "agent",
     type: "RUN_SUCCEEDED",
     occurred_at: "2026-08-24T00:00:00.000Z",
     actor: "system",
@@ -27,6 +28,24 @@ describe("SessionEventWire", () => {
     const event = wireEvent();
     delete event.run_id;
     event.runId = "run_1";
+
+    expect(() => parseSessionEventWire(event)).toThrow(
+      "session_event_schema_mismatch",
+    );
+  });
+
+  it("rejects a run-scoped event without an execution kind", () => {
+    const event = wireEvent();
+    delete event.execution_kind;
+
+    expect(() => parseSessionEventWire(event)).toThrow(
+      "session_event_schema_mismatch",
+    );
+  });
+
+  it("rejects an execution kind without a run id", () => {
+    const event = wireEvent();
+    event.run_id = null;
 
     expect(() => parseSessionEventWire(event)).toThrow(
       "session_event_schema_mismatch",

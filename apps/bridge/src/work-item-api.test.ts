@@ -80,7 +80,10 @@ describe("createWorkItemApp", () => {
 
     const workItem = store.listWorkItems()[0]!;
     const runResponse = await app.request(
-      jsonRequest(`/v1/work-items/${workItem.id}/runs`, { mode: "auto" }),
+      jsonRequest(`/v1/work-items/${workItem.id}/runs`, {
+        mode: "auto",
+        execution_kind: "agent",
+      }),
     );
     expect(runResponse.status).toBe(202);
   });
@@ -163,6 +166,7 @@ describe("createWorkItemApp", () => {
     const response = await app.request(
       jsonRequest(`/v1/work-items/${workItem.id}/runs`, {
         mode: "investigation",
+        execution_kind: "agent",
       }),
     );
 
@@ -175,6 +179,7 @@ describe("createWorkItemApp", () => {
     expect(store.getRun(result.run_id)).toMatchObject({
       workItemId: workItem.id,
       agentId: "pi-investigator",
+      executionKind: "agent",
     });
   });
 
@@ -233,7 +238,7 @@ describe("createWorkItemApp", () => {
       conversationId: "web:approval",
       riskLevel: "production_write",
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "agent" });
     store.updateRunStatus(run.id, "waiting");
     const approval = approvals.request({
       workItemId: item.id,
@@ -274,7 +279,7 @@ describe("createWorkItemApp", () => {
       conversationId: "web:evidence",
       riskLevel: "read_only",
     });
-    const run = store.createRun({ workItemId: item.id, mode: item.mode });
+    const run = store.createRun({ workItemId: item.id, mode: item.mode, executionKind: "agent" });
     const artifact = store.createArtifact({
       workItemId: item.id,
       runId: run.id,

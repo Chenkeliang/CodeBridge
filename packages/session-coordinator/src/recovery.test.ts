@@ -20,6 +20,7 @@ function setupRunningRun(replaySafety: ReplaySafety = "safe") {
       text: "调查",
       attachmentIds: [],
       flowId: null,
+      executionKind: "agent",
       model: null,
       effort: null,
       permissionMode: null,
