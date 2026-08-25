@@ -101,6 +101,7 @@ export function Workbench() {
   const [providerHistory, setProviderHistory] = useState<ProviderHistoryImportState>({ kind: "idle" });
   const providerHistoryRequestVersion = useRef(0);
   const pendingHistoryImportKey = useRef<{ sessionId: string; key: string } | null>(null);
+  const activeHistoryImportRequest = useRef<{ sessionId: string; requestVersion: number } | null>(null);
   const providerHistoryPreview = useRef<ProviderHistoryPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -259,6 +260,7 @@ export function Workbench() {
     selectedSessionRef.current = selectedSessionId;
     providerHistoryRequestVersion.current += 1;
     pendingHistoryImportKey.current = null;
+    activeHistoryImportRequest.current = null;
     providerHistoryPreview.current = null;
     setProviderHistory({ kind: "idle" });
   }, [selectedSessionId]);
@@ -558,9 +560,16 @@ export function Workbench() {
   async function importSelectedProviderHistory(): Promise<void> {
     const sessionId = selectedSessionRef.current;
     const preview = providerHistoryPreview.current;
-    if (!sessionId || !preview) return;
+    if (!sessionId || !preview || activeHistoryImportRequest.current) return;
 
     const requestVersion = ++providerHistoryRequestVersion.current;
+    activeHistoryImportRequest.current = { sessionId, requestVersion };
+    const releaseRequest = () => {
+      const active = activeHistoryImportRequest.current;
+      if (active?.sessionId === sessionId && active.requestVersion === requestVersion) {
+        activeHistoryImportRequest.current = null;
+      }
+    };
     const pending = pendingHistoryImportKey.current;
     const key = pending?.sessionId === sessionId ? pending.key : crypto.randomUUID();
     pendingHistoryImportKey.current = { sessionId, key };
@@ -570,6 +579,7 @@ export function Workbench() {
     try {
       result = await api.importProviderHistory(sessionId, key);
     } catch (caught) {
+      releaseRequest();
       if (
         selectedSessionRef.current !== sessionId
         || providerHistoryRequestVersion.current !== requestVersion
@@ -589,7 +599,10 @@ export function Workbench() {
     if (
       selectedSessionRef.current !== sessionId
       || providerHistoryRequestVersion.current !== requestVersion
-    ) return;
+    ) {
+      releaseRequest();
+      return;
+    }
     pendingHistoryImportKey.current = null;
 
     try {
@@ -597,13 +610,18 @@ export function Workbench() {
       if (
         selectedSessionRef.current !== sessionId
         || providerHistoryRequestVersion.current !== requestVersion
-      ) return;
+      ) {
+        releaseRequest();
+        return;
+      }
       sessionViewStore.hydrate(snapshot);
       setSessions((current) => current.map((item) =>
         item.session_id === snapshot.session.session_id ? snapshot.session : item
       ));
+      releaseRequest();
       setProviderHistory({ kind: "imported", sessionId, result });
     } catch {
+      releaseRequest();
       if (
         selectedSessionRef.current !== sessionId
         || providerHistoryRequestVersion.current !== requestVersion

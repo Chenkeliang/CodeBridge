@@ -314,6 +314,133 @@ test("history Import retries an unknown result with the same caller key", async 
   expect(keys[1]).toBe(keys[0]);
 });
 
+test("history 401 Preview stays read-only, single-confirms, and survives refresh", async ({ page }) => {
+  const value = session("sess_a", "Session A");
+  let imported = false;
+  let importCalls = 0;
+  let releaseImport: (() => void) | undefined;
+  const importGate = new Promise<void>((resolve) => { releaseImport = resolve; });
+
+  await installWorkbenchRoutes(page, [value], () => imported);
+  await page.route("**/v1/sessions/sess_a/provider-history/preview", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      providerSessionId: value.provider_session_id,
+      importedPosition: imported ? 401 : 0,
+      providerPosition: 401,
+      importableEvents: imported ? 0 : 401,
+      nextDigest: "sha256:401",
+    }),
+  }));
+  await page.route("**/v1/sessions/sess_a/provider-history/import", async (route) => {
+    importCalls += 1;
+    await importGate;
+    imported = true;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ importedEvents: 401, importedTurns: 1, lastEventSequence: 2 }),
+    });
+  });
+
+  await page.goto("/workbench/");
+  await expect(page.getByText("发现 401 条可导入历史记录")).toBeVisible();
+  expect(importCalls).toBe(0);
+  await page.getByRole("button", { name: "导入历史" }).evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
+  await expect.poll(() => importCalls).toBe(1);
+  releaseImport?.();
+  await expect(page.getByText("已导入 401 条历史记录")).toBeVisible();
+  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
+  await expect(page.locator("[data-provider-history]")).toHaveCount(0);
+});
+
+test("history Preview failure retries only the read path", async ({ page }) => {
+  const value = session("sess_a", "Session A");
+  let previewCalls = 0;
+  await installWorkbenchRoutes(page, [value], () => false);
+  await page.route("**/v1/sessions/sess_a/provider-history/preview", async (route) => {
+    previewCalls += 1;
+    if (previewCalls === 1) {
+      await route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "provider_history_unavailable" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        providerSessionId: value.provider_session_id,
+        importedPosition: 0,
+        providerPosition: 0,
+        importableEvents: 0,
+        nextDigest: "sha256:empty",
+      }),
+    });
+  });
+
+  await page.goto("/workbench/");
+  await expect(page.getByText("暂时无法读取 Provider 历史。")).toBeVisible();
+  await page.getByRole("button", { name: "重试检查" }).click();
+  await expect(page.getByText("Provider 历史已同步")).toBeVisible();
+  expect(previewCalls).toBe(2);
+});
+
+test("history Prefix Drift blocks Import without unsafe retry", async ({ page }) => {
+  const value = session("sess_a", "Session A");
+  await installWorkbenchRoutes(page, [value], () => false);
+  await page.route("**/v1/sessions/sess_a/provider-history/preview", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      providerSessionId: value.provider_session_id,
+      importedPosition: 1,
+      providerPosition: 2,
+      importableEvents: 1,
+      nextDigest: "sha256:changed",
+    }),
+  }));
+  await page.route("**/v1/sessions/sess_a/provider-history/import", (route) => route.fulfill({
+    status: 409,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "provider_history_prefix_changed" }),
+  }));
+
+  await page.goto("/workbench/");
+  await page.getByRole("button", { name: "导入历史" }).click();
+  await expect(page.getByText("Provider 历史前缀已变化，无法安全自动合并。")).toBeVisible();
+  await expect(page.getByRole("button", { name: /重试/ })).toHaveCount(0);
+});
+
+test("history Preview 0 leaves an existing Timeline unobstructed", async ({ page }) => {
+  const value = session("sess_a", "Session A");
+  await installWorkbenchRoutes(page, [value], () => true);
+  await page.route("**/v1/sessions/sess_a/provider-history/preview", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      providerSessionId: value.provider_session_id,
+      importedPosition: 2,
+      providerPosition: 2,
+      importableEvents: 0,
+      nextDigest: "sha256:same",
+    }),
+  }));
+
+  await page.goto("/workbench/");
+  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
+  await expect(page.locator("[data-provider-history]")).toHaveCount(0);
+});
+
 for (const width of [320, 768, 1280, 1536]) {
   test(`overflow contains hostile content at ${width}px`, async ({ page }) => {
     const value = session("sess_hostile", "标题".repeat(5_000));
