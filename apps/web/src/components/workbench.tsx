@@ -13,6 +13,11 @@ import { SessionTimeline } from "@/components/session-timeline";
 import { FlowDetail } from "@/components/flow-detail";
 import { FlowControlPanel } from "@/components/flow-control-panel";
 import { FlowBatchPanel } from "@/components/flow-batch-panel";
+import {
+  ProviderHistoryImportCard,
+  providerHistoryErrorPresentation,
+  type ProviderHistoryImportState,
+} from "@/components/provider-history-import-card";
 import { SettingsPage } from "@/components/settings-page";
 import { SkillControlPlanePage } from "@/components/skill-control-plane";
 import { PixelMark } from "@/components/pixel-mark";
@@ -35,6 +40,7 @@ import type {
   FlowRecommendation,
   FlowReviewContext,
   MessageAttachmentInput,
+  ProviderHistoryPreview,
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -92,6 +98,10 @@ export function Workbench() {
   const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
   const [sending, setSending] = useState(false);
   const pendingSubmissionKey = useRef<string | null>(null);
+  const [providerHistory, setProviderHistory] = useState<ProviderHistoryImportState>({ kind: "idle" });
+  const providerHistoryRequestVersion = useRef(0);
+  const pendingHistoryImportKey = useRef<{ sessionId: string; key: string } | null>(null);
+  const providerHistoryPreview = useRef<ProviderHistoryPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState(false);
   const [pickingDirectory, setPickingDirectory] = useState(false);
@@ -177,6 +187,32 @@ export function Workbench() {
     window.setTimeout(() => setNotice((current) => current?.text === message ? null : current), 4000);
   }, []);
 
+  const previewProviderHistory = useCallback(async (sessionId: string): Promise<void> => {
+    const requestVersion = ++providerHistoryRequestVersion.current;
+    setProviderHistory({ kind: "previewing", sessionId });
+    try {
+      const preview = await api.previewProviderHistory(sessionId);
+      if (
+        selectedSessionRef.current !== sessionId
+        || providerHistoryRequestVersion.current !== requestVersion
+      ) return;
+      providerHistoryPreview.current = preview;
+      if (preview.importableEvents > 0) {
+        setProviderHistory({ kind: "available", sessionId, preview });
+        return;
+      }
+      const timelineEmpty = (sessionViewStore.get(sessionId)?.snapshot.timeline.turns.length ?? 0) === 0;
+      setProviderHistory(timelineEmpty ? { kind: "empty", sessionId } : { kind: "idle" });
+    } catch (caught) {
+      if (
+        selectedSessionRef.current !== sessionId
+        || providerHistoryRequestVersion.current !== requestVersion
+      ) return;
+      const presentation = providerHistoryErrorPresentation(caught, "preview");
+      setProviderHistory({ kind: "error", sessionId, ...presentation });
+    }
+  }, []);
+
   const reload = useCallback(async (importProvider = false, silent = false) => {
     if (!silent) setLoading(true);
     if (!silent) setError(null);
@@ -219,7 +255,13 @@ export function Workbench() {
   useEffect(() => { void reload(false).then(() => void reload(true, true)); }, [reload]);
 
   useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
-  useEffect(() => { selectedSessionRef.current = selectedSessionId; }, [selectedSessionId]);
+  useEffect(() => {
+    selectedSessionRef.current = selectedSessionId;
+    providerHistoryRequestVersion.current += 1;
+    pendingHistoryImportKey.current = null;
+    providerHistoryPreview.current = null;
+    setProviderHistory({ kind: "idle" });
+  }, [selectedSessionId]);
 
   useEffect(() => {
     if (loading || deepLinkHandled.current) return;
@@ -353,6 +395,7 @@ export function Workbench() {
         setPermissionMode(session.permission_mode ?? "");
         setPendingFlowId("");
         setLoadingSession(false);
+        if (session.provider_session_id) void previewProviderHistory(sessionId);
         await sessionConnection.open(sessionId);
       } catch (caught) {
         if (active) setError(messageOf(caught));
@@ -364,7 +407,7 @@ export function Workbench() {
       active = false;
       sessionConnection.close();
     };
-  }, [selectedSessionId, sessionConnection]);
+  }, [previewProviderHistory, selectedSessionId, sessionConnection]);
 
   useEffect(() => {
     let active = true;
@@ -509,6 +552,69 @@ export function Workbench() {
     } catch (caught) {
       setError(messageOf(caught));
       return undefined;
+    }
+  }
+
+  async function importSelectedProviderHistory(): Promise<void> {
+    const sessionId = selectedSessionRef.current;
+    const preview = providerHistoryPreview.current;
+    if (!sessionId || !preview) return;
+
+    const requestVersion = ++providerHistoryRequestVersion.current;
+    const pending = pendingHistoryImportKey.current;
+    const key = pending?.sessionId === sessionId ? pending.key : crypto.randomUUID();
+    pendingHistoryImportKey.current = { sessionId, key };
+    setProviderHistory({ kind: "importing", sessionId, preview });
+
+    let result;
+    try {
+      result = await api.importProviderHistory(sessionId, key);
+    } catch (caught) {
+      if (
+        selectedSessionRef.current !== sessionId
+        || providerHistoryRequestVersion.current !== requestVersion
+      ) return;
+      const presentation = providerHistoryErrorPresentation(caught, "import");
+      if (presentation.code === "provider_history_cursor_conflict") {
+        pendingHistoryImportKey.current = null;
+        await previewProviderHistory(sessionId);
+        return;
+      }
+      if (presentation.retry === null) pendingHistoryImportKey.current = null;
+      setProviderHistory({ kind: "error", sessionId, ...presentation });
+      if (presentation.code === "session_not_found") void reload(false, true);
+      return;
+    }
+
+    if (
+      selectedSessionRef.current !== sessionId
+      || providerHistoryRequestVersion.current !== requestVersion
+    ) return;
+    pendingHistoryImportKey.current = null;
+
+    try {
+      const snapshot = await api.openSession(sessionId);
+      if (
+        selectedSessionRef.current !== sessionId
+        || providerHistoryRequestVersion.current !== requestVersion
+      ) return;
+      sessionViewStore.hydrate(snapshot);
+      setSessions((current) => current.map((item) =>
+        item.session_id === snapshot.session.session_id ? snapshot.session : item
+      ));
+      setProviderHistory({ kind: "imported", sessionId, result });
+    } catch {
+      if (
+        selectedSessionRef.current !== sessionId
+        || providerHistoryRequestVersion.current !== requestVersion
+      ) return;
+      setProviderHistory({
+        kind: "error",
+        sessionId,
+        code: "session_refresh_failed",
+        message: "历史已导入，但刷新 Session 失败，请重新检查。",
+        retry: "preview",
+      });
     }
   }
 
@@ -1325,6 +1431,23 @@ export function Workbench() {
     values={paramValues}
   /></div> : null;
 
+  const selectedProviderHistory = providerHistory.kind !== "idle"
+    && providerHistory.sessionId === selectedSessionId
+    ? providerHistory
+    : null;
+  const providerHistorySurface = selectedProviderHistory ? <ProviderHistoryImportCard
+    onImport={() => { void importSelectedProviderHistory(); }}
+    onRetryImport={() => { void importSelectedProviderHistory(); }}
+    onRetryPreview={() => {
+      const sessionId = selectedSessionRef.current;
+      if (sessionId) void previewProviderHistory(sessionId);
+    }}
+    state={selectedProviderHistory}
+  /> : null;
+  const hasTimeline = Boolean(sessionView?.snapshot.timeline.turns.length);
+  const showProviderHistoryAboveTimeline = hasTimeline && selectedProviderHistory != null
+    && ["available", "importing", "error", "imported"].includes(selectedProviderHistory.kind);
+
   return (
     <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && (area === "agents" || area === "flows") ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
       <AgentRail
@@ -1527,7 +1650,8 @@ export function Workbench() {
                 </div>}
                 {flowBatchSurface}
                 {flowDetailSurface}
-                {loadingSession ? <LoadingConversation /> : sessionView?.snapshot.timeline.turns.length ? (
+                {!loadingSession && showProviderHistoryAboveTimeline && <div className="mb-5">{providerHistorySurface}</div>}
+                {loadingSession ? <LoadingConversation /> : sessionView && hasTimeline ? (
                   <SessionTimeline
                     activeRunId={sessionView.snapshot.runtime.active_run?.run_id ?? null}
                     approvalStatusOverrides={approvalStatusOverrides}
@@ -1553,7 +1677,9 @@ export function Workbench() {
                       .map((flow) => flow.flow_id)}
                     turns={sessionView.snapshot.timeline.turns}
                   />
-                ) : <div aria-label="Empty Session" className="flex min-h-[42vh] flex-col items-center justify-center text-center">
+                ) : providerHistorySurface ? <div className="flex min-h-[42vh] items-center justify-center">
+                  <div className="w-full max-w-[680px]">{providerHistorySurface}</div>
+                </div> : <div aria-label="Empty Session" className="flex min-h-[42vh] flex-col items-center justify-center text-center">
                   <div className={cn("mb-4 grid size-10 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")}>{selectedAgent ? <BrandAgentIcon agentId={selectedAgent.agent_id} className="size-[18px]" /> : <PixelMark className="size-5" />}</div>
                   <h2 className={cn("font-brand text-xl font-normal tracking-[-0.02em]", "text-ink")}>{selectedSession.title || (selectedAgent ? `${selectedAgent.display_name} Session` : "Session")}</h2>
                   <p className={cn("mt-2 text-xs", "text-muted")}>输入目标开始当前 Session</p>
