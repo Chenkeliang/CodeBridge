@@ -19,6 +19,10 @@ import {
 const MAX_EXTRACTED_STEPS = 24;
 const MAX_EXTRACTED_PURPOSE_CHARACTERS = 240;
 const MAX_SOURCE_TEXT_CHARACTERS = 4_096;
+const MAX_FLOW_SAVE_RESULT_DEPTH = 6;
+const MAX_FLOW_SAVE_RESULT_NODES = 64;
+const MAX_FLOW_SAVE_RESULT_ARRAY_ITEMS = 32;
+const MAX_FLOW_SAVE_RESULT_OBJECT_KEYS = 32;
 
 export interface ExtractRunDefinitionInput {
   session: Pick<AgentSession, "id" | "agentId">;
@@ -924,11 +928,35 @@ function agentEventValue(event: DomainEvent): Record<string, unknown> | null {
     : null;
 }
 
-function flowSaveToolOutputFromAgentValue(
+export function flowSaveToolOutputFromAgentValue(
   output: unknown,
-  depth = 0,
 ): RequestFlowSaveOutput | null {
-  if (depth > 6) return null;
+  return parseFlowSaveToolOutput(output, {
+    remainingNodes: MAX_FLOW_SAVE_RESULT_NODES,
+  }, 0);
+}
+
+function parseFlowSaveToolOutput(
+  output: unknown,
+  traversal: { remainingNodes: number },
+  depth: number,
+): RequestFlowSaveOutput | null {
+  if (
+    depth > MAX_FLOW_SAVE_RESULT_DEPTH
+    || traversal.remainingNodes <= 0
+  ) return null;
+  traversal.remainingNodes -= 1;
+  if (Array.isArray(output) && output.length > MAX_FLOW_SAVE_RESULT_ARRAY_ITEMS) {
+    return null;
+  }
+  if (output && typeof output === "object" && !Array.isArray(output)) {
+    let ownEnumerableKeys = 0;
+    for (const key in output) {
+      if (!Object.hasOwn(output, key)) continue;
+      ownEnumerableKeys += 1;
+      if (ownEnumerableKeys > MAX_FLOW_SAVE_RESULT_OBJECT_KEYS) return null;
+    }
+  }
   try {
     return parseRequestFlowSaveOutput(output);
   } catch {
@@ -938,14 +966,14 @@ function flowSaveToolOutputFromAgentValue(
     const text = output.trim();
     if (!text || text.length > MAX_SOURCE_TEXT_CHARACTERS) return null;
     try {
-      return flowSaveToolOutputFromAgentValue(JSON.parse(text), depth + 1);
+      return parseFlowSaveToolOutput(JSON.parse(text), traversal, depth + 1);
     } catch {
       return null;
     }
   }
   if (Array.isArray(output)) {
     for (const item of output) {
-      const parsed = flowSaveToolOutputFromAgentValue(item, depth + 1);
+      const parsed = parseFlowSaveToolOutput(item, traversal, depth + 1);
       if (parsed) return parsed;
     }
     return null;
@@ -954,7 +982,7 @@ function flowSaveToolOutputFromAgentValue(
   const value = output as Record<string, unknown>;
   for (const key of ["structuredContent", "details", "content", "output", "text"] as const) {
     if (!Object.hasOwn(value, key)) continue;
-    const parsed = flowSaveToolOutputFromAgentValue(value[key], depth + 1);
+    const parsed = parseFlowSaveToolOutput(value[key], traversal, depth + 1);
     if (parsed) return parsed;
   }
   return null;

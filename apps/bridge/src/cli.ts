@@ -59,6 +59,10 @@ import { buildFlowRecommendationGuidance } from "./flow-recommendation-guidance.
 import { createFlowBatchApp } from "./flow-batch-api.js";
 import { FlowBatchService } from "./flow-batch-service.js";
 import { FlowSaveIntentService } from "./flow-save-intent.js";
+import {
+  createFlowSaveToolEventHandler,
+  FlowSaveToolTranslator,
+} from "./flow-save-tool-translator.js";
 
 const program = new Command();
 
@@ -137,6 +141,13 @@ program
       events: workItemStore,
       catalog: flowCatalog,
     });
+    const flowSaveToolTranslator = new FlowSaveToolTranslator({
+      intents: flowSaveIntents,
+    });
+    const handleFlowSaveToolEvent = createFlowSaveToolEventHandler(
+      flowSaveToolTranslator,
+      (message) => console.warn(message),
+    );
     await flowSaveIntents.reconcilePendingAtStartup().catch((error) => {
       console.error("Flow save intent reconciliation failed:", error);
     });
@@ -191,18 +202,21 @@ program
       sessionLeaseService,
       executorOwner,
       onEvent: (run, event) => {
-        if (event.type !== "session") return;
-        const workItem = workItemStore.getWorkItem(run.workItemId);
-        if (!workItem || !workItem.conversationId.startsWith("conv_")) return;
-        const session = sessionCatalog.getSession(
-          `sess_${workItem.conversationId.slice("conv_".length)}`,
-        );
-        if (session) {
-          sessionCatalog.updateSession(session.id, {
-            providerSessionId: event.sessionId,
-            status: "active",
-          });
+        if (event.type === "session") {
+          const workItem = workItemStore.getWorkItem(run.workItemId);
+          if (workItem?.conversationId.startsWith("conv_")) {
+            const session = sessionCatalog.getSession(
+              `sess_${workItem.conversationId.slice("conv_".length)}`,
+            );
+            if (session) {
+              sessionCatalog.updateSession(session.id, {
+                providerSessionId: event.sessionId,
+                status: "active",
+              });
+            }
+          }
         }
+        handleFlowSaveToolEvent(run, event);
       },
       resolveRequest: (workItem, run, step?: PersistedPlanStep) => {
         const linkedSession = workItem.conversationId.startsWith("conv_")
