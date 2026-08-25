@@ -1,6 +1,15 @@
-import { describe, expect, it } from "vitest";
-import type { DomainEvent, Run } from "@codebridge/work-items";
-import { extractRunDefinition, type ExtractRunDefinitionInput } from "./flow-save-intent.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { FlowCatalogStore } from "@codebridge/flow-catalog";
+import { SessionCatalogStore } from "@codebridge/session-catalog";
+import { SqliteEventStore, type DomainEvent, type Run } from "@codebridge/work-items";
+import { definitionHash } from "@codebridge/workflow-engine";
+import { compileCatalogFlow } from "./flow-compile.js";
+import {
+  candidateFlowId,
+  extractRunDefinition,
+  FlowSaveIntentService,
+  type ExtractRunDefinitionInput,
+} from "./flow-save-intent.js";
 
 function run(overrides: Partial<Run> = {}): Run {
   return {
@@ -392,5 +401,636 @@ describe("extractRunDefinition", () => {
       code: "run_not_extractable",
       reason: expect.any(String),
     });
+  });
+});
+
+interface SaveIntentFixture {
+  sessions: SessionCatalogStore;
+  events: SqliteEventStore;
+  catalog: FlowCatalogStore;
+  service: FlowSaveIntentService;
+  sessionId: string;
+  workItemId: string;
+}
+
+const openSaveIntentFixtures: SaveIntentFixture[] = [];
+
+afterEach(() => {
+  for (const fixture of openSaveIntentFixtures.splice(0)) {
+    fixture.catalog.close();
+    fixture.events.close();
+    fixture.sessions.close();
+  }
+  vi.restoreAllMocks();
+});
+
+function saveIntentFixture(): SaveIntentFixture {
+  const sessions = new SessionCatalogStore(":memory:");
+  const events = new SqliteEventStore(":memory:");
+  const catalog = new FlowCatalogStore(":memory:");
+  const sessionId = "sess_flow_save";
+  const workItemId = "wi_flow_save";
+  sessions.createSession({ id: sessionId, agentId: "codex", taskRecordId: workItemId });
+  events.createWorkItem({
+    id: workItemId,
+    title: "Flow save intent fixture",
+    mode: "auto",
+    conversationId: `conv_${sessionId}`,
+    sessionId,
+    agentId: "codex",
+    riskLevel: "read_only",
+  });
+  events.withSessionTransaction((transaction) => transaction.ensureRuntime(sessionId));
+  const service = new FlowSaveIntentService({ sessions, events, catalog });
+  const fixture = { sessions, events, catalog, service, sessionId, workItemId };
+  openSaveIntentFixtures.push(fixture);
+  return fixture;
+}
+
+function seedSaveIntentRun(
+  fixture: SaveIntentFixture,
+  options: {
+    id: string;
+    text?: string;
+    executionKind?: "agent" | "flow";
+    status?: "running" | "succeeded" | "failed";
+    imported?: boolean;
+    tools?: string[];
+  },
+): Run {
+  const executionKind = options.executionKind ?? "agent";
+  let runId = options.id;
+  fixture.events.withSessionTransaction((transaction) => {
+    const turn = transaction.insertTurn(fixture.sessionId, {
+      text: options.text ?? `业务任务 ${options.id}`,
+      attachmentIds: [],
+      flowId: executionKind === "flow" ? "flow_published" : null,
+      executionKind,
+      model: null,
+      effort: null,
+      permissionMode: null,
+      plan: null,
+    });
+    const dispatched = transaction.dispatchTurn(turn.turnId, {
+      id: options.id,
+      workItemId: fixture.workItemId,
+      sessionId: fixture.sessionId,
+      turnId: turn.turnId,
+      agentId: "codex",
+      mode: "auto",
+      executionKind,
+      planId: null,
+      planIrHash: null,
+      workflowRevision: null,
+    });
+    runId = dispatched.run.id;
+  });
+  for (const [index, name] of (options.tools ?? ["Read File", "Search"]).entries()) {
+    fixture.events.appendEvent({
+      workItemId: fixture.workItemId,
+      runId,
+      type: "AGENT_EVENT",
+      actor: "adapter",
+      target: "tool_start",
+      payload: {
+        imported: options.imported === true,
+        event: { type: "tool_start", toolCallId: `${runId}_tool_${index}`, name },
+      },
+    });
+  }
+  const status = options.status ?? "succeeded";
+  fixture.events.updateRunStatus(runId, status);
+  if (status === "succeeded") {
+    fixture.events.appendEvent({
+      workItemId: fixture.workItemId,
+      runId,
+      type: "RUN_SUCCEEDED",
+      actor: "system",
+      target: runId,
+      payload: { imported: options.imported === true },
+    });
+  }
+  return fixture.events.getRun(runId)!;
+}
+
+function addRequestToolStart(
+  fixture: SaveIntentFixture,
+  run: Run,
+  toolCallId: string,
+): void {
+  fixture.events.appendEvent({
+    workItemId: fixture.workItemId,
+    runId: run.id,
+    type: "AGENT_EVENT",
+    actor: "adapter",
+    target: "tool_start",
+    payload: {
+      event: {
+        type: "tool_start",
+        toolCallId,
+        name: "codebridge.request_flow_save",
+      },
+    },
+  });
+}
+
+function saveMatchingLifecycleFlow(
+  fixture: SaveIntentFixture,
+  request: ReturnType<FlowSaveIntentService["requestManual"]>,
+  status: "candidate" | "published" | "deprecated" = "candidate",
+) {
+  return fixture.catalog.save({
+    flowId: candidateFlowId(request.requestId),
+    name: `Matching ${request.requestId}`,
+    kind: "runbook",
+    status,
+    source: "agent_generated",
+    definitionRevision: `sha256:${request.requestId}`,
+    reviewStatus: status === "candidate" ? "pending" : "approved",
+    gitRevision: status === "candidate" ? null : `git:${status}`,
+    steps: [{ id: "inspect", purpose: "核对来源" }],
+    provenance: {
+      sourceRunId: request.sourceRunId,
+      sourceSessionId: request.sessionId,
+      sourceFlowId: `flow_ephemeral_${request.sourceRunId}`,
+      sourceDefinitionRevision: `agent:${request.sourceRunId}`,
+      sourceRequestId: request.requestId,
+    },
+  });
+}
+
+describe("FlowSaveIntentService", () => {
+  it("deduplicates manual idempotency keys and Agent toolCallIds", () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const first = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "manual-key");
+    const replay = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "manual-key");
+    expect(replay.requestId).toBe(first.requestId);
+
+    const requestRun = seedSaveIntentRun(fixture, {
+      id: "run_request",
+      text: "把刚才任务存为 Flow",
+      status: "running",
+      tools: [],
+    });
+    addRequestToolStart(fixture, requestRun, "tool_save");
+    const toolFirst = fixture.service.requestFromTool({
+      sessionId: fixture.sessionId,
+      currentRunId: requestRun.id,
+      toolCallId: "tool_save",
+      sourceScope: "previous_completed_run",
+    });
+    const toolReplay = fixture.service.requestFromTool({
+      sessionId: fixture.sessionId,
+      currentRunId: requestRun.id,
+      toolCallId: "tool_save",
+      sourceScope: "previous_completed_run",
+    });
+    expect(toolReplay.requestId).toBe(toolFirst.requestId);
+    expect(fixture.events.listEvents(fixture.workItemId)
+      .filter((entry) => entry.type === "FLOW_SAVE_REQUESTED")).toHaveLength(2);
+  });
+
+  it("selects the latest preceding successful Agent Run by canonical sequence", () => {
+    const fixture = saveIntentFixture();
+    seedSaveIntentRun(fixture, { id: "run_old" });
+    const latest = seedSaveIntentRun(fixture, { id: "run_latest" });
+    seedSaveIntentRun(fixture, { id: "run_flow", executionKind: "flow" });
+    seedSaveIntentRun(fixture, { id: "run_failed", status: "failed" });
+    seedSaveIntentRun(fixture, {
+      id: "run_management",
+      text: "",
+      tools: ["codebridge.request_flow_save", "codebridge.request_flow_save"],
+    });
+    const requestRun = seedSaveIntentRun(fixture, {
+      id: "run_current",
+      text: "存为 Flow",
+      status: "running",
+      tools: [],
+    });
+    addRequestToolStart(fixture, requestRun, "tool_latest");
+
+    const request = fixture.service.requestFromTool({
+      sessionId: fixture.sessionId,
+      currentRunId: requestRun.id,
+      toolCallId: "tool_latest",
+      sourceScope: "previous_completed_run",
+    });
+
+    expect(request.sourceRunId).toBe(latest.id);
+    expect(request.requestRunId).toBe(requestRun.id);
+  });
+
+  it("rejects invalid manual sources before writing any request event", () => {
+    const fixture = saveIntentFixture();
+    const failed = seedSaveIntentRun(fixture, { id: "run_failed", status: "failed" });
+    const flow = seedSaveIntentRun(fixture, { id: "run_flow", executionKind: "flow" });
+    const thin = seedSaveIntentRun(fixture, { id: "run_thin", tools: ["Read File"] });
+    const before = fixture.events.listEvents(fixture.workItemId)
+      .filter((entry) => entry.type === "FLOW_SAVE_REQUESTED").length;
+
+    expect(() => fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: "run_missing",
+    }, "missing")).toThrowError(expect.objectContaining({ code: "source_run_not_found" }));
+    expect(() => fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: failed.id,
+    }, "failed")).toThrowError(expect.objectContaining({ code: "source_run_not_succeeded" }));
+    for (const [key, sourceRunId] of [["flow", flow.id], ["thin", thin.id]] as const) {
+      expect(() => fixture.service.requestManual({
+        sessionId: fixture.sessionId,
+        sourceRunId,
+      }, key)).toThrowError(expect.objectContaining({ code: "source_run_not_extractable" }));
+    }
+    expect(fixture.events.listEvents(fixture.workItemId)
+      .filter((entry) => entry.type === "FLOW_SAVE_REQUESTED")).toHaveLength(before);
+  });
+
+  it("accepts explicit Imported sources and persists Imported provenance", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_imported", imported: true });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "imported");
+    expect(request.sourceImported).toBe(true);
+
+    const confirmed = await fixture.service.confirm(request.requestId, "confirm-imported");
+    expect(confirmed.flow.provenance).toMatchObject({
+      sourceRunId: source.id,
+      sourceRequestId: request.requestId,
+    });
+  });
+
+  it("makes dismiss idempotent and terminal", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "dismiss-source");
+
+    const first = fixture.service.dismiss(request.requestId, "dismiss-key");
+    const replay = fixture.service.dismiss(request.requestId, "dismiss-key");
+    expect(first.state).toBe("dismissed");
+    expect(replay).toEqual(first);
+    await expect(fixture.service.confirm(request.requestId, "confirm-after-dismiss"))
+      .rejects.toMatchObject({ code: "flow_save_request_already_dismissed" });
+  });
+
+  it("converges concurrent confirms on one deterministic Candidate and terminal event", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+      nameHint: "订单复核",
+    }, "confirm-source");
+
+    const [first, second] = await Promise.all([
+      fixture.service.confirm(request.requestId, "confirm-one"),
+      fixture.service.confirm(request.requestId, "confirm-two"),
+    ]);
+    expect(first.flow.flowId).toBe(candidateFlowId(request.requestId));
+    expect(second.flow.flowId).toBe(first.flow.flowId);
+    expect(definitionHash(compileCatalogFlow(first.flow))).toBe(first.flow.planIrHash);
+    expect(fixture.catalog.list()).toHaveLength(1);
+    expect(fixture.events.listEventsByTarget(request.requestId)
+      .filter((entry) => entry.type === "FLOW_CANDIDATE_CREATED")).toHaveLength(1);
+
+    const beforeReplayChanges = fixture.events.countAllChanges();
+    const beforeReplayHistory = fixture.catalog.history(first.flow.flowId);
+    const replay = await fixture.service.confirm(request.requestId, "brand-new-confirm-key");
+    expect(replay.flow.flowId).toBe(first.flow.flowId);
+    expect(fixture.events.countAllChanges()).toBe(beforeReplayChanges);
+    expect(fixture.catalog.history(first.flow.flowId)).toEqual(beforeReplayHistory);
+  });
+
+  it("keeps a request pending when the Catalog is unavailable", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "catalog-down-source");
+    vi.spyOn(fixture.catalog, "save").mockImplementationOnce(() => {
+      throw new Error("flow_catalog_unavailable");
+    });
+
+    await expect(fixture.service.confirm(request.requestId, "catalog-down"))
+      .rejects.toMatchObject({ code: "flow_catalog_unavailable", status: 503 });
+    expect(fixture.service.getRequestState(request.requestId).state).toBe("requested");
+    expect(fixture.events.listEventsByTarget(request.requestId)
+      .filter((entry) => entry.type === "FLOW_SAVE_FAILED")).toHaveLength(0);
+  });
+
+  it("records confirm-time deterministic failures once and requires a new request", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "source-before-failure");
+    fixture.events.updateRunStatus(source.id, "failed");
+
+    await expect(fixture.service.confirm(request.requestId, "confirm-failed-source"))
+      .rejects.toMatchObject({ code: "source_run_not_succeeded" });
+    await expect(fixture.service.confirm(request.requestId, "confirm-failed-source-replay"))
+      .rejects.toMatchObject({ code: "flow_save_request_state_conflict" });
+    expect(fixture.events.listEventsByTarget(request.requestId)
+      .filter((entry) => entry.type === "FLOW_SAVE_FAILED")).toHaveLength(1);
+
+    fixture.events.updateRunStatus(source.id, "succeeded");
+    const replacement = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "new-request");
+    expect(replacement.requestId).not.toBe(request.requestId);
+  });
+
+  it("records a confirm-time extraction invalidation once", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    let extractionAvailable = true;
+    const service = new FlowSaveIntentService({
+      sessions: fixture.sessions,
+      events: fixture.events,
+      catalog: fixture.catalog,
+      extract: (input) => extractionAvailable
+        ? extractRunDefinition(input)
+        : {
+            ok: false,
+            code: "run_not_extractable",
+            reason: "source evidence was removed",
+          },
+    });
+    const request = service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "extractable-before-confirm");
+    extractionAvailable = false;
+
+    await expect(service.confirm(request.requestId, "confirm-invalid"))
+      .rejects.toMatchObject({ code: "source_run_not_extractable" });
+    expect(service.getRequestState(request.requestId)).toMatchObject({
+      state: "failed",
+      code: "source_run_not_extractable",
+    });
+    expect(fixture.events.listEventsByTarget(request.requestId)
+      .filter((entry) => entry.type === "FLOW_SAVE_FAILED")).toHaveLength(1);
+  });
+
+  it("rejects deterministic Candidate collisions without overwriting", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "collision-source");
+    const candidateId = candidateFlowId(request.requestId);
+    fixture.catalog.save({
+      flowId: candidateId,
+      name: "Unrelated Candidate",
+      kind: "runbook",
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision: "sha256:unrelated",
+      steps: [{ id: "unrelated", purpose: "不得覆盖" }],
+      provenance: {
+        sourceRunId: source.id,
+        sourceSessionId: fixture.sessionId,
+        sourceFlowId: "flow_unrelated",
+        sourceDefinitionRevision: "sha256:unrelated",
+        sourceRequestId: "fsr_other",
+      },
+    });
+
+    await expect(fixture.service.confirm(request.requestId, "collision-confirm"))
+      .rejects.toMatchObject({ code: "flow_save_candidate_conflict" });
+    expect(fixture.catalog.get(candidateId)?.name).toBe("Unrelated Candidate");
+    expect(fixture.service.getRequestState(request.requestId).state).toBe("failed");
+  });
+
+  it.each([
+    { label: "Guide kind", kind: "guide" as const, status: "draft" as const },
+    { label: "Runbook draft", kind: "runbook" as const, status: "draft" as const },
+    { label: "wrong source Run", kind: "runbook" as const, status: "candidate" as const, sourceRunId: "run_other" },
+    { label: "wrong source Session", kind: "runbook" as const, status: "candidate" as const, sourceSessionId: "sess_other" },
+  ])("rejects an existing deterministic record with $label even when request provenance matches", async (variant) => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, `collision-${variant.label}`);
+    const candidateId = candidateFlowId(request.requestId);
+    fixture.catalog.save({
+      flowId: candidateId,
+      name: "Wrong deterministic record",
+      kind: variant.kind,
+      status: variant.status,
+      source: "agent_generated",
+      definitionRevision: "sha256:wrong-record",
+      steps: [{ id: "wrong", purpose: "不得作为该请求的 Candidate" }],
+      provenance: {
+        sourceRunId: variant.sourceRunId ?? source.id,
+        sourceSessionId: variant.sourceSessionId ?? fixture.sessionId,
+        sourceFlowId: "flow_ephemeral_run_source",
+        sourceDefinitionRevision: "sha256:source",
+        sourceRequestId: request.requestId,
+      },
+    });
+
+    await expect(fixture.service.confirm(request.requestId, "confirm-wrong-record"))
+      .rejects.toMatchObject({ code: "flow_save_candidate_conflict" });
+    expect(fixture.catalog.get(candidateId)?.name).toBe("Wrong deterministic record");
+    expect(fixture.events.listEventsByTarget(request.requestId)
+      .filter((entry) => entry.type === "FLOW_SAVE_FAILED")).toHaveLength(1);
+    expect(fixture.events.listEventsByTarget(request.requestId)
+      .filter((entry) => entry.type === "FLOW_CANDIDATE_CREATED")).toHaveLength(0);
+  });
+
+  it.each(["published", "deprecated"] as const)(
+    "repairs a requested intent from its matching deterministic %s Runbook",
+    async (status) => {
+      const fixture = saveIntentFixture();
+      const source = seedSaveIntentRun(fixture, { id: "run_source" });
+      const request = fixture.service.requestManual({
+        sessionId: fixture.sessionId,
+        sourceRunId: source.id,
+      }, `pending-${status}-source`);
+      const flowId = candidateFlowId(request.requestId);
+      const flow = fixture.catalog.save({
+        flowId,
+        name: "Matching lifecycle Flow",
+        kind: "runbook",
+        status,
+        source: "agent_generated",
+        definitionRevision: `sha256:${status}`,
+        reviewStatus: "approved",
+        gitRevision: `git:${status}`,
+        steps: [{ id: "inspect", purpose: "核对来源" }],
+        provenance: {
+          sourceRunId: request.sourceRunId,
+          sourceSessionId: request.sessionId,
+          sourceFlowId: "flow_ephemeral_run_source",
+          sourceDefinitionRevision: "sha256:source",
+          sourceRequestId: request.requestId,
+        },
+      });
+
+      const confirmed = await fixture.service.confirm(request.requestId, "confirm-repair");
+
+      expect(confirmed.flow).toEqual(flow);
+      expect(fixture.service.getRequestState(request.requestId)).toMatchObject({
+        state: "completed",
+        flowId,
+      });
+      expect(fixture.events.listEventsByTarget(request.requestId)
+        .filter((entry) => entry.type === "FLOW_SAVE_FAILED")).toHaveLength(0);
+    },
+  );
+
+  it("isolates a corrupt request payload and repairs the next pending request", async () => {
+    const fixture = saveIntentFixture();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    fixture.events.appendEvent({
+      workItemId: fixture.workItemId,
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "system",
+      target: "fsr_corrupt",
+      payload: { request_id: "fsr_corrupt" },
+    });
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const healthy = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "healthy-after-corrupt");
+    saveMatchingLifecycleFlow(fixture, healthy);
+
+    expect(await fixture.service.reconcilePendingAtStartup()).toBe(1);
+    expect(fixture.service.getRequestState(healthy.requestId).state).toBe("completed");
+    expect(errorLog).toHaveBeenCalledWith(
+      "Flow save intent request reconciliation failed:",
+      "fsr_corrupt",
+      expect.any(Error),
+    );
+  });
+
+  it("isolates one terminal append failure and repairs the next pending request", async () => {
+    const fixture = saveIntentFixture();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const first = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "append-failure-first");
+    const second = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "append-failure-second");
+    saveMatchingLifecycleFlow(fixture, first);
+    saveMatchingLifecycleFlow(fixture, second);
+    const originalAppend = fixture.events.appendEventOnce.bind(fixture.events);
+    vi.spyOn(fixture.events, "appendEventOnce").mockImplementation((input) => {
+      if (input.type === "FLOW_CANDIDATE_CREATED" && input.target === first.requestId) {
+        throw new Error("injected_first_append_failure");
+      }
+      return originalAppend(input);
+    });
+
+    expect(await fixture.service.reconcilePendingAtStartup()).toBe(1);
+    expect(fixture.service.getRequestState(first.requestId).state).toBe("requested");
+    expect(fixture.service.getRequestState(second.requestId).state).toBe("completed");
+    expect(errorLog).toHaveBeenCalledWith(
+      "Flow save intent request reconciliation failed:",
+      first.requestId,
+      expect.objectContaining({ message: "injected_first_append_failure" }),
+    );
+  });
+
+  it("propagates a Catalog read failure instead of treating it as one bad request", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "catalog-read-failure");
+    saveMatchingLifecycleFlow(fixture, request);
+    vi.spyOn(fixture.catalog, "get").mockImplementationOnce(() => {
+      throw new Error("catalog_read_unavailable");
+    });
+
+    await expect(fixture.service.reconcilePendingAtStartup())
+      .rejects.toThrow("catalog_read_unavailable");
+    expect(fixture.service.getRequestState(request.requestId).state).toBe("requested");
+  });
+
+  it.each(["published", "deprecated"] as const)(
+    "replays a completed request after the Flow becomes %s without writing",
+    async (status) => {
+      const fixture = saveIntentFixture();
+      const source = seedSaveIntentRun(fixture, { id: "run_source" });
+      const request = fixture.service.requestManual({
+        sessionId: fixture.sessionId,
+        sourceRunId: source.id,
+      }, `completed-${status}-source`);
+      const confirmed = await fixture.service.confirm(request.requestId, "confirm-first");
+      fixture.catalog.save({
+        ...confirmed.flow,
+        status,
+        reviewStatus: "approved",
+        gitRevision: `git:${status}`,
+      });
+      const lifecycleFlow = fixture.catalog.get(confirmed.flow.flowId)!;
+      const beforeEvents = fixture.events.countAllChanges();
+      const beforeHistory = fixture.catalog.history(lifecycleFlow.flowId);
+
+      const replay = await fixture.service.confirm(request.requestId, `confirm-after-${status}`);
+
+      expect(replay.flow).toEqual(lifecycleFlow);
+      expect(fixture.events.countAllChanges()).toBe(beforeEvents);
+      expect(fixture.events.listEventsByTarget(request.requestId)
+        .filter((entry) => entry.type === "FLOW_SAVE_FAILED")).toHaveLength(0);
+      expect(fixture.catalog.history(lifecycleFlow.flowId)).toEqual(beforeHistory);
+    },
+  );
+
+  it.each([
+    { label: "Guide kind", kind: "guide" as const, status: "draft" as const },
+    { label: "wrong provenance", kind: "runbook" as const, status: "published" as const, sourceRunId: "run_other" },
+  ])("rejects completed replay with $label", async (variant) => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const request = fixture.service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, `completed-conflict-${variant.label}`);
+    const confirmed = await fixture.service.confirm(request.requestId, "confirm-first");
+    fixture.catalog.save({
+      ...confirmed.flow,
+      kind: variant.kind,
+      status: variant.status,
+      reviewStatus: variant.status === "published" ? "approved" : "pending",
+      gitRevision: variant.status === "published" ? "git:conflict" : null,
+      provenance: confirmed.flow.provenance
+        ? {
+            ...confirmed.flow.provenance,
+            sourceRunId: variant.sourceRunId ?? confirmed.flow.provenance.sourceRunId,
+          }
+        : null,
+    });
+
+    await expect(fixture.service.confirm(request.requestId, "confirm-after-conflict"))
+      .rejects.toMatchObject({ code: "flow_save_candidate_conflict" });
+    expect(fixture.events.listEventsByTarget(request.requestId)
+      .filter((entry) => entry.type === "FLOW_SAVE_FAILED")).toHaveLength(1);
   });
 });

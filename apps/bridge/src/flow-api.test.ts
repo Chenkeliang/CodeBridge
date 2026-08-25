@@ -9,6 +9,7 @@ import {
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { createFlowApp } from "./flow-api.js";
+import { FlowSaveIntentService } from "./flow-save-intent.js";
 
 function seedWorkflowRun(
   events: SqliteEventStore,
@@ -160,6 +161,87 @@ function seedAgentRun(
 }
 
 describe("flow API", () => {
+  it("computes the same Candidate revision as save intent for the same raw definition", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    try {
+      const source = seedAgentRun(sessions, events, {
+        agentId: "codex",
+        title: "核对订单并生成结论",
+        tools: ["Read File", "Search"],
+      });
+      const saveIntent = new FlowSaveIntentService({ sessions, events, catalog });
+      const request = saveIntent.requestManual({
+        sessionId: source.session.id,
+        sourceRunId: source.run.id,
+      }, "same-definition-source");
+      const confirmed = await saveIntent.confirm(request.requestId, "confirm-source");
+      const app = createFlowApp(catalog, "token", { sessions, events });
+
+      const response = await app.request("/v1/flows/candidates", {
+        method: "POST",
+        headers: { authorization: "Bearer token", "content-type": "application/json" },
+        body: JSON.stringify({
+          session_id: source.session.id,
+          flow: {
+            flow_id: confirmed.flow.flowId,
+            name: confirmed.flow.name,
+            description: confirmed.flow.description,
+            inputs: [],
+            steps: confirmed.flow.steps.map((step) => ({
+              id: step.id,
+              purpose: step.purpose,
+              depends_on: step.dependsOn,
+              mode: "manual",
+              approval: "none",
+            })),
+          },
+        }),
+      });
+
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({
+        flow_id: confirmed.flow.flowId,
+        definition_revision: confirmed.flow.definitionRevision,
+      });
+    } finally {
+      catalog.close();
+      events.close();
+      sessions.close();
+    }
+  });
+
+  it("exposes source_request_id in Candidate provenance", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    catalog.save({
+      flowId: "flow-save-request",
+      name: "Save Request Candidate",
+      kind: "runbook",
+      status: "candidate",
+      source: "agent_generated",
+      definitionRevision: "sha256:save-request",
+      provenance: {
+        sourceRunId: "run-source",
+        sourceSessionId: "sess-source",
+        sourceFlowId: "flow-source",
+        sourceDefinitionRevision: "sha256:source",
+        sourceRequestId: "fsr-source",
+      },
+      steps: [{ id: "inspect", purpose: "核对来源" }],
+    });
+    const app = createFlowApp(catalog, "token");
+
+    const response = await app.request("/v1/flows/flow-save-request", {
+      headers: { authorization: "Bearer token" },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      provenance: { source_request_id: "fsr-source" },
+    });
+    catalog.close();
+  });
+
   it("creates and updates only server-revisioned Guide drafts", async () => {
     const catalog = new FlowCatalogStore(":memory:");
     const app = createFlowApp(catalog, "token");

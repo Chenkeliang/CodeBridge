@@ -36,7 +36,8 @@
 | Network outcome unknown after confirm | State remains whatever canonical events say | Web shows retry | Retry with the same confirmation Idempotency-Key |
 | Catalog save succeeded but terminal event append did not | Candidate exists at deterministic ID; request still appears pending | Startup reconciliation repairs it | Restart Bridge or retry confirm |
 | Deterministic Candidate ID already exists with different `sourceRequestId` | Append `FLOW_SAVE_FAILED`; never overwrite | `409 flow_save_candidate_conflict` | Investigate data integrity; create a new explicit request only after repair |
-| Dismissed/completed/failed request is confirmed again | No write | `409 flow_save_request_already_dismissed`, `flow_save_request_already_completed`, or `flow_save_request_state_conflict` | Create a new request only when the user explicitly asks again |
+| Completed request is confirmed again | No write | `200` with the existing Candidate | Reuse the existing Candidate; a new explicit save intent creates a new `request_id` |
+| Dismissed/failed request is confirmed again | No write | `409 flow_save_request_already_dismissed` or `flow_save_request_state_conflict` | Create a new request only when the user explicitly asks again |
 
 The design diagram’s `failed → retry` arrow is a UX recovery path, not mutation of the same failed request: deterministic failures are immutable evidence. Transient Catalog/transport failures never enter `failed`.
 
@@ -59,6 +60,7 @@ function candidateFlowId(requestId: FlowSaveRequestId): string {
 - The manual request input hash is `flow-save-request:http:<session_id>:<key>`.
 - The Agent input hash is `flow-save-request:tool:<run_id>:<tool_call_id>`.
 - Unknown-result retries reuse the same key. A later explicit user action receives a new key.
+- Confirm is domain-idempotent by immutable `request_id`: after completion, any replay returns the same Candidate with zero writes. A different transport key cannot turn the completed request into a new command.
 - `request_id` is stored in event payload and target; it is not the event ID.
 - Candidate identity is deterministic from `request_id`; two confirms cannot create two Flows.
 - `FLOW_SAVE_REQUESTED.run_id` is the Timeline anchor Run, and payload stores both `request_turn_id` and `source_run_id`: manual entry anchors to the selected source Turn; natural-language entry anchors to the tool-calling Turn. Every terminal event copies the request’s anchor `run_id` so hydrate and live reducers update the same Turn.
@@ -756,7 +758,7 @@ Require bearer auth and `Idempotency-Key`. Assert:
 - repeated request/confirm/dismiss → identical domain outcome;
 - transient Catalog failure → 503 and pending state;
 - confirm success → 201 with Candidate and request state;
-- already completed confirm → 200 only when the same idempotency command is replayed, otherwise `409 flow_save_request_already_completed`;
+- already completed confirm → 200 with the existing Candidate for any replay of that immutable `request_id`; the `Idempotency-Key` header remains required for transport retry discipline but does not create a second confirm command;
 - dismissed confirm → `409 flow_save_request_already_dismissed`; other stale transitions → `409 flow_save_request_state_conflict`.
 
 - [ ] **Step 3: Write failing Web API contract tests**

@@ -58,6 +58,7 @@ import { SessionRuntimeMigration } from "./session-runtime-migration.js";
 import { buildFlowRecommendationGuidance } from "./flow-recommendation-guidance.js";
 import { createFlowBatchApp } from "./flow-batch-api.js";
 import { FlowBatchService } from "./flow-batch-service.js";
+import { FlowSaveIntentService } from "./flow-save-intent.js";
 
 const program = new Command();
 
@@ -131,6 +132,14 @@ program
       throw error;
     }
     const flowCatalog = new FlowCatalogStore(path.join(dataDir, "flows.sqlite"));
+    const flowSaveIntents = new FlowSaveIntentService({
+      sessions: sessionCatalog,
+      events: workItemStore,
+      catalog: flowCatalog,
+    });
+    await flowSaveIntents.reconcilePendingAtStartup().catch((error) => {
+      console.error("Flow save intent reconciliation failed:", error);
+    });
     const approvalService = new ApprovalService(
       workItemStore,
       path.join(dataDir, "approvals.sqlite"),

@@ -216,6 +216,7 @@ requested ──confirm──> completed
 - 用户再次明确要求保存时创建新的 `request_id`；
 - `confirm`、`dismiss` 使用调用方 `Idempotency-Key`；
 - 已完成请求重放返回同一个 Candidate，不创建重复 lineage。
+- Confirm 的领域幂等身份是不可变 `request_id`：完成后即使调用方换了传输层 key，也只能读取同一个 Candidate，不能把旧请求变成新命令。
 
 ### 5.3 存储策略
 
@@ -397,7 +398,7 @@ Flow Catalog 与 Session 事件存储当前不是同一个事务边界，因此 
 
 - 同一 `request_id` 永远派生同一个 Candidate `flow_id`；
 - Catalog `save` 对该 `flow_id + request_id provenance` 幂等；
-- 若进程在 Catalog save 后、事件 append 前崩溃，启动与周期 reconciler 会扫描 pending request，发现对应 Candidate 后补写 `FLOW_CANDIDATE_CREATED`；
+- 若进程在 Catalog save 后、事件 append 前崩溃，V1 由 Bridge 启动时的一次性 reconciler 扫描 pending request，发现对应 Candidate 后补写 `FLOW_CANDIDATE_CREATED`；V1 不增加周期扫描、定时器或第二套后台基础设施；
 - 若事件已完成但 HTTP 响应丢失，重试返回相同 Candidate；
 - 前端不得创建 Candidate、伪造 completed 或承担跨存储补偿。
 
@@ -414,11 +415,12 @@ Dismiss append `FLOW_SAVE_DISMISSED`。重复 Dismiss 返回同一终态。Compl
 | 409 | `source_run_not_succeeded` | 等待终态或重新选择 |
 | 409 | `source_run_not_extractable` | 显示缺少的结构/证据 |
 | 409 | `flow_save_request_already_dismissed` | 保持 dismissed |
-| 409 | `flow_save_request_already_completed` | 打开已有 Candidate |
 | 409 | `flow_save_request_state_conflict` | 刷新 Timeline |
 | 503 | `flow_catalog_unavailable` | 保留 pending，可重试 |
 
 自然语言无法定位来源不是 HTTP 成功，也不是创建空请求；Agent 应明确提示用户使用 Turn 菜单。
+
+已完成请求再次 Confirm 返回 `200` 和原 Candidate，不进入错误合同，也不产生新事件或 lineage。
 
 ## 11. 三通道交互
 
