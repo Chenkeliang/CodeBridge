@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  FLOW_SAVE_NO_SOURCE_MESSAGE,
+  FLOW_SAVE_TOOL_MARKER,
+  PI_FLOW_SAVE_TOOL_NAME,
+} from "@codebridge/core";
 import { FlowCatalogStore } from "@codebridge/flow-catalog";
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore, type DomainEvent, type Run } from "@codebridge/work-items";
@@ -212,6 +217,7 @@ describe("extractRunDefinition", () => {
     const marker = {
       codebridge_internal_tool: "flow_save_request/v1",
       accepted: true,
+      source_scope: "previous_completed_run",
     };
     expect(extractRunDefinition(input([
       event(1, "AGENT_EVENT", { event: {
@@ -262,6 +268,25 @@ describe("extractRunDefinition", () => {
         toolCallId: "save_4",
         status: "completed",
         content: [{ type: "text", text: JSON.stringify(marker) }],
+      } }),
+    ]))).toEqual({
+      ok: false,
+      code: "run_not_extractable",
+      reason: expect.any(String),
+    });
+  });
+
+  it("does not count the provider-safe Pi save tool as a business extraction step", () => {
+    expect(extractRunDefinition(input([
+      event(1, "AGENT_EVENT", { event: {
+        type: "tool_start",
+        toolCallId: "business_1",
+        name: "Read File",
+      } }),
+      event(2, "AGENT_EVENT", { event: {
+        type: "tool_start",
+        toolCallId: "save_1",
+        name: PI_FLOW_SAVE_TOOL_NAME,
       } }),
     ]))).toEqual({
       ok: false,
@@ -517,6 +542,10 @@ function addRequestToolStart(
   fixture: SaveIntentFixture,
   run: Run,
   toolCallId: string,
+  options: {
+    name?: string;
+    input?: unknown;
+  } = {},
 ): void {
   fixture.events.appendEvent({
     workItemId: fixture.workItemId,
@@ -528,7 +557,40 @@ function addRequestToolStart(
       event: {
         type: "tool_start",
         toolCallId,
-        name: "codebridge.request_flow_save",
+        name: options.name ?? "codebridge.request_flow_save",
+        input: options.input ?? { source_scope: "previous_completed_run" },
+      },
+    },
+  });
+}
+
+function addRequestToolEnd(
+  fixture: SaveIntentFixture,
+  run: Run,
+  toolCallId: string,
+  options: {
+    status?: string;
+    output?: unknown;
+    content?: unknown[];
+  } = {},
+): void {
+  fixture.events.appendEvent({
+    workItemId: fixture.workItemId,
+    runId: run.id,
+    type: "AGENT_EVENT",
+    actor: "adapter",
+    target: "tool_end",
+    payload: {
+      event: {
+        type: "tool_end",
+        toolCallId,
+        status: options.status ?? "completed",
+        output: options.output ?? {
+          codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+          accepted: true,
+          source_scope: "previous_completed_run",
+        },
+        ...(options.content ? { content: options.content } : {}),
       },
     },
   });
@@ -560,6 +622,82 @@ function saveMatchingLifecycleFlow(
 }
 
 describe("FlowSaveIntentService", () => {
+  it("previews hundreds of non-extractable Runs from one canonical event read", () => {
+    const fixture = saveIntentFixture();
+    for (let index = 0; index < 210; index += 1) {
+      seedSaveIntentRun(fixture, {
+        id: `run_thin_${index}`,
+        tools: ["Read File"],
+      });
+    }
+    const current = seedSaveIntentRun(fixture, {
+      id: "run_current",
+      text: "把刚才任务存为 Flow",
+      status: "running",
+      tools: [],
+    });
+    const listEvents = vi.spyOn(fixture.events, "listEvents");
+
+    expect(fixture.service.previewPreviousSource({
+      sessionId: fixture.sessionId,
+      currentRunId: current.id,
+    })).toMatchObject({ available: false, code: "no_extractable_previous_run" });
+    expect(listEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects the latest extractable source before many later thin Runs from one snapshot", () => {
+    const fixture = saveIntentFixture();
+    const latestExtractable = seedSaveIntentRun(fixture, { id: "run_latest_extractable" });
+    for (let index = 0; index < 210; index += 1) {
+      seedSaveIntentRun(fixture, {
+        id: `run_later_thin_${index}`,
+        tools: ["Read File"],
+      });
+    }
+    const requestRun = seedSaveIntentRun(fixture, {
+      id: "run_request",
+      text: "存为 Flow",
+      status: "running",
+      tools: [],
+    });
+    addRequestToolStart(fixture, requestRun, "tool_save");
+    addRequestToolEnd(fixture, requestRun, "tool_save");
+    const listEvents = vi.spyOn(fixture.events, "listEvents");
+
+    const request = fixture.service.requestFromTool({
+      sessionId: fixture.sessionId,
+      currentRunId: requestRun.id,
+      toolCallId: "tool_save",
+    });
+
+    expect(request.sourceRunId).toBe(latestExtractable.id);
+    expect(listEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps manual request and confirm extraction on fresh event reads", async () => {
+    const fixture = saveIntentFixture();
+    const source = seedSaveIntentRun(fixture, { id: "run_source" });
+    const observedEventCounts: number[] = [];
+    const service = new FlowSaveIntentService({
+      sessions: fixture.sessions,
+      events: fixture.events,
+      catalog: fixture.catalog,
+      extract: (input) => {
+        observedEventCounts.push(input.events.length);
+        return extractRunDefinition(input);
+      },
+    });
+    const request = service.requestManual({
+      sessionId: fixture.sessionId,
+      sourceRunId: source.id,
+    }, "fresh-manual");
+
+    await service.confirm(request.requestId, "fresh-confirm");
+
+    expect(observedEventCounts).toHaveLength(2);
+    expect(observedEventCounts[1]).toBeGreaterThan(observedEventCounts[0]!);
+  });
+
   it("deduplicates manual idempotency keys and Agent toolCallIds", () => {
     const fixture = saveIntentFixture();
     const source = seedSaveIntentRun(fixture, { id: "run_source" });
@@ -580,17 +718,16 @@ describe("FlowSaveIntentService", () => {
       tools: [],
     });
     addRequestToolStart(fixture, requestRun, "tool_save");
+    addRequestToolEnd(fixture, requestRun, "tool_save");
     const toolFirst = fixture.service.requestFromTool({
       sessionId: fixture.sessionId,
       currentRunId: requestRun.id,
       toolCallId: "tool_save",
-      sourceScope: "previous_completed_run",
     });
     const toolReplay = fixture.service.requestFromTool({
       sessionId: fixture.sessionId,
       currentRunId: requestRun.id,
       toolCallId: "tool_save",
-      sourceScope: "previous_completed_run",
     });
     expect(toolReplay.requestId).toBe(toolFirst.requestId);
     expect(fixture.events.listEvents(fixture.workItemId)
@@ -615,16 +752,120 @@ describe("FlowSaveIntentService", () => {
       tools: [],
     });
     addRequestToolStart(fixture, requestRun, "tool_latest");
+    addRequestToolEnd(fixture, requestRun, "tool_latest");
 
     const request = fixture.service.requestFromTool({
       sessionId: fixture.sessionId,
       currentRunId: requestRun.id,
       toolCallId: "tool_latest",
-      sourceScope: "previous_completed_run",
     });
 
     expect(request.sourceRunId).toBe(latest.id);
     expect(request.requestRunId).toBe(requestRun.id);
+  });
+
+  it.each([
+    ["MCP: tool", { content: [{
+      type: "text",
+      text: JSON.stringify({
+        codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+        accepted: true,
+        source_scope: "previous_completed_run",
+      }),
+    }] }],
+    ["codebridge-internal/codebridge.request_flow_save", { structuredContent: {
+      codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+      accepted: true,
+      source_scope: "previous_completed_run",
+    } }],
+    [PI_FLOW_SAVE_TOOL_NAME, { details: {
+      codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+      accepted: true,
+      source_scope: "previous_completed_run",
+    } }],
+  ] as const)("correlates strict persisted start/end without trusting adapter title %s", (name, output) => {
+    const fixture = saveIntentFixture();
+    seedSaveIntentRun(fixture, { id: "run_source" });
+    const requestRun = seedSaveIntentRun(fixture, {
+      id: "run_request",
+      text: "存为 Flow",
+      status: "running",
+      tools: [],
+    });
+    addRequestToolStart(fixture, requestRun, "tool_save", { name });
+    addRequestToolEnd(fixture, requestRun, "tool_save", { output });
+
+    expect(fixture.service.requestFromTool({
+      sessionId: fixture.sessionId,
+      currentRunId: requestRun.id,
+      toolCallId: "tool_save",
+    })).toMatchObject({ sourceRunId: "run_source" });
+  });
+
+  it("uses canonical ACP content when rawOutput is opaque", () => {
+    const fixture = saveIntentFixture();
+    seedSaveIntentRun(fixture, { id: "run_source" });
+    const requestRun = seedSaveIntentRun(fixture, {
+      id: "run_request",
+      text: "存为 Flow",
+      status: "running",
+      tools: [],
+    });
+    addRequestToolStart(fixture, requestRun, "tool_save", { name: "MCP: tool" });
+    addRequestToolEnd(fixture, requestRun, "tool_save", {
+      output: { opaque: true },
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+          accepted: true,
+          source_scope: "previous_completed_run",
+        }),
+      }],
+    });
+
+    expect(fixture.service.requestFromTool({
+      sessionId: fixture.sessionId,
+      currentRunId: requestRun.id,
+      toolCallId: "tool_save",
+    })).toMatchObject({ sourceRunId: "run_source" });
+  });
+
+  it.each([
+    ["missing start", null, { status: "completed" }],
+    ["invalid start input", { input: { source_scope: "previous_completed_run", run_id: "run_bad" } }, { status: "completed" }],
+    ["accepted false", {}, { status: "completed", output: {
+      codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+      accepted: false,
+      source_scope: "previous_completed_run",
+      code: "no_extractable_previous_run",
+      message: FLOW_SAVE_NO_SOURCE_MESSAGE,
+    } }],
+    ["wrong marker", {}, { status: "completed", output: {
+      codebridge_internal_tool: "wrong/v1",
+      accepted: true,
+      source_scope: "previous_completed_run",
+    } }],
+    ["failed tool end", {}, { status: "failed" }],
+  ] as const)("rejects %s correlation without writing a request", (_label, start, end) => {
+    const fixture = saveIntentFixture();
+    seedSaveIntentRun(fixture, { id: "run_source" });
+    const requestRun = seedSaveIntentRun(fixture, {
+      id: "run_request",
+      text: "存为 Flow",
+      status: "running",
+      tools: [],
+    });
+    if (start) addRequestToolStart(fixture, requestRun, "tool_save", start);
+    addRequestToolEnd(fixture, requestRun, "tool_save", end);
+
+    expect(() => fixture.service.requestFromTool({
+      sessionId: fixture.sessionId,
+      currentRunId: requestRun.id,
+      toolCallId: "tool_save",
+    })).toThrowError(expect.objectContaining({ code: "flow_save_tool_call_not_found" }));
+    expect(fixture.events.listEvents(fixture.workItemId)
+      .filter((entry) => entry.type === "FLOW_SAVE_REQUESTED")).toHaveLength(0);
   });
 
   it("rejects invalid manual sources before writing any request event", () => {

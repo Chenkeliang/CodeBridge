@@ -135,6 +135,7 @@ async function captureAcpPromptPayload(
     spawnKey: "spawn-key",
     envKey: "env-key",
     additionalDirectoriesKey: "dirs-key",
+    mcpServersKey: "[]",
     supportsSteering: false,
     supportsClose: false,
     configOptions: [],

@@ -233,6 +233,9 @@ importers:
       '@codebridge/session-catalog':
         specifier: workspace:*
         version: link:../session-catalog
+      '@earendil-works/pi-ai':
+        specifier: 0.84.1
+        version: 0.84.1(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))(ws@8.21.0)(zod@3.25.76)
       '@earendil-works/pi-coding-agent':
         specifier: 0.84.1
         version: 0.84.1(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))(ws@8.21.0)(zod@3.25.76)
@@ -430,6 +433,9 @@ importers:
       '@codebridge/core':
         specifier: workspace:*
         version: link:../core
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.0
+        version: 1.30.0(zod@3.25.76)
       '@hono/node-server':
         specifier: ^1.13.7
         version: 1.19.14(hono@4.12.27)

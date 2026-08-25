@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import {
+  FLOW_SAVE_TOOL_NAME,
+  PI_FLOW_SAVE_TOOL_NAME,
+  parseRequestFlowSaveInput,
+  parseRequestFlowSaveOutput,
+  type RequestFlowSaveOutput,
+} from "@codebridge/core";
 import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
 import type { AgentSession } from "@codebridge/session-catalog";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
@@ -12,7 +19,6 @@ import {
 const MAX_EXTRACTED_STEPS = 24;
 const MAX_EXTRACTED_PURPOSE_CHARACTERS = 240;
 const MAX_SOURCE_TEXT_CHARACTERS = 4_096;
-const FLOW_SAVE_TOOL_MARKER = "flow_save_request/v1";
 
 export interface ExtractRunDefinitionInput {
   session: Pick<AgentSession, "id" | "agentId">;
@@ -95,6 +101,26 @@ interface FlowSaveIntentServiceOptions {
   extract?: typeof extractRunDefinition;
 }
 
+interface WorkItemEventSnapshot {
+  workItemId: string;
+  events: DomainEvent[];
+  eventsByRunId: ReadonlyMap<string, DomainEvent[]>;
+}
+
+function workItemEventSnapshot(
+  workItemId: string,
+  events: DomainEvent[],
+): WorkItemEventSnapshot {
+  const eventsByRunId = new Map<string, DomainEvent[]>();
+  for (const event of events) {
+    if (event.workItemId !== workItemId || event.runId === null) continue;
+    const scoped = eventsByRunId.get(event.runId);
+    if (scoped) scoped.push(event);
+    else eventsByRunId.set(event.runId, [event]);
+  }
+  return { workItemId, events, eventsByRunId };
+}
+
 export class FlowSaveIntentService {
   private readonly extract: typeof extractRunDefinition;
 
@@ -111,10 +137,11 @@ export class FlowSaveIntentService {
     const current = this.options.events.getRun(input.currentRunId);
     if (!current || current.sessionId !== input.sessionId) return noPreviousSource();
     const events = this.options.events.listEvents(current.workItemId);
+    const snapshot = workItemEventSnapshot(current.workItemId, events);
     const boundary = events.find((event) =>
       event.type === "RUN_CREATED" && event.runId === current.id
     )?.sequence ?? Number.MAX_SAFE_INTEGER;
-    return this.findPreviousSource(input.sessionId, current, boundary)
+    return this.findPreviousSource(input.sessionId, current, boundary, snapshot)
       ? { available: true }
       : noPreviousSource();
   }
@@ -146,27 +173,51 @@ export class FlowSaveIntentService {
     sessionId: string;
     currentRunId: string;
     toolCallId: string;
-    intentSummary?: string;
-    nameHint?: string;
-    sourceScope: "previous_completed_run";
   }): FlowSaveRequest {
     const current = this.options.events.getRun(input.currentRunId);
     if (!current || current.sessionId !== input.sessionId) {
       throw new FlowSaveIntentError("source_run_not_found", 404);
     }
     const inputHash = `flow-save-request:tool:${current.id}:${input.toolCallId}`;
-    const existing = this.requestByInputHash(current.workItemId, inputHash);
-    if (existing) return existing;
     const events = this.options.events.listEvents(current.workItemId);
+    const existing = events.find((event) =>
+      event.type === "FLOW_SAVE_REQUESTED" && event.inputHash === inputHash
+    );
+    if (existing) return requestFromEvent(existing);
+    const snapshot = workItemEventSnapshot(current.workItemId, events);
     const toolStart = events.find((event) => {
       const agentEvent = agentEventValue(event);
       return event.runId === current.id
         && agentEvent?.type === "tool_start"
-        && agentEvent.toolCallId === input.toolCallId
-        && agentEvent.name === "codebridge.request_flow_save";
+        && agentEvent.toolCallId === input.toolCallId;
     });
     if (!toolStart) throw new FlowSaveIntentError("flow_save_tool_call_not_found", 409);
-    const source = this.findPreviousSource(input.sessionId, current, toolStart.sequence);
+    let toolInput: ReturnType<typeof parseRequestFlowSaveInput>;
+    try {
+      toolInput = parseRequestFlowSaveInput(agentEventValue(toolStart)?.input);
+    } catch {
+      throw new FlowSaveIntentError("flow_save_tool_call_not_found", 409);
+    }
+    const toolEnd = events.find((event) => {
+      const agentEvent = agentEventValue(event);
+      if (
+        event.sequence <= toolStart.sequence
+        || event.runId !== current.id
+        || agentEvent?.type !== "tool_end"
+        || agentEvent.toolCallId !== input.toolCallId
+        || agentEvent.status !== "completed"
+      ) return false;
+      const result = flowSaveToolOutputFromAgentValue(agentEvent.output)
+        ?? flowSaveToolOutputFromAgentValue(agentEvent.content);
+      return result?.accepted === true;
+    });
+    if (!toolEnd) throw new FlowSaveIntentError("flow_save_tool_call_not_found", 409);
+    const source = this.findPreviousSource(
+      input.sessionId,
+      current,
+      toolStart.sequence,
+      snapshot,
+    );
     if (!source) throw new FlowSaveIntentError("no_extractable_previous_run", 409);
     const context = this.requireSessionContext(input.sessionId);
     return this.appendRequested({
@@ -175,8 +226,8 @@ export class FlowSaveIntentService {
       source,
       sourceType: "agent_intent",
       userMessage: this.turnText(current) ?? context.workItem.title,
-      intentSummary: input.intentSummary,
-      nameHint: input.nameHint,
+      intentSummary: toolInput.intent_summary,
+      nameHint: toolInput.name_hint,
       inputHash,
     });
   }
@@ -351,7 +402,11 @@ export class FlowSaveIntentService {
     return event ? requestFromEvent(event) : null;
   }
 
-  private requireExtractableSource(sessionId: string, sourceRunId: string): ExtractableSource {
+  private requireExtractableSource(
+    sessionId: string,
+    sourceRunId: string,
+    snapshot?: WorkItemEventSnapshot,
+  ): ExtractableSource {
     const session = this.options.sessions.getSession(sessionId);
     const run = this.options.events.getRun(sourceRunId);
     if (!session || !run || run.sessionId !== sessionId) {
@@ -368,7 +423,9 @@ export class FlowSaveIntentService {
       session,
       run,
       title,
-      events: this.options.events.listEvents(run.workItemId),
+      events: snapshot && snapshot.workItemId === run.workItemId
+        ? [...(snapshot.eventsByRunId.get(run.id) ?? [])]
+        : this.options.events.listEvents(run.workItemId),
     });
     if (!extracted.ok) {
       throw new FlowSaveIntentError(
@@ -385,9 +442,10 @@ export class FlowSaveIntentService {
     sessionId: string,
     currentRun: Run,
     beforeSequence: number,
+    snapshot: WorkItemEventSnapshot,
   ): ExtractableSource | null {
-    const events = this.options.events.listEvents(currentRun.workItemId);
-    const terminalRunIds = events
+    if (snapshot.workItemId !== currentRun.workItemId) return null;
+    const terminalRunIds = snapshot.events
       .filter((event) =>
         event.sequence < beforeSequence
         && event.type === "RUN_SUCCEEDED"
@@ -398,7 +456,7 @@ export class FlowSaveIntentService {
       .map((event) => event.runId!);
     for (const runId of terminalRunIds) {
       try {
-        return this.requireExtractableSource(sessionId, runId);
+        return this.requireExtractableSource(sessionId, runId, snapshot);
       } catch (error) {
         if (error instanceof FlowSaveIntentError && error.status !== 503) continue;
         throw error;
@@ -815,7 +873,8 @@ function extractObservedTrace(
     const agentEvent = agentEventValue(event);
     if (agentEvent?.type !== "tool_start" || typeof agentEvent.name !== "string") return [];
     if (
-      agentEvent.name === "codebridge.request_flow_save"
+      agentEvent.name === FLOW_SAVE_TOOL_NAME
+      || agentEvent.name === PI_FLOW_SAVE_TOOL_NAME
       || (
         typeof agentEvent.toolCallId === "string"
         && managementToolCallIds.has(agentEvent.toolCallId)
@@ -865,25 +924,44 @@ function agentEventValue(event: DomainEvent): Record<string, unknown> | null {
     : null;
 }
 
-function isFlowSaveToolResult(output: unknown): boolean {
+function flowSaveToolOutputFromAgentValue(
+  output: unknown,
+  depth = 0,
+): RequestFlowSaveOutput | null {
+  if (depth > 6) return null;
+  try {
+    return parseRequestFlowSaveOutput(output);
+  } catch {
+    // Adapter results wrap the canonical result in text/content/details fields.
+  }
   if (typeof output === "string") {
     const text = output.trim();
-    if (text === FLOW_SAVE_TOOL_MARKER) return true;
-    if (!text || text.length > MAX_SOURCE_TEXT_CHARACTERS) return false;
+    if (!text || text.length > MAX_SOURCE_TEXT_CHARACTERS) return null;
     try {
-      return isFlowSaveToolResult(JSON.parse(text));
+      return flowSaveToolOutputFromAgentValue(JSON.parse(text), depth + 1);
     } catch {
-      return false;
+      return null;
     }
   }
-  if (Array.isArray(output)) return output.some(isFlowSaveToolResult);
-  if (!output || typeof output !== "object") return false;
-  const value = output as Record<string, unknown>;
-  if (value.codebridge_internal_tool === FLOW_SAVE_TOOL_MARKER) return true;
-  if (value.type === "text" && typeof value.text === "string") {
-    return isFlowSaveToolResult(value.text);
+  if (Array.isArray(output)) {
+    for (const item of output) {
+      const parsed = flowSaveToolOutputFromAgentValue(item, depth + 1);
+      if (parsed) return parsed;
+    }
+    return null;
   }
-  return Object.hasOwn(value, "content") && isFlowSaveToolResult(value.content);
+  if (!output || typeof output !== "object") return null;
+  const value = output as Record<string, unknown>;
+  for (const key of ["structuredContent", "details", "content", "output", "text"] as const) {
+    if (!Object.hasOwn(value, key)) continue;
+    const parsed = flowSaveToolOutputFromAgentValue(value[key], depth + 1);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function isFlowSaveToolResult(output: unknown): boolean {
+  return flowSaveToolOutputFromAgentValue(output) !== null;
 }
 
 function sanitizeToolPurpose(name: string): string {
