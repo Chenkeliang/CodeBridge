@@ -118,7 +118,7 @@ The resolver must additionally reject deleted/unreadable Runs and management-onl
 The product contract is one internal tool, `codebridge.request_flow_save`. Current adapters expose it differently without duplicating domain rules:
 
 - ACP agents receive a CodeBridge-owned stdio MCP server through `mcpServers` on new/load/resume.
-- Pi receives the same schema/result through `customTools`, because the current Pi SDK has no programmatic external-MCP injection hook.
+- Pi receives the same schema/result through `customTools`, because the current Pi SDK has no programmatic external-MCP injection hook. Its Provider-facing wire name is the function-safe `codebridge_request_flow_save`; the canonical product name remains `codebridge.request_flow_save` and the domain identity remains the result marker.
 - Both return the same discriminated result. Bridge computes the read-only source-availability preview before dispatching the request, so a tool can reject honestly without guessing a Run or writing state:
 
 ```ts
@@ -137,7 +137,7 @@ The product contract is one internal tool, `codebridge.request_flow_save`. Curre
 }
 ```
 
-The Bridge translator trusts only a successful `tool_end` with that marker and `accepted: true`, correlates its `toolCallId` to a persisted `tool_start`, validates the start input, and then creates the Save Intent. An `accepted: false` completion creates no request. The tool itself cannot select a Run ID, create a Candidate, approve, or publish.
+The Bridge translator trusts only a successful `tool_end` with that marker and `accepted: true`, correlates its `toolCallId` to a persisted `tool_start`, validates the start input, and then creates the Save Intent. It must not trust ACP's display-oriented tool title or require adapter wire names to be identical. An `accepted: false` completion creates no request. The tool itself cannot select a Run ID, create a Candidate, approve, or publish.
 
 ### 0.8 Surface Matrix planning gate
 
@@ -926,6 +926,11 @@ rtk git commit -m "refactor(flow): retire implicit run save paths"
 - Modify: `packages/backends/src/pi-session-runner.test.ts`
 - Modify: `packages/backends/src/acp/acp-active-session.ts`
 - Modify: `packages/backends/src/acp/acp-active-session.test.ts`
+- Modify: `packages/backends/src/acp/acp-session-runner.ts`
+- Modify: `packages/backends/src/acp/acp-session-pool.ts`
+- Test: `packages/backends/src/acp-session-pool.test.ts`
+- Modify: `apps/bridge/src/flow-save-intent.ts`
+- Test: `apps/bridge/src/flow-save-intent.test.ts`
 
 - [ ] **Step 1: Run impact before edits**
 
@@ -948,8 +953,8 @@ Reject arbitrary `run_id`, `session_id`, Candidate fields, and extra properties.
 - [ ] **Step 3: Write failing adapter tests**
 
 - Bridge `resolveRequest` uses `previewPreviousSource` and adds a read-only `flowSaveSourceAvailability` snapshot to `RunRequest`/`RunContext`; it contains no source Run ID.
-- ACP new/load/resume receives exactly one stdio server named `codebridge-internal` in addition to any future caller-owned MCP list; availability is passed as MCP-process env.
-- Pi `createAgentSession` receives the custom tool closed over the same availability snapshot.
+- ACP new/load/resume receives exactly one stdio server named `codebridge-internal` in addition to any future caller-owned MCP list; availability is passed as MCP-process env. ACP pool reuse includes a canonical hashed MCP identity so an availability/configuration change cannot reuse a stale MCP process or retain secrets in the match key.
+- Pi `createAgentSession` receives the custom tool closed over the same availability snapshot, using Provider-safe wire name `codebridge_request_flow_save`.
 - Both available calls return the exact accepted `flow_save_request/v1` marker; both unavailable calls return `accepted: false` plus the fixed Turn-menu message.
 - Tool execution never performs HTTP, Catalog, SQLite, file, or shell writes.
 
@@ -1047,7 +1052,7 @@ translate(run: Run, event: AgentEvent): FlowSaveRequest | null {
   if (!isSuccessfulFlowSaveToolEnd(event)) return null;
   const start = [...this.events.listEvents(run.workItemId)].reverse().find((candidate) =>
     candidate.runId === run.id
-    && isMatchingFlowSaveToolStart(candidate, event.toolCallId)
+    && isMatchingPersistedToolStart(candidate, event.toolCallId)
   );
   if (!start) return null;
   const input = parseRequestFlowSaveInput(agentEvent(start).input);
@@ -1061,6 +1066,7 @@ translate(run: Run, event: AgentEvent): FlowSaveRequest | null {
 ```
 
 Use persisted events, not an in-memory start map, so Bridge restart between start and end cannot corrupt correlation.
+Treat the strict successful result marker as the canonical domain identity. ACP titles such as `MCP: tool`, MCP namespaces, and Pi's Provider-safe wire name are adapter projections and must not be used as the final identity check.
 
 - [ ] **Step 5: Wire the translator after existing Session identity handling**
 

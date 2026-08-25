@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { Readable, Writable } from "node:stream";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
@@ -9,6 +10,7 @@ import {
   type ActiveSessionMessage,
   type ClientConnection,
   type ContentBlock,
+  type McpServer,
   type SessionConfigOption,
 } from "@agentclientprotocol/sdk";
 import type {
@@ -416,13 +418,37 @@ export function buildSessionMatchKeys(ctx: RunContext): {
   spawnKey: string;
   envKey: string;
   additionalDirectoriesKey: string;
+  mcpServersKey: string;
 } {
   const profile = resolveAcpSpawn(ctx.backendConfig);
+  const canonicalMcpServers = (ctx.mcpServers ?? [])
+    .map((server) => ({
+      name: server.name,
+      command: server.command,
+      args: [...server.args],
+      env: Object.entries(server.env).sort(([left], [right]) =>
+        left.localeCompare(right)
+      ),
+    }))
+    .map((server) => JSON.stringify(server))
+    .sort();
   return {
     spawnKey: `${profile.command} ${profile.args.join(" ")}`,
     envKey: `${ctx.extraEnv?.FCB_CHAT_ID ?? ""}|${ctx.extraEnv?.FCB_TOPIC_ID ?? ""}`,
     additionalDirectoriesKey: (ctx.additionalDirectories ?? []).join("\0"),
+    mcpServersKey: `sha256:${createHash("sha256")
+      .update(JSON.stringify(canonicalMcpServers))
+      .digest("hex")}`,
   };
+}
+
+function acpMcpServers(ctx: RunContext): McpServer[] {
+  return (ctx.mcpServers ?? []).map((server) => ({
+    name: server.name,
+    command: server.command,
+    args: [...server.args],
+    env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
+  }));
 }
 
 /**
@@ -439,7 +465,12 @@ async function openAcpSessionResources(
   resources: AcpSessionResources;
 }> {
   const spawnProfile = resolveAcpSpawn(ctx.backendConfig);
-  const { spawnKey, envKey, additionalDirectoriesKey } = buildSessionMatchKeys(ctx);
+  const {
+    spawnKey,
+    envKey,
+    additionalDirectoriesKey,
+    mcpServersKey,
+  } = buildSessionMatchKeys(ctx);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
     cwd: ctx.cwd,
     env: { ...process.env, ...ctx.extraEnv },
@@ -506,6 +537,7 @@ async function openAcpSessionResources(
       supportsAdditionalDirectories:
         initializeResponse.agentCapabilities?.sessionCapabilities
           ?.additionalDirectories != null,
+      mcpServers: acpMcpServers(ctx),
     });
 
     const resources: AcpSessionResources = {
@@ -517,6 +549,7 @@ async function openAcpSessionResources(
       spawnKey,
       envKey,
       additionalDirectoriesKey,
+      mcpServersKey,
       supportsSteering: supportsAcpSteering(initializeResponse),
       supportsClose:
         initializeResponse.agentCapabilities?.sessionCapabilities?.close != null,
@@ -545,7 +578,12 @@ export async function* runAcpSession(
   outHandle: { current?: AcpRunHandle },
 ): AsyncGenerator<AgentEvent> {
   const pool = options.sessionPool;
-  const { spawnKey, envKey, additionalDirectoriesKey } = buildSessionMatchKeys(ctx);
+  const {
+    spawnKey,
+    envKey,
+    additionalDirectoriesKey,
+    mcpServersKey,
+  } = buildSessionMatchKeys(ctx);
 
   let resources: AcpSessionResources | undefined;
   if (pool?.enabled && ctx.resumeSessionId) {
@@ -555,6 +593,7 @@ export async function* runAcpSession(
         spawnKey,
         envKey,
         additionalDirectoriesKey,
+        mcpServersKey,
       }) ??
       undefined;
   }

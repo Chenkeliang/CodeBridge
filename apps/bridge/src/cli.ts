@@ -262,6 +262,12 @@ program
           mode: linkedSession?.permissionMode ?? undefined,
           resumeSessionId: run.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
+          flowSaveSourceAvailability: linkedSession
+            ? flowSaveIntents.previewPreviousSource({
+                sessionId: linkedSession.id,
+                currentRunId: run.id,
+              })
+            : undefined,
         };
       },
     });

@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   AcpSessionPool,
@@ -64,6 +65,7 @@ import {
 import { writeFcbScript } from "./fcb-script.js";
 import { inspectForeignCodexSessionOwners } from "./codex-session-ownership.js";
 import { SessionLeaseStore, type SessionLease } from "./session-lease.js";
+import { createFlowSaveMcpServerConfig } from "./flow-save-mcp-server.js";
 
 export interface RunnerHostOptions {
   token: string;
@@ -83,6 +85,8 @@ export interface RunnerHostOptions {
   directoryPicker?: () => Promise<string | null>;
   /** Test/embedding hook for Codex app-server Skill discovery. */
   codexSkillLister?: (cwd: string) => Promise<AgentAvailableCommand[]>;
+  /** Absolute built entrypoint for the Bridge-owned read-only MCP server. */
+  flowSaveMcpServerPath?: string;
   /** Test/embedding hook; production owns local Skill filesystem projection here. */
   skillControlPlane?: Pick<
     SkillControlPlane,
@@ -223,9 +227,13 @@ export class RunnerHost {
     Array<{ requestId: string; resolve: (approve: boolean) => void }>
   >();
 
+  private readonly flowSaveMcpServerPath: string;
+
   constructor(private readonly options: RunnerHostOptions) {
     this.maxConcurrent = options.maxConcurrentRuns ?? 4;
     this.dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
+    this.flowSaveMcpServerPath = options.flowSaveMcpServerPath
+      ?? fileURLToPath(new URL("./flow-save-mcp-server.js", import.meta.url));
     this.skillControlPlane = options.skillControlPlane ?? new SkillControlPlane({
       dataDir: this.dataDir,
     });
@@ -860,6 +868,13 @@ export class RunnerHost {
         mode: request.mode,
         claudePermissionMode: request.claudePermissionMode,
         acpConfig: request.acpConfig,
+        flowSaveSourceAvailability: request.flowSaveSourceAvailability,
+        mcpServers: request.flowSaveSourceAvailability
+          ? [createFlowSaveMcpServerConfig(
+              this.flowSaveMcpServerPath,
+              request.flowSaveSourceAvailability,
+            )]
+          : undefined,
         extraEnv: await this.buildAgentEnv(request),
       };
       if (lifecycle.cancelRequested) return;

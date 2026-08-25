@@ -123,7 +123,7 @@ CodeBridge 向 Agent 暴露内部只读 MCP 工具 `codebridge.request_flow_save
 
 ### 4.1 注册方式
 
-`codebridge.request_flow_save` 由 CodeBridge 内部只读 MCP Server 注册，并由 runner-host 注入各 Agent 的 MCP 工具环境。
+`codebridge.request_flow_save` 由 CodeBridge 内部只读 MCP Server 注册，并由 runner-host 注入支持外部 MCP 的 Agent。Pi 当前 SDK 不支持程序化注入外部 MCP，因此通过 `customTools` 投影相同输入和结果；其 Provider-facing wire name 使用函数安全的 `codebridge_request_flow_save`，领域身份仍由 `flow_save_request/v1` 结果 marker 确定。
 
 不在 Codex、Claude、Cursor、Pi 各自实现一套保存逻辑；各 Adapter 只负责把标准 MCP 工具暴露给 Agent，并将工具事件按既有 `AGENT_EVENT` 合同回流。
 
@@ -159,9 +159,9 @@ V1 只支持 `previous_completed_run`：保存请求所在 Run 自身不能作�
 
 Agent 工具调用继续通过 `AGENT_EVENT` 回流：
 
-1. `tool_start` 记录 `toolCallId`、工具名和输入；
+1. `tool_start` 记录 `toolCallId`、Adapter 展示名和输入；展示名可能是 `MCP: tool`、带 namespace 的名称或 Pi 的安全 wire name，不作为领域身份；
 2. `tool_end` 必须与相同 `toolCallId` 关联且状态成功；
-3. Session Runtime 仅在成功 `tool_end` 后创建一次 `FLOW_SAVE_REQUESTED`；
+3. Session Runtime 仅在成功 `tool_end` 严格解析出 `flow_save_request/v1` 且 `accepted: true` 后创建一次 `FLOW_SAVE_REQUESTED`；
 4. 同一 `toolCallId` 重放不得产生第二个请求；
 5. 工具失败、取消或缺失对应 `tool_start` 时不创建请求，并保留可诊断事件。
 

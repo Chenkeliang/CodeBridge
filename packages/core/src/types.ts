@@ -31,6 +31,7 @@ export interface RunRequest {
   claudePermissionMode?: ClaudePermissionMode;
   additionalDirectories?: string[];
   acpConfig?: Record<string, string | boolean>;
+  flowSaveSourceAvailability?: import("./flow-save-tool.js").FlowSaveSourceAvailability;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -418,6 +419,8 @@ export interface RunContext {
   claudePermissionMode?: ClaudePermissionMode;
   additionalDirectories?: string[];
   acpConfig?: Record<string, string | boolean>;
+  flowSaveSourceAvailability?: import("./flow-save-tool.js").FlowSaveSourceAvailability;
+  mcpServers?: import("./flow-save-tool.js").StdioMcpServerConfig[];
   /** 注入 Agent 子进程的额外环境变量（如 FCB_* 出站 API 凭据） */
   extraEnv?: Record<string, string>;
 }

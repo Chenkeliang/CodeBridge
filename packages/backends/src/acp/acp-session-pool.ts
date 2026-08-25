@@ -32,6 +32,7 @@ export interface AcpSessionResources {
   spawnKey: string;
   envKey: string;
   additionalDirectoriesKey: string;
+  mcpServersKey: string;
   supportsSteering: boolean;
   supportsClose: boolean;
   configOptions: SessionConfigOption[];
@@ -129,6 +130,7 @@ export class AcpSessionPool {
       spawnKey: string;
       envKey: string;
       additionalDirectoriesKey: string;
+      mcpServersKey: string;
     },
   ): AcpSessionResources | null {
     if (!this.options.enabled) return null;
@@ -142,6 +144,7 @@ export class AcpSessionPool {
       r.spawnKey !== match.spawnKey ||
       r.envKey !== match.envKey ||
       r.additionalDirectoriesKey !== match.additionalDirectoriesKey
+      || r.mcpServersKey !== match.mcpServersKey
     ) {
       teardownResources(r);
       return null;
