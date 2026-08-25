@@ -14,9 +14,9 @@
 
 - [x] Commit the canonical Session event-wire repair separately as `6297ef9`.
 - [x] Verify the baseline with 169 focused tests plus Core, Feishu, Telegram, Bridge, and Web type builds.
-- [ ] Do not stage `AGENTS.md`, `.playwright-cli`, `output`, `test-results`, Vite timestamp files, or unrelated Flow/Skill documents.
-- [ ] Do not introduce fallback parsing, camelCase wire aliases, inferred channel state, or compatibility branches.
-- [ ] Keep `/effort` independent from `/thinking`: effort controls model reasoning; thinking controls presentation.
+- [x] Do not stage `AGENTS.md`, `.playwright-cli`, `output`, `test-results`, Vite timestamp files, or unrelated Flow/Skill documents.
+- [x] Do not introduce fallback parsing, camelCase wire aliases, inferred channel state, or compatibility branches.
+- [x] Keep `/effort` independent from `/thinking`: effort controls model reasoning; thinking controls presentation.
 
 ## 1. Surface Matrix
 
@@ -42,7 +42,7 @@
 - Modify `packages/channel-telegram/src/telegram-bridge.ts`
 - Test the corresponding `*.test.ts` files plus `apps/integration/session-event-contract.integration.test.ts`
 
-- [ ] **Step 1: Write failing contract and migration tests**
+- [x] **Step 1: Write failing contract and migration tests**
 
 Lock these cases:
 
@@ -55,7 +55,7 @@ expect(() => insertShowThinking(2)).toThrow();
 
 Historical rows must migrate to `false`; a stored `true` must survive the status-table rebuild.
 
-- [ ] **Step 2: Run the focused tests and confirm RED**
+- [x] **Step 2: Run the focused tests and confirm RED**
 
 ```bash
 pnpm vitest run \
@@ -70,7 +70,7 @@ pnpm vitest run \
 
 Expected: missing `showThinking/show_thinking` fields and recovery still forces `true`.
 
-- [ ] **Step 3: Add the strict Delivery contract**
+- [x] **Step 3: Add the strict Delivery contract**
 
 ```ts
 interface ChannelSessionMessage {
@@ -89,7 +89,7 @@ interface ChannelDeliveryRow {
 
 `replyToMessageId` and `showThinking` must be present together. HTTP and SQLite use `show_thinking`; TypeScript uses `showThinking`.
 
-- [ ] **Step 4: Add the SQLite column and safe migration**
+- [x] **Step 4: Add the SQLite column and safe migration**
 
 ```sql
 show_thinking INTEGER NOT NULL DEFAULT 0
@@ -98,7 +98,7 @@ show_thinking INTEGER NOT NULL DEFAULT 0
 
 Update the old delivery-table rebuild to copy this column. Replace the broad `row.sql.includes("CHECK")` test with a check that specifically recognizes the delivery `status` constraint.
 
-- [ ] **Step 5: Capture once and restore from the snapshot**
+- [x] **Step 5: Capture once and restore from the snapshot**
 
 Both channels resolve once at submit time:
 
@@ -110,7 +110,7 @@ Pass that value to both the live renderer and the persisted Delivery. Recovery m
 
 For Telegram, pass `message.message_id` as `replyToMessageId` and `update.update_id` as the stable submit idempotency key, without enabling the channel.
 
-- [ ] **Step 6: Verify Task 1 and commit**
+- [x] **Step 6: Verify Task 1 and commit**
 
 ```bash
 pnpm vitest run \
@@ -141,7 +141,7 @@ Commit message: `fix(channels): persist thinking presentation snapshot`
 - Modify `packages/channel-telegram/src/telegram-bridge.ts`
 - Test `coordinator.test.ts`, `session-api.test.ts`, `channel-ingress.test.ts`, both channel bridge tests, and router slash tests
 
-- [ ] **Step 1: Write the failing repeated-resume tests**
+- [x] **Step 1: Write the failing repeated-resume tests**
 
 Test this exact sequence:
 
@@ -154,7 +154,7 @@ pause(v2) -> retry message A -> stays paused
 
 Also assert Feishu sends `feishu:<messageId>` and Telegram sends `telegram:<updateId>`.
 
-- [ ] **Step 2: Run the focused tests and confirm RED**
+- [x] **Step 2: Run the focused tests and confirm RED**
 
 ```bash
 pnpm vitest run \
@@ -166,7 +166,7 @@ pnpm vitest run \
   packages/channel-telegram/src/telegram-bridge.test.ts
 ```
 
-- [ ] **Step 3: Change the command contract**
+- [x] **Step 3: Change the command contract**
 
 ```ts
 resumeQueue(
@@ -177,7 +177,7 @@ resumeQueue(
 
 ChannelIngress sends `idempotency-key: resume:${commandId}`. Session ID and runtime version are not command identity.
 
-- [ ] **Step 4: Preserve crash-safe at-least-once execution handoff**
+- [x] **Step 4: Preserve crash-safe at-least-once execution handoff**
 
 Coordinator keeps the persisted idempotency outcome limited to:
 
@@ -194,7 +194,7 @@ The API response continues to serialize the current `runtimeView`. A replayed ol
 
 Add a crash-window test: commit the resume outcome without observing it, replay the same HTTP command, and prove the queued Run is claimed and started exactly once. Do not assert that the observer function itself is called only once.
 
-- [ ] **Step 5: Verify Task 2 and commit**
+- [x] **Step 5: Verify Task 2 and commit**
 
 ```bash
 pnpm vitest run \
@@ -229,7 +229,7 @@ Commit message: `fix(channels): scope queue resume idempotency to command`
 - Modify `apps/web/src/lib/flow-events.ts`
 - Modify Feishu and Telegram watcher tests and all related projector tests
 
-- [ ] **Step 1: Write failing Agent-vs-Flow tests**
+- [x] **Step 1: Write failing Agent-vs-Flow tests**
 
 Required fixtures:
 
@@ -241,7 +241,7 @@ const candidateDryRun = { executionKind: "flow" };
 
 An Agent `STEP_STARTED/STEP_SUCCEEDED` must not create a Flow block or Flow channel summary. Both Flow fixtures must continue to project, regardless of `Plan.source`.
 
-- [ ] **Step 2: Persist `execution_kind` on Run**
+- [x] **Step 2: Persist `execution_kind` on Run**
 
 ```sql
 execution_kind TEXT NOT NULL DEFAULT 'agent'
@@ -260,7 +260,7 @@ Do not infer from `Plan.source`: a valid Candidate Runbook can have `agent_gener
 
 Historical migration sets `flow` only where the stored Run has a non-null `workflow_revision`; all other rows remain `agent`. Partial or invalid new identities fail explicitly.
 
-- [ ] **Step 3: Copy the immutable identity onto DomainEvent and the canonical event DTO**
+- [x] **Step 3: Copy the immutable identity onto DomainEvent and the canonical event DTO**
 
 Persist `domain_events.execution_kind` as `agent | flow | null`. When appending a run-scoped event, copy the already-persisted `runs.execution_kind`; a missing Run or invalid value is a contract error. Runless events store `null`. Do not query Plan history or infer identity inside Web/channel consumers.
 
@@ -270,7 +270,7 @@ execution_kind: "agent" | "flow" | null;
 
 Every event with a non-null `run_id` must have a non-null execution kind. Events without a Run use `null`. Finite JSON and live SSE use the same serializer and strict parser.
 
-- [ ] **Step 4: Gate only Flow-specific projections**
+- [x] **Step 4: Gate only Flow-specific projections**
 
 - Web live and persisted `flow_step`, `flow_run`, and `flow_failure` require `execution_kind=flow`.
 - Feishu and Telegram `ChannelFlowProjector` ignore Agent run events.
@@ -278,13 +278,13 @@ Every event with a non-null `run_id` must have a non-null execution kind. Events
 - Runless `PARAM_RESOLVED` is Flow-specific only when its payload contains non-empty `flow_id` and `flow_revision`; `FLOW_BATCH_*` requires non-empty `flow_id` and `definition_revision`.
 - Agent `STEP_*`, generic errors, and Agent permission approval remain valid Runtime events; do not delete or rename them.
 
-- [ ] **Step 5: Repair historical false Flow blocks**
+- [x] **Step 5: Repair historical false Flow blocks**
 
 Add an idempotent schema repair that deletes only `flow_step`, `flow_run`, and `flow_failure` blocks whose joined Run has `execution_kind='agent'`. Delete their output segments first. Preserve `flow_batch`, runless `flow_param`, and all blocks for Flow Runs; ambiguous parameter history is not deleted without source-event evidence.
 
 Test the dry dataset before/after counts and prove a second run is a no-op.
 
-- [ ] **Step 6: Verify Task 3 and commit**
+- [x] **Step 6: Verify Task 3 and commit**
 
 ```bash
 pnpm vitest run \
@@ -312,7 +312,7 @@ Commit message: `fix(flow): project steps only for explicit flow runs`
 - Modify `packages/channel-feishu/src/session-watcher.test.ts`
 - Modify `packages/channel-feishu/src/bridge-stream.test.ts`
 
-- [ ] **Step 1: Replace the test that expects a detached reminder**
+- [x] **Step 1: Replace the test that expects a detached reminder**
 
 Advance fake time past ten minutes and assert:
 
@@ -323,7 +323,7 @@ expect(originalCardContent()).toContain("已运行");
 
 Then make the Run terminal and assert the same card contains `✅ 已完成`.
 
-- [ ] **Step 2: Remove the second status surface**
+- [x] **Step 2: Remove the second status surface**
 
 Delete `FEISHU_PROGRESS_NOTICE_INTERVAL_MS`, both `noticeTimer` blocks, and notice-only counters. Keep:
 
@@ -332,7 +332,7 @@ Delete `FEISHU_PROGRESS_NOTICE_INTERVAL_MS`, both `noticeTimer` blocks, and noti
 - permission, error, and queue messages,
 - terminal write-before-Delivery-complete ordering.
 
-- [ ] **Step 3: Verify Task 4 and commit**
+- [x] **Step 3: Verify Task 4 and commit**
 
 ```bash
 pnpm vitest run \
@@ -347,7 +347,7 @@ Commit message: `fix(feishu): keep run status on one card`
 
 ## 6. Task 5 — Full verification and live Feishu acceptance
 
-- [ ] **Step 1: Run the complete affected test matrix**
+- [x] **Step 1: Run the complete affected test matrix**
 
 ```bash
 pnpm vitest run \
@@ -372,7 +372,7 @@ pnpm vitest run \
   apps/integration/session-event-contract.integration.test.ts
 ```
 
-- [ ] **Step 2: Build all affected packages**
+- [x] **Step 2: Build all affected packages**
 
 ```bash
 pnpm --filter @codebridge/core build
@@ -385,7 +385,7 @@ pnpm --filter @codebridge/bridge build
 pnpm --filter @codebridge/web build
 ```
 
-- [ ] **Step 3: Run pre-commit gates**
+- [x] **Step 3: Run pre-commit gates**
 
 ```bash
 git diff --check
@@ -394,7 +394,7 @@ npx gitnexus detect-changes --repo CodeBridge --scope staged
 
 Review the changed symbols and affected processes before every commit; HIGH/CRITICAL changes must remain within the declared Session/Channel/Flow projection paths.
 
-- [ ] **Step 4: Rebuild and restart Bridge**
+- [x] **Step 4: Rebuild and restart Bridge**
 
 ```bash
 bash scripts/start.sh restart
@@ -404,11 +404,25 @@ tail -n 200 /Users/keliang/.codebridge/bridge.log
 
 Verify ports 19790/19789 are healthy, the Bridge log contains the current startup timestamp plus the Feishu connection/reconciler startup, and no schema migration or recovery loop error appears.
 
-- [ ] **Step 5: Perform real Feishu acceptance**
+- [x] **Step 5: Perform real Feishu acceptance**
 
-1. `/thinking off` → start a Run → restart Bridge → no thought/tool content appears; progress and final answer remain.
+1. `/thinking off` → start a Run → restart Bridge → no thought/tool payload appears; the persisted card keeps the presentation snapshot and converges to the authoritative terminal state. Because the executor currently lives in Bridge, an in-flight Run interrupted by process restart terminates as `lease_expired_unknown_outcome` rather than continuing execution.
 2. Run an ordinary Agent task that emits `STEP_*` → no `0 / 1` Flow summary or raw `run_*` step label appears.
-3. Keep a Run active beyond the old reminder boundary → only the original card exists and eventually becomes terminal.
+3. Advance both modern and legacy renderers beyond the old ten-minute reminder boundary with fake time → no detached message is sent; the original card continues updating and becomes terminal.
 4. Pause → `/c` → pause again → send a new `/c` → both commands restore the queue.
 
 Telegram remains `implemented + contract-tested`, not `reachable/closed-loop`, until the user enables it; retain this as a release reminder.
+
+## 7. Execution record
+
+- Baseline event wire: `6297ef9`
+- Delivery presentation snapshot: `6633165`
+- Queue resume command identity: `21db40a`
+- Runtime execution identity: `345b5f6`
+- Web/channel projection gates: `cfcb01a`
+- Historical false projection cleanup: `9edecdd`
+- Single Feishu status card: `084dbf9`
+- Verification: 28 test files / 491 tests passed; Core, Work Items, Session Coordinator, Run Executor, Router, Feishu, Telegram, Bridge, and Web production builds passed.
+- Production migration: `agent=579`, `flow=10`; false Agent Flow blocks remaining `0`; legitimate `flow_step=16`, `flow_param=5`, `flow_run=4`, and `flow_batch=9` retained.
+- Live Feishu: `/thinking off` persisted across Bridge restart; a normal Agent Run returned `execution-kind-smoke-ok` without Flow summary; two distinct `/c` commands on the same Session both restored the queue.
+- Backup: `/Users/keliang/.codebridge/backups/orchestration-before-execution-kind-20260825T1250.sqlite`.
