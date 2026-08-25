@@ -129,6 +129,38 @@ export interface FlowProvenance {
   source_request_id?: string;
 }
 
+export interface FlowSaveRequest {
+  request_id: string;
+  session_id: string;
+  request_turn_id: string;
+  request_run_id: string;
+  source_turn_id: string;
+  source_run_id: string;
+  source: "agent_intent" | "turn_action";
+  user_message: string;
+  intent_summary: string | null;
+  name_hint: string | null;
+  source_imported: boolean;
+  created_at: string;
+}
+
+export type FlowSaveRequestState =
+  | { state: "requested"; request: FlowSaveRequest }
+  | { state: "dismissed"; request: FlowSaveRequest }
+  | {
+      state: "completed";
+      request: FlowSaveRequest;
+      flow_id: string;
+      definition_revision: string;
+    }
+  | { state: "failed"; request: FlowSaveRequest; code: string };
+
+export interface FlowSaveConfirmResult {
+  state: "completed";
+  request: FlowSaveRequest;
+  flow: FlowRecord;
+}
+
 export interface FlowEvidence {
   run_id: string;
   session_id: string | null;

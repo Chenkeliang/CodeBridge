@@ -183,6 +183,47 @@ describe("workbench API client", () => {
     expect(init.body).toBe(JSON.stringify({ draft_revision: 3 }));
   });
 
+  it("sends caller-owned idempotency keys for Flow save intent commands", async () => {
+    const requestResponse = {
+      state: "requested",
+      request: { request_id: "fsr_one", source_run_id: "run_1" },
+    };
+    const confirmResponse = {
+      state: "completed",
+      request: requestResponse.request,
+      flow: { flow_id: "flow_one", status: "candidate" },
+    };
+    const dismissResponse = {
+      state: "dismissed",
+      request: requestResponse.request,
+    };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json(requestResponse, { status: 201 }))
+      .mockResolvedValueOnce(Response.json(confirmResponse, { status: 201 }))
+      .mockResolvedValueOnce(Response.json(dismissResponse));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.requestFlowSave("sess_1", "run_1", "request-key");
+    await api.confirmFlowSave("fsr_one", "confirm-key");
+    await api.dismissFlowSave("fsr_one", "dismiss-key");
+
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      "/v1/sessions/sess_1/flow-save-requests",
+      "/v1/flow-save-requests/fsr_one/confirm",
+      "/v1/flow-save-requests/fsr_one/dismiss",
+    ]);
+    for (const call of fetch.mock.calls) {
+      expect(new Headers((call[1] as RequestInit).headers).get("Idempotency-Key"))
+        .toMatch(/-key$/);
+    }
+    expect((fetch.mock.calls[0]?.[1] as RequestInit).body).toBe(JSON.stringify({
+      source_run_id: "run_1",
+      source: "turn_action",
+    }));
+    expect((fetch.mock.calls[1]?.[1] as RequestInit).body).toBeUndefined();
+    expect((fetch.mock.calls[2]?.[1] as RequestInit).body).toBeUndefined();
+  });
+
   it("uses the existing Runtime approval query and write contracts", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(Response.json({ approvals: [{ id: "approval_1", status: "requested" }] }))

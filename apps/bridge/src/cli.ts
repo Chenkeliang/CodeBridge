@@ -449,6 +449,7 @@ program
       events: workItemStore,
       capabilities: capabilityRegistry,
       runtime: capabilityRuntime,
+      flowSaveIntents,
     });
     const flowBatchApp = createFlowBatchApp(
       flowBatchService,
