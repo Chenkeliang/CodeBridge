@@ -14,6 +14,11 @@ import {
 import { CoalescingMessageWriter } from "./coalescing-message-writer.js";
 import { chunkTelegramText } from "./telegram-api.js";
 
+const TELEGRAM_FLOW_SAVE_REQUEST_NOTICE =
+  "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。";
+const TELEGRAM_MESSAGE_LIMIT = 4_096;
+const TELEGRAM_RUN_SECTION_SEPARATOR = "\n\n---\n\n";
+
 interface TelegramTransport {
   sendMessage(
     chatId: string,
@@ -38,6 +43,7 @@ class TelegramRunRenderer {
   private readonly projector: ChannelStreamProjector;
   private readonly flowProjector: ChannelFlowProjector;
   private readonly liveWriter: CoalescingMessageWriter;
+  private flowSaveRequested = false;
 
   constructor(
     private readonly api: TelegramTransport,
@@ -67,11 +73,24 @@ class TelegramRunRenderer {
 
   onDomainEvent(event: ChannelSessionEvent): void {
     const flow = this.flowProjector.apply(event);
-    const text = composeTelegramRunBody(
+    const body = composeTelegramRunBody(
       this.projector.snapshot().liveText,
       renderChannelFlowLive(flow),
     );
+    const text = this.flowSaveRequested
+      ? chunkTelegramRunText(body, true)[0]
+      : body;
     if (text) this.liveWriter.enqueue(text);
+  }
+
+  onFlowSaveRequested(): void {
+    if (this.flowSaveRequested) return;
+    this.flowSaveRequested = true;
+    const body = composeTelegramRunBody(
+      this.projector.snapshot().liveText,
+      renderChannelFlowLive(this.flowProjector.snapshot()),
+    );
+    this.liveWriter.enqueue(chunkTelegramRunText(body, true)[0]!);
   }
 
   async onPermissionRequest(title: string): Promise<void> {
@@ -91,10 +110,13 @@ class TelegramRunRenderer {
     this.liveWriter.close();
     const agent = this.projector.snapshot();
     const flowText = renderChannelFlowFinal(this.flowProjector.snapshot());
-    const finalText = flowText
+    const baseFinalText = flowText
       ? composeTelegramRunBody(agent.result, flowText)
       : agent.finalText;
-    const chunks = chunkTelegramText(finalText);
+    const chunks = chunkTelegramRunText(
+      baseFinalText,
+      this.flowSaveRequested,
+    );
     try {
       await this.api.editMessage(
         this.chatId,
@@ -132,8 +154,29 @@ function isStructuredFlowEvent(event: ChannelSessionEvent): boolean {
   return STRUCTURED_FLOW_EVENTS.has(event.type);
 }
 
-function composeTelegramRunBody(agentText: string, flowText: string): string {
-  return [agentText.trim(), flowText.trim()].filter(Boolean).join("\n\n---\n\n");
+function composeTelegramRunBody(
+  agentText: string,
+  flowText: string,
+): string {
+  return [agentText.trim(), flowText.trim()]
+    .filter(Boolean)
+    .join(TELEGRAM_RUN_SECTION_SEPARATOR);
+}
+
+function chunkTelegramRunText(
+  body: string,
+  flowSaveRequested: boolean,
+): string[] {
+  if (!flowSaveRequested) return chunkTelegramText(body);
+  if (!body) return [TELEGRAM_FLOW_SAVE_REQUEST_NOTICE];
+  const noticeSuffix =
+    `${TELEGRAM_RUN_SECTION_SEPARATOR}${TELEGRAM_FLOW_SAVE_REQUEST_NOTICE}`;
+  const firstBodyLength = TELEGRAM_MESSAGE_LIMIT - noticeSuffix.length;
+  const firstBody = body.slice(0, firstBodyLength);
+  return [
+    `${firstBody}${noticeSuffix}`,
+    ...chunkTelegramText(body.slice(firstBodyLength), TELEGRAM_MESSAGE_LIMIT),
+  ];
 }
 
 /** 每 Session 一个持久 events 订阅，单订阅路由 Turn / Run / Delivery。 */
@@ -268,6 +311,10 @@ export class TelegramSessionWatcher {
           renderer.onAgentEvent(agentEvent);
         }
       }
+      return;
+    }
+    if (event.type === "FLOW_SAVE_REQUESTED" && event.runId) {
+      this.runs.get(event.runId)?.onFlowSaveRequested();
       return;
     }
     if (isStructuredFlowEvent(event) && event.runId) {
