@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelDeliveryRow,
   ChannelSessionEvent,
@@ -831,6 +831,122 @@ describe("FeishuSessionWatcher", () => {
 });
 
 describe("FeishuRunCard", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps a ten-minute run and its terminal result on the original card", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-25T00:00:00.000Z"));
+    const contents: string[] = [];
+    const sendMarkdown = vi.fn(async () => {});
+    const host: FeishuCardHost = {
+      channel: {
+        stream: async (
+          _chatId: string,
+          input: {
+            markdown(controller: {
+              cardId: string;
+              messageId: string;
+              setContent(full: string): Promise<void>;
+            }): Promise<void>;
+          },
+        ) => {
+          void input.markdown({
+            cardId: "cardkit-1",
+            messageId: "card-1",
+            setContent: async (full) => {
+              contents.push(full);
+            },
+          }).catch(() => {});
+        },
+      } as never,
+      sendMarkdown,
+      updateCard: async () => {},
+      registerPendingStream: () => {},
+      clearPendingStream: () => {},
+      log: () => {},
+      isDisconnecting: () => false,
+    };
+    const card = new FeishuRunCard(host, "chat", "src", "run_1", false);
+    await card.open();
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "commentary",
+      messageId: "checkpoint-1",
+      text: "P3 正在推进",
+    });
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await card.reconcileRun({
+      status: "running",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:10:00.000Z",
+      leaseExpiresAt: "2026-08-25T00:11:00.000Z",
+      terminalReason: null,
+      sessionActiveRunId: "run_1",
+      sessionQueueState: "ready",
+    }, "connected");
+
+    expect(sendMarkdown).not.toHaveBeenCalled();
+    expect(contents.at(-1)).toContain("已运行 10 分 0 秒");
+
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "final_answer",
+      messageId: "final-1",
+      text: "最终结果",
+    });
+    await card.finalize("succeeded");
+
+    expect(contents.at(-1)).toContain("✅ **已完成**");
+    expect(contents.at(-1)).toContain("最终结果");
+    expect(sendMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("does not create a detached notice when terminal completion races the old boundary", async () => {
+    vi.useFakeTimers();
+    const sendMarkdown = vi.fn(async () => {});
+    let rendered = "";
+    const host: FeishuCardHost = {
+      channel: {
+        stream: async (
+          _chatId: string,
+          input: {
+            markdown(controller: {
+              cardId: string;
+              messageId: string;
+              setContent(full: string): Promise<void>;
+            }): Promise<void>;
+          },
+        ) => {
+          void input.markdown({
+            cardId: "cardkit-1",
+            messageId: "card-1",
+            setContent: async (full) => {
+              rendered = full;
+            },
+          }).catch(() => {});
+        },
+      } as never,
+      sendMarkdown,
+      updateCard: async () => {},
+      registerPendingStream: () => {},
+      clearPendingStream: () => {},
+      log: () => {},
+      isDisconnecting: () => false,
+    };
+    const card = new FeishuRunCard(host, "chat", "src", "run_1", false);
+    await card.open();
+    await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+
+    await card.finalize("succeeded");
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(rendered).toContain("✅ **已完成**");
+    expect(sendMarkdown).not.toHaveBeenCalled();
+  });
+
   it("does not repeat or roll back commentary around tool calls", async () => {
     const contents: string[] = [];
     const host: FeishuCardHost = {
