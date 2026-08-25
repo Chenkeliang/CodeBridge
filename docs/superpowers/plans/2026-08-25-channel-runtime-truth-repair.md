@@ -147,8 +147,9 @@ Test this exact sequence:
 
 ```text
 pause(v1) -> /c(message A) -> ready
-retry message A -> cached, no second transition/observer
-pause(v2) -> /c(message B) -> ready
+retry message A -> cached, no second state transition; handoff may be retried
+pause(v2) -> retry message A -> stays paused
+/c(message B) -> ready
 ```
 
 Also assert Feishu sends `feishu:<messageId>` and Telegram sends `telegram:<updateId>`.
@@ -176,19 +177,22 @@ resumeQueue(
 
 ChannelIngress sends `idempotency-key: resume:${commandId}`. Session ID and runtime version are not command identity.
 
-- [ ] **Step 4: Separate newly applied work from replayed work**
+- [ ] **Step 4: Preserve crash-safe at-least-once execution handoff**
 
-Coordinator returns:
+Coordinator keeps the persisted idempotency outcome limited to:
 
 ```ts
 {
   runtime: SessionRuntime;
   dispatched: { turn: SessionTurn; run: Run } | null;
-  applied: boolean;
 }
 ```
 
-Only `applied === true` may call `observeExecution`. The API serializes `result.runtime` instead of reading a newer live runtime after an idempotency replay.
+The API may call `observeExecution` again for a cached `dispatched` Run. This closes the crash window where the transaction committed before the first handoff. `RunExecutor.claimRun` remains the atomic exactly-once execution gate, so a repeated observer cannot duplicate Agent work or side effects.
+
+The API response continues to serialize the current `runtimeView`. A replayed old command must not return its historical `ready` snapshot after the Session has subsequently become paused.
+
+Add a crash-window test: commit the resume outcome without observing it, replay the same HTTP command, and prove the queued Run is claimed and started exactly once. Do not assert that the observer function itself is called only once.
 
 - [ ] **Step 5: Verify Task 2 and commit**
 
@@ -244,7 +248,7 @@ execution_kind TEXT NOT NULL DEFAULT 'agent'
   CHECK (execution_kind IN ('agent', 'flow'))
 ```
 
-New Runs receive the value at invocation/materialization time:
+New Runs receive the value explicitly from the resolved invocation carried by the Turn:
 
 ```ts
 executionKind: turn.message.flowInvocationSource === "none"
@@ -256,7 +260,9 @@ Do not infer from `Plan.source`: a valid Candidate Runbook can have `agent_gener
 
 Historical migration sets `flow` only where the stored Run has a non-null `workflow_revision`; all other rows remain `agent`. Partial or invalid new identities fail explicitly.
 
-- [ ] **Step 3: Add identity to the canonical event DTO**
+- [ ] **Step 3: Copy the immutable identity onto DomainEvent and the canonical event DTO**
+
+Persist `domain_events.execution_kind` as `agent | flow | null`. When appending a run-scoped event, copy the already-persisted `runs.execution_kind`; a missing Run or invalid value is a contract error. Runless events store `null`. Do not query Plan history or infer identity inside Web/channel consumers.
 
 ```ts
 execution_kind: "agent" | "flow" | null;
@@ -266,14 +272,15 @@ Every event with a non-null `run_id` must have a non-null execution kind. Events
 
 - [ ] **Step 4: Gate only Flow-specific projections**
 
-- Web live and persisted `flow_step`, `flow_param`, `flow_run`, and `flow_failure` require `execution_kind=flow`.
+- Web live and persisted `flow_step`, `flow_run`, and `flow_failure` require `execution_kind=flow`.
 - Feishu and Telegram `ChannelFlowProjector` ignore Agent run events.
 - `FLOW_BATCH_*` remains independently identifiable.
+- Runless `PARAM_RESOLVED` is Flow-specific only when its payload contains non-empty `flow_id` and `flow_revision`; `FLOW_BATCH_*` requires non-empty `flow_id` and `definition_revision`.
 - Agent `STEP_*`, generic errors, and Agent permission approval remain valid Runtime events; do not delete or rename them.
 
 - [ ] **Step 5: Repair historical false Flow blocks**
 
-Add an idempotent schema repair that deletes only `flow_step`, `flow_param`, `flow_run`, and `flow_failure` blocks whose joined Run has `execution_kind='agent'`. Delete their output segments first. Preserve `flow_batch` and all blocks for Flow Runs.
+Add an idempotent schema repair that deletes only `flow_step`, `flow_run`, and `flow_failure` blocks whose joined Run has `execution_kind='agent'`. Delete their output segments first. Preserve `flow_batch`, runless `flow_param`, and all blocks for Flow Runs; ambiguous parameter history is not deleted without source-event evidence.
 
 Test the dry dataset before/after counts and prove a second run is a no-op.
 
