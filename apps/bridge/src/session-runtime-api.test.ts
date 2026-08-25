@@ -120,6 +120,71 @@ function request(message: string, key?: string) {
 }
 
 describe("Session runtime command API", () => {
+  it("re-observes a committed queue resume after a handoff crash", async () => {
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const fixture = setup({
+      executor: { execute } as unknown as RunExecutor,
+    });
+    const submitted = fixture.coordinator.submitTurn({
+      sessionId: fixture.session.id,
+      idempotencyKey: "message_1",
+      message: {
+        text: "检查项目",
+        attachmentIds: [],
+        flowId: null,
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      },
+      workItem: {
+        title: "Session",
+        mode: "auto",
+        conversationId: `conv_${fixture.session.id}`,
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    });
+    fixture.coordinator.pauseQueue({
+      sessionId: fixture.session.id,
+      reason: "stale",
+    });
+    const commandId = "resume:feishu:message-A";
+    fixture.coordinator.resumeQueue({
+      sessionId: fixture.session.id,
+      expectedRuntimeVersion:
+        fixture.workItems.getSessionRuntime(fixture.session.id)!.version,
+      idempotencyKey: commandId,
+    });
+
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/queue/resume`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          "idempotency-key": commandId,
+          "if-match": String(
+            fixture.workItems.getSessionRuntime(fixture.session.id)!.version,
+          ),
+        },
+        body: "{}",
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith(
+      submitted.run!.id,
+      undefined,
+      { dryRun: undefined },
+    );
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
   it("atomically dispatches the first message", async () => {
     const fixture = setup();
     const response = await fixture.app.request(

@@ -255,6 +255,59 @@ describe("FeishuBridge stream lifecycle", () => {
     expect(cancelRun).toHaveBeenCalledWith("sess_pi", "run_pi");
   });
 
+  it("uses the Feishu message id as the queue-resume command id", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-lifecycle-"));
+    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge & {
+      handleMessage(m: FeishuMessage): Promise<void>;
+    };
+    const resumeQueue = vi.fn().mockResolvedValue({ queueState: "ready" });
+    bridge.sessionIngress = {
+      getSlotCommandContext: vi.fn().mockResolvedValue({
+        sessionId: "sess_pi",
+        activeRunId: null,
+        providerSessionId: null,
+      }),
+      resumeQueue,
+    } as unknown as ChannelSessionIngress;
+    bridge.orchestrator = {
+      router: {
+        getBinding: () => ({ showThinking: false, backendId: "pi", cwd: "/tmp/p" }) as never,
+        buildSlot: () => ({ agentId: "pi", workspaceKey: "/tmp/p", generation: 0 }) as never,
+      },
+      listSessions: async () => [],
+      bindSession: () => {},
+      closeSession: async () => ({ ok: true }),
+      deleteSession: async () => ({ ok: true }),
+      listConfigOptions: async () => [],
+      hasActiveRun: () => false,
+      activeRunElapsedMs: () => undefined,
+      activeRunStatus: () => undefined,
+      steerActiveForChat: async () => ({ ok: false }),
+      resolveActivePermission: async () => false,
+      cancelActiveForChat: async () => false,
+      authorizeDirectory: async () => ({ ok: true }),
+      runAgent: async function* () {},
+    } as never;
+    bridge.channel = {
+      async stream() {},
+      async send() {},
+      async disconnect() {},
+    } as never;
+
+    await bridge.handleMessage({
+      messageId: "message-A",
+      chatId: "chat",
+      chatType: "p2p",
+      senderId: "user",
+      content: "/c",
+    });
+
+    expect(resumeQueue).toHaveBeenCalledWith(
+      "sess_pi",
+      "feishu:message-A",
+    );
+  });
+
   it("streams a dispatched run through submit + events", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-lifecycle-"));
     const bridge = new FeishuBridge({ config: defaultConfig(), dataDir }) as unknown as TestableBridge & {

@@ -599,7 +599,10 @@ export class FeishuBridge {
       },
       resumeQueue: async (sessionId) => {
         if (!this.sessionIngress) return { queueState: "paused" };
-        return this.sessionIngress.resumeQueue(sessionId);
+        return this.sessionIngress.resumeQueue(
+          sessionId,
+          `feishu:${msg.messageId}`,
+        );
       },
       steerActiveRun: async (runId, prompt) => {
         if (!this.sessionIngress) {

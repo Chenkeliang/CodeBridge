@@ -367,6 +367,25 @@ describe("channel session ingress", () => {
     expect(result).toEqual({ sessionId: "sess_9" });
   });
 
+  it("scopes queue resume idempotency to the channel command", async () => {
+    const app = new Hono();
+    app.post("/v1/sessions/:session/queue/resume", (c) => {
+      expect(c.req.header("idempotency-key")).toBe(
+        "resume:feishu:message-A",
+      );
+      expect(c.req.header("if-match")).toBe("7");
+      return c.json({ runtime: { queue_state: "ready" } });
+    });
+    app.get("/v1/sessions/:session", (c) => c.json({
+      runtime: { version: 7 },
+    }));
+    const ingress = createChannelSessionIngress(app, "token");
+
+    await expect(
+      ingress.resumeQueue("sess_1", "feishu:message-A"),
+    ).resolves.toEqual({ queueState: "ready" });
+  });
+
   it("throws the provider_session_busy code with detail on the error", async () => {
     const app = new Hono();
     app.post("/v1/channels/:channel/conversations/:conversation/resume", async (c) => {

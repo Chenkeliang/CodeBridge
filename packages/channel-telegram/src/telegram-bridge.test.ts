@@ -15,6 +15,42 @@ afterEach(() => {
 });
 
 describe("TelegramBridge inbound commands", () => {
+  it("uses the Telegram update id as the queue-resume command id", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
+    const resumeQueue = vi.fn().mockResolvedValue({ queueState: "ready" });
+    const bridge = new TelegramBridge({
+      config,
+      dataDir,
+      api: { sendMessage: vi.fn().mockResolvedValue({ message_id: 8 }) } as never,
+      sessionIngress: {
+        getSlotCommandContext: vi.fn().mockResolvedValue({
+          sessionId: "sess_pi",
+          activeRunId: null,
+          providerSessionId: null,
+        }),
+        resumeQueue,
+      } as unknown as ChannelSessionIngress,
+    });
+
+    await bridge.handleUpdate({
+      update_id: 42,
+      message: {
+        message_id: 9,
+        chat: { id: 42, type: "private" },
+        from: { id: 99 },
+        text: "/c",
+      },
+    });
+
+    expect(resumeQueue).toHaveBeenCalledWith(
+      "sess_pi",
+      "telegram:42",
+    );
+  });
+
   it("lists and invokes a Flow without forwarding /flow commands to Agent", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-flow-"));
     tmpDirs.push(dataDir);

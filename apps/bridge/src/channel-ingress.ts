@@ -650,6 +650,7 @@ export function createChannelSessionIngress(
 
   const resumeQueue = async (
     sessionId: string,
+    commandId: string,
   ): Promise<{ queueState: "ready" | "paused" }> => {
     const version = await readRuntimeVersion(sessionId);
     const response = await app.request(
@@ -659,7 +660,7 @@ export function createChannelSessionIngress(
         headers: {
           ...auth,
           "content-type": "application/json",
-          "idempotency-key": `resume:${sessionId}`,
+          "idempotency-key": `resume:${commandId}`,
           "if-match": String(version),
         },
         body: "{}",
