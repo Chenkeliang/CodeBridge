@@ -37,6 +37,12 @@ describe("policy and approval", () => {
       conversationId: "web:1",
       riskLevel: "production_write",
     });
+    workItems.createRun({
+      id: "run_1",
+      workItemId: workItem.id,
+      mode: workItem.mode,
+      executionKind: "agent",
+    });
     const approvals = new ApprovalService(workItems, ":memory:");
     const requested = approvals.request({
       workItemId: workItem.id,
@@ -61,6 +67,7 @@ describe("policy and approval", () => {
     expect(approvals.consume(granted!.id, "run_1", "release", "sha256:abc")).toBe(false);
     expect(workItems.listEvents(workItem.id).map((event) => event.type)).toEqual([
       "WORK_ITEM_CREATED",
+      "RUN_CREATED",
       "APPROVAL_REQUESTED",
       "APPROVAL_GRANTED",
     ]);
@@ -75,6 +82,12 @@ describe("policy and approval", () => {
       mode: "release",
       conversationId: "web:reject",
       riskLevel: "production_write",
+    });
+    workItems.createRun({
+      id: "run_reject",
+      workItemId: workItem.id,
+      mode: workItem.mode,
+      executionKind: "agent",
     });
     const approvals = new ApprovalService(workItems, ":memory:");
     const requested = approvals.request({
@@ -102,6 +115,12 @@ describe("policy and approval", () => {
       mode: "release",
       conversationId: "web:1",
       riskLevel: "production_write",
+    });
+    workItems.createRun({
+      id: "run_1",
+      workItemId: workItem.id,
+      mode: workItem.mode,
+      executionKind: "agent",
     });
     const approvals = new ApprovalService(workItems, ":memory:");
     const requested = approvals.request({

@@ -74,9 +74,9 @@ function insertDomainEvents(
   const db = new DatabaseSync(databasePath);
   const statement = db.prepare(
     `INSERT INTO domain_events (
-      event_id, schema_version, sequence, work_item_id, run_id, type,
+      event_id, schema_version, sequence, work_item_id, run_id, execution_kind, type,
       occurred_at, actor, target, input_hash, result_ref, payload
-    ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+    ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
   );
   const now = new Date("2026-08-14T00:00:00.000Z");
   db.exec("BEGIN IMMEDIATE;");
@@ -87,6 +87,7 @@ function insertDomainEvents(
         event.sequence,
         event.workItemId,
         event.runId ?? null,
+        event.runId ? "agent" : null,
         event.type,
         now.toISOString(),
         event.actor,
