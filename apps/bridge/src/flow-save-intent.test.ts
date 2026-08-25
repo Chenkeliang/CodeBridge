@@ -1008,6 +1008,59 @@ describe("FlowSaveIntentService", () => {
     expect(request.requestRunId).toBe(requestRun.id);
   });
 
+  it("never selects an earlier Flow save request Run as the reusable source", () => {
+    const fixture = saveIntentFixture();
+    const businessRun = seedSaveIntentRun(fixture, { id: "run_business" });
+    const priorSaveRequestRun = seedSaveIntentRun(fixture, {
+      id: "run_prior_save_request",
+      text: "把刚才任务存为 Flow",
+      status: "running",
+      tools: ["Read File", "Search"],
+    });
+    addRequestToolStart(fixture, priorSaveRequestRun, "tool_prior_save", {
+      name: "MCP: request flow save",
+      input: {
+        server: "codebridge-internal",
+        tool: FLOW_SAVE_TOOL_NAME,
+        arguments: { source_scope: "previous_completed_run" },
+      },
+    });
+    addRequestToolEnd(fixture, priorSaveRequestRun, "tool_prior_save", {
+      output: {
+        codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+        accepted: false,
+        source_scope: "previous_completed_run",
+        code: "no_extractable_previous_run",
+      },
+    });
+    fixture.events.updateRunStatus(priorSaveRequestRun.id, "succeeded");
+    fixture.events.appendEvent({
+      workItemId: fixture.workItemId,
+      runId: priorSaveRequestRun.id,
+      type: "RUN_SUCCEEDED",
+      actor: "system",
+      target: priorSaveRequestRun.id,
+      payload: {},
+    });
+    const currentRun = seedSaveIntentRun(fixture, {
+      id: "run_current_save_request",
+      text: "请把刚才这套流程存为 Flow",
+      status: "running",
+      tools: [],
+    });
+    addRequestToolStart(fixture, currentRun, "tool_current_save");
+    addRequestToolEnd(fixture, currentRun, "tool_current_save");
+
+    const request = fixture.service.requestFromTool({
+      sessionId: fixture.sessionId,
+      currentRunId: currentRun.id,
+      toolCallId: "tool_current_save",
+    });
+
+    expect(request.sourceRunId).toBe(businessRun.id);
+    expect(request.sourceRunId).not.toBe(priorSaveRequestRun.id);
+  });
+
   it.each([
     ["MCP: tool", { content: [{
       type: "text",
