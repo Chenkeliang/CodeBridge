@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import {
   toApiRun,
   toApiSession,
+  toApiSessionEvent,
   toApiSessionTurn,
   toApiTimeline,
 } from "./session-runtime-types.js";
@@ -419,7 +420,7 @@ export function registerSessionRuntimeReadRoutes(
           let bytes = 0;
           let wrote = false;
           for (const event of candidates) {
-            const data = JSON.stringify(event);
+            const data = JSON.stringify(toApiSessionEvent(event));
             const size = Buffer.byteLength(data, "utf8");
             if (wrote && bytes + size > 1_048_576) break;
             await stream.writeSSE({
@@ -449,7 +450,7 @@ export function registerSessionRuntimeReadRoutes(
         Math.min(500, Math.max(1, tail)),
       );
       return c.json({
-        events,
+        events: events.map(toApiSessionEvent),
         next_sequence: events.at(-1)?.sequence ?? after,
         has_more: false,
       });
@@ -464,7 +465,7 @@ export function registerSessionRuntimeReadRoutes(
       );
       const events = rows.slice(0, limit);
       return c.json({
-        events,
+        events: events.map(toApiSessionEvent),
         next_sequence: events.at(-1)?.sequence ?? after,
         has_more: rows.length > events.length,
       });

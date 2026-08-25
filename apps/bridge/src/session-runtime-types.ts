@@ -1,9 +1,28 @@
 import type { AgentSession } from "@codebridge/session-catalog";
+import type { SessionEventWire } from "@codebridge/core/session-event-wire";
 import type {
+  DomainEvent,
   Run,
   SessionTimelineTurn,
   SessionTurn,
 } from "@codebridge/work-items";
+
+export function toApiSessionEvent(event: DomainEvent): SessionEventWire {
+  return {
+    schema_version: event.schemaVersion,
+    event_id: event.eventId,
+    sequence: event.sequence,
+    work_item_id: event.workItemId,
+    run_id: event.runId,
+    type: event.type,
+    occurred_at: event.occurredAt,
+    actor: event.actor,
+    target: event.target,
+    input_hash: event.inputHash,
+    result_ref: event.resultRef,
+    payload: event.payload,
+  };
+}
 
 export function toApiSession(session: AgentSession) {
   return {

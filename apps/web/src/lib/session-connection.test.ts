@@ -71,11 +71,17 @@ function snapshot(sessionId: string, lastEventSequence: number): SessionSnapshot
 
 function deltaEvent(sessionId: string, sequence: number, text: string): SessionEvent {
   return {
+    schema_version: 1,
     event_id: `${sessionId}-event-${sequence}`,
     sequence,
+    work_item_id: `${sessionId}-work`,
     run_id: `${sessionId}-run`,
     type: "AGENT_EVENT",
     occurred_at: `2026-08-14T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+    actor: "agent",
+    target: "text_delta",
+    input_hash: null,
+    result_ref: null,
     payload: { event: { type: "text_delta", phase: "final_answer", text } },
   };
 }

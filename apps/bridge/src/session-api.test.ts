@@ -1666,7 +1666,7 @@ describe("session API", () => {
     workItems.close();
   });
 
-  it("serializes channel events with camelCase runId", async () => {
+  it("serializes channel events with the snake_case wire contract", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
     const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
@@ -1696,10 +1696,10 @@ describe("session API", () => {
       { headers: { authorization: `Bearer ${TOKEN}` } },
     );
     const eventsBody = await eventsResponse.json() as {
-      events: Array<{ type: string; runId: string | null }>;
+      events: Array<{ type: string; run_id: string | null }>;
     };
     const runCreated = eventsBody.events.find((event) => event.type === "RUN_CREATED");
-    expect(runCreated?.runId).toMatch(/^run_/);
+    expect(runCreated?.run_id).toMatch(/^run_/);
     catalog.close();
     workItems.close();
   });
@@ -2678,6 +2678,113 @@ describe("session API", () => {
       headers: { authorization: `Bearer ${TOKEN}`, "Last-Event-ID": "1" },
     });
     expect(await response.text()).toContain("AGENT_EVENT");
+    catalog.close();
+    workItems.close();
+  });
+
+  it("serializes finite Session history through the snake_case wire contract", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const workItem = workItems.createWorkItem({
+      title: "finite contract",
+      mode: "auto",
+      conversationId: "finite-contract",
+      workspaceScope: [],
+      riskLevel: "read_only",
+    });
+    const event = workItems.appendEvent({
+      workItemId: workItem.id,
+      runId: "run_contract",
+      type: "AGENT_EVENT",
+      actor: "agent",
+      target: "text_delta",
+      resultRef: "result://contract",
+      payload: { event: { type: "text_delta", text: "hello" } },
+    });
+    const session = catalog.createSession({
+      agentId: "pi",
+      taskRecordId: workItem.id,
+    });
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+
+    const response = await app.request(
+      `/v1/sessions/${session.id}/events?after_sequence=0`,
+      { headers: { authorization: `Bearer ${TOKEN}` } },
+    );
+    const body = await response.json() as {
+      events: Array<Record<string, unknown>>;
+      next_sequence: number;
+      has_more: boolean;
+    };
+
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(body).toMatchObject({ next_sequence: event.sequence, has_more: false });
+    const wireEvent = body.events.find((candidate) => candidate.event_id === event.eventId);
+    expect(wireEvent).toMatchObject({
+      event_id: event.eventId,
+      sequence: event.sequence,
+      work_item_id: workItem.id,
+      run_id: "run_contract",
+      type: "AGENT_EVENT",
+      occurred_at: event.occurredAt,
+      result_ref: "result://contract",
+    });
+    expect(wireEvent).not.toHaveProperty("runId");
+    expect(wireEvent).not.toHaveProperty("occurredAt");
+    expect(wireEvent).not.toHaveProperty("resultRef");
+    catalog.close();
+    workItems.close();
+  });
+
+  it("serializes live Session events through the same snake_case wire contract", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const workItem = workItems.createWorkItem({
+      title: "live contract",
+      mode: "auto",
+      conversationId: "live-contract",
+      workspaceScope: [],
+      riskLevel: "read_only",
+    });
+    const event = workItems.appendEvent({
+      workItemId: workItem.id,
+      runId: "run_contract",
+      type: "AGENT_EVENT",
+      actor: "agent",
+      target: "text_delta",
+      resultRef: "result://contract",
+      payload: { event: { type: "text_delta", text: "hello" } },
+    });
+    const session = catalog.createSession({
+      agentId: "pi",
+      taskRecordId: workItem.id,
+    });
+    const app = createSessionApp({ catalog, agents, workItems }, TOKEN);
+
+    const response = await app.request(
+      `/v1/sessions/${session.id}/events?live=true&after_sequence=0`,
+      { headers: { authorization: `Bearer ${TOKEN}` } },
+    );
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    for (let attempt = 0; attempt < 4 && !text.includes(event.eventId); attempt += 1) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE timeout")), 2_000)),
+      ]);
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(text).toContain(`\"event_id\":\"${event.eventId}\"`);
+    expect(text).toContain(`\"run_id\":\"run_contract\"`);
+    expect(text).toContain(`\"occurred_at\":\"${event.occurredAt}\"`);
+    expect(text).toContain(`\"result_ref\":\"result://contract\"`);
+    expect(text).not.toContain("\"runId\"");
+    expect(text).not.toContain("\"occurredAt\"");
+    expect(text).not.toContain("\"resultRef\"");
+    await reader.cancel();
     catalog.close();
     workItems.close();
   });

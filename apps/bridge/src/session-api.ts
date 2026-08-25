@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { streamSSE } from "hono/streaming";
 import type {
   AgentProfile,
   SessionCatalogStore,
@@ -1016,55 +1015,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(result, result.ok ? 200 : 403);
   });
 
-  app.get("/v1/sessions/:session_id/events", (c) => {
-    const session = options.catalog.getSession(c.req.param("session_id"));
-    if (!session) return c.json({ error: "session_not_found" }, 404);
-    const after = Number(c.req.query("after_sequence") ?? c.req.header("last-event-id") ?? "0");
-    if (!Number.isInteger(after) || after < 0) return c.json({ error: "invalid_after_sequence" }, 400);
-    if (c.req.query("live") === "true") {
-      return streamSSE(c, async (stream) => {
-        let cursor = after;
-        let open = true;
-        stream.onAbort(() => { open = false; });
-        while (open) {
-          const current = options.catalog.getSession(session.id);
-          const taskRecordId = current?.taskRecordId;
-          if (!taskRecordId || !options.workItems.getWorkItem(taskRecordId)) {
-            await stream.sleep(250);
-            continue;
-          }
-          const events = options.workItems.listEvents(taskRecordId, cursor);
-          for (const event of events) {
-            await stream.writeSSE({
-              id: event.eventId,
-              event: event.type,
-              data: JSON.stringify(toApiEvent(event)),
-            });
-            cursor = event.sequence;
-          }
-          if (!events.length) await stream.sleep(250);
-        }
-      });
-    }
-    if (!session.taskRecordId || !options.workItems.getWorkItem(session.taskRecordId)) {
-      return new Response("", {
-        headers: { "cache-control": "no-cache", "content-type": "text/event-stream; charset=utf-8" },
-      });
-    }
-    const tail = Number(c.req.query("tail") ?? "0");
-    const history = after > 0
-      ? options.workItems.listEvents(session.taskRecordId, after)
-      : Number.isInteger(tail) && tail > 0
-        ? options.workItems.listRecentEvents(session.taskRecordId, tail)
-        : options.workItems.listEvents(session.taskRecordId);
-    const stream = history
-      .map((event) => toSseEvent(event))
-      .join("");
-    return new Response(stream, {
-      headers: { "cache-control": "no-cache", "content-type": "text/event-stream; charset=utf-8" },
-    });
-  });
-
   app.post("/v1/sessions/:session_id/close", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
@@ -1553,62 +1503,6 @@ function toApiAttachment(attachment: ReturnType<SqliteEventStore["getMessageAtta
     byte_size: attachment.byteSize,
     content_hash: attachment.contentHash,
     created_at: attachment.createdAt,
-  };
-}
-
-function toSseEvent(event: {
-  eventId: string;
-  sequence: number;
-  runId: string | null;
-  type: string;
-  occurredAt: string;
-  actor: string;
-  target: string | null;
-  inputHash: string | null;
-  resultRef: string | null;
-  payload: Record<string, unknown>;
-}): string {
-  return `id: ${event.eventId}\nevent: ${event.type}\ndata: ${JSON.stringify({
-    event_id: event.eventId,
-    sequence: event.sequence,
-    run_id: event.runId,
-    type: event.type,
-    occurred_at: event.occurredAt,
-    actor: event.actor,
-    target: event.target,
-    input_hash: event.inputHash,
-    result_ref: event.resultRef,
-    payload: event.payload,
-  })}\n\n`;
-}
-
-function toApiEvent(event: {
-  schemaVersion: number;
-  eventId: string;
-  sequence: number;
-  workItemId: string;
-  runId: string | null;
-  type: string;
-  occurredAt: string;
-  actor: string;
-  target: string | null;
-  inputHash: string | null;
-  resultRef: string | null;
-  payload: Record<string, unknown>;
-}): Record<string, unknown> {
-  return {
-    schema_version: event.schemaVersion,
-    event_id: event.eventId,
-    sequence: event.sequence,
-    work_item_id: event.workItemId,
-    run_id: event.runId,
-    type: event.type,
-    occurred_at: event.occurredAt,
-    actor: event.actor,
-    target: event.target,
-    input_hash: event.inputHash,
-    result_ref: event.resultRef,
-    payload: event.payload,
   };
 }
 

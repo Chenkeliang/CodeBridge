@@ -1,4 +1,4 @@
-import type { ConversationEvent } from "./events";
+import type { SessionEventWire } from "@codebridge/core/session-event-wire";
 
 export interface AgentDiagnostic {
   stage: "detect" | "install" | "configure" | "health";
@@ -362,10 +362,7 @@ export interface ApprovalRecord {
   expires_at: string | null;
 }
 
-export type SessionEvent = ConversationEvent & {
-  actor?: string;
-  target?: string | null;
-};
+export type SessionEvent = SessionEventWire;
 
 export type SessionRunStatus =
   | "queued"

@@ -1,4 +1,5 @@
 import { parseSseFrames } from "./sse";
+import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
 import type {
   AgentCommand,
   AgentListResponse,
@@ -70,7 +71,7 @@ type ErrorPayload = {
 
 type SessionEventsPage = {
   events: SessionEvent[];
-  next_sequence: number | null;
+  next_sequence: number;
   has_more: boolean;
 };
 
@@ -191,7 +192,23 @@ function cancelRun(
 
 async function events(id: string, afterSequence = 0): Promise<SessionEventsPage> {
   const params = new URLSearchParams({ after_sequence: String(afterSequence) });
-  return request<SessionEventsPage>(`/v1/sessions/${encodeURIComponent(id)}/events?${params}`);
+  const page = await request<{
+    events: unknown;
+    next_sequence: unknown;
+    has_more: unknown;
+  }>(`/v1/sessions/${encodeURIComponent(id)}/events?${params}`);
+  if (
+    !Array.isArray(page.events)
+    || !Number.isInteger(page.next_sequence)
+    || typeof page.has_more !== "boolean"
+  ) {
+    throw new Error("session_event_schema_mismatch");
+  }
+  return {
+    events: page.events.map(parseSessionEventWire),
+    next_sequence: page.next_sequence as number,
+    has_more: page.has_more,
+  };
 }
 
 async function queue(sessionId: string, afterPosition: number | null): Promise<SessionRuntimeView["queue"]> {
@@ -474,15 +491,30 @@ export async function streamSessionEvents(
     { headers: mergeHeaders({}), signal },
   );
   if (!response.ok || !response.body) throw new Error("无法连接事件流");
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    throw new Error("session_event_transport_mismatch");
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (!signal.aborted) {
-    const chunk = await reader.read();
-    if (chunk.done) return;
-    buffer += decoder.decode(chunk.value, { stream: true });
-    const parsed = parseSseFrames<SessionEvent>(buffer);
-    buffer = parsed.remainder;
-    parsed.events.forEach(onEvent);
+  const abort = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) return;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      const parsed = parseSseFrames<unknown>(buffer);
+      buffer = parsed.remainder;
+      parsed.events.map(parseSessionEventWire).forEach(onEvent);
+    }
+  } finally {
+    signal.removeEventListener("abort", abort);
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }

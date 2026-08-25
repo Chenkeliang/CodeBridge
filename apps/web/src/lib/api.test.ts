@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api } from "./api";
+import { ApiError, api, streamSessionEvents } from "./api";
 import type { AgentSession, FlowRecord, SessionCompositeSnapshot, SessionMessageReceipt, SessionRuntimeView, SessionTurnView } from "./types";
 
 afterEach(() => {
@@ -58,6 +58,23 @@ function receipt(turnId = "turn-1"): SessionMessageReceipt {
   };
 }
 
+function sessionWireEvent() {
+  return {
+    schema_version: 1 as const,
+    event_id: "evt_1",
+    sequence: 1,
+    work_item_id: "work_1",
+    run_id: "run_1",
+    type: "RUN_SUCCEEDED",
+    occurred_at: "2026-08-24T00:00:00.000Z",
+    actor: "system",
+    target: null,
+    input_hash: null,
+    result_ref: "result://final",
+    payload: {},
+  };
+}
+
 function snapshotResponse(sessionId: string): SessionCompositeSnapshot {
   return {
     session: session(sessionId),
@@ -75,6 +92,49 @@ function snapshotResponse(sessionId: string): SessionCompositeSnapshot {
 }
 
 describe("workbench API client", () => {
+  it("consumes the canonical Session event from live SSE", async () => {
+    const event = sessionWireEvent();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      `data: ${JSON.stringify(event)}\n\n`,
+      { headers: { "content-type": "text/event-stream; charset=utf-8" } },
+    )));
+    const received: unknown[] = [];
+
+    await streamSessionEvents(
+      "sess_1",
+      0,
+      new AbortController().signal,
+      (candidate) => received.push(candidate),
+    );
+
+    expect(received).toEqual([event]);
+  });
+
+  it("requires the Session SSE transport contract", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ events: [] })));
+
+    await expect(streamSessionEvents(
+      "sess_1",
+      0,
+      new AbortController().signal,
+      () => {},
+    )).rejects.toThrow("session_event_transport_mismatch");
+  });
+
+  it("rejects malformed Session event frames before they reach the store", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      'data: {"type":"RUN_SUCCEEDED","sequence":1,"runId":"run_1"}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )));
+
+    await expect(streamSessionEvents(
+      "sess_1",
+      0,
+      new AbortController().signal,
+      () => {},
+    )).rejects.toThrow("session_event_schema_mismatch");
+  });
+
   it("uses the Skill catalog, preview, and plan apply contracts", async () => {
     const snapshot = {
       skills: [], targets: [],

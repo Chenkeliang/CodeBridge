@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./session-event-wire": {
+      "types": "./dist/session-event-wire.d.ts",
+      "import": "./dist/session-event-wire.js"
     }
   },
   "scripts": {
