@@ -11,13 +11,21 @@ import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
 import { compileWorkflow, definitionHash, validatePostcondition, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import type { DomainEvent, Run, SqliteEventStore } from "@codebridge/work-items";
-import { buildCandidateDefinition, extractRunDefinition } from "./flow-save-intent.js";
+import {
+  buildCandidateDefinition,
+  extractRunDefinition,
+  FlowSaveIntentError,
+  type FlowSaveIntentService,
+  type FlowSaveRequest,
+  type FlowSaveRequestState,
+} from "./flow-save-intent.js";
 
 export interface FlowApiOptions {
   sessions?: SessionCatalogStore;
   events?: SqliteEventStore;
   capabilities?: CapabilityRegistry;
   runtime?: CapabilityRuntime;
+  flowSaveIntents?: FlowSaveIntentService;
 }
 
 type FlowProposalKind = "structured_plan" | "observed_trace" | "unavailable";
@@ -64,6 +72,71 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
         side_effects: capability.side_effects ?? null,
       })),
     });
+  });
+  app.post("/v1/sessions/:session_id/flow-save-requests", async (c) => {
+    const key = c.req.header("idempotency-key")?.trim();
+    if (!key) return c.json({ error: "idempotency_key_required" }, 400);
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const sourceRunId = typeof body?.source_run_id === "string"
+      ? body.source_run_id.trim()
+      : "";
+    if (!sourceRunId) return c.json({ error: "source_run_id_required" }, 400);
+    if (body?.source !== "turn_action") {
+      return c.json({ error: "flow_save_request_source_invalid" }, 400);
+    }
+    if (!options.flowSaveIntents) {
+      return c.json({ error: "flow_save_intent_unavailable" }, 503);
+    }
+    try {
+      const request = options.flowSaveIntents.requestManual({
+        sessionId: c.req.param("session_id"),
+        sourceRunId,
+        ...(typeof body.intent_summary === "string"
+          ? { intentSummary: body.intent_summary }
+          : {}),
+        ...(typeof body.name_hint === "string" ? { nameHint: body.name_hint } : {}),
+      }, key);
+      return c.json(flowSaveStateResponse({ state: "requested", request }), 201);
+    } catch (error) {
+      if (!(error instanceof FlowSaveIntentError)) throw error;
+      const mapped = flowSaveHttpError(error);
+      return c.json(mapped.body, mapped.status);
+    }
+  });
+  app.post("/v1/flow-save-requests/:request_id/confirm", async (c) => {
+    const key = c.req.header("idempotency-key")?.trim();
+    if (!key) return c.json({ error: "idempotency_key_required" }, 400);
+    if (!options.flowSaveIntents) {
+      return c.json({ error: "flow_save_intent_unavailable" }, 503);
+    }
+    try {
+      const prior = options.flowSaveIntents.getRequestState(c.req.param("request_id"));
+      const result = await options.flowSaveIntents.confirm(c.req.param("request_id"), key);
+      return c.json({
+        state: "completed" as const,
+        request: toApiFlowSaveRequest(result.request),
+        flow: toApiFlow(result.flow),
+      }, prior.state === "completed" ? 200 : 201);
+    } catch (error) {
+      if (!(error instanceof FlowSaveIntentError)) throw error;
+      const mapped = flowSaveHttpError(error);
+      return c.json(mapped.body, mapped.status);
+    }
+  });
+  app.post("/v1/flow-save-requests/:request_id/dismiss", (c) => {
+    const key = c.req.header("idempotency-key")?.trim();
+    if (!key) return c.json({ error: "idempotency_key_required" }, 400);
+    if (!options.flowSaveIntents) {
+      return c.json({ error: "flow_save_intent_unavailable" }, 503);
+    }
+    try {
+      const state = options.flowSaveIntents.dismiss(c.req.param("request_id"), key);
+      return c.json(flowSaveStateResponse(state));
+    } catch (error) {
+      if (!(error instanceof FlowSaveIntentError)) throw error;
+      const mapped = flowSaveHttpError(error);
+      return c.json(mapped.body, mapped.status);
+    }
   });
   app.get("/v1/sessions/:session_id/flow-proposals", (c) => {
     if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
@@ -852,6 +925,50 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
     })),
     created_at: flow.createdAt,
     updated_at: flow.updatedAt,
+  };
+}
+
+function toApiFlowSaveRequest(request: FlowSaveRequest): Record<string, unknown> {
+  return {
+    request_id: request.requestId,
+    session_id: request.sessionId,
+    request_turn_id: request.requestTurnId,
+    request_run_id: request.requestRunId,
+    source_turn_id: request.sourceTurnId,
+    source_run_id: request.sourceRunId,
+    source: request.source,
+    user_message: request.userMessage,
+    intent_summary: request.intentSummary,
+    name_hint: request.nameHint,
+    source_imported: request.sourceImported,
+    created_at: request.createdAt,
+  };
+}
+
+function flowSaveStateResponse(state: FlowSaveRequestState): Record<string, unknown> {
+  return {
+    state: state.state,
+    request: toApiFlowSaveRequest(state.request),
+    ...(state.state === "completed"
+      ? {
+          flow_id: state.flowId,
+          definition_revision: state.definitionRevision,
+        }
+      : {}),
+    ...(state.state === "failed" ? { code: state.code } : {}),
+  };
+}
+
+function flowSaveHttpError(error: FlowSaveIntentError): {
+  status: 404 | 409 | 503;
+  body: { error: string };
+} {
+  const code = error.code === "flow_save_request_already_completed"
+    ? "flow_save_request_state_conflict"
+    : error.code;
+  return {
+    status: error.status,
+    body: { error: code },
   };
 }
 

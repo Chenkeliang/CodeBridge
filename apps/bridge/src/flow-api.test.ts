@@ -9,7 +9,11 @@ import {
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { createFlowApp } from "./flow-api.js";
-import { FlowSaveIntentService } from "./flow-save-intent.js";
+import {
+  extractRunDefinition,
+  FlowSaveIntentError,
+  FlowSaveIntentService,
+} from "./flow-save-intent.js";
 
 function seedWorkflowRun(
   events: SqliteEventStore,
@@ -161,6 +165,469 @@ function seedAgentRun(
 }
 
 describe("flow API", () => {
+  it("exposes authenticated and idempotent Flow save request commands", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    try {
+      const source = seedAgentRun(sessions, events, {
+        agentId: "codex",
+        title: "核对订单并生成结论",
+        tools: ["Read File", "Search"],
+      });
+      const flowSaveIntents = new FlowSaveIntentService({ sessions, events, catalog });
+      const app = createFlowApp(catalog, "token", {
+        sessions,
+        events,
+        flowSaveIntents,
+      });
+      const jsonHeaders = {
+        authorization: "Bearer token",
+        "content-type": "application/json",
+      };
+
+      const unauthorized = await app.request(
+        `/v1/sessions/${source.session.id}/flow-save-requests`,
+        { method: "POST" },
+      );
+      expect(unauthorized.status).toBe(401);
+
+      const missingKey = await app.request(
+        `/v1/sessions/${source.session.id}/flow-save-requests`,
+        {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ source_run_id: source.run.id, source: "turn_action" }),
+        },
+      );
+      expect(missingKey.status).toBe(400);
+      expect(await missingKey.json()).toEqual({ error: "idempotency_key_required" });
+
+      const missingBody = await app.request(
+        `/v1/sessions/${source.session.id}/flow-save-requests`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "request-empty" },
+        },
+      );
+      expect(missingBody.status).toBe(400);
+      expect(await missingBody.json()).toEqual({ error: "source_run_id_required" });
+
+      const invalidSource = await app.request(
+        `/v1/sessions/${source.session.id}/flow-save-requests`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "request-invalid-source" },
+          body: JSON.stringify({ source_run_id: source.run.id, source: "agent_intent" }),
+        },
+      );
+      expect(invalidSource.status).toBe(400);
+      expect(await invalidSource.json()).toEqual({ error: "flow_save_request_source_invalid" });
+
+      for (const action of ["confirm", "dismiss"]) {
+        const missingActionKey = await app.request(
+          `/v1/flow-save-requests/fsr_missing/${action}`,
+          { method: "POST", headers: jsonHeaders },
+        );
+        expect(missingActionKey.status).toBe(400);
+        expect(await missingActionKey.json()).toEqual({ error: "idempotency_key_required" });
+      }
+
+      const create = () => app.request(
+        `/v1/sessions/${source.session.id}/flow-save-requests`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "request-one" },
+          body: JSON.stringify({ source_run_id: source.run.id, source: "turn_action" }),
+        },
+      );
+      const created = await create();
+      expect(created.status).toBe(201);
+      const createdBody = await created.json() as {
+        state: string;
+        request: { request_id: string; session_id: string; source_run_id: string };
+      };
+      expect(createdBody).toMatchObject({
+        state: "requested",
+        request: {
+          session_id: source.session.id,
+          source_run_id: source.run.id,
+          source: "turn_action",
+          source_imported: false,
+        },
+      });
+      expect(createdBody.request.request_id).toMatch(/^fsr_/);
+      expect(createdBody.request).not.toHaveProperty("requestId");
+      expect(createdBody.request).not.toHaveProperty("sourceRunId");
+
+      const repeated = await create();
+      expect(repeated.status).toBe(201);
+      expect(await repeated.json()).toEqual(createdBody);
+
+      const confirmed = await app.request(
+        `/v1/flow-save-requests/${createdBody.request.request_id}/confirm`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "confirm-one" },
+        },
+      );
+      expect(confirmed.status).toBe(201);
+      const confirmedBody = await confirmed.json() as {
+        state: string;
+        request: { request_id: string };
+        flow: { flow_id: string; status: string; provenance: { source_request_id: string } };
+      };
+      expect(confirmedBody).toMatchObject({
+        state: "completed",
+        request: { request_id: createdBody.request.request_id },
+        flow: {
+          status: "candidate",
+          provenance: { source_request_id: createdBody.request.request_id },
+        },
+      });
+
+      const replayed = await app.request(
+        `/v1/flow-save-requests/${createdBody.request.request_id}/confirm`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "confirm-different-transport-key" },
+        },
+      );
+      expect(replayed.status).toBe(200);
+      expect(await replayed.json()).toEqual(confirmedBody);
+      expect(catalog.list().filter((flow) => flow.provenance?.sourceRequestId === createdBody.request.request_id))
+        .toHaveLength(1);
+
+      const completedDismiss = await app.request(
+        `/v1/flow-save-requests/${createdBody.request.request_id}/dismiss`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "dismiss-completed" },
+        },
+      );
+      expect(completedDismiss.status).toBe(409);
+      expect(await completedDismiss.json()).toEqual({
+        error: "flow_save_request_state_conflict",
+      });
+
+      const dismissRequest = await app.request(
+        `/v1/sessions/${source.session.id}/flow-save-requests`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "request-dismiss" },
+          body: JSON.stringify({ source_run_id: source.run.id, source: "turn_action" }),
+        },
+      );
+      const dismissRequestBody = await dismissRequest.json() as {
+        request: { request_id: string };
+      };
+      const dismiss = () => app.request(
+        `/v1/flow-save-requests/${dismissRequestBody.request.request_id}/dismiss`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "dismiss-one" },
+        },
+      );
+      const dismissed = await dismiss();
+      expect(dismissed.status).toBe(200);
+      const dismissedBody = await dismissed.json();
+      expect(dismissedBody).toMatchObject({
+        state: "dismissed",
+        request: { request_id: dismissRequestBody.request.request_id },
+      });
+      const dismissReplay = await dismiss();
+      expect(dismissReplay.status).toBe(200);
+      expect(await dismissReplay.json()).toEqual(dismissedBody);
+
+      const dismissedConfirm = await app.request(
+        `/v1/flow-save-requests/${dismissRequestBody.request.request_id}/confirm`,
+        {
+          method: "POST",
+          headers: { ...jsonHeaders, "Idempotency-Key": "confirm-dismissed" },
+        },
+      );
+      expect(dismissedConfirm.status).toBe(409);
+      expect(await dismissedConfirm.json()).toEqual({
+        error: "flow_save_request_already_dismissed",
+      });
+    } finally {
+      catalog.close();
+      events.close();
+      sessions.close();
+    }
+  });
+
+  it("maps Flow save request validation and availability failures exactly", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    try {
+      const extractable = seedAgentRun(sessions, events, {
+        agentId: "codex",
+        title: "可提取任务",
+        tools: ["Read File", "Search"],
+      });
+      const unextractable = seedAgentRun(sessions, events, {
+        agentId: "codex",
+        title: "没有足够证据",
+        tools: ["Read File"],
+      });
+      const failed = seedAgentRun(sessions, events, {
+        agentId: "codex",
+        title: "失败任务",
+        tools: ["Read File", "Search"],
+        status: "failed",
+      });
+      const managementOnly = seedAgentRun(sessions, events, {
+        agentId: "codex",
+        title: "仅保存管理动作",
+        tools: ["codebridge.request_flow_save", "codebridge.request_flow_save"],
+      });
+      const flowSession = sessions.createSession({ agentId: "codex" });
+      const publishedFlow = catalog.save({
+        flowId: "flow_api_source",
+        name: "Flow Runtime source",
+        kind: "runbook",
+        status: "published",
+        source: "git",
+        definitionRevision: "sha256:flow-api-source",
+        planIrHash: "sha256:flow-api-source-plan",
+        steps: [],
+      });
+      const flowRun = seedWorkflowRun(events, publishedFlow, flowSession.id);
+      const service = new FlowSaveIntentService({ sessions, events, catalog });
+      const app = createFlowApp(catalog, "token", {
+        sessions,
+        events,
+        flowSaveIntents: service,
+      });
+      const post = (sessionId: string, sourceRunId: string, key: string) => app.request(
+        `/v1/sessions/${sessionId}/flow-save-requests`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer token",
+            "content-type": "application/json",
+            "Idempotency-Key": key,
+          },
+          body: JSON.stringify({ source_run_id: sourceRunId, source: "turn_action" }),
+        },
+      );
+
+      const missingSession = await post("sess_missing", extractable.run.id, "missing-session");
+      expect(missingSession.status).toBe(404);
+      expect(await missingSession.json()).toEqual({ error: "source_run_not_found" });
+
+      const missingSource = await post(extractable.session.id, "run_missing", "missing-source");
+      expect(missingSource.status).toBe(404);
+      expect(await missingSource.json()).toEqual({ error: "source_run_not_found" });
+
+      const wrongSession = await post(extractable.session.id, unextractable.run.id, "wrong-session");
+      expect(wrongSession.status).toBe(404);
+      expect(await wrongSession.json()).toEqual({ error: "source_run_not_found" });
+
+      const noEvidence = await post(unextractable.session.id, unextractable.run.id, "unextractable");
+      expect(noEvidence.status).toBe(409);
+      expect(await noEvidence.json()).toEqual({ error: "source_run_not_extractable" });
+
+      const notSucceeded = await post(failed.session.id, failed.run.id, "not-succeeded");
+      expect(notSucceeded.status).toBe(409);
+      expect(await notSucceeded.json()).toEqual({ error: "source_run_not_succeeded" });
+
+      const managementSource = await post(
+        managementOnly.session.id,
+        managementOnly.run.id,
+        "management-source",
+      );
+      expect(managementSource.status).toBe(409);
+      expect(await managementSource.json()).toEqual({ error: "source_run_not_extractable" });
+
+      const runtimeSource = await post(flowSession.id, flowRun.id, "runtime-source");
+      expect(runtimeSource.status).toBe(409);
+      expect(await runtimeSource.json()).toEqual({ error: "source_run_not_extractable" });
+
+      const missingRequest = await app.request("/v1/flow-save-requests/fsr_missing/confirm", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer token",
+          "Idempotency-Key": "confirm-missing",
+        },
+      });
+      expect(missingRequest.status).toBe(404);
+      expect(await missingRequest.json()).toEqual({ error: "flow_save_request_not_found" });
+
+      const unavailableService = new FlowSaveIntentService({ sessions, events });
+      const unavailableApp = createFlowApp(catalog, "token", {
+        sessions,
+        events,
+        flowSaveIntents: unavailableService,
+      });
+      const pending = await unavailableApp.request(
+        `/v1/sessions/${extractable.session.id}/flow-save-requests`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer token",
+            "content-type": "application/json",
+            "Idempotency-Key": "catalog-pending",
+          },
+          body: JSON.stringify({ source_run_id: extractable.run.id, source: "turn_action" }),
+        },
+      );
+      const pendingBody = await pending.json() as { request: { request_id: string } };
+      const catalogUnavailable = await unavailableApp.request(
+        `/v1/flow-save-requests/${pendingBody.request.request_id}/confirm`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer token",
+            "Idempotency-Key": "catalog-confirm",
+          },
+        },
+      );
+      expect(catalogUnavailable.status).toBe(503);
+      expect(await catalogUnavailable.json()).toEqual({ error: "flow_catalog_unavailable" });
+      expect(unavailableService.getRequestState(pendingBody.request.request_id).state).toBe("requested");
+    } finally {
+      catalog.close();
+      events.close();
+      sessions.close();
+    }
+  });
+
+  it("persists a deterministic confirm failure and rejects every stale retry", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    try {
+      const source = seedAgentRun(sessions, events, {
+        agentId: "codex",
+        title: "确认前仍可提取的任务",
+        tools: ["Read File", "Search"],
+      });
+      let sourceRemainsExtractable = true;
+      const service = new FlowSaveIntentService({
+        sessions,
+        events,
+        catalog,
+        extract: (input) => sourceRemainsExtractable
+          ? extractRunDefinition(input)
+          : {
+              ok: false as const,
+              code: "run_not_extractable" as const,
+              reason: "来源证据在确认前失效",
+            },
+      });
+      const app = createFlowApp(catalog, "token", {
+        sessions,
+        events,
+        flowSaveIntents: service,
+      });
+      const commandHeaders = (key: string) => ({
+        authorization: "Bearer token",
+        "content-type": "application/json",
+        "Idempotency-Key": key,
+      });
+
+      const requested = await app.request(
+        `/v1/sessions/${source.session.id}/flow-save-requests`,
+        {
+          method: "POST",
+          headers: commandHeaders("request-before-invalidation"),
+          body: JSON.stringify({ source_run_id: source.run.id, source: "turn_action" }),
+        },
+      );
+      expect(requested.status).toBe(201);
+      const requestedBody = await requested.json() as {
+        request: { request_id: string };
+      };
+
+      sourceRemainsExtractable = false;
+      const failedConfirm = await app.request(
+        `/v1/flow-save-requests/${requestedBody.request.request_id}/confirm`,
+        {
+          method: "POST",
+          headers: commandHeaders("confirm-after-invalidation"),
+        },
+      );
+      expect(failedConfirm.status).toBe(409);
+      const failedBody = await failedConfirm.json();
+      expect(failedBody).toEqual({ error: "source_run_not_extractable" });
+      expect(failedBody).not.toHaveProperty("sourceRunId");
+      expect(service.getRequestState(requestedBody.request.request_id)).toMatchObject({
+        state: "failed",
+        code: "source_run_not_extractable",
+      });
+      expect(events.listEventsByTarget(requestedBody.request.request_id)
+        .filter((event) => event.type === "FLOW_SAVE_FAILED"))
+        .toHaveLength(1);
+
+      for (const action of ["confirm", "dismiss"]) {
+        const stale = await app.request(
+          `/v1/flow-save-requests/${requestedBody.request.request_id}/${action}`,
+          {
+            method: "POST",
+            headers: commandHeaders(`stale-${action}-key`),
+          },
+        );
+        expect(stale.status).toBe(409);
+        expect(await stale.json()).toEqual({
+          error: "flow_save_request_state_conflict",
+        });
+      }
+    } finally {
+      catalog.close();
+      events.close();
+      sessions.close();
+    }
+  });
+
+  it.each([
+    {
+      domainCode: "future_flow_save_missing",
+      domainStatus: 404 as const,
+      responseCode: "future_flow_save_missing",
+    },
+    {
+      domainCode: "future_flow_save_unavailable",
+      domainStatus: 503 as const,
+      responseCode: "future_flow_save_unavailable",
+    },
+    {
+      domainCode: "flow_save_request_already_completed",
+      domainStatus: 404 as const,
+      responseCode: "flow_save_request_state_conflict",
+    },
+  ])(
+    "uses domain status $domainStatus for $domainCode",
+    async ({ domainCode, domainStatus, responseCode }) => {
+      const catalog = new FlowCatalogStore(":memory:");
+      try {
+        const service = {
+          requestManual() {
+            throw new FlowSaveIntentError(domainCode, domainStatus);
+          },
+        } as unknown as FlowSaveIntentService;
+        const app = createFlowApp(catalog, "token", { flowSaveIntents: service });
+
+        const response = await app.request("/v1/sessions/sess_1/flow-save-requests", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer token",
+            "content-type": "application/json",
+            "Idempotency-Key": `key-${domainCode}`,
+          },
+          body: JSON.stringify({ source_run_id: "run_1", source: "turn_action" }),
+        });
+
+        expect(response.status).toBe(domainStatus);
+        expect(await response.json()).toEqual({ error: responseCode });
+      } finally {
+        catalog.close();
+      }
+    },
+  );
+
   it("computes the same Candidate revision as save intent for the same raw definition", async () => {
     const catalog = new FlowCatalogStore(":memory:");
     const sessions = new SessionCatalogStore(":memory:");

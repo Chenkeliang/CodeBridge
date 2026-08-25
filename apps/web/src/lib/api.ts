@@ -13,6 +13,8 @@ import type {
   FlowRecommendation,
   FlowRecord,
   FlowReviewContext,
+  FlowSaveConfirmResult,
+  FlowSaveRequestState,
   MessageAttachmentInput,
   PiProvider,
   PiProviderPreset,
@@ -365,6 +367,25 @@ export const api = {
     }),
   flowReviewContext: (flowId: string) =>
     request<FlowReviewContext>(`/v1/flows/${encodeURIComponent(flowId)}/review-context`),
+  requestFlowSave: (sessionId: string, sourceRunId: string, key: string) =>
+    request<Extract<FlowSaveRequestState, { state: "requested" }>>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-save-requests`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": key },
+        body: JSON.stringify({ source_run_id: sourceRunId, source: "turn_action" }),
+      },
+    ),
+  confirmFlowSave: (requestId: string, key: string) =>
+    request<FlowSaveConfirmResult>(
+      `/v1/flow-save-requests/${encodeURIComponent(requestId)}/confirm`,
+      { method: "POST", headers: { "Idempotency-Key": key } },
+    ),
+  dismissFlowSave: (requestId: string, key: string) =>
+    request<Extract<FlowSaveRequestState, { state: "dismissed" }>>(
+      `/v1/flow-save-requests/${encodeURIComponent(requestId)}/dismiss`,
+      { method: "POST", headers: { "Idempotency-Key": key } },
+    ),
   createCandidate: (sessionId: string, runId: string) =>
     request<FlowRecord>("/v1/flows/candidates", {
       method: "POST",
