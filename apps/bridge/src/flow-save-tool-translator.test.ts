@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FLOW_SAVE_NO_SOURCE_MESSAGE,
   FLOW_SAVE_TOOL_MARKER,
+  FLOW_SAVE_TOOL_NAME,
+  PI_FLOW_SAVE_TOOL_NAME,
   type AgentEvent,
   type RunRequest,
 } from "@codebridge/core";
@@ -141,11 +143,12 @@ function persistAgentEvent(target: Fixture, runId: string, event: AgentEvent): v
 function startEvent(
   toolCallId = "tool_save",
   input: unknown = { source_scope: "previous_completed_run" },
+  name: string = PI_FLOW_SAVE_TOOL_NAME,
 ): AgentEvent {
   return {
     type: "tool_start",
     toolCallId,
-    name: "arbitrary ACP display title",
+    name,
     input,
   };
 }
@@ -280,26 +283,149 @@ describe("FlowSaveToolTranslator", () => {
       tools: ["Read File", "Search"],
     });
     const current = seedRun(target, { id: "run_current", text: "把刚才任务存为 Flow" });
-    translatePersisted(target, current, startEvent());
+    translatePersisted(target, current, startEvent("tool_save", {
+      server: "codebridge-internal",
+      tool: FLOW_SAVE_TOOL_NAME,
+      arguments: {
+        source_scope: "previous_completed_run",
+        name_hint: "只读核对 Flow",
+        intent_summary: "复用上一轮已完成的只读核对步骤",
+      },
+    }, "arbitrary ACP display title"));
     const marker = {
       codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
       accepted: true,
       source_scope: "previous_completed_run",
     };
 
-    const created = translatePersisted(target, current, endEvent({
+    const completion = endEvent({
       name: "mcp.codebridge-internal.codebridge.request_flow_save",
       output: {
         result: { content: [{ type: "text", text: JSON.stringify(marker) }] },
       },
-    }));
+    });
+    const created = translatePersisted(target, current, completion);
+    const replay = translatePersisted(target, current, completion);
 
     expect(created).toMatchObject({
       requestRunId: current.id,
       sourceRunId: "run_source",
       source: "agent_intent",
+      nameHint: "只读核对 Flow",
+      intentSummary: "复用上一轮已完成的只读核对步骤",
+    });
+    expect(replay?.requestId).toBe(created?.requestId);
+    expect(requests(target)).toHaveLength(1);
+    expect(requests(target)[0]).toMatchObject({
+      runId: current.id,
+      type: "FLOW_SAVE_REQUESTED",
+      payload: {
+        request_run_id: current.id,
+        source_run_id: "run_source",
+        source: "agent_intent",
+        name_hint: "只读核对 Flow",
+        intent_summary: "复用上一轮已完成的只读核对步骤",
+      },
+    });
+  });
+
+  it("accepts an exact ACP envelope even when its display title equals the Pi wire name", () => {
+    const target = fixture();
+    seedRun(target, {
+      id: "run_source",
+      status: "succeeded",
+      tools: ["Read File", "Search"],
+    });
+    const current = seedRun(target, { id: "run_current" });
+    translatePersisted(target, current, startEvent("tool_save", {
+      server: "codebridge-internal",
+      tool: FLOW_SAVE_TOOL_NAME,
+      arguments: { source_scope: "previous_completed_run" },
+    }, PI_FLOW_SAVE_TOOL_NAME));
+
+    expect(translatePersisted(target, current, endEvent())).toMatchObject({
+      requestRunId: current.id,
+      sourceRunId: "run_source",
+      source: "agent_intent",
     });
     expect(requests(target)).toHaveLength(1);
+  });
+
+  it.each([
+    ["top-level extra", {
+      server: "codebridge-internal",
+      tool: FLOW_SAVE_TOOL_NAME,
+      arguments: { source_scope: "previous_completed_run" },
+      extra: true,
+    }],
+    ["wrong server", {
+      server: "untrusted-server",
+      tool: FLOW_SAVE_TOOL_NAME,
+      arguments: { source_scope: "previous_completed_run" },
+    }],
+    ["wrong tool", {
+      server: "codebridge-internal",
+      tool: "vendor.request_flow_save",
+      arguments: { source_scope: "previous_completed_run" },
+    }],
+    ["nested extra", {
+      server: "codebridge-internal",
+      tool: FLOW_SAVE_TOOL_NAME,
+      arguments: { source_scope: "previous_completed_run", run_id: "run_source" },
+    }],
+    ["non-object arguments", {
+      server: "codebridge-internal",
+      tool: FLOW_SAVE_TOOL_NAME,
+      arguments: "previous_completed_run",
+    }],
+    ["arbitrary arguments wrapper", {
+      arguments: { source_scope: "previous_completed_run" },
+    }],
+  ])("rejects the invalid ACP start envelope: %s", (_label, toolInput) => {
+    const target = fixture();
+    seedRun(target, {
+      id: "run_source",
+      status: "succeeded",
+      tools: ["Read File", "Search"],
+    });
+    const current = seedRun(target, { id: "run_current" });
+    translatePersisted(target, current, startEvent(
+      "tool_save",
+      toolInput,
+      "arbitrary ACP display title",
+    ));
+
+    expect(() => translatePersisted(target, current, endEvent())).toThrowError(
+      expect.objectContaining({ code: "flow_save_tool_call_not_found" }),
+    );
+    expect(requests(target)).toHaveLength(0);
+  });
+
+  it.each([
+    ["marker-only third-party tool", "vendor.marker_only"],
+    ["ordinary MCP tool", "mcp.vendor.lookup"],
+  ])("rejects accepted Flow-save marker output from %s", (_label, name) => {
+    const target = fixture();
+    seedRun(target, {
+      id: "run_source",
+      status: "succeeded",
+      tools: ["Read File", "Search"],
+    });
+    const current = seedRun(target, { id: "run_current" });
+    translatePersisted(target, current, startEvent(
+      "tool_save",
+      { source_scope: "previous_completed_run" },
+      name,
+    ));
+    const completion = endEvent({ name });
+    persistAgentEvent(target, current.id, completion);
+    const warn = vi.fn();
+    const handle = createFlowSaveToolEventHandler(target.translator, warn);
+
+    expect(handle(current, completion)).toBeNull();
+    expect(requests(target)).toHaveLength(0);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("flow_save_tool_call_not_found"));
   });
 
   it("does not translate a marker beyond the canonical result wrapper depth limit", () => {

@@ -4,6 +4,7 @@ import {
   PI_FLOW_SAVE_TOOL_NAME,
   parseRequestFlowSaveInput,
   parseRequestFlowSaveOutput,
+  type RequestFlowSaveInput,
   type RequestFlowSaveOutput,
 } from "@codebridge/core";
 import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
@@ -23,6 +24,7 @@ const MAX_FLOW_SAVE_RESULT_DEPTH = 6;
 const MAX_FLOW_SAVE_RESULT_NODES = 64;
 const MAX_FLOW_SAVE_RESULT_ARRAY_ITEMS = 32;
 const MAX_FLOW_SAVE_RESULT_OBJECT_KEYS = 32;
+const FLOW_SAVE_ACP_SERVER_NAME = "codebridge-internal";
 
 export interface ExtractRunDefinitionInput {
   session: Pick<AgentSession, "id" | "agentId">;
@@ -109,6 +111,33 @@ interface WorkItemEventSnapshot {
   workItemId: string;
   events: DomainEvent[];
   eventsByRunId: ReadonlyMap<string, DomainEvent[]>;
+}
+
+function parseFlowSaveToolStartInput(
+  agentEvent: Record<string, unknown> | null,
+): RequestFlowSaveInput {
+  if (!agentEvent) throw new Error("invalid_flow_save_tool_input");
+  const value = agentEvent.input;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const envelope = value as Record<string, unknown>;
+    const keys = Reflect.ownKeys(envelope);
+    if (
+      keys.length === 3
+      && Object.hasOwn(envelope, "server")
+      && Object.hasOwn(envelope, "tool")
+      && Object.hasOwn(envelope, "arguments")
+    ) {
+      if (
+        envelope.server !== FLOW_SAVE_ACP_SERVER_NAME
+        || envelope.tool !== FLOW_SAVE_TOOL_NAME
+      ) throw new Error("invalid_flow_save_tool_input");
+      return parseRequestFlowSaveInput(envelope.arguments);
+    }
+  }
+  if (agentEvent.name === PI_FLOW_SAVE_TOOL_NAME) {
+    return parseRequestFlowSaveInput(value);
+  }
+  throw new Error("invalid_flow_save_tool_input");
 }
 
 function workItemEventSnapshot(
@@ -198,7 +227,7 @@ export class FlowSaveIntentService {
     if (!toolStart) throw new FlowSaveIntentError("flow_save_tool_call_not_found", 409);
     let toolInput: ReturnType<typeof parseRequestFlowSaveInput>;
     try {
-      toolInput = parseRequestFlowSaveInput(agentEventValue(toolStart)?.input);
+      toolInput = parseFlowSaveToolStartInput(agentEventValue(toolStart));
     } catch {
       throw new FlowSaveIntentError("flow_save_tool_call_not_found", 409);
     }
