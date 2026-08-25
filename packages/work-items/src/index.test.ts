@@ -228,6 +228,82 @@ describe("SqliteEventStore", () => {
     firstStore.close();
   });
 
+  it("persists Flow save events and lists them by target in sequence order", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "save a reusable Flow",
+      mode: "auto",
+      conversationId: "web:flow-save",
+      riskLevel: "read_only",
+    });
+    const run = store.createRun({
+      workItemId: item.id,
+      mode: "auto",
+      executionKind: "agent",
+    });
+
+    const requested = store.appendEventOnce({
+      workItemId: item.id,
+      runId: run.id,
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "user",
+      target: "fsr_one",
+      inputHash: "flow-save-request:http:sess_1:key_1",
+      payload: {
+        request_id: "fsr_one",
+        session_id: "sess_1",
+        request_turn_id: run.turnId,
+        source_run_id: run.id,
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: run.id,
+      type: "FLOW_SAVE_DISMISSED",
+      actor: "user",
+      target: "fsr_one",
+      payload: { request_id: "fsr_one" },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: run.id,
+      type: "FLOW_CANDIDATE_CREATED",
+      actor: "system",
+      target: "fsr_candidate",
+      payload: {
+        request_id: "fsr_candidate",
+        flow_id: "flow_from_fsr_candidate",
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: run.id,
+      type: "FLOW_SAVE_FAILED",
+      actor: "system",
+      target: "fsr_failed",
+      payload: {
+        request_id: "fsr_failed",
+        code: "source_run_not_extractable",
+      },
+    });
+
+    expect(store.listEventsByTarget("fsr_one").map((event) => event.type))
+      .toEqual([
+        "FLOW_SAVE_REQUESTED",
+        "FLOW_SAVE_DISMISSED",
+      ]);
+    expect(store.listEvents(item.id).map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "FLOW_SAVE_REQUESTED",
+        "FLOW_SAVE_DISMISSED",
+        "FLOW_CANDIDATE_CREATED",
+        "FLOW_SAVE_FAILED",
+      ]),
+    );
+    expect(requested.target).toBe("fsr_one");
+    store.close();
+  });
+
   it("updates the WorkItem projection from terminal events", () => {
     const store = new SqliteEventStore(createDatabasePath());
     const workItem = store.createWorkItem({

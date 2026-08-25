@@ -374,6 +374,21 @@ describe("Session projector", () => {
       target: "run.production",
       payload: { approval_id: "approval_1", step_id: "run" },
     });
+    for (const type of [
+      "FLOW_SAVE_REQUESTED",
+      "FLOW_SAVE_DISMISSED",
+      "FLOW_CANDIDATE_CREATED",
+      "FLOW_SAVE_FAILED",
+    ] as const) {
+      store.appendEvent({
+        workItemId: item.id,
+        runId: "run_1",
+        type,
+        actor: "system",
+        target: "fsr_one",
+        payload: { request_id: "fsr_one" },
+      });
+    }
     // no-op 事件不抛错，且后续投影继续可用（cursor 前进）。
     store.appendEvent({
       workItemId: item.id,

@@ -109,6 +109,10 @@ export type DomainEventType =
   | "FLOW_PROPOSED"
   | "FLOW_SELECTED"
   | "FLOW_SAVED_AS_CANDIDATE"
+  | "FLOW_SAVE_REQUESTED"
+  | "FLOW_SAVE_DISMISSED"
+  | "FLOW_CANDIDATE_CREATED"
+  | "FLOW_SAVE_FAILED"
   | "PLAN_PROPOSED"
   | "PLAN_VALIDATED"
   | "APPROVAL_REQUESTED"
@@ -427,6 +431,9 @@ export class SqliteEventStore {
 
       CREATE INDEX IF NOT EXISTS domain_events_work_item_sequence
         ON domain_events (work_item_id, sequence);
+
+      CREATE INDEX IF NOT EXISTS domain_events_target_sequence
+        ON domain_events (target, sequence);
 
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
@@ -1356,6 +1363,17 @@ export class SqliteEventStore {
          ORDER BY sequence ASC`,
       )
       .all(workItemId, afterSequence);
+    return rows.map(toDomainEvent);
+  }
+
+  listEventsByTarget(target: string): DomainEvent[] {
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM domain_events
+         WHERE target = ?
+         ORDER BY sequence ASC`,
+      )
+      .all(target) as SqliteRow[];
     return rows.map(toDomainEvent);
   }
 
