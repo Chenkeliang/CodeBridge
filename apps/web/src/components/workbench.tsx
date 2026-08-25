@@ -10,6 +10,7 @@ import type {
 } from "@/components/runtime-approval-card";
 import { SessionQueue } from "@/components/session-queue";
 import { SessionTimeline } from "@/components/session-timeline";
+import type { FlowSaveRequestActionState } from "@/components/flow-save-request-card";
 import { FlowDetail } from "@/components/flow-detail";
 import { FlowControlPanel } from "@/components/flow-control-panel";
 import { FlowBatchPanel } from "@/components/flow-batch-panel";
@@ -22,11 +23,16 @@ import { SettingsPage } from "@/components/settings-page";
 import { SkillControlPlanePage } from "@/components/skill-control-plane";
 import { PixelMark } from "@/components/pixel-mark";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { SessionConnection } from "@/lib/session-connection";
 import { sessionViewStore, useSessionView } from "@/lib/session-store";
 import { submitSessionMessage } from "@/lib/submit-session-message";
 import { defaultsFromFlow, flowRunMessage } from "@/lib/flow-run-submit";
+import {
+  flowSaveCommandId,
+  reconcileFlowSaveCommands,
+  type FlowSaveCommandRecord,
+} from "@/lib/flow-save-command-state";
 import type {
   AgentCommand,
   AgentProfile,
@@ -52,6 +58,22 @@ type FlowRevisionMismatch = {
   expected_definition_revision: string;
   current_definition_revision: string;
 };
+
+function canonicalFlowSaveSequence(sessionId: string): number {
+  const snapshot = sessionViewStore.get(sessionId)?.snapshot;
+  if (!snapshot) return 0;
+  let sequence = snapshot.runtime.last_event_sequence;
+  for (const block of snapshot.timeline.turns.flatMap((turn) => turn.blocks)) {
+    if (block.kind !== "flow_save_request") continue;
+    const blockSessionId = block.metadata.session_id;
+    if (typeof blockSessionId === "string" && blockSessionId !== sessionId) continue;
+    const eventSequence = block.metadata.event_sequence;
+    if (typeof eventSequence === "number" && Number.isFinite(eventSequence)) {
+      sequence = Math.max(sequence, eventSequence);
+    }
+  }
+  return sequence;
+}
 
 export function Workbench() {
   const [theme, setTheme] = useState<Theme>(() => readTheme());
@@ -95,6 +117,9 @@ export function Workbench() {
   const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
   const [sending, setSending] = useState(false);
   const pendingSubmissionKey = useRef<string | null>(null);
+  const flowSaveCommands = useRef(new Map<string, FlowSaveCommandRecord>());
+  const [requestingFlowRunIds, setRequestingFlowRunIds] = useState<Set<string>>(() => new Set());
+  const [flowSaveActionStates, setFlowSaveActionStates] = useState<Record<string, FlowSaveRequestActionState>>({});
   const [providerHistory, setProviderHistory] = useState<ProviderHistoryImportState>({ kind: "idle" });
   const providerHistoryRequestVersion = useRef(0);
   const pendingHistoryImportKey = useRef<{ sessionId: string; key: string } | null>(null);
@@ -255,12 +280,37 @@ export function Workbench() {
   useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
   useEffect(() => {
     selectedSessionRef.current = selectedSessionId;
+    flowSaveCommands.current.clear();
+    setRequestingFlowRunIds(new Set());
+    setFlowSaveActionStates({});
     providerHistoryRequestVersion.current += 1;
     pendingHistoryImportKey.current = null;
     activeHistoryImportRequest.current = null;
     providerHistoryPreview.current = null;
     setProviderHistory({ kind: "idle" });
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!selectedSessionId || !sessionView) return;
+    const turns = sessionView.snapshot.timeline.turns;
+    const canonicalRunIds = new Set(turns.map((turn) => turn.run_id));
+    const reconciliation = reconcileFlowSaveCommands({
+      sessionId: selectedSessionId,
+      commands: flowSaveCommands.current,
+      blocks: turns.flatMap((turn) => turn.blocks),
+      canonicalRunIds,
+    });
+    for (const commandId of reconciliation.commandIds) {
+      flowSaveCommands.current.delete(commandId);
+    }
+    if (reconciliation.actionRequestIds.size > 0) {
+      setFlowSaveActionStates((current) => {
+        const next = { ...current };
+        for (const requestId of reconciliation.actionRequestIds) delete next[requestId];
+        return next;
+      });
+    }
+  }, [selectedSessionId, sessionView]);
 
   useEffect(() => {
     if (loading || deepLinkHandled.current) return;
@@ -671,20 +721,26 @@ export function Workbench() {
     }
   }
 
-  async function openFlow(id: string) {
+  async function openFlow(id: string, expectedSessionId?: string | null) {
+    if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return;
     setMissingInputs([]);
     setFlowControlError(null);
     try {
       const context = await api.flowReviewContext(id);
+      if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return;
       setFlowReviewContext(context);
       setDetailFlow(context.flow);
       setParamValues(defaultsFromFlow(context.flow));
     } catch (caught) {
+      if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return;
       setError(messageOf(caught));
     }
   }
 
-  async function refreshFlowCatalog(flowId?: string): Promise<FlowReviewContext | null> {
+  async function refreshFlowCatalog(
+    flowId?: string,
+    expectedSessionId?: string | null,
+  ): Promise<FlowReviewContext | null> {
     const [nextFlows, nextConsumableFlows] = await Promise.all([
       api.flows("manage"),
       api.flows("consume"),
@@ -692,7 +748,9 @@ export function Workbench() {
     setFlows(nextFlows);
     setConsumableFlows(nextConsumableFlows);
     if (!flowId) return null;
+    if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return null;
     const context = await api.flowReviewContext(flowId);
+    if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return null;
     setFlowReviewContext(context);
     setDetailFlow(context.flow);
     setParamValues((current) => ({ ...defaultsFromFlow(context.flow), ...current }));
@@ -700,18 +758,200 @@ export function Workbench() {
   }
 
   async function createCandidateFromRun(runId: string): Promise<void> {
-    if (!selectedSessionId || savingCandidateRunId) return;
+    const sessionId = selectedSessionRef.current;
+    if (!sessionId || savingCandidateRunId) return;
     setSavingCandidateRunId(runId);
     setFlowControlError(null);
     try {
-      const candidate = await api.createCandidate(selectedSessionId, runId);
-      await refreshFlowCatalog(candidate.flow_id);
+      const candidate = await api.createCandidate(sessionId, runId);
+      await refreshFlowCatalog(candidate.flow_id, sessionId);
+      if (selectedSessionRef.current !== sessionId) return;
       notify(`已生成 Candidate · ${candidate.name || candidate.flow_id}`);
     } catch (caught) {
+      if (selectedSessionRef.current !== sessionId) return;
       notify(messageOf(caught), "error");
     } finally {
       setSavingCandidateRunId(null);
     }
+  }
+
+  async function requestFlowSaveFromTurn(sourceRunId: string): Promise<void> {
+    const sessionId = selectedSessionRef.current;
+    if (!sessionId || requestingFlowRunIds.has(sourceRunId)) return;
+    const commandId = flowSaveCommandId(sessionId, "request", sourceRunId);
+    const command = flowSaveCommands.current.get(commandId) ?? {
+      key: crypto.randomUUID(),
+      startedAfterSequence: canonicalFlowSaveSequence(sessionId),
+    };
+    const key = command.key;
+    flowSaveCommands.current.set(commandId, command);
+    setRequestingFlowRunIds((current) => new Set(current).add(sourceRunId));
+    try {
+      await api.requestFlowSave(sessionId, sourceRunId, key);
+    } catch (caught) {
+      if (selectedSessionRef.current !== sessionId) return;
+      if (caught instanceof ApiError) {
+        flowSaveCommands.current.delete(commandId);
+        notify(messageOf(caught), "error");
+        await sessionConnection.refresh(sessionId).catch(() => {});
+      } else {
+        notify("保存请求结果未知；再次选择“存为 Flow”会安全重试同一请求。", "error");
+      }
+      return;
+    } finally {
+      if (selectedSessionRef.current === sessionId) {
+        setRequestingFlowRunIds((current) => {
+          const next = new Set(current);
+          next.delete(sourceRunId);
+          return next;
+        });
+      }
+    }
+    if (selectedSessionRef.current !== sessionId) return;
+    flowSaveCommands.current.delete(commandId);
+    try {
+      await sessionConnection.refresh(sessionId);
+    } catch {
+      if (selectedSessionRef.current === sessionId) {
+        notify("保存请求已记录，但 Timeline 刷新失败，请刷新页面。", "error");
+      }
+    }
+  }
+
+  async function confirmFlowSaveRequest(requestId: string): Promise<void> {
+    const sessionId = selectedSessionRef.current;
+    const actionState = flowSaveActionStates[requestId];
+    if (!sessionId || actionState?.phase || actionState?.retry === "dismiss") return;
+    const commandId = flowSaveCommandId(sessionId, "confirm", requestId);
+    const command = flowSaveCommands.current.get(commandId) ?? {
+      key: crypto.randomUUID(),
+      startedAfterSequence: canonicalFlowSaveSequence(sessionId),
+    };
+    const key = command.key;
+    flowSaveCommands.current.set(commandId, command);
+    setFlowSaveActionStates((current) => ({
+      ...current,
+      [requestId]: { phase: "confirm", error: null, retry: null },
+    }));
+    let result;
+    try {
+      result = await api.confirmFlowSave(requestId, key);
+    } catch (caught) {
+      if (selectedSessionRef.current !== sessionId) return;
+      if (caught instanceof ApiError) {
+        flowSaveCommands.current.delete(commandId);
+        if (caught.status === 503) {
+          setFlowSaveActionStates((current) => ({
+            ...current,
+            [requestId]: {
+              phase: null,
+              error: "Flow Catalog 暂不可用，请重试生成。",
+              retry: "confirm",
+            },
+          }));
+          return;
+        }
+        await sessionConnection.refresh(sessionId).catch(() => {});
+        if (selectedSessionRef.current !== sessionId) return;
+        setFlowSaveActionStates((current) => {
+          const next = { ...current };
+          delete next[requestId];
+          return next;
+        });
+        notify(messageOf(caught), "error");
+        return;
+      }
+      setFlowSaveActionStates((current) => ({
+        ...current,
+        [requestId]: {
+          phase: null,
+          error: "生成结果未知，请使用同一次确认重试。",
+          retry: "confirm",
+        },
+      }));
+      return;
+    }
+    if (selectedSessionRef.current !== sessionId) return;
+    flowSaveCommands.current.delete(commandId);
+    try {
+      await sessionConnection.refresh(sessionId);
+    } catch {
+      if (selectedSessionRef.current === sessionId) {
+        notify("Candidate 已生成，但 Timeline 刷新失败，请刷新页面。", "error");
+      }
+    }
+    if (selectedSessionRef.current !== sessionId) return;
+    setFlowSaveActionStates((current) => {
+      const next = { ...current };
+      delete next[requestId];
+      return next;
+    });
+    const opened = await refreshFlowCatalog(result.flow.flow_id, sessionId).catch((caught) => {
+      if (selectedSessionRef.current !== sessionId) return null;
+      notify(`Candidate 已生成，但详情打开失败：${messageOf(caught)}`, "error");
+      return null;
+    });
+    if (opened && selectedSessionRef.current === sessionId) {
+      notify(`已生成 Candidate · ${result.flow.name || result.flow.flow_id}`);
+    }
+  }
+
+  async function dismissFlowSaveRequest(requestId: string): Promise<void> {
+    const sessionId = selectedSessionRef.current;
+    const actionState = flowSaveActionStates[requestId];
+    if (!sessionId || actionState?.phase || actionState?.retry === "confirm") return;
+    const commandId = flowSaveCommandId(sessionId, "dismiss", requestId);
+    const command = flowSaveCommands.current.get(commandId) ?? {
+      key: crypto.randomUUID(),
+      startedAfterSequence: canonicalFlowSaveSequence(sessionId),
+    };
+    const key = command.key;
+    flowSaveCommands.current.set(commandId, command);
+    setFlowSaveActionStates((current) => ({
+      ...current,
+      [requestId]: { phase: "dismiss", error: null, retry: null },
+    }));
+    try {
+      await api.dismissFlowSave(requestId, key);
+    } catch (caught) {
+      if (selectedSessionRef.current !== sessionId) return;
+      if (caught instanceof ApiError) {
+        flowSaveCommands.current.delete(commandId);
+        await sessionConnection.refresh(sessionId).catch(() => {});
+        if (selectedSessionRef.current !== sessionId) return;
+        setFlowSaveActionStates((current) => {
+          const next = { ...current };
+          delete next[requestId];
+          return next;
+        });
+        notify(messageOf(caught), "error");
+        return;
+      }
+      setFlowSaveActionStates((current) => ({
+        ...current,
+        [requestId]: {
+          phase: null,
+          error: "忽略结果未知，请再次点击“忽略”安全重试。",
+          retry: "dismiss",
+        },
+      }));
+      return;
+    }
+    if (selectedSessionRef.current !== sessionId) return;
+    flowSaveCommands.current.delete(commandId);
+    try {
+      await sessionConnection.refresh(sessionId);
+    } catch {
+      if (selectedSessionRef.current === sessionId) {
+        notify("已忽略请求，但 Timeline 刷新失败，请刷新页面。", "error");
+      }
+    }
+    if (selectedSessionRef.current !== sessionId) return;
+    setFlowSaveActionStates((current) => {
+      const next = { ...current };
+      delete next[requestId];
+      return next;
+    });
   }
 
   async function openFlowRecommendation(recommendation: FlowRecommendation): Promise<void> {
@@ -1655,6 +1895,12 @@ export function Workbench() {
                     loadingEarlier={loadingEarlier}
                     onLoadEarlier={() => void loadEarlierTimeline()}
                     onLoadSegments={(blockId, after) => void loadBlockSegments(blockId, after)}
+                    requestingFlowRunIds={requestingFlowRunIds}
+                    flowSaveActionStates={flowSaveActionStates}
+                    onRequestFlowSave={(runId) => { void requestFlowSaveFromTurn(runId); }}
+                    onConfirmFlowSave={(requestId) => { void confirmFlowSaveRequest(requestId); }}
+                    onDismissFlowSave={(requestId) => { void dismissFlowSaveRequest(requestId); }}
+                    onOpenFlowCandidate={(flowId) => { void openFlow(flowId, selectedSessionId); }}
                     onCreateCandidate={(runId) => { void createCandidateFromRun(runId); }}
                     flowRecommendations={flowRecommendations}
                     onUseFlowRecommendation={(recommendation) => { void openFlowRecommendation(recommendation); }}

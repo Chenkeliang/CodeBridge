@@ -12,6 +12,7 @@ function readSource(): string {
     "./conversation.tsx",
     "./session-chrome.tsx",
     "./session-timeline.tsx",
+    "./flow-save-request-card.tsx",
     "./command-palette.tsx",
   ]
     .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
@@ -227,6 +228,30 @@ describe("Workbench component policy", () => {
 
     expect(source).not.toContain("api.flowProposals(");
     expect(source).not.toContain("flowProposals={");
+  });
+
+  it("keeps Flow save intent writes caller-owned and Timeline state server-owned", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const card = readFileSync(new URL("./flow-save-request-card.tsx", import.meta.url), "utf8");
+
+    expect(workbench).toContain("flowSaveCommand");
+    expect(workbench).toContain("api.requestFlowSave(");
+    expect(workbench).toContain("api.confirmFlowSave(");
+    expect(workbench).toContain("api.dismissFlowSave(");
+    expect(workbench).toContain("crypto.randomUUID()");
+    expect(workbench).toContain("sessionConnection.refresh(");
+    expect(workbench).not.toContain("FLOW_SAVE_REQUESTED");
+    expect(workbench).not.toContain("FLOW_CANDIDATE_CREATED");
+    expect(card).not.toContain("@/lib/api");
+    expect(card).not.toContain("crypto.");
+    expect(card).not.toContain("sessionViewStore");
+  });
+
+  it("uses the shared Popover primitive for Turn actions", () => {
+    const timeline = readFileSync(new URL("./session-timeline.tsx", import.meta.url), "utf8");
+    expect(timeline).toContain('from "@/components/ui/popover"');
+    expect(timeline).not.toContain('role="menu"');
+    expect(timeline).not.toContain('aria-haspopup="menu"');
   });
 
   it("does not block the first paint on provider Session import", () => {

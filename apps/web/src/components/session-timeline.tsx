@@ -1,11 +1,16 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ChevronDown, LoaderCircle, Workflow, X } from "lucide-react";
+import { BookmarkPlus, ChevronDown, LoaderCircle, MoreHorizontal, Workflow, X } from "lucide-react";
 import {
   LiveElapsed,
   Markdown,
   WorkMarkdown,
 } from "@/components/conversation";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  FlowSaveRequestCard,
+  type FlowSaveRequestActionState,
+} from "@/components/flow-save-request-card";
 import {
   RuntimeApprovalCard,
   type RuntimeApprovalAction,
@@ -39,6 +44,12 @@ export function SessionTimeline(props: {
   onUseFlowRecommendation?: (recommendation: FlowRecommendation) => void;
   onDismissFlowRecommendation?: (recommendation: FlowRecommendation) => void;
   onOpenFlowBatch?: (reference: { draftId?: string; batchId?: string }) => void;
+  requestingFlowRunIds?: ReadonlySet<string>;
+  flowSaveActionStates?: Record<string, FlowSaveRequestActionState>;
+  onRequestFlowSave?: (runId: string) => void;
+  onConfirmFlowSave?: (requestId: string) => void;
+  onDismissFlowSave?: (requestId: string) => void;
+  onOpenFlowCandidate?: (flowId: string) => void;
 }) {
   const timelineRoot = useRef<HTMLDivElement | null>(null);
   const seenSegmentIds = useRef<Set<string> | null>(null);
@@ -83,6 +94,14 @@ export function SessionTimeline(props: {
     for (const segmentId of currentSegmentIds) seenSegmentIds.current.add(segmentId);
   }, [props.activeRunId, props.turns]);
 
+  const blockedFlowSaveSourceRunIds = new Set(
+    props.turns.flatMap((turn) => turn.blocks.flatMap((block) => {
+      if (block.kind !== "flow_save_request" || !["pending", "completed"].includes(block.status)) return [];
+      const sourceRunId = stringMetadata(block.metadata, "source_run_id");
+      return sourceRunId ? [sourceRunId] : [];
+    })),
+  );
+
   return <div className="grid gap-6" ref={timelineRoot}>
     {props.hasEarlier && <Button className="mx-auto" data-load-earlier disabled={props.loadingEarlier} onClick={props.onLoadEarlier} size="sm" variant="ghost">
       {props.loadingEarlier ? "正在加载…" : "加载更早对话"}
@@ -115,6 +134,10 @@ export function SessionTimeline(props: {
               savingCandidateRunId={props.savingCandidateRunId ?? null}
               onCreateCandidate={props.onCreateCandidate}
               onOpenFlowBatch={props.onOpenFlowBatch}
+              flowSaveActionState={flowSaveActionState(item.block, props.flowSaveActionStates)}
+              onConfirmFlowSave={props.onConfirmFlowSave}
+              onDismissFlowSave={props.onDismissFlowSave}
+              onOpenFlowCandidate={props.onOpenFlowCandidate}
               runId={turn.run_id}
             />)}
         {recommendation && <div className="grid max-w-[780px] gap-3 rounded-lg border border-accent/40 bg-accent-soft px-3.5 py-3 text-xs text-muted">
@@ -131,6 +154,10 @@ export function SessionTimeline(props: {
             </Button>
           </div>
         </div>}
+        {props.onRequestFlowSave && isEligibleFlowSaveSourceTurn(turn, blockedFlowSaveSourceRunIds) && <TurnActionMenu
+          busy={props.requestingFlowRunIds?.has(turn.run_id) ?? false}
+          onRequest={() => props.onRequestFlowSave?.(turn.run_id)}
+        />}
       </article>;
     })}
   </div>;
@@ -150,10 +177,19 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   savingCandidateRunId: string | null;
   onCreateCandidate?: (runId: string) => void;
   onOpenFlowBatch?: (reference: { draftId?: string; batchId?: string }) => void;
+  flowSaveActionState: FlowSaveRequestActionState | null;
+  onConfirmFlowSave?: (requestId: string) => void;
+  onDismissFlowSave?: (requestId: string) => void;
+  onOpenFlowCandidate?: (flowId: string) => void;
 }) {
   const { block } = props;
-  // S4 only projects the persisted state; W1 installs the interactive card.
-  if (block.kind === "flow_save_request") return null;
+  if (block.kind === "flow_save_request") return <FlowSaveRequestCard
+    actionState={props.flowSaveActionState}
+    block={block}
+    onConfirm={props.onConfirmFlowSave}
+    onDismiss={props.onDismissFlowSave}
+    onOpenCandidate={props.onOpenFlowCandidate}
+  />;
   if (isEmptyProcessBlock(block) && !props.isLive) return null;
   const more = block.next_segment_cursor !== null && !props.isLive && <Button disabled={props.loading} onClick={() => props.onLoadSegments(block.block_id, block.next_segment_cursor!)} size="sm" variant="ghost">
     {props.loading ? "正在加载…" : "加载更多输出"}
@@ -205,6 +241,71 @@ const TimelineBlock = memo(function TimelineBlock(props: {
     onLoadSegments={props.onLoadSegments}
   />;
 });
+
+function TurnActionMenu(props: { busy: boolean; onRequest: () => void }) {
+  const [open, setOpen] = useState(false);
+  return <div className="flex w-full max-w-[780px] justify-end" data-turn-actions>
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger asChild>
+        <Button
+          aria-label="Turn 操作"
+          className="size-8 p-0"
+          disabled={props.busy}
+          size="icon"
+          variant="ghost"
+        >{props.busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <MoreHorizontal className="size-4" />}</Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="min-w-36 border-line-strong bg-overlay p-1 shadow-panel"
+        side="bottom"
+      >
+      <button
+        className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-ink hover:bg-surface-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
+        onClick={() => {
+          setOpen(false);
+          props.onRequest();
+        }}
+        type="button"
+      ><BookmarkPlus className="size-3.5 text-control-accent" />存为 Flow</button>
+      </PopoverContent>
+    </Popover>
+  </div>;
+}
+
+function isEligibleFlowSaveSourceTurn(
+  turn: TimelineTurnView,
+  blockedSourceRunIds: ReadonlySet<string>,
+): boolean {
+  if (turn.status !== "succeeded" || blockedSourceRunIds.has(turn.run_id)) return false;
+  if (!turn.blocks.some((block) => block.kind === "assistant")) return false;
+  if (turn.blocks.some((block) => [
+    "flow_param",
+    "flow_step",
+    "flow_run",
+    "flow_failure",
+    "flow_batch",
+  ].includes(block.kind))) return false;
+  return !turn.blocks.some((block) =>
+    block.kind === "flow_save_request"
+    && stringMetadata(block.metadata, "request_run_id") === turn.run_id
+    && stringMetadata(block.metadata, "source_run_id") !== turn.run_id
+  );
+}
+
+function flowSaveActionState(
+  block: TimelineBlockView,
+  states: Record<string, FlowSaveRequestActionState> | undefined,
+): FlowSaveRequestActionState | null {
+  if (block.kind !== "flow_save_request") return null;
+  const requestId = stringMetadata(block.metadata, "request_id");
+  return requestId ? states?.[requestId] ?? null : null;
+}
+
+function stringMetadata(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value ? value : null;
+}
 
 function FlowBatchTimelineCard({ block, onOpen }: {
   block: TimelineBlockView;
