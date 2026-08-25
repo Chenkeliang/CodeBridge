@@ -126,6 +126,7 @@ export interface FlowProvenance {
   source_session_id: string;
   source_flow_id: string;
   source_definition_revision: string;
+  source_request_id?: string;
 }
 
 export interface FlowEvidence {

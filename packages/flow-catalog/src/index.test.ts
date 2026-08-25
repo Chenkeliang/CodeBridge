@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { FlowCatalogStore } from "./index.js";
 import { InvalidFlowStateError } from "./policy.js";
@@ -159,6 +162,39 @@ describe("flow catalog", () => {
       "review_rejected",
     ]);
     store.close();
+  });
+
+  it("persists sourceRequestId across reopen and revision history reads", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-flow-provenance-"));
+    const databasePath = path.join(directory, "flows.sqlite");
+    try {
+      const first = new FlowCatalogStore(databasePath);
+      const candidate = first.save({
+        flowId: "flow-save-request",
+        name: "Save Request Candidate",
+        kind: "runbook",
+        status: "candidate",
+        source: "agent_generated",
+        definitionRevision: "sha256:request",
+        provenance: {
+          sourceRunId: "run-source",
+          sourceSessionId: "sess-source",
+          sourceFlowId: "flow-source",
+          sourceDefinitionRevision: "sha256:source",
+          sourceRequestId: "fsr-source",
+        },
+        steps: [{ id: "inspect", purpose: "核对来源" }],
+      });
+      first.close();
+
+      const reopened = new FlowCatalogStore(databasePath);
+      expect(reopened.get(candidate.flowId)?.provenance?.sourceRequestId).toBe("fsr-source");
+      expect(reopened.history(candidate.flowId)[0]?.snapshot.provenance?.sourceRequestId)
+        .toBe("fsr-source");
+      reopened.close();
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("defaults legacy records to their own lineage root", () => {

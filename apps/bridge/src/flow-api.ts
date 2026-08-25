@@ -11,7 +11,7 @@ import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
 import { compileWorkflow, definitionHash, validatePostcondition, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import type { DomainEvent, Run, SqliteEventStore } from "@codebridge/work-items";
-import { extractRunDefinition } from "./flow-save-intent.js";
+import { buildCandidateDefinition, extractRunDefinition } from "./flow-save-intent.js";
 
 export interface FlowApiOptions {
   sessions?: SessionCatalogStore;
@@ -506,20 +506,17 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       : derivedFrom ? derivedFrom.steps.map(toWorkflowStep) : [];
     const rawInputs = Array.isArray(input.inputs) ? input.inputs : derivedFrom?.inputs ?? [];
     const source: FlowRecord["source"] = "user_selected";
-    const definition = {
-      schema_version: 1,
-      workflow_id: flowId,
+    const definition = buildCandidateDefinition({
+      flowId,
       name: typeof input.name === "string" && input.name.trim()
         ? input.name.trim()
         : derivedFrom?.name ?? existing?.name ?? flowId,
-      kind: "runbook" as const,
-      status: "draft",
       description: typeof input.description === "string"
         ? input.description
         : input.description === null ? undefined : derivedFrom?.description ?? existing?.description ?? undefined,
       inputs: rawInputs,
       steps: rawSteps,
-    };
+    });
     // The server owns revision computation (spec §6.2): a caller-supplied
     // definition_revision is accepted for backward compatibility but ignored.
     const definitionRevision = definitionHash(definition);
@@ -864,6 +861,9 @@ function toApiProvenance(provenance: FlowRecord["provenance"]): Record<string, s
     source_session_id: provenance.sourceSessionId,
     source_flow_id: provenance.sourceFlowId,
     source_definition_revision: provenance.sourceDefinitionRevision,
+    ...(provenance.sourceRequestId
+      ? { source_request_id: provenance.sourceRequestId }
+      : {}),
   } : null;
 }
 
