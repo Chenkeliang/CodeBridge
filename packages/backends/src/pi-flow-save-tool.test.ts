@@ -32,6 +32,10 @@ describe("Pi Flow save request tool", () => {
     expect(tool.name).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
     expect(FLOW_SAVE_TOOL_NAME).not.toMatch(/^[A-Za-z0-9_-]{1,64}$/);
     expect(tool.description).toContain("明确");
+    expect(tool.description).toContain("确认入口由客户端展示");
+    expect(tool.promptGuidelines).toEqual(expect.arrayContaining([
+      expect.stringContaining("Never claim the current chat can confirm"),
+    ]));
     expect(tool.description).not.toContain("已保存");
     expect(tool.parameters).toMatchObject({
       type: "object",

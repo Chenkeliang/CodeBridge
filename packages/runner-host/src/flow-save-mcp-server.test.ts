@@ -111,7 +111,7 @@ describe("CodeBridge internal Flow save MCP server", () => {
       expect(result.tools).toHaveLength(1);
       expect(result.tools[0]).toMatchObject({
         name: FLOW_SAVE_TOOL_NAME,
-        description: expect.stringContaining("明确"),
+        description: expect.stringMatching(/明确.*确认入口由客户端展示/s),
         annotations: {
           readOnlyHint: true,
           destructiveHint: false,

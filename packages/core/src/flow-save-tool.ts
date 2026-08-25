@@ -11,7 +11,7 @@ export const FLOW_SAVE_NO_SOURCE_MESSAGE =
   "找不到可提取的上一次成功任务，请在目标回复的菜单中选择‘存为 Flow’。" as const;
 
 export const FLOW_SAVE_TOOL_DESCRIPTION =
-  "仅当用户明确要求将上一次已完成任务保存为可复用 Flow 时，创建一个待确认请求。此工具只表达保存意图，不创建 Candidate、不写 Flow Catalog，也不表示 Flow 已经存好。";
+  "仅当用户明确要求将上一次已完成任务保存为可复用 Flow 时，创建一个待确认请求。此工具只表达保存意图，不创建 Candidate、不写 Flow Catalog，也不表示 Flow 已经存好。调用成功后仅说明待确认请求已记录、尚未创建 Candidate；不要声称可在当前通道或当前界面确认，确认入口由客户端展示。";
 
 export const RequestFlowSaveInputSchema = z.object({
   source_scope: z.literal(FLOW_SAVE_SOURCE_SCOPE),
