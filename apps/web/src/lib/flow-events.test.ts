@@ -9,11 +9,23 @@ function turn(runId: string): TimelineTurnView {
 function event(partial: Partial<SessionEvent> & { type: string }): SessionEvent {
   return {
     event_id: "e", sequence: 1, run_id: "run_1", occurred_at: "2026-08-19T00:00:00.000Z",
+    execution_kind: "flow",
     payload: {}, ...partial,
   } as SessionEvent;
 }
 
 describe("applyFlowEvent", () => {
+  it("ignores STEP events from an Agent Run", () => {
+    const input = [turn("run_1")];
+    const output = applyFlowEvent(input, event({
+      type: "STEP_STARTED",
+      execution_kind: "agent",
+      target: "run_1",
+    }));
+
+    expect(output).toBe(input);
+  });
+
   it("starts a flow_step block on STEP_STARTED and completes it on STEP_SUCCEEDED", () => {
     let turns = [turn("run_1")];
     turns = applyFlowEvent(turns, event({ type: "STEP_STARTED", target: "echo", payload: { capability_id: "demo.echo", risk: "read_only" } }));
@@ -46,7 +58,19 @@ describe("applyFlowEvent", () => {
   });
 
   it("records PARAM_RESOLVED on the latest turn when run_id is null", () => {
-    const turns = applyFlowEvent([turn("run_1")], event({ run_id: null, type: "PARAM_RESOLVED", payload: { field: "text", final_value: "hi", resolution: "confirmed", source: "user" } }));
+    const turns = applyFlowEvent([turn("run_1")], event({
+      run_id: null,
+      execution_kind: null,
+      type: "PARAM_RESOLVED",
+      payload: {
+        flow_id: "flow_demo_echo",
+        flow_revision: "sha256:plan",
+        field: "text",
+        final_value: "hi",
+        resolution: "confirmed",
+        source: "user",
+      },
+    }));
     expect(turns[0]!.blocks.at(-1)).toMatchObject({ kind: "flow_param", metadata: { field: "text", final_value: "hi" } });
   });
 

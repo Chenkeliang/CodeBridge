@@ -28,16 +28,34 @@ function event(
 }
 
 describe("createChannelFlowProjector", () => {
+  it("ignores generic Agent steps and approvals", () => {
+    const projector = createChannelFlowProjector();
+    const step = event("STEP_STARTED", "run_1");
+    step.executionKind = "agent";
+    projector.apply(step);
+    const approval = event("APPROVAL_REQUESTED", "tool.write", {
+      approval_id: "approval_agent",
+      step_id: "run",
+    });
+    approval.executionKind = "agent";
+    projector.apply(approval);
+
+    expect(projector.snapshot().steps).toEqual([]);
+    expect(projector.snapshot().approvals).toEqual([]);
+  });
+
   it("projects batch draft and aggregate Runtime status without item-level domain logic", () => {
     const projector = createChannelFlowProjector();
     projector.apply(event("FLOW_BATCH_DRAFTED", "batch_draft_1", {
-      draft_id: "batch_draft_1", flow_id: "flow_order", status: "ready", total: 3, blocking: 0,
+      draft_id: "batch_draft_1", flow_id: "flow_order",
+      definition_revision: "sha256:rev", status: "ready", total: 3, blocking: 0,
     }));
     expect(renderChannelFlowLive(projector.snapshot())).toContain("可处理 3");
     expect(renderChannelFlowLive(projector.snapshot())).toContain("/flow batch show batch_draft_1");
 
     projector.apply(event("FLOW_BATCH_UPDATED", "batch_1", {
-      batch_id: "batch_1", draft_id: "batch_draft_1", status: "running",
+      batch_id: "batch_1", draft_id: "batch_draft_1", flow_id: "flow_order",
+      definition_revision: "sha256:rev", status: "running",
       counts: { total: 3, queued: 0, running: 1, waiting: 0, succeeded: 2, failed: 0 },
     }));
     expect(projector.snapshot().batch).toMatchObject({

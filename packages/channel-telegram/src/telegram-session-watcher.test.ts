@@ -227,7 +227,17 @@ describe("TelegramSessionWatcher", () => {
     const ingress = makeIngress();
     ingress.events = blockingEvents([
       agentEvent(4, { type: "text_delta", text: "final" }),
-      terminalEvent(5),
+      {
+        type: "STEP_STARTED",
+        sequence: 5,
+        runId: "run_1",
+        executionKind: "agent",
+        occurredAt: "2026-08-21T10:00:05.000Z",
+        target: "run_1",
+        resultRef: null,
+        payload: {},
+      },
+      terminalEvent(6),
     ]);
 
     const w = watcher(ingress, api);
@@ -264,7 +274,8 @@ describe("TelegramSessionWatcher", () => {
       artifact,
       { ...artifact, sequence: 7 },
       flowEvent(8, "FLOW_BATCH_DRAFTED", "batch_draft_1", {
-        draft_id: "batch_draft_1", flow_id: "flow_deploy", status: "ready", total: 3, blocking: 0,
+        draft_id: "batch_draft_1", flow_id: "flow_deploy",
+        definition_revision: "sha256:revision", status: "ready", total: 3, blocking: 0,
       }),
       flowEvent(9, "RUN_SNAPSHOT", "run_1", {
         flow_id: "flow_deploy",
