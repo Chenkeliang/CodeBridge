@@ -378,4 +378,27 @@ describe("Workbench component policy", () => {
     expect(workbench).toContain("api.commands(");
     expect(workbench).toContain("setCommandOpen(nextTrigger?.kind === \"command\")");
   });
+
+  it("closes Provider Session history import through explicit Preview and confirmation", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const client = readFileSync(new URL("../lib/api.ts", import.meta.url), "utf8");
+    const openSessionSource = client.slice(
+      client.indexOf("async function openSession"),
+      client.indexOf("async function importSessions"),
+    );
+
+    expect(workbench).toContain("ProviderHistoryImportCard,");
+    expect(workbench).toContain('from "@/components/provider-history-import-card"');
+    expect(workbench).toContain("api.previewProviderHistory(");
+    expect(workbench).toContain("api.importProviderHistory(");
+    expect(workbench).toContain("pendingHistoryImportKey");
+    expect(workbench).toContain("providerHistoryRequestVersion");
+    expect(workbench).toContain("sessionViewStore.hydrate(snapshot)");
+    expect(workbench).not.toContain("setEvents(");
+
+    expect(client).toContain('request<SessionSnapshot>(\'/v1/sessions/\' + encodeURIComponent(id))');
+    expect(client).toContain("async function openSession(id: string)");
+    expect(openSessionSource).not.toContain("provider-history");
+    expect(openSessionSource).not.toContain('method: "POST"');
+  });
 });
