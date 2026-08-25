@@ -12,6 +12,7 @@ import { compileCatalogFlow } from "./flow-compile.js";
 import {
   candidateFlowId,
   extractRunDefinition,
+  flowSaveToolOutputFromAgentValue,
   FlowSaveIntentService,
   type ExtractRunDefinitionInput,
 } from "./flow-save-intent.js";
@@ -426,6 +427,59 @@ describe("extractRunDefinition", () => {
       code: "run_not_extractable",
       reason: expect.any(String),
     });
+  });
+});
+
+describe("flowSaveToolOutputFromAgentValue", () => {
+  const accepted = {
+    codebridge_internal_tool: FLOW_SAVE_TOOL_MARKER,
+    accepted: true as const,
+    source_scope: "previous_completed_run" as const,
+  };
+
+  it.each([
+    { structuredContent: accepted },
+    { details: accepted },
+    { content: [{ type: "text", text: JSON.stringify(accepted) }] },
+  ])("accepts bounded ACP and Pi result wrappers", (value) => {
+    expect(flowSaveToolOutputFromAgentValue(value)).toEqual(accepted);
+  });
+
+  it("fails closed when a marker is outside the shared traversal budget", () => {
+    const payload = Array.from({ length: 256 }, (_, index) =>
+      index === 255 ? accepted : { content: [{ type: "text", text: String(index) }] }
+    );
+
+    expect(flowSaveToolOutputFromAgentValue(payload)).toBeNull();
+  });
+
+  it("fails closed before parsing an oversized wrapper object", () => {
+    const payload = Object.fromEntries(
+      Array.from({ length: 256 }, (_, index) => [`unused_${index}`, index]),
+    ) as Record<string, unknown>;
+    payload.details = accepted;
+
+    expect(flowSaveToolOutputFromAgentValue(payload)).toBeNull();
+  });
+
+  it("shares one total-node budget across individually bounded wrappers", () => {
+    const payload = [
+      ...Array.from({ length: 13 }, () => ({
+        content: [{ type: "text", text: "{}" }],
+      })),
+      { details: accepted },
+    ];
+
+    expect(flowSaveToolOutputFromAgentValue(payload)).toBeNull();
+  });
+
+  it("rejects a marker beyond the independent depth limit", () => {
+    let payload: unknown = accepted;
+    for (let depth = 0; depth < 8; depth += 1) {
+      payload = { content: payload };
+    }
+
+    expect(flowSaveToolOutputFromAgentValue(payload)).toBeNull();
   });
 });
 
