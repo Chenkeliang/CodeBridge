@@ -192,24 +192,6 @@ export function createChannelSessionIngress(
     return body.flows.map(toChannelManageableFlow);
   };
 
-  const saveLatestGuide = async (sessionId: string): Promise<ChannelManageableFlow> => {
-    const proposals = await app.request(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-proposals`,
-      { headers: auth },
-    );
-    if (!proposals.ok) throw new Error(`list Flow proposals failed (${proposals.status}): ${await proposals.text()}`);
-    const body = await proposals.json() as { proposals: Array<{ run_id: string; saveable: boolean }> };
-    const proposal = body.proposals.find((entry) => entry.saveable);
-    if (!proposal) throw new Error("当前 Session 没有可保存的成功 Agent Run");
-    const response = await app.request("/v1/flows/guides", {
-      method: "POST",
-      headers: { ...auth, "content-type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, run_id: proposal.run_id }),
-    });
-    if (!response.ok) throw new Error(`save Guide failed (${response.status}): ${await response.text()}`);
-    return toChannelManageableFlow(await response.json() as Record<string, unknown>);
-  };
-
   const getFlowReviewSummary = async (flowId: string): Promise<ChannelFlowReviewSummary> => {
     const response = await app.request(`/v1/flows/${encodeURIComponent(flowId)}/review-context`, { headers: auth });
     if (!response.ok) throw new Error(`read Flow review failed (${response.status}): ${await response.text()}`);
@@ -738,7 +720,6 @@ export function createChannelSessionIngress(
     submit,
     listConsumableFlows,
     listManageableFlows,
-    saveLatestGuide,
     getFlowReviewSummary,
     updateCandidateSummary,
     rejectCandidate,

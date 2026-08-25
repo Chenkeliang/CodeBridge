@@ -10,10 +10,9 @@ import {
 import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
 import { compileWorkflow, definitionHash, validatePostcondition, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
-import type { DomainEvent, Run, SqliteEventStore } from "@codebridge/work-items";
+import type { DomainEvent, SqliteEventStore } from "@codebridge/work-items";
 import {
   buildCandidateDefinition,
-  extractRunDefinition,
   FlowSaveIntentError,
   type FlowSaveIntentService,
   type FlowSaveRequest,
@@ -26,25 +25,6 @@ export interface FlowApiOptions {
   capabilities?: CapabilityRegistry;
   runtime?: CapabilityRuntime;
   flowSaveIntents?: FlowSaveIntentService;
-}
-
-type FlowProposalKind = "structured_plan" | "observed_trace" | "unavailable";
-
-interface AgentFlowProposal {
-  sessionId: string;
-  runId: string;
-  agentId: string;
-  runStatus: string;
-  kind: FlowProposalKind;
-  saveable: boolean;
-  reason: string | null;
-  sourceFlowId: string | null;
-  sourceDefinitionRevision: string | null;
-  guide: {
-    name: string;
-    description: string | null;
-    steps: Array<{ id: string; purpose: string; dependsOn: string[] }>;
-  } | null;
 }
 
 export function createFlowApp(catalog: FlowCatalogStore, token: string, options: FlowApiOptions = {}) {
@@ -139,14 +119,7 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     }
   });
   app.get("/v1/sessions/:session_id/flow-proposals", (c) => {
-    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
-    if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
-    const session = options.sessions.getSession(c.req.param("session_id"));
-    if (!session) return c.json({ error: "session_not_found" }, 404);
-    return c.json({
-      proposals: proposalsForSession(session.id, session.agentId, session.taskRecordId, options.events)
-        .map(toApiFlowProposal),
-    });
+    return c.json({ error: "flow_proposals_deprecated" }, 410);
   });
   app.get("/v1/sessions/:session_id/flow-recommendations", (c) => {
     if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
@@ -375,108 +348,29 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
   });
   app.post("/v1/flows/guides", async (c) => {
     const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
-    if (body?.flow && typeof body.flow === "object" && !Array.isArray(body.flow)) {
-      const parsed = parseGuideDraft(body.flow);
-      if ("error" in parsed) return c.json({ error: parsed.error }, 400);
-      const flowId = `flow_${randomUUID().replaceAll("-", "")}`;
-      return c.json(toApiFlow(catalog.save({
-        flowId,
-        ...parsed,
-        kind: "guide",
-        status: "draft",
-        source: "user_selected",
-        definitionRevision: guideDefinitionRevision(flowId, parsed),
-        planIrHash: null,
-        inputs: [],
-        reviewStatus: "pending",
-        gitRevision: null,
-        validationIssues: [],
-        lineageRootFlowId: flowId,
-        parentFlowId: null,
-        provenance: null,
-        publicationSequence: 0,
-      })), 201);
+    if (body && (Object.hasOwn(body, "session_id") || Object.hasOwn(body, "run_id"))) {
+      return c.json({ error: "run_guide_save_deprecated" }, 410);
     }
-    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
-    if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
-    const sessionId = typeof body?.session_id === "string" ? body.session_id : undefined;
-    const runId = typeof body?.run_id === "string" ? body.run_id : undefined;
-    if (!sessionId) return c.json({ error: "session_id is required" }, 400);
-    if (!runId) return c.json({ error: "run_id is required" }, 400);
-    const session = options.sessions.getSession(sessionId);
-    if (!session) return c.json({ error: "session_not_found" }, 404);
-    const run = options.events.getRun(runId);
-    if (!run || run.sessionId !== session.id) return c.json({ error: "run_not_found" }, 404);
-    if (run.status !== "succeeded") return c.json({ error: "run_not_succeeded" }, 409);
-    const proposal = proposalsForSession(
-      session.id,
-      session.agentId,
-      session.taskRecordId,
-      options.events,
-    ).find((entry) => entry.runId === run.id);
-    if (!proposal?.saveable || !proposal.guide || !proposal.sourceFlowId || !proposal.sourceDefinitionRevision) {
-      return c.json({
-        error: "run_not_extractable",
-        reason: proposal?.reason ?? "Run 没有可复用的计划或工具轨迹",
-      }, 409);
-    }
-    const prior = catalog.list().find((flow) =>
-      flow.kind === "guide"
-      && flow.source === "agent_generated"
-      && flow.provenance?.sourceRunId === run.id
-      && flow.provenance.sourceSessionId === session.id
-      && flow.provenance.sourceDefinitionRevision === proposal.sourceDefinitionRevision
-    );
-    if (prior) return c.json(toApiFlow(prior));
-
+    const parsed = parseGuideDraft(body?.flow);
+    if ("error" in parsed) return c.json({ error: parsed.error }, 400);
     const flowId = `flow_${randomUUID().replaceAll("-", "")}`;
-    const name = typeof body?.name === "string" && body.name.trim()
-      ? body.name.trim()
-      : proposal.guide.name;
-    const description = typeof body?.description === "string"
-      ? body.description
-      : proposal.guide.description;
-    const definition = {
-      schema_version: 1,
-      workflow_id: flowId,
-      name,
-      kind: "guide" as const,
-      status: "draft" as const,
-      description: description ?? undefined,
-      inputs: [],
-      steps: proposal.guide.steps.map((step) => ({
-        id: step.id,
-        purpose: step.purpose,
-        mode: "manual" as const,
-        depends_on: step.dependsOn,
-        approval: "none" as const,
-      })),
-    };
-    const saved = catalog.save({
+    return c.json(toApiFlow(catalog.save({
       flowId,
-      name,
-      description,
+      ...parsed,
       kind: "guide",
       status: "draft",
-      source: "agent_generated",
-      definitionRevision: definitionHash(definition),
+      source: "user_selected",
+      definitionRevision: guideDefinitionRevision(flowId, parsed),
       planIrHash: null,
       inputs: [],
-      steps: proposal.guide.steps.map((step) => ({
-        id: step.id,
-        purpose: step.purpose,
-        mode: "manual",
-        dependsOn: step.dependsOn,
-        approval: "none",
-      })),
-      provenance: {
-        sourceRunId: run.id,
-        sourceSessionId: session.id,
-        sourceFlowId: proposal.sourceFlowId,
-        sourceDefinitionRevision: proposal.sourceDefinitionRevision,
-      },
-    });
-    return c.json(toApiFlow(saved), 201);
+      reviewStatus: "pending",
+      gitRevision: null,
+      validationIssues: [],
+      lineageRootFlowId: flowId,
+      parentFlowId: null,
+      provenance: null,
+      publicationSequence: 0,
+    })), 201);
   });
   app.put("/v1/flows/:flow_id/guide", async (c) => {
     const existing = catalog.get(c.req.param("flow_id"));
@@ -781,112 +675,6 @@ function toApiFlowRecommendation(
     extracted_inputs: event.payload.extracted_inputs ?? {},
     status,
     created_at: event.occurredAt,
-  };
-}
-
-function proposalsForSession(
-  sessionId: string,
-  agentId: string,
-  taskRecordId: string | null,
-  events: SqliteEventStore,
-): AgentFlowProposal[] {
-  const workItem = taskRecordId
-    ? events.getWorkItem(taskRecordId)
-    : events.getWorkItemBySessionId(sessionId);
-  if (!workItem) return [];
-  const sessionEvents = events.listEvents(workItem.id);
-  return events.listRuns(workItem.id)
-    .filter((run) => run.sessionId === sessionId)
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    .map((run) => proposalForRun(
-      sessionId,
-      agentId,
-      workItem.title,
-      run,
-      sessionEvents.filter((event) => event.runId === run.id),
-    ));
-}
-
-function proposalForRun(
-  sessionId: string,
-  agentId: string,
-  title: string,
-  run: Run,
-  runEvents: ReturnType<SqliteEventStore["listEvents"]>,
-): AgentFlowProposal {
-  const extracted = extractRunDefinition({
-    session: { id: sessionId, agentId },
-    run,
-    title,
-    events: runEvents,
-  });
-  if (!extracted.ok) {
-    return unavailableProposal(
-      sessionId,
-      run.id,
-      run.agentId ?? agentId,
-      run.status,
-      extracted.reason,
-    );
-  }
-  return {
-    sessionId,
-    runId: run.id,
-    agentId: run.agentId ?? agentId,
-    runStatus: run.status,
-    kind: extracted.kind,
-    saveable: true,
-    reason: extracted.warnings[0] ?? null,
-    sourceFlowId: extracted.sourceFlowId,
-    sourceDefinitionRevision: extracted.sourceDefinitionRevision,
-    guide: {
-      name: extracted.name,
-      description: extracted.description,
-      steps: extracted.steps,
-    },
-  };
-}
-
-function unavailableProposal(
-  sessionId: string,
-  runId: string,
-  agentId: string,
-  runStatus: string,
-  reason: string,
-): AgentFlowProposal {
-  return {
-    sessionId,
-    runId,
-    agentId,
-    runStatus,
-    kind: "unavailable",
-    saveable: false,
-    reason,
-    sourceFlowId: null,
-    sourceDefinitionRevision: null,
-    guide: null,
-  };
-}
-
-function toApiFlowProposal(proposal: AgentFlowProposal): Record<string, unknown> {
-  return {
-    session_id: proposal.sessionId,
-    run_id: proposal.runId,
-    agent_id: proposal.agentId,
-    run_status: proposal.runStatus,
-    kind: proposal.kind,
-    saveable: proposal.saveable,
-    reason: proposal.reason,
-    source_definition_revision: proposal.sourceDefinitionRevision,
-    guide: proposal.guide ? {
-      name: proposal.guide.name,
-      description: proposal.guide.description,
-      steps: proposal.guide.steps.map((step) => ({
-        id: step.id,
-        purpose: step.purpose,
-        depends_on: step.dependsOn,
-      })),
-    } : null,
   };
 }
 

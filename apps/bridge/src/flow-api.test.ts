@@ -905,204 +905,64 @@ describe("flow API", () => {
     catalog.close();
   });
 
-  it("reads structured and observed Agent Run proposals without making them executable", async () => {
+  it("retires implicit Flow proposals and run-based Guide writes with hard 410 responses", async () => {
     const catalog = new FlowCatalogStore(":memory:");
-    const sessions = new SessionCatalogStore(":memory:");
-    const events = new SqliteEventStore(":memory:");
-    const structured = seedAgentRun(sessions, events, {
-      agentId: "codex",
-      title: "复核仓配告警",
-      proposal: [
-        { id: "inspect", purpose: "查询订单与仓配状态" },
-        { id: "verify", purpose: "核对退款与逆向链路" },
-      ],
-    });
-    const observed = seedAgentRun(sessions, events, {
-      agentId: "cursor",
-      title: "订单链路核验 oid 1644460 searchOrder 6928674077056597072\n请尽快处理",
-      tools: [
-        "python3 /Users/demo/.claude/skills/meepo/scripts/meepo.py task-info --order-sn 6928674077056597072A",
-        "Read File",
-      ],
-    });
-    const app = createFlowApp(catalog, "token", { sessions, events });
-    const headers = { authorization: "Bearer token" };
+    const app = createFlowApp(catalog, "token");
+    const headers = { authorization: "Bearer token", "content-type": "application/json" };
 
-    const structuredResponse = await app.request(
-      `/v1/sessions/${structured.session.id}/flow-proposals`,
+    const proposals = await app.request(
+      "/v1/sessions/sess_legacy/flow-proposals",
       { headers },
     );
-    expect(structuredResponse.status).toBe(200);
-    const structuredBody = await structuredResponse.json() as {
-      proposals: Array<{ guide: { steps: Array<{ purpose: string }> } }>;
-    };
-    expect(structuredBody.proposals[0]).toMatchObject({
-      run_id: structured.run.id,
-      agent_id: "codex",
-      kind: "structured_plan",
-      saveable: true,
-    });
-    expect(structuredBody.proposals[0]?.guide.steps).toEqual(
-      expect.arrayContaining([expect.objectContaining({ purpose: "查询订单与仓配状态" })]),
-    );
+    expect(proposals.status).toBe(410);
+    expect(await proposals.json()).toEqual({ error: "flow_proposals_deprecated" });
 
-    const observedResponse = await app.request(
-      `/v1/sessions/${observed.session.id}/flow-proposals`,
-      { headers },
-    );
-    expect(observedResponse.status).toBe(200);
-    const observedBody = await observedResponse.json() as {
-      proposals: Array<{ kind: string; guide: { steps: Array<{ purpose: string }> } }>;
-    };
-    expect(observedBody.proposals[0]?.kind).toBe("observed_trace");
-    const serialized = JSON.stringify(observedBody);
-    expect(serialized).toContain("meepo");
-    expect(serialized).not.toContain("6928674077056597072A");
-    expect(serialized).not.toContain("6928674077056597072");
-    expect(serialized).not.toContain("1644460");
-    expect(serialized).not.toContain("请尽快处理");
-    expect(serialized).not.toContain("/Users/demo");
+    const runBasedGuide = await app.request("/v1/flows/guides", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        session_id: "sess_legacy",
+        run_id: "run_legacy",
+      }),
+    });
+    expect(runBasedGuide.status).toBe(410);
+    expect(await runBasedGuide.json()).toEqual({ error: "run_guide_save_deprecated" });
+
+    const mixedGuide = await app.request("/v1/flows/guides", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        session_id: null,
+        run_id: "",
+        flow: {
+          name: "不得由混合合同创建",
+          steps: [{ id: "lookup", purpose: "不应写入 Catalog" }],
+        },
+      }),
+    });
+    expect(mixedGuide.status).toBe(410);
+    expect(await mixedGuide.json()).toEqual({ error: "run_guide_save_deprecated" });
     expect(catalog.list()).toEqual([]);
 
-    events.close();
-    sessions.close();
     catalog.close();
   });
 
-  it("keeps the legacy proposal response while excluding the Flow save management tool", async () => {
+  it("rejects malformed Guide draft bodies without treating them as legacy run saves", async () => {
     const catalog = new FlowCatalogStore(":memory:");
-    const sessions = new SessionCatalogStore(":memory:");
-    const events = new SqliteEventStore(":memory:");
-    const fixture = seedAgentRun(sessions, events, {
-      agentId: "codex",
-      title: "读取一次后请求保存",
-      tools: ["Read File", "codebridge.request_flow_save"],
-    });
-    const app = createFlowApp(catalog, "token", { sessions, events });
-
-    const response = await app.request(
-      `/v1/sessions/${fixture.session.id}/flow-proposals`,
-      { headers: { authorization: "Bearer token" } },
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      proposals: [{
-        run_id: fixture.run.id,
-        kind: "unavailable",
-        saveable: false,
-        guide: null,
-      }],
-    });
-
-    events.close();
-    sessions.close();
-    catalog.close();
-  });
-
-  it("saves an Agent proposal as one idempotent Guide with server provenance", async () => {
-    const catalog = new FlowCatalogStore(":memory:");
-    const sessions = new SessionCatalogStore(":memory:");
-    const events = new SqliteEventStore(":memory:");
-    const fixture = seedAgentRun(sessions, events, {
-      agentId: "pi",
-      title: "权益核验",
-      tools: ["equity-center query", "Read File"],
-    });
-    const app = createFlowApp(catalog, "token", { sessions, events });
-    const request = () => app.request("/v1/flows/guides", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        session_id: fixture.session.id,
-        run_id: fixture.run.id,
-        name: "可编辑权益核验 Guide",
-      }),
-    });
-
-    const first = await request();
-    expect(first.status).toBe(201);
-    const saved = await first.json() as { flow_id: string; definition_revision: string };
-    expect(saved).toMatchObject({
-      name: "可编辑权益核验 Guide",
-      kind: "guide",
-      status: "draft",
-      source: "agent_generated",
-      plan_ir_hash: null,
-      provenance: {
-        source_run_id: fixture.run.id,
-        source_session_id: fixture.session.id,
-      },
-    });
-
-    const retry = await request();
-    expect(retry.status).toBe(200);
-    expect(await retry.json()).toMatchObject({
-      flow_id: saved.flow_id,
-      definition_revision: saved.definition_revision,
-    });
-    expect(catalog.list()).toHaveLength(1);
-    const consumeResponse = await app.request("/v1/flows?view=consume", {
-      headers: { authorization: "Bearer token" },
-    });
-    expect(((await consumeResponse.json()) as { flows: unknown[] }).flows).toEqual([]);
-
-    events.close();
-    sessions.close();
-    catalog.close();
-  });
-
-  it("explains unavailable and rejects cross-Session or failed Run Guide saves", async () => {
-    const catalog = new FlowCatalogStore(":memory:");
-    const sessions = new SessionCatalogStore(":memory:");
-    const events = new SqliteEventStore(":memory:");
-    const unavailable = seedAgentRun(sessions, events, {
-      agentId: "claude",
-      title: "只有结果",
-    });
-    const failed = seedAgentRun(sessions, events, {
-      agentId: "cursor",
-      title: "失败任务",
-      tools: ["Read File", "grep"],
-      status: "failed",
-    });
-    const app = createFlowApp(catalog, "token", { sessions, events });
+    const app = createFlowApp(catalog, "token");
     const headers = { authorization: "Bearer token", "content-type": "application/json" };
-    const list = await app.request(
-      `/v1/sessions/${unavailable.session.id}/flow-proposals`,
-      { headers },
-    );
-    expect(await list.json()).toMatchObject({
-      proposals: [{ kind: "unavailable", saveable: false, reason: expect.any(String) }],
-    });
 
-    const crossSession = await app.request("/v1/flows/guides", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        session_id: failed.session.id,
-        run_id: unavailable.run.id,
-      }),
-    });
-    expect(crossSession.status).toBe(404);
-    expect(await crossSession.json()).toEqual({ error: "run_not_found" });
+    for (const body of [JSON.stringify({}), JSON.stringify({ flow: null }), "{", "null"]) {
+      const response = await app.request("/v1/flows/guides", {
+        method: "POST",
+        headers,
+        body,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "flow is required" });
+    }
+    expect(catalog.list()).toEqual([]);
 
-    const failedRun = await app.request("/v1/flows/guides", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        session_id: failed.session.id,
-        run_id: failed.run.id,
-      }),
-    });
-    expect(failedRun.status).toBe(409);
-    expect(await failedRun.json()).toEqual({ error: "run_not_succeeded" });
-
-    events.close();
-    sessions.close();
     catalog.close();
   });
 

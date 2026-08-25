@@ -218,11 +218,6 @@ describe("channel session ingress", () => {
       expect(c.req.query("view")).toBe("manage");
       return c.json({ flows: [candidate] });
     });
-    app.get("/v1/sessions/:session/flow-proposals", (c) => c.json({ proposals: [{ run_id: "run_1", saveable: true }] }));
-    app.post("/v1/flows/guides", async (c) => {
-      expect(await c.req.json()).toEqual({ session_id: "sess_1", run_id: "run_1" });
-      return c.json({ ...candidate, flow_id: "flow_guide", kind: "guide", status: "draft" }, 201);
-    });
     app.get("/v1/flows/:flow/review-context", (c) => c.json({
       flow: candidate,
       diff: { name_changed: true, description_changed: false, inputs: {}, steps: { changed: ["lookup"] } },
@@ -237,7 +232,7 @@ describe("channel session ingress", () => {
 
     const ingress = createChannelSessionIngress(app, "token");
     await expect(ingress.listManageableFlows?.()).resolves.toMatchObject([{ flowId: "flow_candidate", status: "candidate" }]);
-    await expect(ingress.saveLatestGuide?.("sess_1")).resolves.toMatchObject({ flowId: "flow_guide", kind: "guide" });
+    expect(ingress).not.toHaveProperty("saveLatestGuide");
     await expect(ingress.getFlowReviewSummary?.("flow_candidate")).resolves.toMatchObject({ changedFields: ["name", "step ~lookup"], evidenceCount: 1 });
     await expect(ingress.updateCandidateSummary?.("flow_candidate", { name: "New" })).resolves.toMatchObject({ name: "New" });
     await expect(ingress.rejectCandidate?.("flow_candidate")).resolves.toMatchObject({ reviewStatus: "rejected" });
