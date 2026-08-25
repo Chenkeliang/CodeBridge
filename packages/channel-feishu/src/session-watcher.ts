@@ -33,6 +33,8 @@ import {
 export const FEISHU_LIVE_STATUS_TICK_MS = 15_000;
 export { FEISHU_LIVE_STATUS_QUIET_MS } from "./run-status.js";
 const FEISHU_LIVE_PROGRESS_CHARS = 1200;
+const FEISHU_FLOW_SAVE_REQUEST_NOTICE =
+  "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。";
 
 export function classifyFeishuCardWriteError(
   error: unknown,
@@ -90,8 +92,16 @@ function isStructuredFlowEvent(type: string): boolean {
     || type === "FLOW_BATCH_COMPLETED";
 }
 
-function composeFeishuRunBody(agentText: string, flowText: string): string {
-  return [agentText || undefined, flowText || undefined]
+function composeFeishuRunBody(
+  agentText: string,
+  flowText: string,
+  flowSaveRequested = false,
+): string {
+  return [
+    agentText || undefined,
+    flowText || undefined,
+    flowSaveRequested ? FEISHU_FLOW_SAVE_REQUEST_NOTICE : undefined,
+  ]
     .filter((value): value is string => Boolean(value))
     .join("\n\n---\n\n");
 }
@@ -130,6 +140,7 @@ export class FeishuRunCard {
   private streamCardId?: string;
   private queueRender: (statusOnly: boolean) => void = () => {};
   private done = false;
+  private flowSaveRequested = false;
 
   constructor(
     private readonly host: FeishuCardHost,
@@ -218,7 +229,11 @@ export class FeishuRunCard {
               : flowText && !snapshot.result.trim()
                 ? ""
                 : snapshot.finalText;
-            const body = composeFeishuRunBody(agentText, flowText);
+            const body = composeFeishuRunBody(
+              agentText,
+              flowText,
+              this.flowSaveRequested,
+            );
             this.writer?.enqueue({
               content: status && body ? `${status}\n\n---\n\n${body}` : status || body,
               statusOnly,
@@ -269,6 +284,13 @@ export class FeishuRunCard {
     const next = this.flowProjector.apply(event);
     const current = renderChannelFlowLive(next);
     this.queueRender(previous === current);
+  }
+
+  async onFlowSaveRequested(): Promise<void> {
+    await this.ready;
+    if (this.abortController.signal.aborted || this.flowSaveRequested) return;
+    this.flowSaveRequested = true;
+    this.queueRender(false);
   }
 
   async reconcileRun(
@@ -341,6 +363,7 @@ interface ResumedFeishuCard {
   runStatus: FeishuRunStatus;
   resultRecovery: "pending" | "confirmed";
   projectedSequences: Set<number>;
+  flowSaveRequested: boolean;
 }
 
 function isTerminalRunSnapshot(
@@ -417,6 +440,7 @@ export class FeishuSessionWatcher {
       runStatus,
       resultRecovery: "pending",
       projectedSequences: new Set<number>(),
+      flowSaveRequested: false,
     });
     this.deliveries.set(runId, { turnId, owner });
   }
@@ -575,6 +599,11 @@ export class FeishuSessionWatcher {
       event.runId !== runId
       || resumed.projectedSequences.has(event.sequence)
     ) return;
+    if (event.type === "FLOW_SAVE_REQUESTED") {
+      resumed.flowSaveRequested = true;
+      resumed.projectedSequences.add(event.sequence);
+      return;
+    }
     if (event.type === "AGENT_EVENT") {
       const agentEvent = event.payload.event as AgentEvent | undefined;
       if (!agentEvent) return;
@@ -706,7 +735,11 @@ export class FeishuSessionWatcher {
         : flowText && !snapshot.result.trim()
           ? ""
           : snapshot.finalText;
-    const body = composeFeishuRunBody(agentText, flowText);
+    const body = composeFeishuRunBody(
+      agentText,
+      flowText,
+      resumed.flowSaveRequested,
+    );
     const markdown = status && body
       ? `${status}\n\n---\n\n${body}`
       : status || body || "（运行中）";
@@ -799,6 +832,19 @@ export class FeishuSessionWatcher {
       }
       if (card && agentEvent && agentEvent.type !== "done") {
         await card.onAgentEvent(agentEvent);
+      }
+      return;
+    }
+    if (event.type === "FLOW_SAVE_REQUESTED" && event.runId) {
+      const card = this.cards.get(event.runId);
+      if (card) await card.onFlowSaveRequested();
+      const resumed = this.resumedCards.get(event.runId);
+      if (resumed) {
+        const alreadyProjected = resumed.flowSaveRequested;
+        this.applyRecoveredEvent(event.runId, resumed, event);
+        if (!alreadyProjected && resumed.flowSaveRequested) {
+          await this.writeResumedCard(event.runId, resumed);
+        }
       }
       return;
     }
