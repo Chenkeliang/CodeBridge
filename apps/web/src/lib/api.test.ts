@@ -455,40 +455,9 @@ describe("workbench API client", () => {
     ]);
   });
 
-  it("lists Agent Run proposals and saves a confirmed Guide draft", async () => {
-    const proposal = {
-      session_id: "sess_1",
-      run_id: "run_1",
-      agent_id: "codex",
-      run_status: "succeeded",
-      kind: "structured_plan",
-      saveable: true,
-      reason: null,
-      source_definition_revision: "sha256:source",
-      guide: {
-        name: "核验仓配订单",
-        description: "来自 Agent Run",
-        steps: [{ id: "step_1", purpose: "查询订单" }],
-      },
-    } as const;
-    const fetch = vi.fn()
-      .mockResolvedValueOnce(Response.json({ proposals: [proposal] }))
-      .mockResolvedValueOnce(Response.json({ flow_id: "flow_guide", kind: "guide", status: "draft" }, { status: 201 }));
-    vi.stubGlobal("fetch", fetch);
-
-    const proposals = await api.flowProposals("sess_1");
-    const guide = await api.saveGuide("sess_1", "run_1");
-
-    expect(proposals).toEqual([proposal]);
-    expect(guide).toMatchObject({ flow_id: "flow_guide", kind: "guide", status: "draft" });
-    expect(fetch.mock.calls[0]?.[0]).toBe("/v1/sessions/sess_1/flow-proposals");
-    expect(fetch.mock.calls[1]).toEqual([
-      "/v1/flows/guides",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ session_id: "sess_1", run_id: "run_1" }),
-      }),
-    ]);
+  it("does not expose legacy run-based Guide APIs", () => {
+    expect(api).not.toHaveProperty("flowProposals");
+    expect(api).not.toHaveProperty("saveGuide");
   });
 
   it("creates and updates a manually authored Guide draft", async () => {

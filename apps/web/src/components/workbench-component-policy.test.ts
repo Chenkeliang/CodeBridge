@@ -222,6 +222,13 @@ describe("Workbench component policy", () => {
     expect(source).not.toContain("setEvents(");
   });
 
+  it("does not fetch or pass legacy automatic Flow proposals", () => {
+    const source = readSource();
+
+    expect(source).not.toContain("api.flowProposals(");
+    expect(source).not.toContain("flowProposals={");
+  });
+
   it("does not block the first paint on provider Session import", () => {
     const source = readSource();
 
