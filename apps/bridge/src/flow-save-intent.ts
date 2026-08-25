@@ -154,6 +154,19 @@ function workItemEventSnapshot(
   return { workItemId, events, eventsByRunId };
 }
 
+function containsFlowSaveToolStart(events: readonly DomainEvent[]): boolean {
+  return events.some((event) => {
+    const agentEvent = agentEventValue(event);
+    if (agentEvent?.type !== "tool_start") return false;
+    try {
+      parseFlowSaveToolStartInput(agentEvent);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 export class FlowSaveIntentService {
   private readonly extract: typeof extractRunDefinition;
 
@@ -488,6 +501,7 @@ export class FlowSaveIntentService {
       .reverse()
       .map((event) => event.runId!);
     for (const runId of terminalRunIds) {
+      if (containsFlowSaveToolStart(snapshot.eventsByRunId.get(runId) ?? [])) continue;
       try {
         return this.requireExtractableSource(sessionId, runId, snapshot);
       } catch (error) {
