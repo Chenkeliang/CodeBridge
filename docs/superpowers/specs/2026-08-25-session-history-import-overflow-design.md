@@ -1,6 +1,6 @@
 # Provider Session 历史导入与 Web 防溢出设计
 
-> Status: Review draft  
+> Status: Implemented and verified  
 > Date: 2026-08-25  
 > Branch: `codex/fix-session-history-overflow`
 
@@ -132,13 +132,13 @@ Web 主布局遵守以下规则：
 
 ## 6. Surface Matrix
 
-| Surface | Entry | Read path | Write path | Error/Recovery | Terminal feedback | 状态 |
-|---|---|---|---|---|---|---|
-| Web | 选择 Provider Session | Preview + Session Snapshot | 用户确认后 Import | 卡片展示失败并可重试 | Timeline 可见且刷新后保留 | planned |
-| Backend | Preview/Import API | Runner History Loader | ProviderHistoryImporter | 既有 409/502 合同 | 返回导入位置和事件数 | implemented + reachable |
-| Agent/Provider | 本地 Provider Session | Runner Loader | 无 | Loader 错误返回 Bridge | 原始数据不变 | implemented + reachable |
-| 飞书 | 无历史导入入口 | 无 | 无 | 无 | 无 | 非本次目标 |
-| Telegram | 无历史导入入口 | 无 | 无 | 无 | 无 | 非本次目标 |
+| Surface | Entry | Read path | Write path | Event consumption | Error handling | Recovery | Terminal feedback | Planned landing | Final state |
+|---|---|---|---|---|---|---|---|---|---|
+| Web | 选择 Provider Session | Preview + Session Snapshot | 用户确认后 Import | N/A：同步请求/响应后刷新 Snapshot | 互斥错误卡与准确恢复动作 | 重试 Preview；未知结果复用同 Key；拒绝陈旧响应 | Timeline + 已导入数量，刷新后保留 | H1–H3、E1 | implemented + reachable + closed-loop |
+| Backend | Preview/Import API | Runner History Loader | ProviderHistoryImporter | N/A：同步写 canonical Timeline | 固定 status/code 矩阵 | 既有幂等与 cursor/prefix 防护 | 导入位置、事件数与持久 Snapshot | C1 | implemented + reachable + closed-loop |
+| Agent/Provider | 本地 Provider Session | Runner Loader | 无 | N/A | Loader 错误返回 Bridge | Provider 原始数据不变 | 原始历史仍可读取 | C1 regression only | implemented + reachable；只读源 |
+| 飞书 | 无历史导入入口 | 无 | 无 | N/A | N/A | N/A | N/A | Out of scope | 非本次目标 |
+| Telegram | 无历史导入入口 | 无 | 无 | N/A | N/A | N/A | N/A | Out of scope | 非本次目标 |
 
 ## 7. 测试策略
 
@@ -189,3 +189,12 @@ Web 主布局遵守以下规则：
 - 重写 Provider History 导入算法；
 - 建设全局批量迁移页面；
 - 改变 Provider Session 原始文件。
+
+## 10. Implementation verification（2026-08-25）
+
+- 真实 Session `sess_6c9d9dbc38314d32a3b957c9cebcb84a` 在重启后的活跃 Bridge 上只读 Preview：`importedPosition=0`、`providerPosition=401`、`importableEvents=401`；自动化未点击 Import。
+- 活跃 Web 已选中该 Session，并展示“发现 401 条可导入历史记录”和唯一确认按钮。
+- 320px 活跃页面实测 `documentElement.scrollWidth === documentElement.clientWidth === 320`，Import 按钮仍可见。
+- 对抗性浏览器矩阵在 320/768/1280/1536 四个宽度执行三轮，30/30 通过；Flow 主路径回归 1/1 通过。
+- 聚焦合同/组件测试 157/157 通过；Web 与 Bridge production build 通过。
+- 自动化只覆盖“发现、预览、确认入口和合同”；真实 Provider Session 的 Import 仍由用户点击确认，写边界未被绕过。
