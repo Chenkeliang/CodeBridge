@@ -801,7 +801,7 @@ function addRequestToolStart(
       event: {
         type: "tool_start",
         toolCallId,
-        name: options.name ?? "codebridge.request_flow_save",
+        name: options.name ?? PI_FLOW_SAVE_TOOL_NAME,
         input: options.input ?? { source_scope: "previous_completed_run" },
       },
     },
@@ -1036,7 +1036,16 @@ describe("FlowSaveIntentService", () => {
       status: "running",
       tools: [],
     });
-    addRequestToolStart(fixture, requestRun, "tool_save", { name });
+    addRequestToolStart(fixture, requestRun, "tool_save", {
+      name,
+      input: name === PI_FLOW_SAVE_TOOL_NAME
+        ? { source_scope: "previous_completed_run" }
+        : {
+            server: "codebridge-internal",
+            tool: FLOW_SAVE_TOOL_NAME,
+            arguments: { source_scope: "previous_completed_run" },
+          },
+    });
     addRequestToolEnd(fixture, requestRun, "tool_save", { output });
 
     expect(fixture.service.requestFromTool({
@@ -1055,7 +1064,14 @@ describe("FlowSaveIntentService", () => {
       status: "running",
       tools: [],
     });
-    addRequestToolStart(fixture, requestRun, "tool_save", { name: "MCP: tool" });
+    addRequestToolStart(fixture, requestRun, "tool_save", {
+      name: "MCP: tool",
+      input: {
+        server: "codebridge-internal",
+        tool: FLOW_SAVE_TOOL_NAME,
+        arguments: { source_scope: "previous_completed_run" },
+      },
+    });
     addRequestToolEnd(fixture, requestRun, "tool_save", {
       output: { opaque: true },
       content: [{
