@@ -630,13 +630,14 @@ describe("FeishuBridge streaming", () => {
     expect(rendered).toContain("已处理完成");
   });
 
-  it("sends a sparse progress message without counting it as Agent activity", async () => {
+  it("keeps long-running progress on the original card without a detached message", async () => {
     vi.useFakeTimers();
     const bridge = new FeishuBridge({
       config: defaultConfig(),
       dataDir: os.tmpdir(),
     }) as unknown as TestableBridge;
     const notices: string[] = [];
+    const contents: string[] = [];
     let releaseAgent!: () => void;
     let checkpointEmitted!: () => void;
     const release = new Promise<void>((resolve) => {
@@ -651,7 +652,9 @@ describe("FeishuBridge streaming", () => {
         await input.markdown({
           messageId: "card-message-1",
           async append() {},
-          async setContent() {},
+          async setContent(full: string) {
+            contents.push(full);
+          },
         });
       },
       async send(_chatId, input) {
@@ -690,12 +693,13 @@ describe("FeishuBridge streaming", () => {
     await emitted;
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
-    expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("任务仍在运行");
-    expect(notices[0]).toContain("P3 正在推进");
+    expect(notices).toHaveLength(0);
+    expect(contents.at(-1)).toContain("已运行 10 分 0 秒");
 
     releaseAgent();
     await running;
+    expect(notices).toHaveLength(0);
+    expect(contents.at(-1)).toContain("✅ **已完成**");
     expect(vi.getTimerCount()).toBe(0);
   });
 

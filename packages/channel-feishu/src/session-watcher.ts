@@ -9,7 +9,6 @@ import type {
 import {
   createChannelFlowProjector,
   createChannelStreamProjector,
-  formatElapsed,
   renderChannelFlowFinal,
   renderChannelFlowLive,
   type ChannelFlowProjector,
@@ -32,7 +31,6 @@ import {
 } from "./run-status.js";
 
 export const FEISHU_LIVE_STATUS_TICK_MS = 15_000;
-export const FEISHU_PROGRESS_NOTICE_INTERVAL_MS = 10 * 60_000;
 export { FEISHU_LIVE_STATUS_QUIET_MS } from "./run-status.js";
 const FEISHU_LIVE_PROGRESS_CHARS = 1200;
 
@@ -127,10 +125,6 @@ export class FeishuRunCard {
   private readonly ready = new Promise<void>((resolve) => { this.readyResolve = resolve; });
 
   private writer?: CoalescingCardWriter<CardSnapshot>;
-  private timers: Array<NodeJS.Timeout> = [];
-  private activityVersion = 0;
-  private notifiedActivityVersion = 0;
-  private quietNotifiedActivityVersion = -1;
   private lastWriteError?: unknown;
   private streamMessageId?: string;
   private streamCardId?: string;
@@ -233,45 +227,6 @@ export class FeishuRunCard {
 
           this.queueRender(false);
 
-          const noticeTimer = setInterval(() => {
-            if (this.abortController.signal.aborted) return;
-            const version = this.activityVersion;
-            const hasNewActivity = version > this.notifiedActivityVersion;
-            const quiet =
-              Date.now() - this.runStatus.lastActivityAt >=
-              FEISHU_PROGRESS_NOTICE_INTERVAL_MS;
-            if (!hasNewActivity && (!quiet || this.quietNotifiedActivityVersion === version)) {
-              return;
-            }
-            const checkpoint = this.projector.snapshot().progress.trim().slice(-360);
-            const lines = [
-              hasNewActivity
-                ? `🟢 **任务仍在运行** · 已运行 ${formatElapsed(Date.now() - this.runStatus.startedAt)}`
-                : `🟠 **任务运行中 · 暂无新事件** · 已运行 ${formatElapsed(Date.now() - this.runStatus.startedAt)}`,
-              `最近真实任务事件：${formatElapsed(Date.now() - this.runStatus.lastActivityAt)}前`,
-              `当前阶段：${this.runStatus.phase}`,
-              checkpoint ? `最新检查点：${checkpoint}` : undefined,
-            ]
-              .filter((line): line is string => Boolean(line))
-              .join("\n");
-            void this.host
-              .sendMarkdown(this.chatId, lines, this.sourceMessageId)
-              .then(() => {
-                if (hasNewActivity) {
-                  this.notifiedActivityVersion = Math.max(this.notifiedActivityVersion, version);
-                } else {
-                  this.quietNotifiedActivityVersion = version;
-                }
-              })
-              .catch((err) => {
-                this.host.log(
-                  `飞书进度提醒发送失败（不影响 Agent 运行）：${err instanceof Error ? err.message : String(err)}`,
-                );
-              });
-          }, FEISHU_PROGRESS_NOTICE_INTERVAL_MS);
-          this.timers.push(noticeTimer);
-          noticeTimer.unref?.();
-
           this.readyResolve();
           await this.cardDone;
         },
@@ -291,7 +246,6 @@ export class FeishuRunCard {
     await this.ready;
     if (this.abortController.signal.aborted) return;
     const recorded = recordFeishuRunActivity(this.runStatus, event);
-    if (recorded) this.activityVersion += 1;
     if (event.type === "permission_request") {
       void this.host
         .sendMarkdown(
@@ -325,7 +279,6 @@ export class FeishuRunCard {
     if (this.abortController.signal.aborted) return;
     setInboundWebSocket(this.runStatus, inboundState);
     applyRunSnapshot(this.runStatus, snapshot);
-    if (this.runStatus.state !== "running") this.clearTimers();
     this.queueRender(false);
     await this.writer?.flush();
     if (this.runStatus.state !== "running" && this.lastWriteError) {
@@ -349,17 +302,11 @@ export class FeishuRunCard {
     await this.writer?.flush();
   }
 
-  private clearTimers(): void {
-    for (const timer of this.timers) clearInterval(timer);
-    this.timers = [];
-  }
-
   async finalize(
     terminalState: Exclude<FeishuRunState, "running">,
   ): Promise<void> {
     await this.ready;
     if (this.done) return;
-    this.clearTimers();
     finishFeishuRunStatus(this.runStatus, terminalState);
     this.queueRender(false);
     await this.writer?.flush();
@@ -375,7 +322,6 @@ export class FeishuRunCard {
     if (this.done) return;
     this.done = true;
     this.abortController.abort();
-    this.clearTimers();
     this.cardDoneResolve();
   }
 }

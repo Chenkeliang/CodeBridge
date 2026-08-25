@@ -26,7 +26,6 @@ import {
   checkAccess,
   createChannelStreamProjector,
   formatChannelFlowBatchSnapshot,
-  formatElapsed,
   formatWelcomeMessage,
   handleSlashCommand,
   isTerminalChannelFlowBatch,
@@ -36,7 +35,6 @@ import { ChainTopicTracker } from "./chain-topics.js";
 import {
   FeishuSessionWatcher,
   FEISHU_LIVE_STATUS_TICK_MS,
-  FEISHU_PROGRESS_NOTICE_INTERVAL_MS,
   type FeishuCardHost,
 } from "./session-watcher.js";
 import {
@@ -947,7 +945,6 @@ export class FeishuBridge {
       maxProgressChars: FEISHU_LIVE_PROGRESS_CHARS,
     });
     const runStatus = createFeishuRunStatus();
-    const startedAt = runStatus.startedAt;
     let agentConsumed = false; // 已消费过 agent 事件流？（避免降级时重复跑）
     let cardBroken = false; // 飞书卡片流式失败（如 11310 cardid invalid）→ 降级
     let streamMessageId: string | undefined;
@@ -1026,9 +1023,6 @@ export class FeishuBridge {
               },
             }));
             if (streamAbort.signal.aborted) return;
-            let activityVersion = 0;
-            let notifiedActivityVersion = 0;
-            let quietNotifiedActivityVersion = -1;
             type CardSnapshot = { content: string; statusOnly: boolean };
 
             const renderBody = (): string => {
@@ -1081,64 +1075,15 @@ export class FeishuBridge {
             }, FEISHU_LIVE_STATUS_TICK_MS);
             statusTimer.unref?.();
 
-            const noticeTimer = setInterval(() => {
-              if (streamAbort.signal.aborted) return;
-              const version = activityVersion;
-              const hasNewActivity = version > notifiedActivityVersion;
-              const quiet =
-                Date.now() - runStatus.lastActivityAt >=
-                FEISHU_PROGRESS_NOTICE_INTERVAL_MS;
-              if (
-                !hasNewActivity &&
-                (!quiet || quietNotifiedActivityVersion === version)
-              ) {
-                return;
-              }
-
-              const checkpoint = projector.snapshot().progress.trim().slice(-360);
-              const lines = [
-                hasNewActivity
-                  ? `🟢 **任务仍在运行** · 已运行 ${formatElapsed(Date.now() - startedAt)}`
-                  : `🟠 **任务运行中 · 暂无新事件** · 已运行 ${formatElapsed(Date.now() - startedAt)}`,
-                `最近真实任务事件：${formatElapsed(Date.now() - runStatus.lastActivityAt)}前`,
-                `当前阶段：${runStatus.phase}`,
-                checkpoint ? `最新检查点：${checkpoint}` : undefined,
-              ]
-                .filter((line): line is string => Boolean(line))
-                .join("\n");
-
-              void this.sendMarkdown(msg.chatId, lines, msg.messageId)
-                .then(() => {
-                  if (hasNewActivity) {
-                    notifiedActivityVersion = Math.max(
-                      notifiedActivityVersion,
-                      version,
-                    );
-                  } else {
-                    quietNotifiedActivityVersion = version;
-                  }
-                })
-                .catch((err) => {
-                  this.options.onLog?.(
-                    `飞书进度提醒发送失败（不影响 Agent 运行）：${err instanceof Error ? err.message : String(err)}`,
-                  );
-                });
-            }, FEISHU_PROGRESS_NOTICE_INTERVAL_MS);
-            noticeTimer.unref?.();
-
             try {
               await consumeAgent(
                 (event) => {
-                  if (recordFeishuRunActivity(runStatus, event)) {
-                    activityVersion += 1;
-                    queueRender(true);
-                  }
+                  if (recordFeishuRunActivity(runStatus, event)) queueRender(true);
                 },
                 () => queueRender(false),
               );
             } finally {
               clearInterval(statusTimer);
-              clearInterval(noticeTimer);
               // 合并队列保证旧状态先落完、最终快照最后落下，不会反向覆盖结果。
               queueRender(false);
               await writer.flush();
