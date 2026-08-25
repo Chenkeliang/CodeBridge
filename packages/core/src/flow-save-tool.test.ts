@@ -56,6 +56,8 @@ describe("Flow save request tool contract", () => {
     expect(FLOW_SAVE_TOOL_MARKER).toBe("flow_save_request/v1");
     expect(FLOW_SAVE_TOOL_DESCRIPTION).toContain("明确");
     expect(FLOW_SAVE_TOOL_DESCRIPTION).toContain("保存");
+    expect(FLOW_SAVE_TOOL_DESCRIPTION).toContain("确认入口由客户端展示");
+    expect(FLOW_SAVE_TOOL_DESCRIPTION).toContain("不要声称可在当前通道或当前界面确认");
     expect(FLOW_SAVE_TOOL_DESCRIPTION).not.toContain("已保存");
     expect(FLOW_SAVE_TOOL_DESCRIPTION).not.toContain("已创建");
   });

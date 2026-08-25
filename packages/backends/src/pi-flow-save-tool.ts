@@ -20,6 +20,7 @@ export function createPiFlowSaveTool(
     promptGuidelines: [
       "Use this tool only when the user explicitly asks to save a reusable Flow.",
       "Do not use it for ordinary file or result saving, and do not claim a Flow was created.",
+      "After success, say only that a pending request was recorded and no Candidate exists yet. Never claim the current chat can confirm it; the client provides the confirmation entry.",
     ],
     parameters: Type.Object({
       source_scope: Type.Literal(FLOW_SAVE_SOURCE_SCOPE),
