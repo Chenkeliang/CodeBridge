@@ -198,6 +198,10 @@ export function projectSessionEvent(
     case "FLOW_PROPOSED":
     case "FLOW_SELECTED":
     case "FLOW_SAVED_AS_CANDIDATE":
+    case "FLOW_SAVE_REQUESTED":
+    case "FLOW_SAVE_DISMISSED":
+    case "FLOW_CANDIDATE_CREATED":
+    case "FLOW_SAVE_FAILED":
     case "PROJECT_CANDIDATE_FOUND":
     case "ARTIFACT_CREATED":
     case "VERIFICATION_COMPLETED":
