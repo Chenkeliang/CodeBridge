@@ -216,6 +216,8 @@ export function initializeSessionRuntimeSchema(
     WHERE json_extract(message_json, '$.executionKind') IS NULL;
   `);
 
+  removeMisprojectedAgentFlowBlocks(database);
+
   // 迁移已有库：session_runtime 表在此处才被 CREATE，故 provider_session_id
   // 的 ALTER 必须在建表之后执行（新库该列已内联在 CREATE TABLE 中）。
   addColumn(
@@ -232,6 +234,31 @@ export function initializeSessionRuntimeSchema(
   );
 
   migrateChannelDeliveryStatusCheck(database);
+}
+
+export function removeMisprojectedAgentFlowBlocks(
+  database: DatabaseSync,
+): number {
+  const invalidBlocks = `
+    SELECT blocks.block_id
+    FROM session_timeline_blocks AS blocks
+    JOIN runs ON runs.id = blocks.run_id
+    WHERE runs.execution_kind = 'agent'
+      AND blocks.kind IN ('flow_step', 'flow_run', 'flow_failure')
+  `;
+  database
+    .prepare(
+      `DELETE FROM session_output_segments
+       WHERE block_id IN (${invalidBlocks})`,
+    )
+    .run();
+  const result = database
+    .prepare(
+      `DELETE FROM session_timeline_blocks
+       WHERE block_id IN (${invalidBlocks})`,
+    )
+    .run();
+  return Number(result.changes);
 }
 
 /**

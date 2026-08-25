@@ -1,6 +1,9 @@
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import { migrateChannelDeliveryStatusCheck } from "./session-schema.js";
+import {
+  migrateChannelDeliveryStatusCheck,
+  removeMisprojectedAgentFlowBlocks,
+} from "./session-schema.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
   typeof import("node:sqlite");
@@ -25,6 +28,48 @@ const LEGACY_TABLE = `
 `;
 
 describe("channel turn delivery schema migration", () => {
+  it("removes only false Flow blocks from Agent Runs and is idempotent", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        execution_kind TEXT NOT NULL
+      );
+      CREATE TABLE session_timeline_blocks (
+        block_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        kind TEXT NOT NULL
+      );
+      CREATE TABLE session_output_segments (
+        segment_id TEXT PRIMARY KEY,
+        block_id TEXT NOT NULL
+      );
+      INSERT INTO runs VALUES ('run_agent', 'agent');
+      INSERT INTO runs VALUES ('run_flow', 'flow');
+      INSERT INTO session_timeline_blocks VALUES
+        ('agent_step', 'run_agent', 'flow_step'),
+        ('agent_failure', 'run_agent', 'flow_failure'),
+        ('agent_param', 'run_agent', 'flow_param'),
+        ('agent_batch', 'run_agent', 'flow_batch'),
+        ('flow_step', 'run_flow', 'flow_step');
+      INSERT INTO session_output_segments VALUES
+        ('segment_agent', 'agent_step'),
+        ('segment_flow', 'flow_step');
+    `);
+
+    expect(removeMisprojectedAgentFlowBlocks(db)).toBe(2);
+    expect(removeMisprojectedAgentFlowBlocks(db)).toBe(0);
+    expect(
+      db.prepare("SELECT block_id FROM session_timeline_blocks ORDER BY block_id")
+        .all().map((row) => String((row as { block_id: unknown }).block_id)),
+    ).toEqual(["agent_batch", "agent_param", "flow_step"]);
+    expect(
+      db.prepare("SELECT segment_id FROM session_output_segments ORDER BY segment_id")
+        .all().map((row) => String((row as { segment_id: unknown }).segment_id)),
+    ).toEqual(["segment_flow"]);
+    db.close();
+  });
+
   it("upgrades a legacy table with a status CHECK and preserves data", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(LEGACY_TABLE);
