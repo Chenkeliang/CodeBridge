@@ -784,7 +784,7 @@ test("Turn action persists across refresh and confirm opens one unbound Candidat
   await page.reload();
   await expect(page.locator('[data-flow-save-request="pending"]')).toBeVisible();
   await page.getByRole("button", { name: "生成 Candidate" }).click();
-  await expect(page.locator('[data-flow-save-request="completed"]')).toBeVisible();
+  await expect(page.getByRole("region", { name: "Flow 管理" })).toBeVisible();
   await page.getByRole("button", { name: "Dry-run 预演" }).click();
   await expect.poll(() => fixture.messageBodies.length).toBe(1);
   expect(fixture.messageBodies[0]).toMatchObject({
@@ -901,7 +901,8 @@ test("unknown confirm outcome retries with the same key", async ({ page }) => {
   await page.getByRole("button", { name: "生成 Candidate" }).click();
   await expect(page.getByText("生成结果未知，请使用同一次确认重试。")).toBeVisible();
   await page.getByRole("button", { name: "重试生成" }).click();
-  await expect(page.locator('[data-flow-save-request="completed"]')).toBeVisible();
+  await expect(page.getByRole("region", { name: "Flow 管理" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Flow 管理" }).getByText(candidate.name, { exact: true }).first()).toBeVisible();
   expect(fixture.confirmKeys).toHaveLength(2);
   expect(fixture.confirmKeys[1]).toBe(fixture.confirmKeys[0]);
 });
@@ -921,6 +922,8 @@ test("an older terminal block cannot clear a newer unknown confirm command", asy
   await expect(pending.getByRole("button", { name: "重试生成" })).toBeVisible();
   await expect.poll(fixture.unrelatedEventDeliveries).toBe(1);
   await pending.getByRole("button", { name: "重试生成" }).click();
+  await expect(page.getByRole("region", { name: "Flow 管理" })).toBeVisible();
+  await page.locator('button[aria-label="Codex"]').click();
   await expect(page.locator('[data-flow-save-request="completed"][data-flow-save-request-id="fsr_one"]'))
     .toBeVisible();
   expect(fixture.confirmKeys).toHaveLength(2);
@@ -994,11 +997,15 @@ test("two pending cards keep independent keys while A unknown result retries its
   await cardA.getByRole("button", { name: "生成 Candidate" }).click();
   await expect(cardA.getByRole("button", { name: "正在生成 Candidate" })).toBeDisabled();
   await cardB.getByRole("button", { name: "生成 Candidate" }).click();
+  await expect(page.getByRole("region", { name: "Flow 管理" })).toBeVisible();
+  await page.locator('button[aria-label="Codex"]').click();
   await expect(cardB).toHaveAttribute("data-flow-save-request", "completed");
   releaseA();
   await expect(cardA.getByText("生成结果未知，请使用同一次确认重试。")).toBeVisible();
   await expect(cardA.getByRole("button", { name: "忽略" })).toHaveCount(0);
   await cardA.getByRole("button", { name: "重试生成" }).click();
+  await expect(page.getByRole("region", { name: "Flow 管理" })).toBeVisible();
+  await page.locator('button[aria-label="Codex"]').click();
   await expect(cardA).toHaveAttribute("data-flow-save-request", "completed");
 
   const callsA = fixture.confirmCalls.filter((call) => call.requestId === "fsr_one");
@@ -1113,7 +1120,7 @@ test("known 503 keeps pending and reuses the same confirm key", async ({ page })
   await page.getByRole("button", { name: "生成 Candidate" }).click();
   await expect(page.getByText("Flow Catalog 暂不可用，请重试生成。")).toBeVisible();
   await page.getByRole("button", { name: "重试生成" }).click();
-  await expect(page.locator('[data-flow-save-request="completed"]')).toBeVisible();
+  await expect(page.getByRole("region", { name: "Flow 管理" })).toBeVisible();
   expect(fixture.confirmKeys[1]).toBe(fixture.confirmKeys[0]);
 });
 
