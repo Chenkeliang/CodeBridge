@@ -13,6 +13,7 @@ function readSource(): string {
     "./session-chrome.tsx",
     "./session-timeline.tsx",
     "./flow-save-request-card.tsx",
+    "./flow-save-inbox-detail.tsx",
     "./command-palette.tsx",
   ]
     .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
@@ -37,6 +38,7 @@ describe("Workbench component policy", () => {
       "./composer-controls.tsx",
       "./markdown-composer/markdown-composer.tsx",
       "./design-preview.tsx",
+      "./flow-save-inbox-detail.tsx",
       "./ui/button.tsx",
       "./ui/textarea.tsx",
       "./ui/badge.tsx",
@@ -256,6 +258,17 @@ describe("Workbench component policy", () => {
     expect(workbench).toContain('refreshFlowSaveInboxRef.current("periodic")');
     expect(workbench.match(/window\.setInterval/g) ?? []).toHaveLength(1);
     expect(workbench).not.toMatch(/event_sequence[^;\n]*[<>]=?/);
+  });
+
+  it("keeps the Flow save inbox inside narrow viewport containment rules", () => {
+    const detail = readFileSync(new URL("./flow-save-inbox-detail.tsx", import.meta.url), "utf8");
+    const chrome = readFileSync(new URL("./session-chrome.tsx", import.meta.url), "utf8");
+
+    expect(detail).toContain("min-w-0");
+    expect(detail).toContain("[overflow-wrap:anywhere]");
+    expect(detail).not.toContain("overflow-x-hidden");
+    expect(chrome).toContain("data-flow-save-inbox-request");
+    expect(chrome).toContain("[overflow-wrap:anywhere]");
   });
 
   it("uses the shared Popover primitive for Turn actions", () => {

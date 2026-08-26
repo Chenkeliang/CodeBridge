@@ -3,7 +3,7 @@ import { Archive, BookOpen, ChevronDown, MoreHorizontal, Pencil, Pin, Plus, Refr
 import { BrandAgentIcon, agentTintClass } from "@/components/brand-agent-icon";
 import { PixelMark } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
-import type { AgentProfile, AgentSession, FlowRecord } from "@/lib/types";
+import type { AgentProfile, AgentSession, FlowRecord, FlowSaveInboxRequest } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { relativeTime, statusLabel, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
 
@@ -28,9 +28,10 @@ function useDismissOnOutside(open: boolean, onDismiss: () => void) {
   return rootRef;
 }
 
-export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onArea, onTheme }: {
+export function AgentRail({ agents, area, pendingFlowSaveCount = 0, selectedAgentId, theme, onAgent, onArea, onTheme }: {
   agents: AgentProfile[];
   area: PanelArea;
+  pendingFlowSaveCount?: number;
   selectedAgentId: string | null;
   onAgent: (id: string) => void;
   onArea: (area: PanelArea) => void;
@@ -49,7 +50,10 @@ export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onAre
       })}
     </div>
     <div className={cn("my-2 h-px w-8 border-t", "border-line")} />
-    <button aria-label="Flows" aria-pressed={area === "flows"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "flows" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("flows")} title="Flows" type="button"><Workflow className="size-3.5" /></button>
+    <button aria-label={pendingFlowSaveCount > 0 ? `Flows，${pendingFlowSaveCount} 个待生成请求` : "Flows"} aria-pressed={area === "flows"} className={cn("relative grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "flows" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("flows")} title="Flows" type="button">
+      <Workflow className="size-3.5" />
+      {pendingFlowSaveCount > 0 && <span aria-hidden="true" className={cn("absolute -right-1.5 -top-1.5 min-w-5 rounded-full border px-1 font-mono text-[10px] leading-[18px]", "bg-control-accent", "text-accent-ink", "border-sidebar")} data-flow-save-badge>{pendingFlowSaveCount > 99 ? "99+" : pendingFlowSaveCount}</span>}
+    </button>
     <button aria-label="Skills" aria-pressed={area === "skills"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "skills" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("skills")} title="Skills" type="button"><BookOpen className="size-3.5" /></button>
     <div className="flex-1" />
     <button aria-label="设置" aria-pressed={area === "settings"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "settings" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("settings")} title="设置" type="button"><Settings2 className="size-3.5" /></button>
@@ -90,22 +94,26 @@ function SessionRow({ session, selected, onSession, onUpdateSession, onDeleteSes
   </div>;
 }
 
-export function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, flows, flowId, loading, query, sessions, selectedSessionId, showArchived, onCreate, onCreateGuide, onImportGuide, onFlow, onQuery, onRefresh, onSession, onUpdateSession, onDeleteSession, onToggleArchived }: {
+export function SessionPanel({ agent, agents = [], activeSessionCount, area, archivedSessionCount, flows, flowId, loading, pendingFlowSaveRequests = [], query, sessions, selectedPendingFlowSaveRequestId = null, selectedSessionId, showArchived, onCreate, onCreateGuide, onImportGuide, onFlow, onPendingFlowSaveRequest, onQuery, onRefresh, onSession, onUpdateSession, onDeleteSession, onToggleArchived }: {
   agent: AgentProfile | null;
+  agents?: AgentProfile[];
   activeSessionCount: number;
   area: PanelArea;
   archivedSessionCount: number;
   flows: FlowRecord[];
   flowId: string;
   loading: boolean;
+  pendingFlowSaveRequests?: FlowSaveInboxRequest[];
   query: string;
   sessions: AgentSession[];
+  selectedPendingFlowSaveRequestId?: string | null;
   selectedSessionId: string | null;
   showArchived: boolean;
   onCreate: () => void;
   onCreateGuide?: () => void;
   onImportGuide?: () => void;
   onFlow: (id: string) => void;
+  onPendingFlowSaveRequest?: (request: FlowSaveInboxRequest) => void;
   onQuery: (value: string) => void;
   onRefresh: () => void;
   onSession: (session: AgentSession) => void;
@@ -121,7 +129,7 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
   ] as const;
   return <aside className={cn("flex min-h-0 min-w-0 flex-col border-r", "bg-sidebar", "border-line")}>
     <header className="flex items-start justify-between gap-3 px-5 pb-4 pt-6">
-      <div className="min-w-0"><p className={cn("mb-1 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>{area === "agents" ? "当前 Agent" : "目录"}</p><h1 className={cn("truncate font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>{area === "agents" ? agent?.display_name ?? "Agents" : "Flows"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-xs", "text-muted")}>{area === "agents" ? (agent?.status === "healthy" ? `${sessions.length} 个会话` : `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "不可用"} · ${sessions.length} 个会话`) : `${flows.length} 个管理定义`}</p></div>
+      <div className="min-w-0"><p className={cn("mb-1 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>{area === "agents" ? "当前 Agent" : "目录"}</p><h1 className={cn("truncate font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>{area === "agents" ? agent?.display_name ?? "Agents" : "Flows"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-xs", "text-muted")}>{area === "agents" ? (agent?.status === "healthy" ? `${sessions.length} 个会话` : `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "不可用"} · ${sessions.length} 个会话`) : `${pendingFlowSaveRequests.length} 个待生成 · ${flows.length} 个管理定义`}</p></div>
       <div className="flex gap-1">
         <Button aria-label="刷新" className={cn("size-8 px-0 hover:opacity-80", "text-muted")} onClick={onRefresh} size="icon" variant="ghost"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} /></Button>
         {area === "agents" && <Button aria-label="新建 Session" className={cn("size-8 border px-0 hover:-translate-y-px hover:opacity-80", "bg-surface", "text-ink", "border-line-strong")} disabled={!agent || agent.status !== "healthy"} onClick={onCreate} size="icon" variant="outline"><Plus className="size-4" /></Button>}
@@ -138,6 +146,18 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
       </div>
       <footer className={cn("border-t px-3 py-2", "border-line")}><button className={cn("flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-opacity hover:opacity-80", "text-muted")} onClick={onToggleArchived} type="button"><Archive className="size-3.5" /><span className="flex-1">{showArchived ? "返回 Sessions" : "已归档"}</span><span className="font-mono text-xs">{showArchived ? activeSessionCount : archivedSessionCount}</span></button></footer>
     </> : <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4">
+      {pendingFlowSaveRequests.length > 0 && <div>
+        <div className={cn("px-2.5 py-2 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>待生成 · {pendingFlowSaveRequests.length}</div>
+        {pendingFlowSaveRequests.map((request) => {
+          const agentName = agents.find((candidate) => candidate.agent_id === request.agent_id)?.display_name
+            ?? request.agent_id;
+          const title = request.name_hint || request.source_title || "未命名保存请求";
+          return <button className={cn("grid w-full min-w-0 gap-1 rounded-md border border-transparent px-3 py-2.5 text-left text-xs transition-colors hover:opacity-80", "text-ink", selectedPendingFlowSaveRequestId === request.request_id && cn("bg-surface", "border-line"))} data-flow-save-inbox-request={request.request_id} key={request.request_id} onClick={() => onPendingFlowSaveRequest?.(request)} type="button">
+            <span className="[overflow-wrap:anywhere] font-medium leading-5">{title}</span>
+            <span className={cn("flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5", "text-muted")}><span>{agentName}</span><span>·</span><span className="min-w-0 [overflow-wrap:anywhere]">{request.session_title || request.session_id}</span></span>
+          </button>;
+        })}
+      </div>}
       {flowGroups.map((group) => {
         const groupFlows = flows.filter((flow) => flow.status === group.status);
         if (!groupFlows.length) return null;
@@ -146,7 +166,7 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
           {groupFlows.map((flow) => <button className={cn("flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2.5 text-left text-xs transition-colors hover:opacity-80", "text-ink", flowId === flow.flow_id && cn("bg-surface", "border-line"))} key={flow.flow_id} onClick={() => onFlow(flow.flow_id)} type="button"><Workflow className={cn("size-3.5", flow.status === "candidate" ? "text-warning" : "text-muted")} /><span className="min-w-0 flex-1 truncate">{flow.name || flow.flow_id}</span><span className={cn("font-mono text-xs", "text-faint")}>{flow.kind}</span></button>)}
         </div>;
       })}
-      {!flows.length && <div className={cn("px-3 py-8 text-center text-xs", "text-muted")}>暂无 Flow</div>}
+      {!flows.length && !pendingFlowSaveRequests.length && <div className={cn("px-3 py-8 text-center text-xs", "text-muted")}>暂无 Flow</div>}
     </div>}
   </aside>;
 }

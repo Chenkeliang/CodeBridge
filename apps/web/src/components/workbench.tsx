@@ -14,6 +14,7 @@ import type { FlowSaveRequestActionState } from "@/components/flow-save-request-
 import { FlowDetail } from "@/components/flow-detail";
 import { FlowControlPanel } from "@/components/flow-control-panel";
 import { FlowBatchPanel } from "@/components/flow-batch-panel";
+import { FlowSaveInboxDetail } from "@/components/flow-save-inbox-detail";
 import {
   ProviderHistoryImportCard,
   providerHistoryErrorPresentation,
@@ -168,6 +169,13 @@ export function Workbench() {
     .join("|") ?? "";
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
+  const selectedPendingFlowSaveRequest = flowSaveInbox.requests.find(
+    (request) => request.request_id === selectedPendingFlowSaveRequestId,
+  ) ?? null;
+  const selectedPendingFlowSaveAgentName = selectedPendingFlowSaveRequest
+    ? agents.find((agent) => agent.agent_id === selectedPendingFlowSaveRequest.agent_id)?.display_name
+      ?? selectedPendingFlowSaveRequest.agent_id
+    : null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
   const selectedAgentSetup = selectedAgent?.setup ?? null;
   const selectedAgentManifest = selectedAgent?.setup_manifest ?? null;
@@ -1778,6 +1786,7 @@ export function Workbench() {
       <AgentRail
         agents={agents}
         area={area}
+        pendingFlowSaveCount={flowSaveInbox.requests.length}
         selectedAgentId={selectedAgentId}
         theme={theme}
         onAgent={selectAgent}
@@ -1787,21 +1796,32 @@ export function Workbench() {
 
       {panelOpen && (area === "agents" || area === "flows") && <div className="hidden min-h-0 min-w-0 md:contents"><SessionPanel
         agent={selectedAgent}
+        agents={agents}
         activeSessionCount={activeSessionCount}
         area={area}
         archivedSessionCount={archivedSessionCount}
         flows={flows}
         flowId={detailFlow?.flow_id ?? ""}
         loading={loading}
+        pendingFlowSaveRequests={flowSaveInbox.requests}
         query={query}
         sessions={agentSessions}
         selectedSessionId={selectedSessionId}
+        selectedPendingFlowSaveRequestId={selectedPendingFlowSaveRequestId}
         onCreate={() => selectedAgent && void createSession(selectedAgent.agent_id)}
         onCreateGuide={() => { void createGuideDraft(); }}
         onImportGuide={() => guideImportInput.current?.click()}
-        onFlow={(id) => { void openFlow(id); }}
+        onFlow={(id) => { setSelectedPendingFlowSaveRequestId(null); void openFlow(id); }}
+        onPendingFlowSaveRequest={(request) => {
+          setSelectedPendingFlowSaveRequestId(request.request_id);
+          setDetailFlow(null);
+          setFlowReviewContext(null);
+        }}
         onQuery={setQuery}
-        onRefresh={() => void reload(true)}
+        onRefresh={() => {
+          void reload(true);
+          if (area === "flows") void refreshFlowSaveInbox("immediate");
+        }}
         onSession={selectSession}
         onUpdateSession={(session, update) => applySessionUpdate(session.session_id, update)}
         onDeleteSession={(session) => deleteSessionById(session.session_id)}
@@ -1867,6 +1887,14 @@ export function Workbench() {
                   .catch((caught) => setError(messageOf(caught)));
               }}
               onReading={setReading}
+            />
+          </section>
+        ) : area === "flows" && selectedPendingFlowSaveRequest && selectedPendingFlowSaveAgentName ? (
+          <section aria-label="Flow 待生成详情" className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-7">
+            <FlowSaveInboxDetail
+              actionState={flowSaveActionStates[selectedPendingFlowSaveRequest.request_id] ?? null}
+              agentName={selectedPendingFlowSaveAgentName}
+              request={selectedPendingFlowSaveRequest}
             />
           </section>
         ) : !selectedSession && detailFlow ? (
