@@ -144,6 +144,7 @@ function CardShell(props: {
     )}
     data-flow-save-request-id={props.requestId ?? undefined}
     data-flow-save-request={props.status}
+    tabIndex={-1}
   >{props.children}</section>;
 }
 

@@ -1,10 +1,33 @@
 import { describe, expect, it } from "vitest";
-import type { TimelineBlockView } from "@/lib/types";
+import type { FlowSaveInboxRequest, TimelineBlockView } from "@/lib/types";
 import {
+  canStartFlowSaveAction,
   flowSaveCommandId,
   reconcileFlowSaveCommands,
+  reconcileFlowSaveInboxCommands,
   type FlowSaveCommandRecord,
 } from "./flow-save-command-state.js";
+
+function inboxRequest(sessionId: string, requestId: string): FlowSaveInboxRequest {
+  return {
+    request_id: requestId,
+    session_id: sessionId,
+    agent_id: "pi",
+    session_title: sessionId,
+    request_turn_id: `turn_request_${requestId}`,
+    request_run_id: `run_request_${requestId}`,
+    source_turn_id: `turn_source_${requestId}`,
+    source_run_id: `run_source_${requestId}`,
+    source_title: requestId,
+    source: "agent_intent",
+    user_message: "保存刚才的流程",
+    intent_summary: null,
+    name_hint: null,
+    source_imported: false,
+    created_at: "2026-08-26T04:00:00.000Z",
+    event_sequence: 42,
+  };
+}
 
 function saveBlock(input: {
   requestId?: string;
@@ -113,5 +136,41 @@ describe("reconcileFlowSaveCommands", () => {
 
     expect(commands.get(confirmId)).toEqual(command("confirm"));
     expect(actions).toEqual({ fsr_one: "retry" });
+  });
+});
+
+describe("global Flow save command state", () => {
+  it("keeps concurrent Session/request keys separate", () => {
+    expect(flowSaveCommandId("sess-a", "confirm", "fsr-a"))
+      .not.toBe(flowSaveCommandId("sess-b", "confirm", "fsr-b"));
+  });
+
+  it("clears only the action whose request left the canonical inbox", () => {
+    const aConfirm = flowSaveCommandId("sess-a", "confirm", "fsr-a");
+    const aDismiss = flowSaveCommandId("sess-a", "dismiss", "fsr-a");
+    const bConfirm = flowSaveCommandId("sess-b", "confirm", "fsr-b");
+    const commands = new Map([
+      [aConfirm, command("a-confirm")],
+      [aDismiss, command("a-dismiss")],
+      [bConfirm, command("b-confirm")],
+    ]);
+
+    const cleanup = reconcileFlowSaveInboxCommands({
+      previousRequests: [inboxRequest("sess-a", "fsr-a"), inboxRequest("sess-b", "fsr-b")],
+      currentRequests: [inboxRequest("sess-b", "fsr-b")],
+      commands,
+    });
+
+    expect(cleanup.commandIds).toEqual(new Set([aConfirm, aDismiss]));
+    expect(cleanup.actionRequestIds).toEqual(new Set(["fsr-a"]));
+    expect(cleanup.commandIds.has(bConfirm)).toBe(false);
+  });
+
+  it("allows an unknown result to retry only the original action", () => {
+    expect(canStartFlowSaveAction({ phase: null, error: "unknown", retry: "confirm" }, "confirm")).toBe(true);
+    expect(canStartFlowSaveAction({ phase: null, error: "unknown", retry: "confirm" }, "dismiss")).toBe(false);
+    expect(canStartFlowSaveAction({ phase: null, error: "unknown", retry: "dismiss" }, "dismiss")).toBe(true);
+    expect(canStartFlowSaveAction({ phase: null, error: "unknown", retry: "dismiss" }, "confirm")).toBe(false);
+    expect(canStartFlowSaveAction({ phase: "confirm", error: null, retry: null }, "confirm")).toBe(false);
   });
 });
