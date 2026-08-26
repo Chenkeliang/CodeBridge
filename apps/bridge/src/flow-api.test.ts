@@ -9,6 +9,7 @@ import {
 import { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SqliteEventStore } from "@codebridge/work-items";
 import { createFlowApp } from "./flow-api.js";
+import { FlowSaveInboxService } from "./flow-save-inbox.js";
 import {
   extractRunDefinition,
   FlowSaveIntentError,
@@ -1987,5 +1988,212 @@ describe("flow API", () => {
     events.close();
     capabilities.close();
     catalog.close();
+  });
+
+  it("exposes a read-only paginated pending Flow save inbox with exact snake_case fields", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    try {
+      const first = seedAgentRun(sessions, events, {
+        agentId: "pi",
+        title: "排查仓配异常",
+        tools: ["Read File", "Search"],
+      });
+      const second = seedAgentRun(sessions, events, {
+        agentId: "codex",
+        title: "核对支付状态",
+        tools: ["Read File", "Search"],
+      });
+      const intents = new FlowSaveIntentService({ sessions, events, catalog });
+      const firstRequest = intents.requestManual({
+        sessionId: first.session.id,
+        sourceRunId: first.run.id,
+        intentSummary: "保存仓配排查步骤",
+        nameHint: "仓配排查",
+      }, "inbox-first");
+      const secondRequest = intents.requestManual({
+        sessionId: second.session.id,
+        sourceRunId: second.run.id,
+      }, "inbox-second");
+      const inbox = new FlowSaveInboxService({ sessions, events });
+      const app = createFlowApp(catalog, "token", {
+        sessions,
+        events,
+        flowSaveIntents: intents,
+        flowSaveInbox: inbox,
+      });
+      const beforeEvents = new Map([
+        [first.workItem.id, events.listEvents(first.workItem.id).length],
+        [second.workItem.id, events.listEvents(second.workItem.id).length],
+      ]);
+      const beforeCatalog = catalog.list();
+
+      const firstPageResponse = await app.request(
+        "/v1/flow-save-requests?state=pending&limit=1",
+        { headers: { authorization: "Bearer token" } },
+      );
+      expect(firstPageResponse.status).toBe(200);
+      const firstPage = await firstPageResponse.json() as {
+        requests: Array<Record<string, unknown>>;
+        next_cursor: string | null;
+      };
+      expect(firstPage.requests).toHaveLength(1);
+      expect(Object.keys(firstPage.requests[0]!).sort()).toEqual([
+        "agent_id",
+        "created_at",
+        "event_sequence",
+        "intent_summary",
+        "name_hint",
+        "request_id",
+        "request_run_id",
+        "request_turn_id",
+        "session_id",
+        "session_title",
+        "source",
+        "source_imported",
+        "source_run_id",
+        "source_title",
+        "source_turn_id",
+        "user_message",
+      ]);
+      expect(firstPage.requests[0]).toMatchObject({
+        request_id: expect.stringMatching(/^fsr_/),
+        session_id: expect.stringMatching(/^sess_/),
+        agent_id: expect.stringMatching(/^(pi|codex)$/),
+        request_turn_id: expect.stringMatching(/^turn_/),
+        request_run_id: expect.stringMatching(/^run_/),
+        source_turn_id: expect.stringMatching(/^turn_/),
+        source_run_id: expect.stringMatching(/^run_/),
+        source_title: expect.any(String),
+        source: "turn_action",
+        user_message: expect.any(String),
+        source_imported: false,
+        created_at: expect.any(String),
+        event_sequence: expect.any(Number),
+      });
+      expect(
+        firstPage.requests[0]?.session_title === null
+        || typeof firstPage.requests[0]?.session_title === "string",
+      ).toBe(true);
+      expect(
+        firstPage.requests[0]?.intent_summary === null
+        || typeof firstPage.requests[0]?.intent_summary === "string",
+      ).toBe(true);
+      expect(
+        firstPage.requests[0]?.name_hint === null
+        || typeof firstPage.requests[0]?.name_hint === "string",
+      ).toBe(true);
+      expect(firstPage.next_cursor).toEqual(expect.any(String));
+
+      const secondPageResponse = await app.request(
+        `/v1/flow-save-requests?state=pending&limit=1&cursor=${encodeURIComponent(firstPage.next_cursor!)}`,
+        { headers: { authorization: "Bearer token" } },
+      );
+      expect(secondPageResponse.status).toBe(200);
+      const secondPage = await secondPageResponse.json() as {
+        requests: Array<Record<string, unknown> & { request_id: string }>;
+        next_cursor: string | null;
+      };
+      expect(secondPage.requests).toHaveLength(1);
+      expect(secondPage.next_cursor).toBeNull();
+      expect(new Set([
+        String(firstPage.requests[0]?.request_id),
+        secondPage.requests[0]!.request_id,
+      ])).toEqual(new Set([firstRequest.requestId, secondRequest.requestId]));
+      const allRequests = [firstPage.requests[0]!, secondPage.requests[0]!];
+      expect(allRequests.find((request) => request.request_id === firstRequest.requestId))
+        .toMatchObject({
+          intent_summary: "保存仓配排查步骤",
+          name_hint: "仓配排查",
+        });
+      expect(events.listEvents(first.workItem.id)).toHaveLength(beforeEvents.get(first.workItem.id)!);
+      expect(events.listEvents(second.workItem.id)).toHaveLength(beforeEvents.get(second.workItem.id)!);
+      expect(catalog.list()).toEqual(beforeCatalog);
+    } finally {
+      catalog.close();
+      events.close();
+      sessions.close();
+    }
+  });
+
+  it("rejects unavailable or malformed pending inbox reads with exact status codes", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    try {
+      const inbox = new FlowSaveInboxService({ sessions, events });
+      const app = createFlowApp(catalog, "token", { flowSaveInbox: inbox });
+      const authorization = { authorization: "Bearer token" };
+      const extraCursor = Buffer.from(JSON.stringify({
+        occurred_at: "2026-08-26T00:00:00.000Z",
+        event_id: "evt_one",
+        extra: true,
+      })).toString("base64url");
+
+      const unauthorized = await app.request("/v1/flow-save-requests?state=pending");
+      expect(unauthorized.status).toBe(401);
+
+      for (const [url, error] of [
+        ["/v1/flow-save-requests", "flow_save_request_state_invalid"],
+        ["/v1/flow-save-requests?state=completed", "flow_save_request_state_invalid"],
+        ["/v1/flow-save-requests?state=pending&limit=0", "flow_save_request_limit_invalid"],
+        ["/v1/flow-save-requests?state=pending&limit=101", "flow_save_request_limit_invalid"],
+        ["/v1/flow-save-requests?state=pending&limit=1.5", "flow_save_request_limit_invalid"],
+        ["/v1/flow-save-requests?state=pending&cursor=not-base64", "flow_save_request_cursor_invalid"],
+        [`/v1/flow-save-requests?state=pending&cursor=${extraCursor}`, "flow_save_request_cursor_invalid"],
+      ] as const) {
+        const response = await app.request(url, { headers: authorization });
+        expect(response.status, url).toBe(400);
+        expect(await response.json(), url).toEqual({ error });
+      }
+
+      const unavailable = createFlowApp(catalog, "token");
+      const unavailableResponse = await unavailable.request(
+        "/v1/flow-save-requests?state=pending",
+        { headers: authorization },
+      );
+      expect(unavailableResponse.status).toBe(503);
+      expect(await unavailableResponse.json()).toEqual({ error: "flow_save_inbox_unavailable" });
+    } finally {
+      events.close();
+      sessions.close();
+      catalog.close();
+    }
+  });
+
+  it("omits a pending request after its Session is deleted", async () => {
+    const catalog = new FlowCatalogStore(":memory:");
+    const sessions = new SessionCatalogStore(":memory:");
+    const events = new SqliteEventStore(":memory:");
+    try {
+      const source = seedAgentRun(sessions, events, {
+        agentId: "pi",
+        title: "排查仓配异常",
+        tools: ["Read File", "Search"],
+      });
+      const intents = new FlowSaveIntentService({ sessions, events, catalog });
+      intents.requestManual({
+        sessionId: source.session.id,
+        sourceRunId: source.run.id,
+      }, "inbox-deleted-session");
+      expect(sessions.deleteSession(source.session.id)).toBe(true);
+      const app = createFlowApp(catalog, "token", {
+        flowSaveInbox: new FlowSaveInboxService({ sessions, events }),
+      });
+
+      const response = await app.request(
+        "/v1/flow-save-requests?state=pending",
+        { headers: { authorization: "Bearer token" } },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ requests: [], next_cursor: null });
+      expect(catalog.list()).toEqual([]);
+    } finally {
+      events.close();
+      sessions.close();
+      catalog.close();
+    }
   });
 });

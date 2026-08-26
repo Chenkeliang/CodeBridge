@@ -717,6 +717,10 @@ function requestFromEvent(event: DomainEvent): FlowSaveRequest {
   };
 }
 
+export function parseFlowSaveRequestEvent(event: DomainEvent): FlowSaveRequest {
+  return requestFromEvent(event);
+}
+
 function requiredPayloadString(event: DomainEvent, key: string): string {
   const value = event.payload[key];
   if (typeof value !== "string" || !value) {
