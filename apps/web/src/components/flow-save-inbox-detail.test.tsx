@@ -77,6 +77,21 @@ describe("FlowSaveInboxDetail", () => {
     const onDismiss = vi.fn();
 
     act(() => root.render(<FlowSaveInboxDetail
+      actionState={null}
+      agentName="Pi"
+      onConfirm={onConfirm}
+      onDismiss={onDismiss}
+      request={request}
+    />));
+    const initialButtons = Array.from(host.querySelectorAll("button"));
+    act(() => initialButtons.find((button) => button.textContent?.includes("生成 Candidate"))!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    act(() => initialButtons.find((button) => button.textContent === "忽略")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onConfirm).toHaveBeenCalledWith(request.request_id);
+    expect(onDismiss).toHaveBeenCalledWith(request.request_id);
+
+    act(() => root.render(<FlowSaveInboxDetail
       actionState={{ phase: null, error: "结果未知", retry: "confirm" }}
       agentName="Pi"
       onConfirm={onConfirm}

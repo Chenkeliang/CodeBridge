@@ -30,8 +30,10 @@ import { sessionViewStore, useSessionView } from "@/lib/session-store";
 import { submitSessionMessage } from "@/lib/submit-session-message";
 import { defaultsFromFlow, flowRunMessage } from "@/lib/flow-run-submit";
 import {
+  canStartFlowSaveAction,
   flowSaveCommandId,
   reconcileFlowSaveCommands,
+  reconcileFlowSaveInboxCommands,
   type FlowSaveCommandRecord,
 } from "@/lib/flow-save-command-state";
 import {
@@ -49,6 +51,7 @@ import type {
   FlowBatchSnapshot,
   FlowRecommendation,
   FlowReviewContext,
+  FlowSaveInboxRequest,
   MessageAttachmentInput,
   ProviderHistoryPreview,
   WorkspaceListing,
@@ -127,7 +130,9 @@ export function Workbench() {
   const [flowSaveActionStates, setFlowSaveActionStates] = useState<Record<string, FlowSaveRequestActionState>>({});
   const flowSaveInboxState = useRef(new FlowSaveInboxState({ pollIntervalMs: 15_000 }));
   const [flowSaveInbox, setFlowSaveInbox] = useState(() => flowSaveInboxState.current.snapshot());
-  const [selectedPendingFlowSaveRequestId, setSelectedPendingFlowSaveRequestId] = useState<string | null>(null);
+  const previousFlowSaveInboxRequests = useRef<FlowSaveInboxRequest[]>([]);
+  const selectedPendingFlowSaveRequestRef = useRef<string | null>(null);
+  const [selectedPendingFlowSaveRequestId, setSelectedPendingFlowSaveRequestIdState] = useState<string | null>(null);
   const flowSaveInboxTimer = useRef<number | null>(null);
   const refreshFlowSaveInboxRef = useRef<(kind: FlowSaveInboxRefreshKind) => Promise<void>>(async () => {});
   const [providerHistory, setProviderHistory] = useState<ProviderHistoryImportState>({ kind: "idle" });
@@ -225,6 +230,11 @@ export function Workbench() {
   const notify = useCallback((message: string, kind: "info" | "error" = "info") => {
     setNotice({ text: message, kind });
     window.setTimeout(() => setNotice((current) => current?.text === message ? null : current), 4000);
+  }, []);
+
+  const selectPendingFlowSaveRequest = useCallback((requestId: string | null) => {
+    selectedPendingFlowSaveRequestRef.current = requestId;
+    setSelectedPendingFlowSaveRequestIdState(requestId);
   }, []);
 
   const syncFlowSaveInbox = useCallback(() => {
@@ -368,20 +378,36 @@ export function Workbench() {
   }, [area, refreshFlowSaveInbox]);
 
   useEffect(() => {
-    if (
-      selectedPendingFlowSaveRequestId
-      && !flowSaveInbox.requests.some((request) => request.request_id === selectedPendingFlowSaveRequestId)
-    ) {
-      setSelectedPendingFlowSaveRequestId(null);
+    const reconciliation = reconcileFlowSaveInboxCommands({
+      previousRequests: previousFlowSaveInboxRequests.current,
+      currentRequests: flowSaveInbox.requests,
+      commands: flowSaveCommands.current,
+    });
+    previousFlowSaveInboxRequests.current = flowSaveInbox.requests;
+    for (const commandId of reconciliation.commandIds) {
+      flowSaveCommands.current.delete(commandId);
     }
-  }, [flowSaveInbox.requests, selectedPendingFlowSaveRequestId]);
+    if (reconciliation.actionRequestIds.size > 0) {
+      setFlowSaveActionStates((current) => {
+        const next = { ...current };
+        for (const requestId of reconciliation.actionRequestIds) delete next[requestId];
+        return next;
+      });
+    }
+    if (
+      selectedPendingFlowSaveRequestRef.current
+      && !flowSaveInbox.requests.some(
+        (request) => request.request_id === selectedPendingFlowSaveRequestRef.current,
+      )
+    ) {
+      selectPendingFlowSaveRequest(flowSaveInbox.requests[0]?.request_id ?? null);
+    }
+  }, [flowSaveInbox.requests, selectPendingFlowSaveRequest]);
 
   useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
   useEffect(() => {
     selectedSessionRef.current = selectedSessionId;
-    flowSaveCommands.current.clear();
     setRequestingFlowRunIds(new Set());
-    setFlowSaveActionStates({});
     providerHistoryRequestVersion.current += 1;
     pendingHistoryImportKey.current = null;
     activeHistoryImportRequest.current = null;
@@ -917,14 +943,16 @@ export function Workbench() {
     }
   }
 
-  async function confirmFlowSaveRequest(requestId: string): Promise<void> {
-    const sessionId = selectedSessionRef.current;
+  async function confirmFlowSaveRequest(sessionId: string, requestId: string): Promise<void> {
     const actionState = flowSaveActionStates[requestId];
-    if (!sessionId || actionState?.phase || actionState?.retry === "dismiss") return;
+    if (!canStartFlowSaveAction(actionState, "confirm")) return;
+    const inboxRequest = flowSaveInbox.requests.find((request) =>
+      request.session_id === sessionId && request.request_id === requestId
+    );
     const commandId = flowSaveCommandId(sessionId, "confirm", requestId);
     const command = flowSaveCommands.current.get(commandId) ?? {
       key: crypto.randomUUID(),
-      startedAfterSequence: canonicalFlowSaveSequence(sessionId),
+      startedAfterSequence: inboxRequest?.event_sequence ?? canonicalFlowSaveSequence(sessionId),
     };
     const key = command.key;
     flowSaveCommands.current.set(commandId, command);
@@ -936,9 +964,7 @@ export function Workbench() {
     try {
       result = await api.confirmFlowSave(requestId, key);
     } catch (caught) {
-      if (selectedSessionRef.current !== sessionId) return;
       if (caught instanceof ApiError) {
-        flowSaveCommands.current.delete(commandId);
         if (caught.status === 503) {
           setFlowSaveActionStates((current) => ({
             ...current,
@@ -950,14 +976,20 @@ export function Workbench() {
           }));
           return;
         }
-        await sessionConnection.refresh(sessionId).catch(() => {});
-        if (selectedSessionRef.current !== sessionId) return;
+        flowSaveCommands.current.delete(commandId);
+        await refreshFlowSaveInbox("immediate");
+        if (selectedSessionRef.current === sessionId) {
+          await sessionConnection.refresh(sessionId).catch(() => {});
+        }
         setFlowSaveActionStates((current) => {
           const next = { ...current };
           delete next[requestId];
           return next;
         });
-        notify(messageOf(caught), "error");
+        if (
+          selectedPendingFlowSaveRequestRef.current === requestId
+          || (selectedPendingFlowSaveRequestRef.current === null && selectedSessionRef.current === sessionId)
+        ) notify(messageOf(caught), "error");
         return;
       }
       setFlowSaveActionStates((current) => ({
@@ -970,39 +1002,46 @@ export function Workbench() {
       }));
       return;
     }
-    if (selectedSessionRef.current !== sessionId) return;
+    const shouldOpenCandidate = selectedPendingFlowSaveRequestRef.current === requestId
+      || (selectedPendingFlowSaveRequestRef.current === null && selectedSessionRef.current === sessionId);
     flowSaveCommands.current.delete(commandId);
-    try {
-      await sessionConnection.refresh(sessionId);
-    } catch {
-      if (selectedSessionRef.current === sessionId) {
-        notify("Candidate 已生成，但 Timeline 刷新失败，请刷新页面。", "error");
-      }
-    }
-    if (selectedSessionRef.current !== sessionId) return;
     setFlowSaveActionStates((current) => {
       const next = { ...current };
       delete next[requestId];
       return next;
     });
-    const opened = await refreshFlowCatalog(result.flow.flow_id, sessionId).catch((caught) => {
-      if (selectedSessionRef.current !== sessionId) return null;
+    await refreshFlowSaveInbox("immediate");
+    if (selectedSessionRef.current === sessionId) try {
+      await sessionConnection.refresh(sessionId);
+    } catch {
+      if (shouldOpenCandidate && selectedSessionRef.current === sessionId) {
+        notify("Candidate 已生成，但 Timeline 刷新失败，请刷新页面。", "error");
+      }
+    }
+    const opened = await refreshFlowCatalog(
+      shouldOpenCandidate ? result.flow.flow_id : undefined,
+    ).catch((caught) => {
+      if (!shouldOpenCandidate) return null;
       notify(`Candidate 已生成，但详情打开失败：${messageOf(caught)}`, "error");
       return null;
     });
-    if (opened && selectedSessionRef.current === sessionId) {
+    if (opened && shouldOpenCandidate) {
+      selectPendingFlowSaveRequest(null);
+      setArea("flows");
       notify(`已生成 Candidate · ${result.flow.name || result.flow.flow_id}`);
     }
   }
 
-  async function dismissFlowSaveRequest(requestId: string): Promise<void> {
-    const sessionId = selectedSessionRef.current;
+  async function dismissFlowSaveRequest(sessionId: string, requestId: string): Promise<void> {
     const actionState = flowSaveActionStates[requestId];
-    if (!sessionId || actionState?.phase || actionState?.retry === "confirm") return;
+    if (!canStartFlowSaveAction(actionState, "dismiss")) return;
+    const inboxRequest = flowSaveInbox.requests.find((request) =>
+      request.session_id === sessionId && request.request_id === requestId
+    );
     const commandId = flowSaveCommandId(sessionId, "dismiss", requestId);
     const command = flowSaveCommands.current.get(commandId) ?? {
       key: crypto.randomUUID(),
-      startedAfterSequence: canonicalFlowSaveSequence(sessionId),
+      startedAfterSequence: inboxRequest?.event_sequence ?? canonicalFlowSaveSequence(sessionId),
     };
     const key = command.key;
     flowSaveCommands.current.set(commandId, command);
@@ -1013,17 +1052,21 @@ export function Workbench() {
     try {
       await api.dismissFlowSave(requestId, key);
     } catch (caught) {
-      if (selectedSessionRef.current !== sessionId) return;
       if (caught instanceof ApiError) {
         flowSaveCommands.current.delete(commandId);
-        await sessionConnection.refresh(sessionId).catch(() => {});
-        if (selectedSessionRef.current !== sessionId) return;
+        await refreshFlowSaveInbox("immediate");
+        if (selectedSessionRef.current === sessionId) {
+          await sessionConnection.refresh(sessionId).catch(() => {});
+        }
         setFlowSaveActionStates((current) => {
           const next = { ...current };
           delete next[requestId];
           return next;
         });
-        notify(messageOf(caught), "error");
+        if (
+          selectedPendingFlowSaveRequestRef.current === requestId
+          || (selectedPendingFlowSaveRequestRef.current === null && selectedSessionRef.current === sessionId)
+        ) notify(messageOf(caught), "error");
         return;
       }
       setFlowSaveActionStates((current) => ({
@@ -1036,21 +1079,53 @@ export function Workbench() {
       }));
       return;
     }
-    if (selectedSessionRef.current !== sessionId) return;
     flowSaveCommands.current.delete(commandId);
-    try {
+    setFlowSaveActionStates((current) => {
+      const next = { ...current };
+      delete next[requestId];
+      return next;
+    });
+    await refreshFlowSaveInbox("immediate");
+    if (selectedSessionRef.current === sessionId) try {
       await sessionConnection.refresh(sessionId);
     } catch {
       if (selectedSessionRef.current === sessionId) {
         notify("已忽略请求，但 Timeline 刷新失败，请刷新页面。", "error");
       }
     }
-    if (selectedSessionRef.current !== sessionId) return;
-    setFlowSaveActionStates((current) => {
-      const next = { ...current };
-      delete next[requestId];
-      return next;
-    });
+  }
+
+  async function locateFlowSaveSource(request: FlowSaveInboxRequest): Promise<void> {
+    const targetSession = sessions.find((session) =>
+      session.session_id === request.session_id && session.agent_id === request.agent_id
+    );
+    if (!targetSession) {
+      notify("来源 Session 已不存在或不可访问。", "error");
+      return;
+    }
+    try {
+      const snapshot = await api.openSession(request.session_id);
+      sessionViewStore.hydrate(snapshot);
+    } catch (caught) {
+      notify(`无法读取来源 Session：${messageOf(caught)}`, "error");
+      return;
+    }
+
+    selectPendingFlowSaveRequest(null);
+    setArea("agents");
+    selectSession(targetSession);
+    const selector = `[data-flow-save-request-id="${CSS.escape(request.request_id)}"]`;
+    let card: HTMLElement | null = null;
+    for (let attempt = 0; attempt < 10 && !card; attempt += 1) {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      card = document.querySelector<HTMLElement>(selector);
+    }
+    if (!card) {
+      notify("来源请求卡已不存在，未定位到其他内容。", "error");
+      return;
+    }
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    card.focus({ preventScroll: true });
   }
 
   async function openFlowRecommendation(recommendation: FlowRecommendation): Promise<void> {
@@ -1811,9 +1886,9 @@ export function Workbench() {
         onCreate={() => selectedAgent && void createSession(selectedAgent.agent_id)}
         onCreateGuide={() => { void createGuideDraft(); }}
         onImportGuide={() => guideImportInput.current?.click()}
-        onFlow={(id) => { setSelectedPendingFlowSaveRequestId(null); void openFlow(id); }}
+        onFlow={(id) => { selectPendingFlowSaveRequest(null); void openFlow(id); }}
         onPendingFlowSaveRequest={(request) => {
-          setSelectedPendingFlowSaveRequestId(request.request_id);
+          selectPendingFlowSaveRequest(request.request_id);
           setDetailFlow(null);
           setFlowReviewContext(null);
         }}
@@ -1894,6 +1969,9 @@ export function Workbench() {
             <FlowSaveInboxDetail
               actionState={flowSaveActionStates[selectedPendingFlowSaveRequest.request_id] ?? null}
               agentName={selectedPendingFlowSaveAgentName}
+              onConfirm={(requestId) => { void confirmFlowSaveRequest(selectedPendingFlowSaveRequest.session_id, requestId); }}
+              onDismiss={(requestId) => { void dismissFlowSaveRequest(selectedPendingFlowSaveRequest.session_id, requestId); }}
+              onOpenSourceSession={() => { void locateFlowSaveSource(selectedPendingFlowSaveRequest); }}
               request={selectedPendingFlowSaveRequest}
             />
           </section>
@@ -2017,8 +2095,8 @@ export function Workbench() {
                     requestingFlowRunIds={requestingFlowRunIds}
                     flowSaveActionStates={flowSaveActionStates}
                     onRequestFlowSave={(runId) => { void requestFlowSaveFromTurn(runId); }}
-                    onConfirmFlowSave={(requestId) => { void confirmFlowSaveRequest(requestId); }}
-                    onDismissFlowSave={(requestId) => { void dismissFlowSaveRequest(requestId); }}
+                     onConfirmFlowSave={(requestId) => { if (selectedSessionId) void confirmFlowSaveRequest(selectedSessionId, requestId); }}
+                     onDismissFlowSave={(requestId) => { if (selectedSessionId) void dismissFlowSaveRequest(selectedSessionId, requestId); }}
                     onOpenFlowCandidate={(flowId) => { void openFlow(flowId, selectedSessionId); }}
                     onCreateCandidate={(runId) => { void createCandidateFromRun(runId); }}
                     flowRecommendations={flowRecommendations}
