@@ -1,6 +1,6 @@
 # Flow Save Intent：从执行证据到用户确认
 
-> Status: Review draft  
+> Status: Implemented and verified  
 > Date: 2026-08-25  
 > Branch: `codex/fix-session-history-overflow`  
 > Supersedes: “成功 Run 且有结构化计划或至少两次工具调用，就主动展示整理为 Guide”
