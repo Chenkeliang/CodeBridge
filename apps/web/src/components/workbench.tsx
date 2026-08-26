@@ -29,6 +29,7 @@ import { SessionConnection } from "@/lib/session-connection";
 import { sessionViewStore, useSessionView } from "@/lib/session-store";
 import { submitSessionMessage } from "@/lib/submit-session-message";
 import { defaultsFromFlow, flowRunMessage } from "@/lib/flow-run-submit";
+import { latestCandidateForSession } from "@/lib/flow-navigation";
 import {
   canStartFlowSaveAction,
   flowSaveCommandId,
@@ -702,6 +703,22 @@ export function Workbench() {
     setSelectedSessionId(nextSessionId);
   }
 
+  function enterArea(nextArea: PanelArea): void {
+    if (nextArea !== "flows") {
+      setArea(nextArea);
+      return;
+    }
+    const expectedSessionId = selectedSessionRef.current;
+    setArea("flows");
+    selectPendingFlowSaveRequest(null);
+    setDetailFlow(null);
+    setFlowReviewContext(null);
+    setFlowControlError(null);
+    setMissingInputs([]);
+    const related = latestCandidateForSession(flows, expectedSessionId);
+    if (related) void openFlow(related.flow_id, expectedSessionId);
+  }
+
   function selectSession(session: AgentSession) {
     selectedAgentRef.current = session.agent_id;
     selectedSessionRef.current = session.session_id;
@@ -856,6 +873,7 @@ export function Workbench() {
       setFlowReviewContext(context);
       setDetailFlow(context.flow);
       setParamValues(defaultsFromFlow(context.flow));
+      setArea("flows");
     } catch (caught) {
       if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return;
       setError(messageOf(caught));
@@ -1874,7 +1892,7 @@ export function Workbench() {
         selectedAgentId={selectedAgentId}
         theme={theme}
         onAgent={selectAgent}
-        onArea={setArea}
+        onArea={enterArea}
         onTheme={toggleTheme}
       />
 
@@ -1927,7 +1945,7 @@ export function Workbench() {
 
       <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", "bg-canvas text-ink")}>
         {pixelWipe > 0 && <PixelWipe key={pixelWipe} seed={pixelWipe} />}
-        {(area === "agents" || area === "flows") && <SessionHeader
+        {area === "agents" && <SessionHeader
           agent={selectedAgent}
           session={selectedSession}
           runState={runState}
@@ -1973,21 +1991,27 @@ export function Workbench() {
               onReading={setReading}
             />
           </section>
-        ) : area === "flows" && selectedPendingFlowSaveRequest && selectedPendingFlowSaveAgentName ? (
-          <section aria-label="Flow 待生成详情" className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-7">
-            <FlowSaveInboxDetail
-              actionState={flowSaveActionStates[selectedPendingFlowSaveRequest.request_id] ?? null}
-              agentName={selectedPendingFlowSaveAgentName}
-              onConfirm={(requestId) => { void confirmFlowSaveRequest(selectedPendingFlowSaveRequest.session_id, requestId); }}
-              onDismiss={(requestId) => { void dismissFlowSaveRequest(selectedPendingFlowSaveRequest.session_id, requestId); }}
-              onOpenSourceSession={() => { void locateFlowSaveSource(selectedPendingFlowSaveRequest); }}
-              request={selectedPendingFlowSaveRequest}
-            />
-          </section>
-        ) : !selectedSession && detailFlow ? (
-          <section aria-label="Flow 管理" className="min-h-0 flex-1 overflow-y-auto px-8 py-7">
-            <div className="mx-auto w-full max-w-[880px]">{flowDetailSurface}</div>
-          </section>
+        ) : area === "flows" ? (
+          selectedPendingFlowSaveRequest && selectedPendingFlowSaveAgentName ? (
+            <section aria-label="Flow 待生成详情" className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-7">
+              <FlowSaveInboxDetail
+                actionState={flowSaveActionStates[selectedPendingFlowSaveRequest.request_id] ?? null}
+                agentName={selectedPendingFlowSaveAgentName}
+                onConfirm={(requestId) => { void confirmFlowSaveRequest(selectedPendingFlowSaveRequest.session_id, requestId); }}
+                onDismiss={(requestId) => { void dismissFlowSaveRequest(selectedPendingFlowSaveRequest.session_id, requestId); }}
+                onOpenSourceSession={() => { void locateFlowSaveSource(selectedPendingFlowSaveRequest); }}
+                request={selectedPendingFlowSaveRequest}
+              />
+            </section>
+          ) : detailFlow ? (
+            <section aria-label="Flow 管理" className="min-h-0 flex-1 overflow-y-auto px-8 py-7">
+              <div className="mx-auto w-full max-w-[880px]">{flowDetailSurface}</div>
+            </section>
+          ) : (
+            <section aria-label="Flow 选择" className="flex min-h-0 flex-1 items-center justify-center px-8 text-center">
+              <p className="text-xs text-muted">从左侧选择 Flow 或待生成请求</p>
+            </section>
+          )
         ) : !selectedSession ? selectedAgentNeedsSetup || selectedAgentUnavailable ? (
           <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">
             <div className="w-full max-w-[760px]">
@@ -2089,7 +2113,6 @@ export function Workbench() {
                   <button className="text-ink hover:opacity-80" onClick={() => void unbindSelectedFlow()} type="button">解绑</button>
                 </div>}
                 {flowBatchSurface}
-                {flowDetailSurface}
                 {!loadingSession && showProviderHistoryAboveTimeline && <div className="mb-5">{providerHistorySurface}</div>}
                 {loadingSession ? <LoadingConversation /> : sessionView && hasTimeline ? (
                   <SessionTimeline

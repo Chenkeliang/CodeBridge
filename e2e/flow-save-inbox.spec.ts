@@ -30,6 +30,23 @@ const candidate = {
   updated_at: "2026-08-26T04:00:01.000Z",
 };
 
+const foreignCandidate = {
+  ...candidate,
+  flow_id: "flow_channel_package",
+  name: "channel-package-build-compare",
+  definition_revision: "sha256:foreign",
+  lineage_root_flow_id: "flow_channel_package",
+  provenance: {
+    ...candidate.provenance,
+    source_run_id: "run_source_b",
+    source_session_id: "sess_b",
+    source_flow_id: "flow_ephemeral_b",
+    source_definition_revision: "sha256:source_b",
+    source_request_id: "fsr_b",
+  },
+  updated_at: "2026-08-26T05:00:00.000Z",
+};
+
 function agent(agentId: "pi" | "codex", displayName: string) {
   return {
     agent_id: agentId,
@@ -135,6 +152,7 @@ function reviewContext() {
 
 async function installFixture(page: Page, options: {
   pending?: PendingRequest[];
+  initialFlows?: Array<typeof candidate>;
   confirmUnknownOnce?: boolean;
   confirmUnavailableOnce?: boolean;
   dismissUnknownOnce?: boolean;
@@ -146,7 +164,7 @@ async function installFixture(page: Page, options: {
   const sessionB = session("sess_b", "codex", "Codex Session B");
   const state = {
     pending: [...(options.pending ?? [pendingRequest("fsr_a", "sess_a", "pi", sessionA.title)])],
-    flows: [] as typeof candidate[],
+    flows: [...(options.initialFlows ?? [])],
     terminals: new Map<string, "completed" | "dismissed">(),
   };
   const confirmCalls: Array<{ requestId: string; key: string }> = [];
@@ -250,11 +268,26 @@ async function installFixture(page: Page, options: {
     contentType: "application/json",
     body: JSON.stringify({ capabilities: [] }),
   }));
-  await page.route(`**/v1/flows/${candidate.flow_id}/review-context`, (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify(reviewContext()),
-  }));
+  await page.route(/\/v1\/flows\/([^/]+)\/review-context$/, (route) => {
+    const flowId = new URL(route.request().url()).pathname.split("/").at(-2)!;
+    const flow = state.flows.find((entry) => entry.flow_id === flowId);
+    if (!flow) {
+      return route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "flow_not_found" }),
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...reviewContext(),
+        flow,
+        provenance: flow.provenance,
+      }),
+    });
+  });
   await page.route("**/v1/flow-save-requests?*", async (route) => {
     inboxCalls += 1;
     const captured = [...state.pending];
@@ -371,6 +404,43 @@ async function openPending(page: Page, requestId = "fsr_a") {
   await expect(page.locator(`[data-flow-save-inbox-detail="${requestId}"]`)).toBeVisible();
 }
 
+test("Flows opens the newest Candidate for the active Session and restores that Session", async ({ page }) => {
+  await installFixture(page, { initialFlows: [foreignCandidate, candidate] });
+  await page.goto("/workbench/");
+  await page.locator('button[aria-label="Pi"]').click();
+  await page.getByText("Pi Session A", { exact: true }).click();
+  await expect(page.getByRole("region", { name: "Session conversation" })).toBeVisible();
+
+  await page.getByRole("button", { name: /^Flows/ }).click();
+  const management = page.getByRole("region", { name: "Flow 管理" });
+  await expect(management).toBeVisible();
+  await expect(management.getByText(candidate.name, { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Session conversation" })).toHaveCount(0);
+  const foreignButton = page.getByRole("button", { name: `${foreignCandidate.name} runbook` });
+  await expect(foreignButton).not.toHaveClass(/border-line/);
+  await foreignButton.click();
+  await expect(management.getByText(foreignCandidate.name, { exact: true }).first()).toBeVisible();
+
+  await page.locator('button[aria-label="Pi"]').click();
+  await expect(page.getByRole("region", { name: "Session conversation" })).toBeVisible();
+  await expect(page.getByText("Pi Session A", { exact: true }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: /^Flows/ }).click();
+  await expect(page.getByRole("region", { name: "Flow 管理" }).getByText(candidate.name, { exact: true }).first()).toBeVisible();
+});
+
+test("re-entering Flows clears a stale unrelated selection when the Session has no Candidate", async ({ page }) => {
+  await installFixture(page, { initialFlows: [foreignCandidate] });
+  await page.goto("/workbench/");
+  await page.getByRole("button", { name: /^Flows/ }).click();
+  await expect(page.getByRole("region", { name: "Flow 管理" }).getByText(foreignCandidate.name, { exact: true }).first()).toBeVisible();
+
+  await page.locator('button[aria-label="Pi"]').click();
+  await page.getByRole("button", { name: /^Flows/ }).click();
+  await expect(page.getByRole("region", { name: "Flow 选择" })).toContainText("从左侧选择 Flow 或待生成请求");
+  await expect(page.getByRole("region", { name: "Session conversation" })).toHaveCount(0);
+});
+
 test("discovers Pi A globally while Codex B stays selected, then locates the exact source card", async ({ page }) => {
   await installFixture(page);
   await page.goto("/workbench/");
@@ -378,11 +448,15 @@ test("discovers Pi A globally while Codex B stays selected, then locates the exa
 
   await openPending(page);
   await expect(page.getByText("待生成 · 1", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Session conversation" })).toHaveCount(0);
+  await page.locator('button[aria-label="Codex"]').click();
   await expect(page.getByText("Codex Session B", { exact: true }).first()).toBeVisible();
 
   await page.reload();
   await openPending(page);
+  await page.locator('button[aria-label="Codex"]').click();
   await expect(page.getByText("Codex Session B", { exact: true }).first()).toBeVisible();
+  await openPending(page);
 
   await page.getByRole("button", { name: "定位来源 Session" }).click();
   const sourceCard = page.locator('[data-flow-save-request-id="fsr_a"]');
