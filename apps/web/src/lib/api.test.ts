@@ -547,4 +547,38 @@ describe("workbench API client", () => {
       }),
     ]);
   });
+
+  it("previews Provider history without a key and imports with the caller key", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        providerSessionId: "provider-session-1",
+        importedPosition: 0,
+        providerPosition: 401,
+        importableEvents: 401,
+        nextDigest: "sha256:preview",
+      }))
+      .mockResolvedValueOnce(Response.json({
+        importedEvents: 401,
+        importedTurns: 25,
+        lastEventSequence: 401,
+      }));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.previewProviderHistory("sess_1");
+    await api.importProviderHistory("sess_1", "history-confirm-1");
+
+    expect(fetch.mock.calls[0]).toEqual([
+      "/v1/sessions/sess_1/provider-history/preview",
+      expect.objectContaining({ method: "POST" }),
+    ]);
+    expect(new Headers((fetch.mock.calls[0]?.[1] as RequestInit).headers).has("Idempotency-Key"))
+      .toBe(false);
+
+    const importInit = fetch.mock.calls[1]?.[1] as RequestInit;
+    expect(fetch.mock.calls[1]?.[0]).toBe("/v1/sessions/sess_1/provider-history/import");
+    expect(importInit.method).toBe("POST");
+    expect(new Headers(importInit.headers).get("Idempotency-Key"))
+      .toBe("history-confirm-1");
+    expect(JSON.parse(String(importInit.body))).toEqual({ confirm: true });
+  });
 });

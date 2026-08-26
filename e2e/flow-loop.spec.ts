@@ -104,6 +104,7 @@ test("published runbook main path and candidate dry-run", async ({ page }) => {
   let lastBody: Record<string, unknown> = {};
 
   await page.addInitScript(() => {
+    (globalThis as typeof globalThis & { process?: { env: Record<string, string> } }).process = { env: {} };
     localStorage.setItem("codebridge:last-session:codex", "sess_1");
   });
   page.on("response", (response) => {
@@ -145,8 +146,23 @@ test("published runbook main path and candidate dry-run", async ({ page }) => {
     status: 200, contentType: "application/json",
     body: JSON.stringify({ ...sessionBase, title: "Session 1" }),
   }));
-  await page.route("**/v1/flows", (route) => route.fulfill({
+  await page.route(/\/v1\/flows(?:\?.*)?$/, (route) => route.fulfill({
     status: 200, contentType: "application/json", body: JSON.stringify({ flows: [publishedFlow, candidateFlow] }),
+  }));
+  await page.route("**/v1/capabilities", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ capabilities: [] }),
+  }));
+  await page.route("**/v1/flows/flow_demo_echo/review-context", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({
+      flow: publishedFlow, base: null, provenance: null, evidence: [], history: [],
+      diff: { name_changed: false, description_changed: false, inputs: { added: [], removed: [], changed: [] }, steps: { added: [], removed: [], changed: [], reordered: false } },
+    }),
+  }));
+  await page.route("**/v1/flows/flow_demo_echo_cand/review-context", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({
+      flow: candidateFlow, base: publishedFlow, provenance: null, evidence: [], history: [],
+      diff: { name_changed: false, description_changed: false, inputs: { added: [], removed: [], changed: [] }, steps: { added: [], removed: [], changed: [], reordered: false } },
+    }),
   }));
   await page.route("**/v1/flows/flow_demo_echo_cand", (route) => route.fulfill({
     status: 200, contentType: "application/json", body: JSON.stringify(candidateFlow),

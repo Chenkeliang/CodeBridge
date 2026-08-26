@@ -378,4 +378,45 @@ describe("Workbench component policy", () => {
     expect(workbench).toContain("api.commands(");
     expect(workbench).toContain("setCommandOpen(nextTrigger?.kind === \"command\")");
   });
+
+  it("closes Provider Session history import through explicit Preview and confirmation", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const client = readFileSync(new URL("../lib/api.ts", import.meta.url), "utf8");
+    const openSessionSource = client.slice(
+      client.indexOf("async function openSession"),
+      client.indexOf("async function importSessions"),
+    );
+
+    expect(workbench).toContain("ProviderHistoryImportCard,");
+    expect(workbench).toContain('from "@/components/provider-history-import-card"');
+    expect(workbench).toContain("api.previewProviderHistory(");
+    expect(workbench).toContain("api.importProviderHistory(");
+    expect(workbench).toContain("pendingHistoryImportKey");
+    expect(workbench).toContain("providerHistoryRequestVersion");
+    expect(workbench).toContain("sessionViewStore.hydrate(snapshot)");
+    expect(workbench).not.toContain("setEvents(");
+
+    expect(client).toContain('request<SessionSnapshot>(\'/v1/sessions/\' + encodeURIComponent(id))');
+    expect(client).toContain("async function openSession(id: string)");
+    expect(openSessionSource).not.toContain("provider-history");
+    expect(openSessionSource).not.toContain('method: "POST"');
+  });
+
+  it("contains long Session, Queue, message, and Composer content at the source chain", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const header = readFileSync(new URL("./session-chrome.tsx", import.meta.url), "utf8");
+    const queue = readFileSync(new URL("./session-queue.tsx", import.meta.url), "utf8");
+    const conversation = readFileSync(new URL("./conversation.tsx", import.meta.url), "utf8");
+
+    expect(header).toContain("flex min-w-0 flex-1 items-center gap-3 overflow-hidden");
+    expect(header).toContain("min-w-0 flex-1 overflow-hidden");
+    expect(header).toContain("relative flex shrink-0 items-center gap-2");
+    expect(workbench).toContain("mx-auto grid min-w-0 w-full max-w-[880px] gap-3");
+    expect(queue).toContain("grid-cols-[auto_minmax(0,1fr)_auto]");
+    expect(queue).toContain("line-clamp-2 min-w-0 [overflow-wrap:anywhere]");
+    expect(queue).toContain("取消排队消息");
+    expect(conversation).toContain("max-w-[72%] min-w-0");
+    expect(conversation).toContain("[overflow-wrap:anywhere]");
+    expect(workbench).not.toContain("overflow-x-hidden");
+  });
 });

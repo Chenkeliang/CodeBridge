@@ -515,6 +515,20 @@ export interface SessionCompositeSnapshot extends SessionSnapshot {
   runs: RunRecord[];
 }
 
+export interface ProviderHistoryPreview {
+  providerSessionId: string;
+  importedPosition: number;
+  providerPosition: number;
+  importableEvents: number;
+  nextDigest: string;
+}
+
+export interface ProviderHistoryImportResult {
+  importedEvents: number;
+  importedTurns: number;
+  lastEventSequence: number;
+}
+
 export interface SubmitTurnReceipt {
   acceptance: "queued" | "dispatched";
   turn: SessionTurnView;

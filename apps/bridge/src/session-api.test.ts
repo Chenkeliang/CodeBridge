@@ -605,13 +605,141 @@ describe("session API", () => {
       },
     );
     expect(imported.status).toBe(200);
-    expect(await imported.json()).toMatchObject({
+    const importedResult = await imported.json();
+    expect(importedResult).toMatchObject({
       importedEvents: 2,
       importedTurns: 1,
     });
-    expect(catalog.getSession(session.id)?.taskRecordId).toBeTruthy();
+
+    const afterFirst = await app.request(`/v1/sessions/${session.id}`, { headers });
+    expect(afterFirst.status).toBe(200);
+    const firstSnapshot = await afterFirst.json() as {
+      session: { task_record_id: string | null };
+      timeline: { turns: Array<{ blocks: Array<{ kind: string }> }> };
+    };
+    expect(firstSnapshot.session.task_record_id).toBeTruthy();
+    expect(firstSnapshot.timeline.turns).toHaveLength(1);
+    expect(firstSnapshot.timeline.turns[0]?.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "user_message" }),
+      expect.objectContaining({ kind: "assistant" }),
+    ]));
+
+    const replayed = await app.request(
+      `/v1/sessions/${session.id}/provider-history/import`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "idempotency-key": "import_1",
+        },
+        body: JSON.stringify({ confirm: true }),
+      },
+    );
+    expect(replayed.status).toBe(200);
+    expect(await replayed.json()).toEqual(importedResult);
+    const afterReplay = await app.request(`/v1/sessions/${session.id}`, { headers });
+    const replaySnapshot = await afterReplay.json() as {
+      timeline: { turns: unknown[] };
+    };
+    expect(replaySnapshot.timeline.turns).toHaveLength(1);
     catalog.close();
     workItems.close();
+  });
+
+  it("maps Provider history route failures to the stable status and code matrix", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    let prefixChanged = false;
+    const runner = {
+      loadSessionHistory: vi.fn(async (
+        _agentId: string,
+        _cwd: string,
+        providerSessionId: string,
+      ) => {
+        if (providerSessionId === "provider-unavailable") {
+          throw new Error("provider offline");
+        }
+        if (providerSessionId === "provider-prefix") {
+          return [{ kind: "message", text: prefixChanged ? "rewritten" : "original" }];
+        }
+        return [{ kind: "message", text: "history" }];
+      }),
+    } as unknown as RunnerClient;
+    const bound = catalog.createSession({
+      agentId: "pi",
+      cwd: "/workspace",
+      providerSessionId: "provider-bound",
+    });
+    const unbound = catalog.createSession({ agentId: "pi", cwd: "/workspace" });
+    const unavailable = catalog.createSession({
+      agentId: "pi",
+      cwd: "/workspace",
+      providerSessionId: "provider-unavailable",
+    });
+    const prefix = catalog.createSession({
+      agentId: "pi",
+      cwd: "/workspace",
+      providerSessionId: "provider-prefix",
+    });
+    const app = createSessionApp({ catalog, agents, workItems, runner }, TOKEN);
+    const headers = {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+    };
+
+    const assertFailure = async (response: Response, status: number, error: string) => {
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ error });
+    };
+
+    await assertFailure(await app.request(
+      "/v1/sessions/missing/provider-history/preview",
+      { method: "POST", headers },
+    ), 404, "session_not_found");
+    await assertFailure(await app.request(
+      `/v1/sessions/${unbound.id}/provider-history/preview`,
+      { method: "POST", headers },
+    ), 409, "provider_session_not_bound");
+    await assertFailure(await app.request(
+      `/v1/sessions/${unavailable.id}/provider-history/preview`,
+      { method: "POST", headers },
+    ), 502, "provider_history_unavailable");
+    await assertFailure(await app.request(
+      `/v1/sessions/${bound.id}/provider-history/import`,
+      { method: "POST", headers, body: JSON.stringify({ confirm: true }) },
+    ), 400, "confirmation_and_idempotency_key_required");
+
+    const initialImport = await app.request(
+      `/v1/sessions/${prefix.id}/provider-history/import`,
+      {
+        method: "POST",
+        headers: { ...headers, "idempotency-key": "prefix-1" },
+        body: JSON.stringify({ confirm: true }),
+      },
+    );
+    expect(initialImport.status).toBe(200);
+    prefixChanged = true;
+    await assertFailure(await app.request(
+      `/v1/sessions/${prefix.id}/provider-history/preview`,
+      { method: "POST", headers },
+    ), 409, "provider_history_prefix_changed");
+
+    const noRunnerCatalog = new SessionCatalogStore(":memory:");
+    const noRunnerWorkItems = new SqliteEventStore(":memory:");
+    const noRunnerApp = createSessionApp({
+      catalog: noRunnerCatalog,
+      agents,
+      workItems: noRunnerWorkItems,
+    }, TOKEN);
+    await assertFailure(await noRunnerApp.request(
+      "/v1/sessions/anything/provider-history/preview",
+      { method: "POST", headers },
+    ), 503, "runner_unavailable");
+
+    catalog.close();
+    workItems.close();
+    noRunnerCatalog.close();
+    noRunnerWorkItems.close();
   });
 
   it("creates a session fixed to an Agent and maps messages to a TaskRecord", async () => {
