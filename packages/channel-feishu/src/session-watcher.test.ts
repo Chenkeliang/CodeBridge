@@ -731,7 +731,7 @@ describe("FeishuSessionWatcher", () => {
 
     const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
     expect(final).toContain("✅ **已完成**");
-    expect(final.match(/已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。/g))
+    expect(final.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
       .toHaveLength(1);
     expect(vi.mocked(host.updateCard).mock.calls.every(([cardId]) =>
       cardId === "cardkit-old"
@@ -795,7 +795,7 @@ describe("FeishuSessionWatcher", () => {
     expect(vi.mocked(host.updateCard).mock.calls.length)
       .toBeGreaterThan(writesAfterForeign);
     expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1)))
-      .toContain("已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。");
+      .toContain("已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。");
     expect(host.sendMarkdown).not.toHaveBeenCalled();
     w.abort();
   });
@@ -1015,13 +1015,21 @@ describe("FeishuRunCard", () => {
     };
     const card = new FeishuRunCard(host, "chat", "src", "run_1", false);
     await card.open();
+    const longResult = "完整正文".repeat(1_600);
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "final_answer",
+      messageId: "long-final",
+      text: longResult,
+    });
     await card.onFlowSaveRequested();
     await card.onFlowSaveRequested();
     await card.finalize("succeeded");
 
     expect(contents.at(-1)).toContain("✅ **已完成**");
+    expect(contents.at(-1)).toContain(longResult);
     expect(contents.at(-1)?.match(
-      /已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。/g,
+      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
     )).toHaveLength(1);
     expect(sendMarkdown).not.toHaveBeenCalled();
   });

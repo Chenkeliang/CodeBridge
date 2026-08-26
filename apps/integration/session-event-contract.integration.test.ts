@@ -251,9 +251,9 @@ describe("Session event wire contract integration", () => {
       expect(writes).toContain("真实持久化的最终答案");
       expect(writes).toContain("✅ **已完成**");
       expect(writes).toContain(
-        "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。",
+        "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
       );
-      expect(writes.match(/已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。/g))
+      expect(writes.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
         .toHaveLength(1);
       expect(writes).not.toContain("结果恢复中");
       expect(writes).not.toContain("本次无输出");
