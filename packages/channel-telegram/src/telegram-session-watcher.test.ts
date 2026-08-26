@@ -384,7 +384,7 @@ describe("TelegramSessionWatcher", () => {
     const finalText = String(api.editMessage.mock.calls.at(-1)?.[2]);
     expect(finalText).toContain("answer");
     expect(finalText.match(
-      /已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。/g,
+      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
     )).toHaveLength(1);
     expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
     expect(api.editMessage).toHaveBeenCalledTimes(editsAtTerminal);
@@ -420,7 +420,7 @@ describe("TelegramSessionWatcher", () => {
 
     const pendingText = String(api.editMessage.mock.calls.at(-1)?.[2]);
     expect(pendingText).toContain(
-      "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。",
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     expect(pendingText.length).toBeLessThanOrEqual(4_096);
     const overflowMessages = api.sendMessage.mock.calls.slice(1);
@@ -428,7 +428,7 @@ describe("TelegramSessionWatcher", () => {
     expect(overflowMessages[0]?.[1]).not.toContain("已记录“存为 Flow”请求");
     expect([
       pendingText.replace(
-        /\n\n---\n\n已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。$/,
+        /\n\n---\n\n已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。$/,
         "",
       ),
       ...overflowMessages.map((call) => String(call[1])),
@@ -479,13 +479,13 @@ describe("TelegramSessionWatcher", () => {
       .map((call) => String(call[1]));
     expect(fallbackMessages).toHaveLength(2);
     expect(fallbackMessages[0]).toContain(
-      "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。",
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     expect(fallbackMessages.join("").match(
-      /已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。/g,
+      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
     )).toHaveLength(1);
     expect(fallbackMessages).not.toContain(
-      "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。",
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     w.abort();
   });
@@ -539,7 +539,7 @@ describe("TelegramSessionWatcher", () => {
     await matchingProcessed;
 
     expect(String(api.editMessage.mock.calls.at(-1)?.[2])).toContain(
-      "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。",
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
     expect(api.sendMessage).not.toHaveBeenCalled();
