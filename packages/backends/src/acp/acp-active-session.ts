@@ -2,6 +2,7 @@ import {
   methods,
   type ActiveSession,
   type ClientConnection,
+  type McpServer,
 } from "@agentclientprotocol/sdk";
 import type { BackendProfile, RunContext } from "@codebridge/core";
 import { acpContinueMethod } from "./acp-spawn-profiles.js";
@@ -13,6 +14,7 @@ export interface OpenActiveSessionOptions {
   isAborted?: () => boolean;
   loadTimeoutMs?: number;
   supportsAdditionalDirectories?: boolean;
+  mcpServers?: readonly McpServer[];
 }
 
 function attachActiveSession(
@@ -52,17 +54,18 @@ export async function openActiveSession(
   const additionalDirectories = ctx.additionalDirectories?.length
     ? ctx.additionalDirectories
     : undefined;
+  const mcpServers = [...(options.mcpServers ?? [])];
 
   if (additionalDirectories && !options.supportsAdditionalDirectories) {
     throw new Error("ACP agent 未声明 additionalDirectories 支持，无法扩展工作目录。");
   }
 
   const startNewSession = () => {
-    const builder = additionalDirectories
+    const builder = additionalDirectories || mcpServers.length
       ? agent.buildSession({
           cwd: ctx.cwd,
-          additionalDirectories,
-          mcpServers: [],
+          ...(additionalDirectories ? { additionalDirectories } : {}),
+          mcpServers,
         })
       : agent.buildSession(ctx.cwd);
     return raceWithAbort(
@@ -82,7 +85,7 @@ export async function openActiveSession(
     sessionId,
     cwd: ctx.cwd,
     ...(additionalDirectories ? { additionalDirectories } : {}),
-    mcpServers: [] as [],
+    mcpServers,
   };
 
   const loadMethod =

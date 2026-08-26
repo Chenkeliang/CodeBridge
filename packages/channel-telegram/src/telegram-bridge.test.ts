@@ -599,8 +599,34 @@ describe("TelegramBridge inbound commands", () => {
             payload: {},
           };
           yield {
-            type: "RUN_SUCCEEDED",
+            type: "FLOW_SAVE_REQUESTED",
             sequence: 4,
+            runId: "run_1",
+            occurredAt: null,
+            target: "fsr_restart",
+            resultRef: null,
+            payload: {
+              request_id: "fsr_restart",
+              request_run_id: "run_1",
+              source_run_id: "run_previous",
+            },
+          };
+          yield {
+            type: "FLOW_SAVE_REQUESTED",
+            sequence: 4,
+            runId: "run_1",
+            occurredAt: null,
+            target: "fsr_restart",
+            resultRef: null,
+            payload: {
+              request_id: "fsr_restart",
+              request_run_id: "run_1",
+              source_run_id: "run_previous",
+            },
+          };
+          yield {
+            type: "RUN_SUCCEEDED",
+            sequence: 5,
             runId: "run_1",
             occurredAt: null,
             target: null,
@@ -622,6 +648,13 @@ describe("TelegramBridge inbound commands", () => {
     const writes = JSON.stringify(editMessage.mock.calls);
     expect(writes).toContain("public result");
     expect(writes).not.toContain("private reasoning");
+    const terminalText = String(editMessage.mock.calls.at(-1)?.[2]);
+    expect(terminalText.match(
+      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
+    )).toHaveLength(1);
+    expect(editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(completeDelivery).toHaveBeenCalledTimes(1);
     await bridge.disconnect();
   });
 });

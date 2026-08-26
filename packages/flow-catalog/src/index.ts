@@ -50,6 +50,7 @@ export interface FlowProvenance {
   sourceSessionId: string;
   sourceFlowId: string;
   sourceDefinitionRevision: string;
+  sourceRequestId?: string;
 }
 
 export type FlowHistoryAction =

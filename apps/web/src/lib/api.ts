@@ -10,10 +10,12 @@ import type {
   FlowCapability,
   FlowBatchDraft,
   FlowBatchSnapshot,
-  FlowProposal,
   FlowRecommendation,
   FlowRecord,
   FlowReviewContext,
+  FlowSaveInboxPage,
+  FlowSaveConfirmResult,
+  FlowSaveRequestState,
   MessageAttachmentInput,
   PiProvider,
   PiProviderPreset,
@@ -340,10 +342,6 @@ export const api = {
     (await request<{ flows: FlowRecord[] }>(`/v1/flows?view=${view}`)).flows,
   flowCapabilities: async () =>
     (await request<{ capabilities: FlowCapability[] }>("/v1/capabilities")).capabilities,
-  flowProposals: async (sessionId: string) =>
-    (await request<{ proposals: FlowProposal[] }>(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-proposals`,
-    )).proposals,
   flowRecommendations: async (sessionId: string) =>
     (await request<{ recommendations: FlowRecommendation[] }>(
       `/v1/sessions/${encodeURIComponent(sessionId)}/flow-recommendations`,
@@ -356,11 +354,6 @@ export const api = {
         body: JSON.stringify({ session_id: sessionId, flow_id: flowId }),
       },
     ),
-  saveGuide: (sessionId: string, runId: string) =>
-    request<FlowRecord>("/v1/flows/guides", {
-      method: "POST",
-      body: JSON.stringify({ session_id: sessionId, run_id: runId }),
-    }),
   createGuide: (flow: Pick<FlowRecord, "name" | "description" | "steps">) =>
     request<FlowRecord>("/v1/flows/guides", {
       method: "POST",
@@ -375,6 +368,39 @@ export const api = {
     }),
   flowReviewContext: (flowId: string) =>
     request<FlowReviewContext>(`/v1/flows/${encodeURIComponent(flowId)}/review-context`),
+  pendingFlowSaveRequests: (input: {
+    limit?: number;
+    cursor?: string | null;
+    signal?: AbortSignal;
+  } = {}) => {
+    const params = new URLSearchParams({
+      state: "pending",
+      limit: String(input.limit ?? 50),
+    });
+    if (input.cursor) params.set("cursor", input.cursor);
+    return request<FlowSaveInboxPage>(`/v1/flow-save-requests?${params}`, {
+      signal: input.signal,
+    });
+  },
+  requestFlowSave: (sessionId: string, sourceRunId: string, key: string) =>
+    request<Extract<FlowSaveRequestState, { state: "requested" }>>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-save-requests`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": key },
+        body: JSON.stringify({ source_run_id: sourceRunId, source: "turn_action" }),
+      },
+    ),
+  confirmFlowSave: (requestId: string, key: string) =>
+    request<FlowSaveConfirmResult>(
+      `/v1/flow-save-requests/${encodeURIComponent(requestId)}/confirm`,
+      { method: "POST", headers: { "Idempotency-Key": key } },
+    ),
+  dismissFlowSave: (requestId: string, key: string) =>
+    request<Extract<FlowSaveRequestState, { state: "dismissed" }>>(
+      `/v1/flow-save-requests/${encodeURIComponent(requestId)}/dismiss`,
+      { method: "POST", headers: { "Idempotency-Key": key } },
+    ),
   createCandidate: (sessionId: string, runId: string) =>
     request<FlowRecord>("/v1/flows/candidates", {
       method: "POST",

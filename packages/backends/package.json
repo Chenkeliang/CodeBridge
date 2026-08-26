@@ -17,6 +17,7 @@
     "@agentclientprotocol/sdk": "1.3.0",
     "@codebridge/core": "workspace:*",
     "@codebridge/session-catalog": "workspace:*",
+    "@earendil-works/pi-ai": "0.84.1",
     "@earendil-works/pi-coding-agent": "0.84.1",
     "zod": "^3.25.76"
   },

@@ -61,7 +61,15 @@ function setup(overrides: {
   return { app, catalog, workItems, coordinator, session };
 }
 
-function setupRuntimeLoop(overrides: { flows?: FlowCatalogStore } = {}) {
+function setupRuntimeLoop(overrides: {
+  flows?: FlowCatalogStore;
+  exposeFlowSaveAvailability?: boolean;
+  flowSaveAvailability?: { available: true } | {
+    available: false;
+    code: "no_extractable_previous_run";
+    message: string;
+  };
+} = {}) {
   const catalog = new SessionCatalogStore(":memory:");
   const workItems = new SqliteEventStore(":memory:");
   const coordinator = new SessionCoordinator(workItems, {
@@ -75,17 +83,37 @@ function setupRuntimeLoop(overrides: { flows?: FlowCatalogStore } = {}) {
   const runtime = new CapabilityRuntime();
   registerDemoCapabilities(registry, runtime);
   const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
+  const previewPreviousSource = vi.fn().mockReturnValue(
+    overrides.flowSaveAvailability ?? {
+      available: false,
+      code: "no_extractable_previous_run",
+      message: "找不到可提取的上一次成功任务，请在目标回复的菜单中选择‘存为 Flow’。",
+    },
+  );
   const executor = new RunExecutor(workItems, runner, {
     policy: new PolicyEngine(registry),
     capabilities: runtime,
     sessionCoordinator: coordinator,
     sessionLeaseService: new SessionLeaseService(workItems),
     executorOwner: "test:bridge",
-    resolveRequest: (workItem, run) => ({
-      runId: run.id,
-      sessionKey: { chatId: workItem.conversationId, backendId: "pi", cwd: "/workspace" },
-      prompt: "unused",
-    }),
+    resolveRequest: (workItem, run) => {
+      const linkedSessionId = workItem.conversationId.startsWith("conv_")
+        ? `sess_${workItem.conversationId.slice("conv_".length)}`
+        : undefined;
+      return {
+        runId: run.id,
+        sessionKey: { chatId: workItem.conversationId, backendId: "pi", cwd: "/workspace" },
+        prompt: "unused",
+        ...(linkedSessionId && overrides.exposeFlowSaveAvailability !== false
+          ? {
+              flowSaveSourceAvailability: previewPreviousSource({
+                sessionId: linkedSessionId,
+                currentRunId: run.id,
+              }),
+            }
+          : {}),
+      };
+    },
   });
   const app = createSessionApp({
     catalog,
@@ -104,7 +132,16 @@ function setupRuntimeLoop(overrides: { flows?: FlowCatalogStore } = {}) {
       sessionFeatures: ["resume"],
     }],
   }, token);
-  return { app, catalog, workItems, coordinator, session, runner, registry };
+  return {
+    app,
+    catalog,
+    workItems,
+    coordinator,
+    session,
+    runner,
+    registry,
+    previewPreviousSource,
+  };
 }
 
 function request(message: string, key?: string) {
@@ -927,6 +964,58 @@ describe("Session runtime command API", () => {
     });
     const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
     expect(fixture.workItems.listRuns(workItemId).at(-1)?.executionKind).toBe("agent");
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("previews and dispatches Flow save source availability without a source Run id", async () => {
+    const fixture = setupRuntimeLoop({
+      flowSaveAvailability: { available: true },
+    });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      request("把刚才的流程存下来", "loop_flow_save_availability"),
+    );
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => {
+      expect(fixture.runner.requests).toHaveLength(1);
+    });
+
+    expect(fixture.previewPreviousSource).toHaveBeenCalledWith({
+      sessionId: fixture.session.id,
+      currentRunId: expect.stringMatching(/^run_/),
+    });
+    expect(fixture.runner.requests[0]?.flowSaveSourceAvailability).toEqual({
+      available: true,
+    });
+    expect(JSON.stringify(fixture.runner.requests[0]?.flowSaveSourceAvailability))
+      .not.toContain("run_");
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("dispatches no Flow save availability or request when the confirmation surface is unavailable", async () => {
+    const fixture = setupRuntimeLoop({
+      exposeFlowSaveAvailability: false,
+      flowSaveAvailability: { available: true },
+    });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      request("把刚才的流程存下来", "loop_flow_save_web_disabled"),
+    );
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => {
+      expect(fixture.runner.requests).toHaveLength(1);
+    });
+
+    expect(fixture.previewPreviousSource).not.toHaveBeenCalled();
+    expect(fixture.runner.requests[0]?.flowSaveSourceAvailability).toBeUndefined();
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    expect(fixture.workItems.listEvents(workItemId).some((event) =>
+      event.type === "FLOW_SAVE_REQUESTED"
+    )).toBe(false);
     fixture.registry.close();
     fixture.catalog.close();
     fixture.workItems.close();

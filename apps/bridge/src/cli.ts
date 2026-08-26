@@ -58,6 +58,12 @@ import { SessionRuntimeMigration } from "./session-runtime-migration.js";
 import { buildFlowRecommendationGuidance } from "./flow-recommendation-guidance.js";
 import { createFlowBatchApp } from "./flow-batch-api.js";
 import { FlowBatchService } from "./flow-batch-service.js";
+import { FlowSaveIntentService } from "./flow-save-intent.js";
+import { FlowSaveInboxService } from "./flow-save-inbox.js";
+import {
+  createFlowSaveToolEventHandler,
+  FlowSaveToolTranslator,
+} from "./flow-save-tool-translator.js";
 
 const program = new Command();
 
@@ -131,6 +137,34 @@ program
       throw error;
     }
     const flowCatalog = new FlowCatalogStore(path.join(dataDir, "flows.sqlite"));
+    const flowSaveIntents = new FlowSaveIntentService({
+      sessions: sessionCatalog,
+      events: workItemStore,
+      catalog: flowCatalog,
+    });
+    const flowSaveInbox = new FlowSaveInboxService({
+      sessions: sessionCatalog,
+      events: workItemStore,
+      warn: (warning) => console.warn(
+        "Flow save inbox warning:",
+        JSON.stringify({
+          code: warning.code,
+          request_id: warning.requestId,
+          session_id: warning.sessionId,
+          event_id: warning.eventId,
+        }),
+      ),
+    });
+    const flowSaveToolTranslator = new FlowSaveToolTranslator({
+      intents: flowSaveIntents,
+    });
+    const handleFlowSaveToolEvent = createFlowSaveToolEventHandler(
+      flowSaveToolTranslator,
+      (message) => console.warn(message),
+    );
+    await flowSaveIntents.reconcilePendingAtStartup().catch((error) => {
+      console.error("Flow save intent reconciliation failed:", error);
+    });
     const approvalService = new ApprovalService(
       workItemStore,
       path.join(dataDir, "approvals.sqlite"),
@@ -182,18 +216,21 @@ program
       sessionLeaseService,
       executorOwner,
       onEvent: (run, event) => {
-        if (event.type !== "session") return;
-        const workItem = workItemStore.getWorkItem(run.workItemId);
-        if (!workItem || !workItem.conversationId.startsWith("conv_")) return;
-        const session = sessionCatalog.getSession(
-          `sess_${workItem.conversationId.slice("conv_".length)}`,
-        );
-        if (session) {
-          sessionCatalog.updateSession(session.id, {
-            providerSessionId: event.sessionId,
-            status: "active",
-          });
+        if (event.type === "session") {
+          const workItem = workItemStore.getWorkItem(run.workItemId);
+          if (workItem?.conversationId.startsWith("conv_")) {
+            const session = sessionCatalog.getSession(
+              `sess_${workItem.conversationId.slice("conv_".length)}`,
+            );
+            if (session) {
+              sessionCatalog.updateSession(session.id, {
+                providerSessionId: event.sessionId,
+                status: "active",
+              });
+            }
+          }
         }
+        handleFlowSaveToolEvent(run, event);
       },
       resolveRequest: (workItem, run, step?: PersistedPlanStep) => {
         const linkedSession = workItem.conversationId.startsWith("conv_")
@@ -253,6 +290,12 @@ program
           mode: linkedSession?.permissionMode ?? undefined,
           resumeSessionId: run.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
+          flowSaveSourceAvailability: surfaces.web && linkedSession
+            ? flowSaveIntents.previewPreviousSource({
+                sessionId: linkedSession.id,
+                currentRunId: run.id,
+              })
+            : undefined,
         };
       },
     });
@@ -440,6 +483,8 @@ program
       events: workItemStore,
       capabilities: capabilityRegistry,
       runtime: capabilityRuntime,
+      flowSaveIntents,
+      flowSaveInbox,
     });
     const flowBatchApp = createFlowBatchApp(
       flowBatchService,

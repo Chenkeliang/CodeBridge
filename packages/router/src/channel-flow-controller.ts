@@ -31,7 +31,6 @@ export interface ChannelFlowCommandInput {
   listFlows(): Promise<ChannelConsumableFlow[]>;
   getSessionId(): Promise<string | null>;
   listManageableFlows?(): Promise<ChannelManageableFlow[]>;
-  saveLatestGuide?(sessionId: string): Promise<ChannelManageableFlow>;
   getFlowReviewSummary?(flowId: string): Promise<ChannelFlowReviewSummary>;
   updateCandidateSummary?(flowId: string, patch: { name?: string; description?: string }): Promise<ChannelManageableFlow>;
   rejectCandidate?(flowId: string): Promise<ChannelManageableFlow>;
@@ -88,11 +87,10 @@ export class ChannelFlowController {
       if (remainder.toLowerCase() !== "save") {
         return { type: "reply", text: "用法：/flow guide save" };
       }
-      if (!input.saveLatestGuide) return managementUnavailable();
-      const sessionId = await input.getSessionId();
-      if (!sessionId) return { type: "reply", text: "当前话题尚未关联 Session，不能保存 Guide。" };
-      const saved = await input.saveLatestGuide(sessionId);
-      return { type: "reply", text: `已保存 Guide 草稿：${saved.name} (${saved.flowId})\n版本：${saved.definitionRevision}` };
+      return {
+        type: "reply",
+        text: "该命令已停用。请在 Web 对目标回复使用“存为 Flow”，或在对话中明确请求保存，再前往 Web 确认。",
+      };
     }
 
     if (lowerAction === "diff" || lowerAction === "review") {
@@ -477,7 +475,7 @@ function flowHelp(): string {
     "/flow cancel — 取消选择",
     "/flow approve | reject — 处理当前 Runtime 步骤审批",
     "/flow manage — 列出管理态 Flow",
-    "/flow guide save — 保存最近一次成功 Run 为 Guide",
+    "/flow guide save — 已停用；请使用显式 Save Intent 并前往 Web 确认",
     "/flow diff | review | reject | open <Flow ID> — 管理 Candidate（批准发布仅限 Web）",
     "/flow edit <Flow ID> name=<名称> — 编辑 Candidate 摘要",
     "/flow batch show|confirm|cancel|retry-failed <ID> — 查看和控制批量调用",

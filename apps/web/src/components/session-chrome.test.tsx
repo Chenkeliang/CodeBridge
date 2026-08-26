@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { AgentRail, SessionHeader, SessionPanel } from "./session-chrome";
-import type { AgentProfile, AgentSession } from "@/lib/types";
+import type { AgentProfile, AgentSession, FlowSaveInboxRequest } from "@/lib/types";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -36,6 +36,31 @@ const session: AgentSession = {
   created_at: "2026-08-18T00:00:00.000Z",
   updated_at: "2026-08-18T00:00:00.000Z",
 };
+
+function pendingRequest(
+  requestId: string,
+  overrides: Partial<FlowSaveInboxRequest> = {},
+): FlowSaveInboxRequest {
+  return {
+    request_id: requestId,
+    session_id: "session-1",
+    agent_id: "pi",
+    session_title: "历史 Session",
+    request_turn_id: `turn_request_${requestId}`,
+    request_run_id: `run_request_${requestId}`,
+    source_turn_id: `turn_source_${requestId}`,
+    source_run_id: `run_source_${requestId}`,
+    source_title: `来源 ${requestId}`,
+    source: "agent_intent",
+    user_message: "保存刚才的流程",
+    intent_summary: null,
+    name_hint: null,
+    source_imported: false,
+    created_at: "2026-08-26T04:00:00.000Z",
+    event_sequence: 42,
+    ...overrides,
+  };
+}
 
 function panelProps(): ComponentProps<typeof SessionPanel> {
   return {
@@ -105,6 +130,88 @@ describe("SessionPanel menus", () => {
     expect(button).not.toBeNull();
     act(() => button!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(onArea).toHaveBeenCalledWith("skills");
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("renders the Flow pending badge for 1, 99, and 100 requests", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const render = (count: number) => act(() => root.render(<AgentRail
+      agents={[agent]}
+      area="agents"
+      onAgent={vi.fn()}
+      onArea={vi.fn()}
+      onTheme={vi.fn()}
+      pendingFlowSaveCount={count}
+      selectedAgentId="pi"
+      theme="paper"
+    />));
+
+    render(0);
+    expect(host.querySelector("[data-flow-save-badge]")).toBeNull();
+    render(1);
+    expect(host.querySelector("[data-flow-save-badge]")?.textContent).toBe("1");
+    expect(host.querySelector('button[aria-label="Flows，1 个待生成请求"]')).not.toBeNull();
+    render(99);
+    expect(host.querySelector("[data-flow-save-badge]")?.textContent).toBe("99");
+    render(100);
+    expect(host.querySelector("[data-flow-save-badge]")?.textContent).toBe("99+");
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("renders pending requests before Flow groups without selecting a Session", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    const onPending = vi.fn();
+    const onSession = vi.fn();
+    const requests = [
+      pendingRequest("known", { name_hint: "仓配复盘" }),
+      pendingRequest("unknown", { agent_id: "unknown-agent", source_title: "未知 Agent 来源" }),
+    ];
+    act(() => root.render(<SessionPanel
+      {...panelProps()}
+      agents={[agent]}
+      area="flows"
+      flows={[{
+        flow_id: "flow_1",
+        name: "已发布流程",
+        description: null,
+        kind: "runbook",
+        status: "published",
+        source: "user_defined",
+        definition_revision: "rev_1",
+        plan_ir_hash: null,
+        inputs: [],
+        steps: [],
+        review_status: null,
+        git_revision: null,
+        validation_issues: [],
+        lineage_root_flow_id: "flow_1",
+        parent_flow_id: null,
+        provenance: null,
+        publication_sequence: 1,
+        created_at: "2026-08-26T00:00:00.000Z",
+        updated_at: "2026-08-26T00:00:00.000Z",
+      }]}
+      onPendingFlowSaveRequest={onPending}
+      onSession={onSession}
+      pendingFlowSaveRequests={requests}
+      selectedPendingFlowSaveRequestId={null}
+    />));
+
+    expect(host.textContent?.indexOf("待生成 · 2")).toBeLessThan(host.textContent?.indexOf("已发布") ?? -1);
+    expect(host.textContent).toContain("仓配复盘");
+    expect(host.textContent).toContain("Pi");
+    expect(host.textContent).toContain("unknown-agent");
+    const pending = host.querySelector('[data-flow-save-inbox-request="known"]');
+    expect(pending).not.toBeNull();
+    act(() => pending!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(onPending).toHaveBeenCalledWith(requests[0]);
+    expect(onSession).not.toHaveBeenCalled();
 
     act(() => root.unmount());
     host.remove();

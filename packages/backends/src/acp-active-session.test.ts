@@ -18,6 +18,19 @@ describe("raceWithAbort", () => {
 });
 
 describe("openActiveSession", () => {
+  const externalMcp = {
+    name: "caller-owned",
+    command: "/usr/bin/true",
+    args: [],
+    env: [],
+  };
+  const internalMcp = {
+    name: "codebridge-internal",
+    command: process.execPath,
+    args: ["/absolute/flow-save-mcp-server.js"],
+    env: [{ name: "CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY", value: "true" }],
+  };
+
   it("starts a new ActiveSession when no resume id", async () => {
     const active = { sessionId: "sess-new", dispose: () => {} };
     const agent = {
@@ -67,6 +80,35 @@ describe("openActiveSession", () => {
       cwd: "/tmp/project",
       additionalDirectories: ["/tmp/shared"],
       mcpServers: [],
+    });
+  });
+
+  it("passes caller-owned and internal MCP servers when creating a new session", async () => {
+    const active = { sessionId: "sess-new", dispose: () => {} };
+    let request: unknown;
+    const agent = {
+      buildSession: (value: unknown) => {
+        request = value;
+        return { start: async () => active };
+      },
+    };
+    const profile = defaultConfig().backends.cursor!;
+
+    await openActiveSession(
+      { agent } as unknown as ClientConnection,
+      {
+        runId: "r1",
+        cwd: "/tmp/project",
+        prompt: "hi",
+        backendConfig: profile,
+      },
+      profile,
+      { mcpServers: [externalMcp, internalMcp] },
+    );
+
+    expect(request).toEqual({
+      cwd: "/tmp/project",
+      mcpServers: [externalMcp, internalMcp],
     });
   });
 
@@ -132,6 +174,44 @@ describe("openActiveSession", () => {
       { method: "attachSession" },
     ]);
     expect(result).toBe(active);
+  });
+
+  it.each([
+    ["cursor", "session/load"],
+    ["claude", "session/resume"],
+  ] as const)("passes the same MCP list through %s continuation", async (backendId, expectedMethod) => {
+    const calls: Array<{ method: string; params?: unknown }> = [];
+    const active = { sessionId: "sess-loaded", dispose: () => {} };
+    const agent = {
+      request: async (method: string, params: unknown) => {
+        calls.push({ method, params });
+      },
+      attachSession: () => active,
+      buildSession: () => ({ start: async () => active }),
+    };
+    const profile = defaultConfig().backends[backendId]!;
+
+    await openActiveSession(
+      { agent } as unknown as ClientConnection,
+      {
+        runId: "r1",
+        cwd: "/tmp/project",
+        prompt: "hi",
+        resumeSessionId: "sess-loaded",
+        backendConfig: profile,
+      },
+      profile,
+      { mcpServers: [externalMcp, internalMcp] },
+    );
+
+    expect(calls[0]).toEqual({
+      method: expectedMethod,
+      params: {
+        sessionId: "sess-loaded",
+        cwd: "/tmp/project",
+        mcpServers: [externalMcp, internalMcp],
+      },
+    });
   });
 
   it("fails without creating a replacement session when session/load times out", async () => {

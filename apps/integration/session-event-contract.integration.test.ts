@@ -198,6 +198,19 @@ describe("Session event wire contract integration", () => {
         event: { type: "text_delta", text: "真实持久化的最终答案" },
       },
     });
+    workItems.appendEvent({
+      workItemId: submitted.workItemId,
+      runId: run.id,
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "agent",
+      target: "fsr_contract",
+      resultRef: null,
+      payload: {
+        request_id: "fsr_contract",
+        request_run_id: run.id,
+        source_run_id: "run_previous",
+      },
+    });
     coordinator.finishRun({
       sessionId: session.id,
       runId: run.id,
@@ -228,10 +241,20 @@ describe("Session event wire contract integration", () => {
           resultRef: "result://final",
         }),
         expect.objectContaining({ type: "RUN_SUCCEEDED", runId: run.id }),
+        expect.objectContaining({
+          type: "FLOW_SAVE_REQUESTED",
+          runId: run.id,
+          target: "fsr_contract",
+        }),
       ]));
       const writes = JSON.stringify(feishu.rawClient.cardkit.v1.card.update.mock.calls);
       expect(writes).toContain("真实持久化的最终答案");
       expect(writes).toContain("✅ **已完成**");
+      expect(writes).toContain(
+        "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
+      );
+      expect(writes.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
+        .toHaveLength(1);
       expect(writes).not.toContain("结果恢复中");
       expect(writes).not.toContain("本次无输出");
     } finally {

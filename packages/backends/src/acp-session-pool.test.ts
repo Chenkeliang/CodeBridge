@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
+import { defaultConfig, type RunContext } from "@codebridge/core";
 import {
   AcpSessionPool,
   resourcesAlive,
   type AcpSessionResources,
 } from "./acp/acp-session-pool.js";
+import { buildSessionMatchKeys } from "./acp/acp-session-runner.js";
 
 interface FakeHandles {
   resources: AcpSessionResources;
@@ -12,6 +14,9 @@ interface FakeHandles {
   closed: () => boolean;
   markDead: () => void;
 }
+
+const MCP_KEY_UNAVAILABLE = `sha256:${"0".repeat(64)}`;
+const MCP_KEY_AVAILABLE = `sha256:${"1".repeat(64)}`;
 
 function fakeResources(sessionId: string, over?: Partial<AcpSessionResources>): FakeHandles {
   let disposed = false;
@@ -45,6 +50,7 @@ function fakeResources(sessionId: string, over?: Partial<AcpSessionResources>): 
     spawnKey: "npx adapter",
     envKey: "chat|topic",
     additionalDirectoriesKey: "",
+    mcpServersKey: MCP_KEY_UNAVAILABLE,
     supportsSteering: false,
     supportsClose: false,
     configOptions: [],
@@ -68,9 +74,75 @@ const MATCH = {
   spawnKey: "npx adapter",
   envKey: "chat|topic",
   additionalDirectoriesKey: "",
+  mcpServersKey: MCP_KEY_UNAVAILABLE,
 };
 
 describe("AcpSessionPool", () => {
+  it("derives a stable MCP reuse key that changes with the availability snapshot", () => {
+    const base: RunContext = {
+      runId: "run-1",
+      cwd: "/w",
+      prompt: "hi",
+      backendConfig: defaultConfig().backends.cursor!,
+    };
+    const server = {
+      name: "codebridge-internal",
+      command: "/usr/bin/node",
+      args: ["/opt/codebridge/flow-save-mcp-server.js"],
+    };
+    const unavailable = buildSessionMatchKeys({
+      ...base,
+      mcpServers: [{
+        ...server,
+        env: { SECOND: "stable", CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY: "false" },
+      }],
+    }).mcpServersKey;
+    const sameUnavailable = buildSessionMatchKeys({
+      ...base,
+      mcpServers: [{
+        ...server,
+        env: { CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY: "false", SECOND: "stable" },
+      }],
+    }).mcpServersKey;
+    const available = buildSessionMatchKeys({
+      ...base,
+      mcpServers: [{
+        ...server,
+        env: { SECOND: "stable", CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY: "true" },
+      }],
+    }).mcpServersKey;
+
+    expect(sameUnavailable).toBe(unavailable);
+    expect(available).not.toBe(unavailable);
+    expect(unavailable).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(unavailable).not.toContain("flow-save-mcp-server.js");
+    expect(unavailable).not.toContain("stable");
+    expect(unavailable).not.toContain("false");
+  });
+
+  it("treats equivalent MCP server sets as the same configuration regardless of list order", () => {
+    const base: RunContext = {
+      runId: "run-1",
+      cwd: "/w",
+      prompt: "hi",
+      backendConfig: defaultConfig().backends.cursor!,
+    };
+    const servers = [
+      { name: "alpha", command: "/a", args: ["one"], env: { TOKEN: "secret-a" } },
+      { name: "beta", command: "/b", args: ["two"], env: { TOKEN: "secret-b" } },
+    ];
+
+    const forward = buildSessionMatchKeys({ ...base, mcpServers: servers }).mcpServersKey;
+    const reversed = buildSessionMatchKeys({
+      ...base,
+      mcpServers: [...servers].reverse(),
+    }).mcpServersKey;
+
+    expect(reversed).toBe(forward);
+    expect(forward).not.toContain("secret-a");
+    expect(forward).not.toContain("secret-b");
+  });
+
   it("release 后 acquire 命中同一对象；检出期间再 acquire 落空（并发认领走旁路）", () => {
     const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
     const a = fakeResources("s1");
@@ -100,6 +172,26 @@ describe("AcpSessionPool", () => {
     pool.release(a.resources);
     expect(pool.acquire("s1", MATCH)).toBeNull();
     expect(a.disposed()).toBe(true);
+  });
+
+  it("Flow save availability false→true 时不复用旧 MCP 进程", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const unavailable = fakeResources("s1", { mcpServersKey: MCP_KEY_UNAVAILABLE });
+    pool.release(unavailable.resources);
+
+    expect(pool.acquire("s1", { ...MATCH, mcpServersKey: MCP_KEY_AVAILABLE })).toBeNull();
+    expect(unavailable.disposed()).toBe(true);
+    expect(unavailable.closed()).toBe(true);
+  });
+
+  it("相同 MCP 配置与 availability snapshot 仍复用旧进程", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const current = fakeResources("s1", { mcpServersKey: MCP_KEY_AVAILABLE });
+    pool.release(current.resources);
+
+    expect(pool.acquire("s1", { ...MATCH, mcpServersKey: MCP_KEY_AVAILABLE }))
+      .toBe(current.resources);
+    expect(current.disposed()).toBe(false);
   });
 
   it("死进程条目 acquire 时被剔除", () => {

@@ -111,6 +111,20 @@ function wireEvent(
   };
 }
 
+function flowSaveEvent(
+  sessionId: string,
+  sequence: number,
+  type: "FLOW_SAVE_REQUESTED" | "FLOW_SAVE_DISMISSED" | "FLOW_CANDIDATE_CREATED" | "FLOW_SAVE_FAILED",
+  payload: Record<string, unknown>,
+): SessionEvent {
+  return {
+    ...wireEvent(sessionId, sequence, `${sessionId}-run`),
+    type,
+    target: "fsr_one",
+    payload,
+  };
+}
+
 function activeTail(view: SessionView): string {
   const lastTurn = view.snapshot.timeline.turns.at(-1);
   const lastBlock = lastTurn?.blocks.at(-1);
@@ -118,6 +132,57 @@ function activeTail(view: SessionView): string {
 }
 
 describe("SessionViewStore", () => {
+  it("applies Flow save intent before the Flow execution gate and keeps terminal state", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+
+    expect(store.receive("sess_1", flowSaveEvent("sess_1", 11, "FLOW_SAVE_REQUESTED", {
+      request_id: "fsr_one",
+      source_run_id: "run_source",
+      source_imported: false,
+    }))).toBe("applied");
+    expect(store.get("sess_1")?.snapshot.timeline.turns[0]?.blocks.at(-1)).toMatchObject({
+      block_id: "flow_save:fsr_one",
+      block_index: 1,
+      kind: "flow_save_request",
+      status: "pending",
+    });
+
+    expect(store.receive("sess_1", flowSaveEvent("sess_1", 12, "FLOW_CANDIDATE_CREATED", {
+      request_id: "fsr_one",
+      source_run_id: "run_source",
+      flow_id: "flow_candidate",
+      definition_revision: "sha256:definition",
+    }))).toBe("applied");
+    expect(store.get("sess_1")?.snapshot.timeline.turns[0]?.blocks.at(-1)).toMatchObject({
+      block_id: "flow_save:fsr_one",
+      status: "completed",
+      metadata: expect.objectContaining({ flow_id: "flow_candidate" }),
+    });
+
+    expect(store.receive("sess_1", flowSaveEvent("sess_1", 11, "FLOW_SAVE_DISMISSED", {
+      request_id: "fsr_one",
+    }))).toBe("duplicate");
+    expect(store.get("sess_1")?.snapshot.timeline.turns[0]?.blocks.at(-1)?.status).toBe("completed");
+  });
+
+  it("requests a refresh instead of projecting a Save Intent onto the wrong Turn", () => {
+    const store = new SessionViewStore({ schedule: (flush) => flush() });
+    store.hydrate(snapshot("sess_1", 10));
+
+    expect(store.receive("sess_1", {
+      ...flowSaveEvent("sess_1", 11, "FLOW_SAVE_REQUESTED", {
+        request_id: "fsr_old",
+        request_turn_id: "turn_old",
+        source_run_id: "run_source",
+      }),
+      run_id: "run_old",
+    })).toBe("refresh_required");
+    expect(store.get("sess_1")?.snapshot.timeline.turns[0]?.blocks).toHaveLength(1);
+    expect(store.get("sess_1")?.snapshot.timeline.turns[0]?.blocks[0]?.kind).toBe("assistant");
+    expect(store.get("sess_1")?.snapshot.runtime.last_event_sequence).toBe(11);
+  });
+
   it("keeps cached Session windows isolated", () => {
     const store = new SessionViewStore({ schedule: (flush) => flush() });
     store.hydrate(snapshot("sess_1", 10));

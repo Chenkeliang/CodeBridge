@@ -139,6 +139,7 @@ function hostileSnapshot(value: MockSession) {
 }
 
 async function installWorkbenchRoutes(page: Page, sessions: MockSession[], isImported: (id: string) => boolean) {
+  let deprecatedFlowProposalRequests = 0;
   await page.addInitScript((sessionId) => {
     (globalThis as typeof globalThis & { process?: { env: Record<string, string> } }).process = { env: {} };
     localStorage.setItem("codebridge:last-session:codex", sessionId);
@@ -210,11 +211,14 @@ async function installWorkbenchRoutes(page: Page, sessions: MockSession[], isImp
       contentType: "application/json",
       body: JSON.stringify({ commands: [] }),
     }));
-    await page.route(`**/v1/sessions/${value.session_id}/flow-proposals`, (route) => route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ proposals: [] }),
-    }));
+    await page.route(`**/v1/sessions/${value.session_id}/flow-proposals`, async (route) => {
+      deprecatedFlowProposalRequests += 1;
+      await route.fulfill({
+        status: 410,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "flow_proposals_deprecated" }),
+      });
+    });
     await page.route(`**/v1/sessions/${value.session_id}/flow-recommendations`, (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -226,7 +230,28 @@ async function installWorkbenchRoutes(page: Page, sessions: MockSession[], isImp
       body: ": keep-alive\n\n",
     }));
   }
+  return { deprecatedFlowProposalRequests: () => deprecatedFlowProposalRequests };
 }
+
+test("workbench never requests the deprecated Flow proposals endpoint", async ({ page }) => {
+  const value = session("sess_a", "Session A");
+  const probe = await installWorkbenchRoutes(page, [value], () => false);
+  await page.route("**/v1/sessions/sess_a/provider-history/preview", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      providerSessionId: value.provider_session_id,
+      importedPosition: 0,
+      providerPosition: 0,
+      importableEvents: 0,
+      nextDigest: "sha256:empty",
+    }),
+  }));
+
+  await page.goto("/workbench/");
+  await expect(page.getByText("Provider 历史已同步")).toBeVisible();
+  expect(probe.deprecatedFlowProposalRequests()).toBe(0);
+});
 
 test("history Preview ignores a late response from the previous Session", async ({ page }) => {
   const sessionA = session("sess_a", "Session A");
