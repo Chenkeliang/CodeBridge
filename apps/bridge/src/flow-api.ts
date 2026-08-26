@@ -18,6 +18,10 @@ import {
   type FlowSaveRequest,
   type FlowSaveRequestState,
 } from "./flow-save-intent.js";
+import type {
+  FlowSaveInboxRequest,
+  FlowSaveInboxService,
+} from "./flow-save-inbox.js";
 
 export interface FlowApiOptions {
   sessions?: SessionCatalogStore;
@@ -25,6 +29,7 @@ export interface FlowApiOptions {
   capabilities?: CapabilityRegistry;
   runtime?: CapabilityRuntime;
   flowSaveIntents?: FlowSaveIntentService;
+  flowSaveInbox?: FlowSaveInboxService;
 }
 
 export function createFlowApp(catalog: FlowCatalogStore, token: string, options: FlowApiOptions = {}) {
@@ -40,6 +45,27 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     }
     const predicate = view === "manage" ? isManageable : isConsumable;
     return c.json({ flows: catalog.list().filter(predicate).map(toApiFlow) });
+  });
+  app.get("/v1/flow-save-requests", (c) => {
+    if (c.req.query("state") !== "pending") {
+      return c.json({ error: "flow_save_request_state_invalid" }, 400);
+    }
+    const limit = parseFlowSaveInboxLimit(c.req.query("limit"));
+    if (limit === null) {
+      return c.json({ error: "flow_save_request_limit_invalid" }, 400);
+    }
+    const cursor = parseFlowSaveInboxCursor(c.req.query("cursor"));
+    if (cursor === undefined) {
+      return c.json({ error: "flow_save_request_cursor_invalid" }, 400);
+    }
+    if (!options.flowSaveInbox) {
+      return c.json({ error: "flow_save_inbox_unavailable" }, 503);
+    }
+    const page = options.flowSaveInbox.listPending({ limit, cursor });
+    return c.json({
+      requests: page.requests.map(toApiFlowSaveInboxRequest),
+      next_cursor: page.nextCursor ? encodeFlowSaveInboxCursor(page.nextCursor) : null,
+    });
   });
   app.get("/v1/capabilities", (c) => {
     const capabilities = options.capabilities?.list() ?? [];
@@ -732,6 +758,64 @@ function toApiFlowSaveRequest(request: FlowSaveRequest): Record<string, unknown>
     source_imported: request.sourceImported,
     created_at: request.createdAt,
   };
+}
+
+function toApiFlowSaveInboxRequest(
+  request: FlowSaveInboxRequest,
+): Record<string, unknown> {
+  return {
+    ...toApiFlowSaveRequest(request),
+    agent_id: request.agentId,
+    session_title: request.sessionTitle,
+    event_sequence: request.eventSequence,
+  };
+}
+
+function parseFlowSaveInboxLimit(value: string | undefined): number | null {
+  if (value === undefined) return 50;
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed <= 100 ? parsed : null;
+}
+
+function parseFlowSaveInboxCursor(
+  value: string | undefined,
+): { occurredAt: string; eventId: string } | null | undefined {
+  if (value === undefined) return null;
+  if (!value || !/^[A-Za-z0-9_-]+$/.test(value)) return undefined;
+  try {
+    const buffer = Buffer.from(value, "base64url");
+    if (buffer.toString("base64url") !== value) return undefined;
+    const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      Object.keys(record).sort().join(",") !== "event_id,occurred_at"
+      || typeof record.occurred_at !== "string"
+      || typeof record.event_id !== "string"
+      || !record.event_id
+    ) return undefined;
+    const occurredAt = record.occurred_at;
+    const timestamp = new Date(occurredAt);
+    if (!Number.isFinite(timestamp.getTime()) || timestamp.toISOString() !== occurredAt) {
+      return undefined;
+    }
+    return { occurredAt, eventId: record.event_id };
+  } catch {
+    return undefined;
+  }
+}
+
+function encodeFlowSaveInboxCursor(cursor: {
+  occurredAt: string;
+  eventId: string;
+}): string {
+  return Buffer.from(JSON.stringify({
+    occurred_at: cursor.occurredAt,
+    event_id: cursor.eventId,
+  })).toString("base64url");
 }
 
 function flowSaveStateResponse(state: FlowSaveRequestState): Record<string, unknown> {

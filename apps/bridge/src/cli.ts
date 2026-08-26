@@ -59,6 +59,7 @@ import { buildFlowRecommendationGuidance } from "./flow-recommendation-guidance.
 import { createFlowBatchApp } from "./flow-batch-api.js";
 import { FlowBatchService } from "./flow-batch-service.js";
 import { FlowSaveIntentService } from "./flow-save-intent.js";
+import { FlowSaveInboxService } from "./flow-save-inbox.js";
 import {
   createFlowSaveToolEventHandler,
   FlowSaveToolTranslator,
@@ -140,6 +141,19 @@ program
       sessions: sessionCatalog,
       events: workItemStore,
       catalog: flowCatalog,
+    });
+    const flowSaveInbox = new FlowSaveInboxService({
+      sessions: sessionCatalog,
+      events: workItemStore,
+      warn: (warning) => console.warn(
+        "Flow save inbox warning:",
+        JSON.stringify({
+          code: warning.code,
+          request_id: warning.requestId,
+          session_id: warning.sessionId,
+          event_id: warning.eventId,
+        }),
+      ),
     });
     const flowSaveToolTranslator = new FlowSaveToolTranslator({
       intents: flowSaveIntents,
@@ -470,6 +484,7 @@ program
       capabilities: capabilityRegistry,
       runtime: capabilityRuntime,
       flowSaveIntents,
+      flowSaveInbox,
     });
     const flowBatchApp = createFlowBatchApp(
       flowBatchService,
