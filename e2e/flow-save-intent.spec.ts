@@ -132,6 +132,7 @@ function requestBlock(input: {
       request_run_id: sourceRunId,
       source_turn_id: sourceTurnId,
       source_run_id: sourceRunId,
+      source_title: input.summary ?? "查询公司权益并核对交付",
       source: "turn_action",
       user_message: input.summary ?? "查询公司权益并核对交付",
       source_imported: input.imported ?? false,

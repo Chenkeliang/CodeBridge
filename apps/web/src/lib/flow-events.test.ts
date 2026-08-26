@@ -115,6 +115,7 @@ describe("applyFlowSaveIntentEvent", () => {
       payload: {
         request_id: "fsr_one",
         source_run_id: "run_source",
+        source_title: "查询公司权益并核对交付",
         source_imported: false,
       },
     }));
@@ -126,6 +127,7 @@ describe("applyFlowSaveIntentEvent", () => {
       metadata: {
         request_id: "fsr_one",
         source_run_id: "run_source",
+        source_title: "查询公司权益并核对交付",
         source_imported: false,
       },
     });

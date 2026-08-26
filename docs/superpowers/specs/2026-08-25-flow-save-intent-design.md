@@ -188,6 +188,7 @@ interface FlowSaveRequestedPayload {
   request_run_id: string;
   source_turn_id: string;
   source_run_id: string;
+  source_title: string;
   source: "agent_intent" | "turn_action";
   user_message: string;
   intent_summary: string | null;
@@ -197,6 +198,8 @@ interface FlowSaveRequestedPayload {
 ```
 
 后续事件必须带相同 `request_id` 和 `source_run_id`。
+
+`source_title` 是被选择的业务 source Run 对应 Turn 标题；`user_message` 是触发保存意图的用户原话。确认卡不得把保存指令冒充为来源。
 
 ### 5.2 状态机
 
@@ -440,6 +443,7 @@ V1 支持自然语言触发工具，但不在通道内创建 Candidate：
 ```
 
 该提示只能与 Web Timeline 确认卡在同一阶段交付；目的地不可达时不得上线提示。
+因此 Web Surface 未启用时，Bridge 不向 Agent Run 注入 Flow Save 工具，也不产生自然语言入口的 `FLOW_SAVE_REQUESTED`。
 
 通道不实现独立提取、状态机或 Catalog 写入。通道内确认留到后续管理能力阶段。
 

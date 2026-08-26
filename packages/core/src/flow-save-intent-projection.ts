@@ -17,7 +17,12 @@ const IDENTITY_FIELDS = [
   "flow_id",
   "definition_revision",
 ] as const;
-const DISPLAY_FIELDS = ["user_message", "intent_summary", "name_hint"] as const;
+const DISPLAY_FIELDS = [
+  "source_title",
+  "user_message",
+  "intent_summary",
+  "name_hint",
+] as const;
 
 export interface FlowSaveIntentProjectionInput {
   type: string;

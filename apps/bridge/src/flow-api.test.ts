@@ -245,13 +245,19 @@ describe("flow API", () => {
       expect(created.status).toBe(201);
       const createdBody = await created.json() as {
         state: string;
-        request: { request_id: string; session_id: string; source_run_id: string };
+        request: {
+          request_id: string;
+          session_id: string;
+          source_run_id: string;
+          source_title: string;
+        };
       };
       expect(createdBody).toMatchObject({
         state: "requested",
         request: {
           session_id: source.session.id,
           source_run_id: source.run.id,
+          source_title: "核对订单并生成结论",
           source: "turn_action",
           source_imported: false,
         },

@@ -724,6 +724,7 @@ function toApiFlowSaveRequest(request: FlowSaveRequest): Record<string, unknown>
     request_run_id: request.requestRunId,
     source_turn_id: request.sourceTurnId,
     source_run_id: request.sourceRunId,
+    source_title: request.sourceTitle,
     source: request.source,
     user_message: request.userMessage,
     intent_summary: request.intentSummary,

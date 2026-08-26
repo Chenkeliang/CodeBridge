@@ -19,7 +19,8 @@ function block(
     metadata: {
       request_id: "fsr_one",
       source_run_id: "run_source",
-      user_message: "查询公司权益并核对交付",
+      source_title: "查询公司权益并核对交付",
+      user_message: "把刚才存为 Flow",
       intent_summary: "保留这套查询流程",
       source_imported: false,
       ...metadata,
@@ -60,6 +61,7 @@ describe("FlowSaveRequestCard", () => {
     const view = renderCard();
     expect(view.host.textContent).toContain("存为 Flow？");
     expect(view.host.textContent).toContain("查询公司权益并核对交付");
+    expect(view.host.textContent).toContain("你的请求：把刚才存为 Flow");
     expect(view.host.textContent).toContain("生成 Candidate");
     expect(view.host.textContent).toContain("预演和审查");
 

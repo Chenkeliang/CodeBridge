@@ -433,6 +433,7 @@ describe("Session projector", () => {
         request_turn_id: "turn_request",
         source_run_id: "run_source",
         source_turn_id: "turn_source",
+        source_title: "查询公司权益并核对交付",
         source_imported: false,
       },
     });
@@ -446,6 +447,7 @@ describe("Session projector", () => {
       metadata: expect.objectContaining({
         request_id: "fsr_one",
         source_run_id: "run_source",
+        source_title: "查询公司权益并核对交付",
         source_imported: false,
       }),
     });
