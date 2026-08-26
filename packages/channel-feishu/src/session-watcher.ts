@@ -34,7 +34,7 @@ export const FEISHU_LIVE_STATUS_TICK_MS = 15_000;
 export { FEISHU_LIVE_STATUS_QUIET_MS } from "./run-status.js";
 const FEISHU_LIVE_PROGRESS_CHARS = 1200;
 const FEISHU_FLOW_SAVE_REQUEST_NOTICE =
-  "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。";
+  "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。";
 
 export function classifyFeishuCardWriteError(
   error: unknown,

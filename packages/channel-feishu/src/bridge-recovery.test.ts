@@ -188,12 +188,12 @@ describe("FeishuBridge interrupted stream recovery", () => {
     );
     expect(writes).toContain("public result");
     expect(writes).toContain(
-      "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。",
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     const finalWrite = JSON.stringify(
       channel.rawClient.cardkit.v1.card.update.mock.calls.at(-1),
     );
-    expect(finalWrite.match(/已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。/g))
+    expect(finalWrite.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
       .toHaveLength(1);
     expect(writes).not.toContain("private reasoning");
     expect(writes).not.toContain("SecretTool");
