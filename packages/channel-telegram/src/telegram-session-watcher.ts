@@ -15,7 +15,7 @@ import { CoalescingMessageWriter } from "./coalescing-message-writer.js";
 import { chunkTelegramText } from "./telegram-api.js";
 
 const TELEGRAM_FLOW_SAVE_REQUEST_NOTICE =
-  "已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。";
+  "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。";
 const TELEGRAM_MESSAGE_LIMIT = 4_096;
 const TELEGRAM_RUN_SECTION_SEPARATOR = "\n\n---\n\n";
 

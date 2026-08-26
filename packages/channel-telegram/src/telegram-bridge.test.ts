@@ -650,7 +650,7 @@ describe("TelegramBridge inbound commands", () => {
     expect(writes).not.toContain("private reasoning");
     const terminalText = String(editMessage.mock.calls.at(-1)?.[2]);
     expect(terminalText.match(
-      /已记录“存为 Flow”请求。请前往 Web 确认；尚未创建 Candidate。/g,
+      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
     )).toHaveLength(1);
     expect(editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
     expect(sendMessage).not.toHaveBeenCalled();
