@@ -10,7 +10,7 @@
 
 | 权限 | 用途 |
 |------|------|
-| `im:message` | 接收与发送消息（**下载用户发的图片**也依赖此项或 `im:message:readonly`） |
+| `im:message` | 接收与发送消息（**下载用户发的图片和文件**也依赖此项或 `im:message:readonly`） |
 | `im:message:send_as_bot` | 以机器人身份发送 |
 | `im:message.group_at_msg` | 群聊 @ 消息 |
 | `im:resource` | 机器人上传图片/文件 |

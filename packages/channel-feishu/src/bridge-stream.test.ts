@@ -981,6 +981,69 @@ describe("FeishuBridge mentions", () => {
     });
   });
 
+  it("downloads inbound file resources as run attachments", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as MentionTestableBridge & {
+      channel: {
+        rawClient: {
+          im: {
+            v1: {
+              messageResource: {
+                get(args: unknown): Promise<Buffer>;
+              };
+            };
+          };
+        };
+        send(
+          chatId: string,
+          input: { markdown: string },
+          options: unknown,
+        ): Promise<void>;
+      };
+    };
+    let received: FeishuMessage | undefined;
+    const types: string[] = [];
+    bridge.handleMessage = async (message) => {
+      received = message;
+    };
+    bridge.channel = {
+      rawClient: {
+        im: {
+          v1: {
+            messageResource: {
+              async get(args) {
+                const typed = args as { params: { type: string } };
+                types.push(typed.params.type);
+                return Buffer.from("sku,qty\n1,2\n");
+              },
+            },
+          },
+        },
+      },
+      send: async () => {},
+    };
+
+    await bridge.dispatchInboundMessage({
+      messageId: "message-file-1",
+      chatId: "chat-1",
+      chatType: "p2p",
+      senderId: "ou_requester",
+      content: '<file key="file_v1" name="订单.csv"/>',
+      resources: [{ type: "file", fileKey: "file_v1", fileName: "订单.csv" }],
+    });
+
+    expect(types).toEqual(["file"]);
+    expect(received?.attachments).toEqual([
+      {
+        name: "订单.csv",
+        mimeType: "text/csv",
+        dataBase64: Buffer.from("sku,qty\n1,2\n").toString("base64"),
+      },
+    ]);
+  });
+
   it("guides the Agent and sends a real scoped Feishu mention", async () => {
     const bridge = new FeishuBridge({
       config: defaultConfig(),

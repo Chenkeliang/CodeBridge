@@ -402,6 +402,33 @@ describe("Pi session runner", () => {
     expect(withMetadata).not.toContain("LEAK-PI-SETUP");
   });
 
+  it("puts non-image attachments into prompt text instead of the images option", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-att-"));
+    tempDirs.push(dir);
+    const filePath = path.join(dir, "data.xlsx");
+    const imgPath = path.join(dir, "pic.png");
+    await fs.writeFile(filePath, "fake-xlsx");
+    await fs.writeFile(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const payload = JSON.parse(
+      await capturePiPromptPayload({
+        attachments: [
+          { path: imgPath, mimeType: "image/png", name: "pic.png" },
+          {
+            path: filePath,
+            mimeType:
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            name: "data.xlsx",
+          },
+        ],
+      }),
+    ) as { text: string; options?: { images?: unknown[] } };
+
+    expect(payload.options?.images).toHaveLength(1);
+    expect(payload.text).toContain(filePath);
+    expect(payload.text).toContain("data.xlsx");
+    expect(payload.text).not.toContain(imgPath);
+  });
+
   it("does not bind a provider Session when the first prompt fails", async () => {
     const session = new FakePiSession();
     session.prompt = async () => {
