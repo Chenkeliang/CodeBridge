@@ -267,7 +267,7 @@ export function Workbench() {
     const pages = [];
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
-    let settled = false;
+    let settled: boolean;
     try {
       do {
         const page = await api.pendingFlowSaveRequests({
