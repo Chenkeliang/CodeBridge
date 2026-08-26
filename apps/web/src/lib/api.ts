@@ -13,6 +13,7 @@ import type {
   FlowRecommendation,
   FlowRecord,
   FlowReviewContext,
+  FlowSaveInboxPage,
   FlowSaveConfirmResult,
   FlowSaveRequestState,
   MessageAttachmentInput,
@@ -367,6 +368,20 @@ export const api = {
     }),
   flowReviewContext: (flowId: string) =>
     request<FlowReviewContext>(`/v1/flows/${encodeURIComponent(flowId)}/review-context`),
+  pendingFlowSaveRequests: (input: {
+    limit?: number;
+    cursor?: string | null;
+    signal?: AbortSignal;
+  } = {}) => {
+    const params = new URLSearchParams({
+      state: "pending",
+      limit: String(input.limit ?? 50),
+    });
+    if (input.cursor) params.set("cursor", input.cursor);
+    return request<FlowSaveInboxPage>(`/v1/flow-save-requests?${params}`, {
+      signal: input.signal,
+    });
+  },
   requestFlowSave: (sessionId: string, sourceRunId: string, key: string) =>
     request<Extract<FlowSaveRequestState, { state: "requested" }>>(
       `/v1/sessions/${encodeURIComponent(sessionId)}/flow-save-requests`,

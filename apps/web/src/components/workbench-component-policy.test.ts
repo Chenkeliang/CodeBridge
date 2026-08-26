@@ -247,6 +247,17 @@ describe("Workbench component policy", () => {
     expect(card).not.toContain("sessionViewStore");
   });
 
+  it("loads the global Flow save inbox through one race-safe polling lifecycle", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(workbench).toContain("new FlowSaveInboxState");
+    expect(workbench).toContain("api.pendingFlowSaveRequests(");
+    expect(workbench).toContain('document.addEventListener("visibilitychange"');
+    expect(workbench).toContain('refreshFlowSaveInboxRef.current("periodic")');
+    expect(workbench.match(/window\.setInterval/g) ?? []).toHaveLength(1);
+    expect(workbench).not.toMatch(/event_sequence[^;\n]*[<>]=?/);
+  });
+
   it("uses the shared Popover primitive for Turn actions", () => {
     const timeline = readFileSync(new URL("./session-timeline.tsx", import.meta.url), "utf8");
     expect(timeline).toContain('from "@/components/ui/popover"');
