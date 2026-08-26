@@ -146,10 +146,13 @@ V1 只接受 `state=pending`。其他值返回 `400 flow_save_request_state_inva
       "event_sequence": 1725
     }
   ],
-  "next_cursor": null,
-  "last_event_sequence": 1781
+  "next_cursor": null
 }
 ```
+
+`domain_events.sequence` 只在单个 WorkItem 内递增，不能作为跨 Session 的全局 cursor。
+`next_cursor` 必须是不透明的 `(occurred_at, event_id)` 复合游标；单个请求返回的
+`event_sequence` 仍用于该请求自身的事件身份和审计。
 
 ### 5.2 查询语义
 
@@ -159,15 +162,16 @@ V1 只接受 `state=pending`。其他值返回 `400 flow_save_request_state_inva
 2. 同一 `request_id` 之后不存在 dismissed/completed/failed 终态；
 3. 对应 Session 仍存在；
 4. payload 中的 Session/Turn/Run 身份与持久事实一致；
-5. 结果按 requested event sequence 倒序稳定分页。
+5. 结果按 `(occurred_at DESC, event_id DESC)` 稳定分页。
 
 损坏或身份不一致的事件不进入列表，并记录结构化告警；不得猜测或自动修复归属。
 
 ### 5.3 性能与索引
 
-查询在 Event Store 内完成，不由 Web 遍历 Session。实现应使用按事件类型、target 和 sequence
-可界定的 SQL 查询。若现有 `(target, sequence)` 索引不足，增加与实际查询一致的专用索引，
-并用大量历史终态请求验证查询不会退化为逐 Session N+1。
+查询在 Event Store 内完成，不由 Web 遍历 Session。新增
+`domain_events(type, occurred_at DESC, event_id DESC)` 索引支撑全局 requested 扫描；现有
+`domain_events(target, sequence)` 索引支撑同一请求的终态排除。使用 opaque 复合 cursor，并用
+大量历史终态请求验证查询不会退化为逐 Session N+1。
 
 ### 5.4 一致性
 
@@ -243,6 +247,8 @@ Web 启动时读取 pending count/list。之后：
 - 切入 Flows、手动刷新、confirm/dismiss 后立即刷新；
 - 页面恢复可见时立即刷新一次；
 - 同一时刻只允许一个列表请求，陈旧响应不得覆盖新结果。
+
+Web 用单调 request generation 判定响应是否陈旧，不比较不同 WorkItem 的 event sequence。
 
 V1 不新增第二条全局 SSE。持久只读查询保证刷新和重启恢复；轮询只负责发现延迟，不承担
 领域状态。
