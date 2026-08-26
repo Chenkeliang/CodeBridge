@@ -109,4 +109,26 @@ describe("ProviderHistoryImporter", () => {
     catalog.close();
     store.close();
   });
+
+  it("rejects a stale import cursor before appending duplicate history", async () => {
+    const { store, catalog, runner, session } = setupImportedSession();
+    vi.mocked(runner.loadSessionHistory).mockResolvedValue([
+      { kind: "message", text: "original" },
+    ]);
+    const importer = new ProviderHistoryImporter({ store, catalog, runner });
+    await importer.import(session.id, "import_1");
+
+    expect(() => store.importProviderHistory({
+      sessionId: session.id,
+      providerSessionId: "provider_1",
+      priorPosition: 0,
+      priorDigest: "sha256:stale",
+      nextDigest: "sha256:next",
+      events: [],
+      idempotencyKey: "import_2",
+    })).toThrow("provider_history_cursor_conflict");
+    expect(store.listTimelineTurns(session.id, { limit: 50 }).turns).toHaveLength(1);
+    catalog.close();
+    store.close();
+  });
 });

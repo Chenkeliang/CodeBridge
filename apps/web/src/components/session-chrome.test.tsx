@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import { AgentRail, SessionPanel } from "./session-chrome";
+import { AgentRail, SessionHeader, SessionPanel } from "./session-chrome";
 import type { AgentProfile, AgentSession } from "@/lib/types";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -62,6 +62,39 @@ function panelProps(): ComponentProps<typeof SessionPanel> {
 }
 
 describe("SessionPanel menus", () => {
+  it("keeps a hostile Session title inside the variable header region", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(host);
+    act(() => root.render(<SessionHeader
+      agent={agent}
+      menuOpen={false}
+      menuView="actions"
+      onDelete={vi.fn()}
+      onMenu={vi.fn()}
+      onMenuView={vi.fn()}
+      onRenameDraft={vi.fn()}
+      onTogglePanel={vi.fn()}
+      onUpdate={vi.fn()}
+      panelOpen
+      renameDraft=""
+      runState="running"
+      session={{ ...session, title: "x".repeat(10_000) }}
+    />));
+
+    const header = host.querySelector("header");
+    const variable = header?.firstElementChild;
+    const actions = header?.lastElementChild;
+    expect(variable?.className).toContain("min-w-0");
+    expect(variable?.className).toContain("flex-1");
+    expect(variable?.className).toContain("overflow-hidden");
+    expect(variable?.querySelector("div")?.className).toContain("overflow-hidden");
+    expect(actions?.className).toContain("shrink-0");
+    expect(host.querySelector('[aria-label="Session 操作"]')).not.toBeNull();
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
   it("opens Skills as a first-class vertical rail area", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const root = createRoot(host);

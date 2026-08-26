@@ -17,6 +17,8 @@ import type {
   MessageAttachmentInput,
   PiProvider,
   PiProviderPreset,
+  ProviderHistoryImportResult,
+  ProviderHistoryPreview,
   RunRecord,
   SessionCancelRunResult,
   SessionCompositeSnapshot,
@@ -315,6 +317,20 @@ export const api = {
   importSessions,
   session: (id: string) => request<AgentSession>(`/v1/sessions/${encodeURIComponent(id)}`),
   openSession,
+  previewProviderHistory: (sessionId: string) =>
+    request<ProviderHistoryPreview>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/provider-history/preview`,
+      { method: "POST" },
+    ),
+  importProviderHistory: (sessionId: string, idempotencyKey: string) =>
+    request<ProviderHistoryImportResult>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/provider-history/import`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ confirm: true }),
+      },
+    ),
   createSession: (agentId: string) =>
     request<AgentSession>("/v1/sessions", { method: "POST", body: JSON.stringify({ agent_id: agentId }) }),
   updateSession: (id: string, update: Record<string, unknown>) =>
