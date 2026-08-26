@@ -1107,14 +1107,14 @@ for (const delivery of ["sse", "hydrate"] as const) {
   });
 }
 
-test("known 503 keeps pending and a later explicit retry uses a new key", async ({ page }) => {
+test("known 503 keeps pending and reuses the same confirm key", async ({ page }) => {
   const fixture = await installFixture(page, { confirmMode: "unavailable-once" });
   await openSaveRequest(page);
   await page.getByRole("button", { name: "生成 Candidate" }).click();
   await expect(page.getByText("Flow Catalog 暂不可用，请重试生成。")).toBeVisible();
   await page.getByRole("button", { name: "重试生成" }).click();
   await expect(page.locator('[data-flow-save-request="completed"]')).toBeVisible();
-  expect(fixture.confirmKeys[1]).not.toBe(fixture.confirmKeys[0]);
+  expect(fixture.confirmKeys[1]).toBe(fixture.confirmKeys[0]);
 });
 
 test("deterministic source failure renders the persisted reason without same-request retry", async ({ page }) => {
