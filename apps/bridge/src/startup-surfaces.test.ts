@@ -33,6 +33,26 @@ describe("startup surfaces", () => {
     expect(resolveStartupSurfaces(config, { web: true }).web).toBe(true);
   });
 
+  it("gates the Agent Flow save tool on the reachable Web confirmation surface", () => {
+    const config = defaultConfig();
+    config.web = { enabled: false };
+    config.feishu.appId = "cli_feishu_enabled";
+    config.feishu.appSecret = "feishu_enabled_secret";
+
+    expect(resolveStartupSurfaces(config)).toEqual({
+      web: false,
+      feishu: true,
+      telegram: false,
+    });
+
+    const source = readFileSync(new URL("./cli.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("flowSaveSourceAvailability: surfaces.web && linkedSession");
+    expect(source).not.toContain("flowSaveSourceAvailability: linkedSession\n");
+    expect(source).not.toContain("flowSaveSourceAvailability: surfaces.feishu");
+    expect(source).not.toContain("flowSaveSourceAvailability: surfaces.telegram");
+  });
+
   it("keeps OpenCode in the configurable Agent registry and forwards Session config", () => {
     expect(
       supportedAgentSetupManifests.some((manifest) => manifest.agentId === "opencode"),

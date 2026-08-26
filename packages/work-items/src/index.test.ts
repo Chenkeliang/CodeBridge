@@ -22,6 +22,114 @@ function createDatabasePath(): string {
   return path.join(directory, "events.sqlite");
 }
 
+function rawDatabase(store: SqliteEventStore): InstanceType<typeof DatabaseSync> {
+  return (store as unknown as { database: InstanceType<typeof DatabaseSync> }).database;
+}
+
+function seedFlowSaveRuns(
+  store: SqliteEventStore,
+  input: {
+    workItemId: string;
+    sessionId: string;
+    sourceRunId: string;
+    requestRunId: string;
+  },
+): { sourceTurnId: string; requestTurnId: string } {
+  const sourceTurn = store.withSessionTransaction((tx) => {
+    const turn = tx.insertTurn(input.sessionId, {
+      text: "调查仓配异常",
+      attachmentIds: [],
+      flowId: null,
+      executionKind: "agent",
+      model: null,
+      effort: null,
+      permissionMode: null,
+      plan: null,
+    });
+    tx.dispatchTurn(turn.turnId, {
+      id: input.sourceRunId,
+      workItemId: input.workItemId,
+      sessionId: input.sessionId,
+      turnId: turn.turnId,
+      mode: "auto",
+      executionKind: "agent",
+      agentId: "pi",
+      planId: null,
+      planIrHash: null,
+      workflowRevision: null,
+    });
+    return turn;
+  });
+  store.withSessionTransaction((tx) => {
+    tx.updateRun(input.sourceRunId, { status: "succeeded" });
+  });
+  const requestTurn = store.withSessionTransaction((tx) => {
+    const turn = tx.insertTurn(input.sessionId, {
+      text: "把刚才存为 Flow",
+      attachmentIds: [],
+      flowId: null,
+      executionKind: "agent",
+      model: null,
+      effort: null,
+      permissionMode: null,
+      plan: null,
+    });
+    tx.dispatchTurn(turn.turnId, {
+      id: input.requestRunId,
+      workItemId: input.workItemId,
+      sessionId: input.sessionId,
+      turnId: turn.turnId,
+      mode: "auto",
+      executionKind: "agent",
+      agentId: "pi",
+      planId: null,
+      planIrHash: null,
+      workflowRevision: null,
+    });
+    return turn;
+  });
+  return {
+    sourceTurnId: sourceTurn.turnId,
+    requestTurnId: requestTurn.turnId,
+  };
+}
+
+function appendFlowSaveRequested(
+  store: SqliteEventStore,
+  input: {
+    workItemId: string;
+    sessionId: string;
+    requestId: string;
+    requestRunId: string;
+    requestTurnId: string;
+    sourceRunId: string;
+    sourceTurnId: string;
+  },
+) {
+  return store.appendEvent({
+    workItemId: input.workItemId,
+    runId: input.requestRunId,
+    type: "FLOW_SAVE_REQUESTED",
+    actor: "agent",
+    target: input.requestId,
+    payload: {
+      request_id: input.requestId,
+      session_id: input.sessionId,
+      request_run_id: input.requestRunId,
+      request_turn_id: input.requestTurnId,
+      source_run_id: input.sourceRunId,
+      source_turn_id: input.sourceTurnId,
+      source_title: "调查仓配异常",
+      source: "agent_intent",
+      user_message: "把刚才存为 Flow",
+      source_imported: false,
+      intent_summary: null,
+      name_hint: null,
+      created_at: "2026-08-26T00:00:00.000Z",
+    },
+  });
+}
+
 describe("SqliteEventStore", () => {
   it("backfills immutable execution identity for historical Runs and events", () => {
     const databasePath = createDatabasePath();
@@ -226,6 +334,381 @@ describe("SqliteEventStore", () => {
     expect(firstStore.listEvents(item.id).filter((event) => event.inputHash === "provider-history:message:1")).toHaveLength(1);
     secondStore.close();
     firstStore.close();
+  });
+
+  it("persists Flow save events and lists them by target in sequence order", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      title: "save a reusable Flow",
+      mode: "auto",
+      conversationId: "web:flow-save",
+      riskLevel: "read_only",
+    });
+    const run = store.createRun({
+      workItemId: item.id,
+      mode: "auto",
+      executionKind: "agent",
+    });
+
+    const requested = store.appendEventOnce({
+      workItemId: item.id,
+      runId: run.id,
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "user",
+      target: "fsr_one",
+      inputHash: "flow-save-request:http:sess_1:key_1",
+      payload: {
+        request_id: "fsr_one",
+        session_id: "sess_1",
+        request_turn_id: run.turnId,
+        source_run_id: run.id,
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: run.id,
+      type: "FLOW_SAVE_DISMISSED",
+      actor: "user",
+      target: "fsr_one",
+      payload: { request_id: "fsr_one" },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: run.id,
+      type: "FLOW_CANDIDATE_CREATED",
+      actor: "system",
+      target: "fsr_candidate",
+      payload: {
+        request_id: "fsr_candidate",
+        flow_id: "flow_from_fsr_candidate",
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: run.id,
+      type: "FLOW_SAVE_FAILED",
+      actor: "system",
+      target: "fsr_failed",
+      payload: {
+        request_id: "fsr_failed",
+        code: "source_run_not_extractable",
+      },
+    });
+
+    expect(store.listEventsByTarget("fsr_one").map((event) => event.type))
+      .toEqual([
+        "FLOW_SAVE_REQUESTED",
+        "FLOW_SAVE_DISMISSED",
+      ]);
+    expect(store.listEvents(item.id).map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "FLOW_SAVE_REQUESTED",
+        "FLOW_SAVE_DISMISSED",
+        "FLOW_CANDIDATE_CREATED",
+        "FLOW_SAVE_FAILED",
+      ]),
+    );
+    expect(requested.target).toBe("fsr_one");
+    store.close();
+  });
+
+  it("lists only pending Flow save requests and does not cross targets or WorkItems", () => {
+    const store = new SqliteEventStore(":memory:");
+    const first = store.createWorkItem({
+      id: "wi_inbox_first",
+      title: "first",
+      mode: "auto",
+      conversationId: "conv_inbox_first",
+      sessionId: "sess_inbox_first",
+      agentId: "pi",
+      riskLevel: "read_only",
+    });
+    const firstRuns = seedFlowSaveRuns(store, {
+      workItemId: first.id,
+      sessionId: "sess_inbox_first",
+      sourceRunId: "run_source_first",
+      requestRunId: "run_request_first",
+    });
+    const pending = appendFlowSaveRequested(store, {
+      workItemId: first.id,
+      sessionId: "sess_inbox_first",
+      requestId: "fsr_pending",
+      requestRunId: "run_request_first",
+      requestTurnId: firstRuns.requestTurnId,
+      sourceRunId: "run_source_first",
+      sourceTurnId: firstRuns.sourceTurnId,
+    });
+    const dismissed = appendFlowSaveRequested(store, {
+      workItemId: first.id,
+      sessionId: "sess_inbox_first",
+      requestId: "fsr_dismissed",
+      requestRunId: "run_request_first",
+      requestTurnId: firstRuns.requestTurnId,
+      sourceRunId: "run_source_first",
+      sourceTurnId: firstRuns.sourceTurnId,
+    });
+    store.appendEvent({
+      workItemId: first.id,
+      runId: "run_request_first",
+      type: "FLOW_SAVE_DISMISSED",
+      actor: "user",
+      target: "fsr_dismissed",
+      payload: { request_id: "fsr_dismissed" },
+    });
+    const completed = appendFlowSaveRequested(store, {
+      workItemId: first.id,
+      sessionId: "sess_inbox_first",
+      requestId: "fsr_completed",
+      requestRunId: "run_request_first",
+      requestTurnId: firstRuns.requestTurnId,
+      sourceRunId: "run_source_first",
+      sourceTurnId: firstRuns.sourceTurnId,
+    });
+    store.appendEvent({
+      workItemId: first.id,
+      runId: "run_request_first",
+      type: "FLOW_CANDIDATE_CREATED",
+      actor: "system",
+      target: "fsr_completed",
+      payload: {
+        request_id: "fsr_completed",
+        flow_id: "flow_from_completed",
+      },
+    });
+    const failed = appendFlowSaveRequested(store, {
+      workItemId: first.id,
+      sessionId: "sess_inbox_first",
+      requestId: "fsr_failed",
+      requestRunId: "run_request_first",
+      requestTurnId: firstRuns.requestTurnId,
+      sourceRunId: "run_source_first",
+      sourceTurnId: firstRuns.sourceTurnId,
+    });
+    store.appendEvent({
+      workItemId: first.id,
+      runId: "run_request_first",
+      type: "FLOW_SAVE_FAILED",
+      actor: "system",
+      target: "fsr_failed",
+      payload: {
+        request_id: "fsr_failed",
+        code: "source_run_not_extractable",
+      },
+    });
+    const second = store.createWorkItem({
+      id: "wi_inbox_second",
+      title: "second",
+      mode: "auto",
+      conversationId: "conv_inbox_second",
+      riskLevel: "read_only",
+    });
+    const secondRun = store.createRun({
+      id: "run_request_second",
+      workItemId: second.id,
+      mode: "auto",
+      executionKind: "agent",
+    });
+    store.appendEvent({
+      workItemId: second.id,
+      runId: secondRun.id,
+      type: "FLOW_SAVE_DISMISSED",
+      actor: "user",
+      target: "fsr_pending",
+      payload: { request_id: "fsr_pending" },
+    });
+
+    const page = store.listPendingFlowSaveRequestEvents({ limit: 50, cursor: null });
+
+    expect(page.rows.map((row) => row.event.eventId)).toEqual([pending.eventId]);
+    expect(page.rows.map((row) => row.event.eventId)).not.toEqual(expect.arrayContaining([
+      dismissed.eventId,
+      completed.eventId,
+      failed.eventId,
+    ]));
+    expect(page.nextCursor).toBeNull();
+    store.close();
+  });
+
+  it("orders equal timestamps by event id and paginates by the opaque tuple without duplicates", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      id: "wi_inbox_cursor",
+      title: "cursor",
+      mode: "auto",
+      conversationId: "conv_inbox_cursor",
+      sessionId: "sess_inbox_cursor",
+      agentId: "pi",
+      riskLevel: "read_only",
+    });
+    const runs = seedFlowSaveRuns(store, {
+      workItemId: item.id,
+      sessionId: "sess_inbox_cursor",
+      sourceRunId: "run_source_cursor",
+      requestRunId: "run_request_cursor",
+    });
+    const events = ["a", "b", "c"].map((suffix) => appendFlowSaveRequested(store, {
+      workItemId: item.id,
+      sessionId: "sess_inbox_cursor",
+      requestId: `fsr_cursor_${suffix}`,
+      requestRunId: "run_request_cursor",
+      requestTurnId: runs.requestTurnId,
+      sourceRunId: "run_source_cursor",
+      sourceTurnId: runs.sourceTurnId,
+    }));
+    rawDatabase(store).prepare(
+      "UPDATE domain_events SET occurred_at = ? WHERE event_id IN (?, ?, ?)",
+    ).run(
+      "2026-08-26T01:02:03.000Z",
+      events[0]!.eventId,
+      events[1]!.eventId,
+      events[2]!.eventId,
+    );
+    const expected = events.map((event) => event.eventId).sort().reverse();
+
+    const first = store.listPendingFlowSaveRequestEvents({ limit: 2, cursor: null });
+    const second = store.listPendingFlowSaveRequestEvents({
+      limit: 2,
+      cursor: first.nextCursor,
+    });
+
+    expect(first.rows.map((row) => row.event.eventId)).toEqual(expected.slice(0, 2));
+    expect(first.nextCursor).toEqual({
+      occurredAt: "2026-08-26T01:02:03.000Z",
+      eventId: expected[1],
+    });
+    expect(second.rows.map((row) => row.event.eventId)).toEqual(expected.slice(2));
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.rows, ...second.rows].map((row) => row.event.eventId)).size).toBe(3);
+    store.close();
+  });
+
+  it("returns WorkItem, request Run/Turn, and source Run/Turn identity evidence from the page query", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      id: "wi_inbox_evidence",
+      title: "evidence",
+      mode: "auto",
+      conversationId: "conv_inbox_evidence",
+      sessionId: "sess_inbox_evidence",
+      agentId: "pi",
+      riskLevel: "read_only",
+    });
+    const runs = seedFlowSaveRuns(store, {
+      workItemId: item.id,
+      sessionId: "sess_inbox_evidence",
+      sourceRunId: "run_source_evidence",
+      requestRunId: "run_request_evidence",
+    });
+    appendFlowSaveRequested(store, {
+      workItemId: item.id,
+      sessionId: "sess_inbox_evidence",
+      requestId: "fsr_evidence",
+      requestRunId: "run_request_evidence",
+      requestTurnId: runs.requestTurnId,
+      sourceRunId: "run_source_evidence",
+      sourceTurnId: runs.sourceTurnId,
+    });
+
+    const [row] = store.listPendingFlowSaveRequestEvents({ limit: 50, cursor: null }).rows;
+
+    expect(row).toMatchObject({
+      workItemSessionId: "sess_inbox_evidence",
+      requestRun: {
+        runId: "run_request_evidence",
+        sessionId: "sess_inbox_evidence",
+        turnId: runs.requestTurnId,
+      },
+      requestTurn: {
+        turnId: runs.requestTurnId,
+        sessionId: "sess_inbox_evidence",
+      },
+      sourceRun: {
+        runId: "run_source_evidence",
+        sessionId: "sess_inbox_evidence",
+        turnId: runs.sourceTurnId,
+      },
+      sourceTurn: {
+        turnId: runs.sourceTurnId,
+        sessionId: "sess_inbox_evidence",
+      },
+    });
+    rawDatabase(store).prepare("UPDATE runs SET turn_id = ? WHERE id = ?")
+      .run("turn_missing", "run_source_evidence");
+    const [malformed] = store.listPendingFlowSaveRequestEvents({ limit: 50, cursor: null }).rows;
+    expect(malformed?.sourceRun).toMatchObject({
+      runId: "run_source_evidence",
+      turnId: "turn_missing",
+    });
+    expect(malformed?.sourceTurn).toBeNull();
+    store.close();
+  });
+
+  it("keeps the pending query bounded with 100 pending and 500 terminal requests", () => {
+    const store = new SqliteEventStore(":memory:");
+    const item = store.createWorkItem({
+      id: "wi_inbox_scale",
+      title: "scale",
+      mode: "auto",
+      conversationId: "conv_inbox_scale",
+      riskLevel: "read_only",
+    });
+    const run = store.createRun({
+      id: "run_inbox_scale",
+      workItemId: item.id,
+      mode: "auto",
+      executionKind: "agent",
+    });
+    for (let index = 0; index < 600; index += 1) {
+      const requestId = `fsr_scale_${String(index).padStart(3, "0")}`;
+      store.appendEvent({
+        workItemId: item.id,
+        runId: run.id,
+        type: "FLOW_SAVE_REQUESTED",
+        actor: "agent",
+        target: requestId,
+        payload: { request_id: requestId, source_run_id: run.id },
+      });
+      if (index < 500) {
+        store.appendEvent({
+          workItemId: item.id,
+          runId: run.id,
+          type: index % 3 === 0
+            ? "FLOW_SAVE_DISMISSED"
+            : index % 3 === 1
+              ? "FLOW_CANDIDATE_CREATED"
+              : "FLOW_SAVE_FAILED",
+          actor: "system",
+          target: requestId,
+        });
+      }
+    }
+
+    const first = store.listPendingFlowSaveRequestEvents({ limit: 40, cursor: null });
+    const second = store.listPendingFlowSaveRequestEvents({ limit: 100, cursor: first.nextCursor });
+
+    expect(first.rows).toHaveLength(40);
+    expect(first.nextCursor).not.toBeNull();
+    expect(second.rows).toHaveLength(60);
+    expect(second.nextCursor).toBeNull();
+    expect([...first.rows, ...second.rows].every((row) =>
+      Number(row.event.target?.slice("fsr_scale_".length)) >= 500
+    )).toBe(true);
+    store.close();
+  });
+
+  it("creates the exact index used by the global Flow save inbox query", () => {
+    const databasePath = createDatabasePath();
+    const store = new SqliteEventStore(databasePath);
+    const columns = rawDatabase(store)
+      .prepare("PRAGMA index_info(domain_events_flow_save_inbox)")
+      .all() as Array<{ name?: unknown }>;
+
+    expect(columns.map((column) => String(column.name))).toEqual([
+      "type",
+      "occurred_at",
+      "event_id",
+    ]);
+    store.close();
   });
 
   it("updates the WorkItem projection from terminal events", () => {

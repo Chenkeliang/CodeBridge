@@ -9,7 +9,7 @@ import type {
   TimelineSegmentView,
   TimelineTurnView,
 } from "./types";
-import { applyFlowEvent } from "./flow-events";
+import { applyFlowEvent, applyFlowSaveIntentEvent } from "./flow-events";
 
 export type ReceiveDisposition = "applied" | "duplicate" | "gap" | "refresh_required";
 
@@ -86,6 +86,23 @@ export class SessionViewStore {
       });
       this.notify(sessionId);
       return committed.refreshRequired ? "refresh_required" : "applied";
+    }
+
+    const saveIntentApplied = applyFlowSaveIntentEvent(
+      current.snapshot.timeline.turns,
+      event,
+    );
+    if (saveIntentApplied !== current.snapshot.timeline.turns) {
+      this.entries.set(sessionId, {
+        snapshot: {
+          ...current.snapshot,
+          runtime: { ...current.snapshot.runtime, last_event_sequence: event.sequence },
+          timeline: { ...current.snapshot.timeline, turns: saveIntentApplied },
+        },
+        status: "ready",
+      });
+      this.notify(sessionId);
+      return "applied";
     }
 
     const applied = applyFlowEvent(current.snapshot.timeline.turns, event);

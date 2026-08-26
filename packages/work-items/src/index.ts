@@ -109,6 +109,10 @@ export type DomainEventType =
   | "FLOW_PROPOSED"
   | "FLOW_SELECTED"
   | "FLOW_SAVED_AS_CANDIDATE"
+  | "FLOW_SAVE_REQUESTED"
+  | "FLOW_SAVE_DISMISSED"
+  | "FLOW_CANDIDATE_CREATED"
+  | "FLOW_SAVE_FAILED"
   | "PLAN_PROPOSED"
   | "PLAN_VALIDATED"
   | "APPROVAL_REQUESTED"
@@ -188,6 +192,36 @@ export interface DomainEvent {
   inputHash: string | null;
   resultRef: string | null;
   payload: Record<string, unknown>;
+}
+
+export interface FlowSaveInboxEventCursor {
+  occurredAt: string;
+  eventId: string;
+}
+
+export interface FlowSaveInboxRunEvidence {
+  runId: string;
+  sessionId: string | null;
+  turnId: string | null;
+}
+
+export interface FlowSaveInboxTurnEvidence {
+  turnId: string;
+  sessionId: string;
+}
+
+export interface FlowSaveInboxEventRow {
+  event: DomainEvent;
+  workItemSessionId: string | null;
+  requestRun: FlowSaveInboxRunEvidence | null;
+  requestTurn: FlowSaveInboxTurnEvidence | null;
+  sourceRun: FlowSaveInboxRunEvidence | null;
+  sourceTurn: FlowSaveInboxTurnEvidence | null;
+}
+
+export interface FlowSaveInboxEventPage {
+  rows: FlowSaveInboxEventRow[];
+  nextCursor: FlowSaveInboxEventCursor | null;
 }
 
 export interface AppendEventInput {
@@ -427,6 +461,12 @@ export class SqliteEventStore {
 
       CREATE INDEX IF NOT EXISTS domain_events_work_item_sequence
         ON domain_events (work_item_id, sequence);
+
+      CREATE INDEX IF NOT EXISTS domain_events_target_sequence
+        ON domain_events (target, sequence);
+
+      CREATE INDEX IF NOT EXISTS domain_events_flow_save_inbox
+        ON domain_events (type, occurred_at DESC, event_id DESC);
 
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
@@ -1357,6 +1397,95 @@ export class SqliteEventStore {
       )
       .all(workItemId, afterSequence);
     return rows.map(toDomainEvent);
+  }
+
+  listEventsByTarget(target: string): DomainEvent[] {
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM domain_events
+         WHERE target = ?
+         ORDER BY sequence ASC`,
+      )
+      .all(target) as SqliteRow[];
+    return rows.map(toDomainEvent);
+  }
+
+  listPendingFlowSaveRequestEvents(input: {
+    limit: number;
+    cursor: FlowSaveInboxEventCursor | null;
+  }): FlowSaveInboxEventPage {
+    const limit = Math.max(1, Math.min(100, Math.floor(input.limit)));
+    const cursorOccurredAt = input.cursor?.occurredAt ?? null;
+    const cursorEventId = input.cursor?.eventId ?? null;
+    const rows = this.database
+      .prepare(
+        `SELECT
+           requested.*,
+           work_item.session_id AS inbox_work_item_session_id,
+           request_run.id AS inbox_request_run_id,
+           request_run.session_id AS inbox_request_run_session_id,
+           request_run.turn_id AS inbox_request_run_turn_id,
+           request_turn.turn_id AS inbox_request_turn_id,
+           request_turn.session_id AS inbox_request_turn_session_id,
+           source_run.id AS inbox_source_run_id,
+           source_run.session_id AS inbox_source_run_session_id,
+           source_run.turn_id AS inbox_source_run_turn_id,
+           source_turn.turn_id AS inbox_source_turn_id,
+           source_turn.session_id AS inbox_source_turn_session_id
+         FROM domain_events requested
+         LEFT JOIN work_items work_item
+           ON work_item.id = requested.work_item_id
+         LEFT JOIN runs request_run
+           ON request_run.id = requested.run_id
+          AND request_run.work_item_id = requested.work_item_id
+         LEFT JOIN session_turns request_turn
+           ON request_turn.turn_id = request_run.turn_id
+         LEFT JOIN runs source_run
+           ON source_run.id = json_extract(requested.payload, '$.source_run_id')
+          AND source_run.work_item_id = requested.work_item_id
+         LEFT JOIN session_turns source_turn
+           ON source_turn.turn_id = source_run.turn_id
+         WHERE requested.type = 'FLOW_SAVE_REQUESTED'
+           AND (
+             ? IS NULL
+             OR requested.occurred_at < ?
+             OR (
+               requested.occurred_at = ?
+               AND requested.event_id < ?
+             )
+           )
+           AND NOT EXISTS (
+             SELECT 1
+             FROM domain_events terminal
+             WHERE terminal.work_item_id = requested.work_item_id
+               AND terminal.target = requested.target
+               AND terminal.sequence > requested.sequence
+               AND terminal.type IN (
+                 'FLOW_SAVE_DISMISSED',
+                 'FLOW_CANDIDATE_CREATED',
+                 'FLOW_SAVE_FAILED'
+               )
+           )
+         ORDER BY requested.occurred_at DESC, requested.event_id DESC
+         LIMIT ?`,
+      )
+      .all(
+        cursorOccurredAt,
+        cursorOccurredAt,
+        cursorOccurredAt,
+        cursorEventId,
+        limit + 1,
+      ) as SqliteRow[];
+    const hasMore = rows.length > limit;
+    const selectedRows = rows.slice(0, limit);
+    const pageRows = selectedRows.map(toFlowSaveInboxEventRow);
+    const last = hasMore ? pageRows.at(-1)?.event : undefined;
+    return {
+      rows: pageRows,
+      nextCursor: last
+        ? { occurredAt: last.occurredAt, eventId: last.eventId }
+        : null,
+    };
   }
 
   listEventsPage(
@@ -2559,6 +2688,43 @@ function toDomainEvent(row: SqliteRow): DomainEvent {
     resultRef: row.result_ref === null ? null : String(row.result_ref),
     payload: JSON.parse(String(row.payload)) as Record<string, unknown>,
   };
+}
+
+function toFlowSaveInboxEventRow(row: SqliteRow): FlowSaveInboxEventRow {
+  return {
+    event: toDomainEvent(row),
+    workItemSessionId: nullableSqliteString(row.inbox_work_item_session_id),
+    requestRun: toFlowSaveInboxRunEvidence(row, "inbox_request"),
+    requestTurn: toFlowSaveInboxTurnEvidence(row, "inbox_request"),
+    sourceRun: toFlowSaveInboxRunEvidence(row, "inbox_source"),
+    sourceTurn: toFlowSaveInboxTurnEvidence(row, "inbox_source"),
+  };
+}
+
+function toFlowSaveInboxRunEvidence(
+  row: SqliteRow,
+  prefix: "inbox_request" | "inbox_source",
+): FlowSaveInboxRunEvidence | null {
+  const runId = nullableSqliteString(row[`${prefix}_run_id`]);
+  if (!runId) return null;
+  return {
+    runId,
+    sessionId: nullableSqliteString(row[`${prefix}_run_session_id`]),
+    turnId: nullableSqliteString(row[`${prefix}_run_turn_id`]),
+  };
+}
+
+function toFlowSaveInboxTurnEvidence(
+  row: SqliteRow,
+  prefix: "inbox_request" | "inbox_source",
+): FlowSaveInboxTurnEvidence | null {
+  const turnId = nullableSqliteString(row[`${prefix}_turn_id`]);
+  const sessionId = nullableSqliteString(row[`${prefix}_turn_session_id`]);
+  return turnId && sessionId ? { turnId, sessionId } : null;
+}
+
+function nullableSqliteString(value: unknown): string | null {
+  return value === null || value === undefined ? null : String(value);
 }
 
 function toRun(row: SqliteRow): Run {

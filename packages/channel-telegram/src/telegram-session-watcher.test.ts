@@ -24,6 +24,9 @@ function makeIngress() {
     ackDelivery: vi.fn(async () => true),
     completeDelivery: vi.fn(async () => true),
     listDeliveries: vi.fn(async () => []),
+    requestFlowSave: vi.fn(),
+    confirmFlowSave: vi.fn(),
+    dismissFlowSave: vi.fn(),
   };
 }
 
@@ -97,6 +100,27 @@ function flowEvent(
     target,
     resultRef,
     payload,
+  };
+}
+
+function flowSaveRequestedEvent(
+  sequence: number,
+  runId = "run_1",
+): ChannelSessionEvent {
+  const requestId = runId === "run_1" ? "fsr_1" : `fsr_${runId}`;
+  return {
+    type: "FLOW_SAVE_REQUESTED",
+    sequence,
+    runId,
+    executionKind: "agent",
+    occurredAt: `2026-08-21T10:00:${String(sequence).padStart(2, "0")}.000Z`,
+    target: requestId,
+    resultRef: null,
+    payload: {
+      request_id: requestId,
+      request_run_id: runId,
+      source_run_id: "run_previous",
+    },
   };
 }
 
@@ -315,6 +339,209 @@ describe("TelegramSessionWatcher", () => {
     expect(finalText).toContain("Flow 结果 · 成功");
     expect(finalText).toContain("Flow 批量草稿 · ready");
     expect(finalText.match(/deploy\.output\.json/g)).toHaveLength(1);
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it("keeps one Flow save request notice on the pending message through terminal delivery", async () => {
+    const api = makeApi();
+    const ingress = makeIngress();
+    const requested = flowSaveRequestedEvent(5);
+    let releasePostTerminal!: () => void;
+    let markPostTerminalProcessed!: () => void;
+    const postTerminalGate = new Promise<void>((resolve) => {
+      releasePostTerminal = resolve;
+    });
+    const postTerminalProcessed = new Promise<void>((resolve) => {
+      markPostTerminalProcessed = resolve;
+    });
+    ingress.events = vi.fn(async function* (
+      _sessionId: string,
+      opts: { signal: AbortSignal },
+    ) {
+      yield agentEvent(4, { type: "text_delta", text: "answer" });
+      yield requested;
+      yield requested;
+      yield terminalEvent(6);
+      await postTerminalGate;
+      yield { ...requested, type: "FLOW_SAVE_DISMISSED", sequence: 7 };
+      yield { ...requested, type: "FLOW_CANDIDATE_CREATED", sequence: 8 };
+      markPostTerminalProcessed();
+      await new Promise<void>((resolve) =>
+        opts.signal.addEventListener("abort", () => resolve()),
+      );
+    });
+
+    const w = watcher(ingress, api);
+    await w.openRun("run_1", turn());
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+    const editsAtTerminal = api.editMessage.mock.calls.length;
+    releasePostTerminal();
+    await postTerminalProcessed;
+
+    const finalText = String(api.editMessage.mock.calls.at(-1)?.[2]);
+    expect(finalText).toContain("answer");
+    expect(finalText.match(
+      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
+    )).toHaveLength(1);
+    expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
+    expect(api.editMessage).toHaveBeenCalledTimes(editsAtTerminal);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      "telegram:42",
+      "⏳ Agent 正在处理…",
+      undefined,
+    );
+    expect(ingress.events).toHaveBeenCalledTimes(1);
+    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
+    expect(ingress.requestFlowSave).not.toHaveBeenCalled();
+    expect(ingress.confirmFlowSave).not.toHaveBeenCalled();
+    expect(ingress.dismissFlowSave).not.toHaveBeenCalled();
+    w.abort();
+  });
+
+  it("pins the complete Flow save notice to the original pending message for a long reply", async () => {
+    const api = makeApi();
+    const ingress = makeIngress();
+    const longReply = "A".repeat(4_097);
+    ingress.events = blockingEvents([
+      agentEvent(4, { type: "text_delta", text: longReply }),
+      flowSaveRequestedEvent(5),
+      terminalEvent(6),
+    ]);
+
+    const w = watcher(ingress, api);
+    await w.openRun("run_1", turn());
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+
+    const pendingText = String(api.editMessage.mock.calls.at(-1)?.[2]);
+    expect(pendingText).toContain(
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
+    );
+    expect(pendingText.length).toBeLessThanOrEqual(4_096);
+    const overflowMessages = api.sendMessage.mock.calls.slice(1);
+    expect(overflowMessages).toHaveLength(1);
+    expect(overflowMessages[0]?.[1]).not.toContain("已记录“存为 Flow”请求");
+    expect([
+      pendingText.replace(
+        /\n\n---\n\n已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。$/,
+        "",
+      ),
+      ...overflowMessages.map((call) => String(call[1])),
+    ].join("")).toBe(longReply);
+    w.abort();
+  });
+
+  it("keeps the existing long-reply chunk order when there is no Save Intent", async () => {
+    const api = makeApi();
+    const ingress = makeIngress();
+    ingress.events = blockingEvents([
+      agentEvent(4, { type: "text_delta", text: "A".repeat(4_097) }),
+      terminalEvent(5),
+    ]);
+
+    const w = watcher(ingress, api);
+    await w.openRun("run_1", turn());
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+
+    expect(api.editMessage.mock.calls.at(-1)?.[2]).toBe("A".repeat(4_096));
+    expect(api.sendMessage.mock.calls.slice(1)).toEqual([
+      ["telegram:42", "A", undefined],
+    ]);
+    w.abort();
+  });
+
+  it("uses the existing fallback without creating a separate notice message when edit fails", async () => {
+    const api = makeApi();
+    api.editMessage = vi.fn(async () => {
+      throw new Error("edit boom");
+    });
+    const ingress = makeIngress();
+    ingress.events = blockingEvents([
+      agentEvent(4, { type: "text_delta", text: "A".repeat(4_097) }),
+      flowSaveRequestedEvent(5),
+      terminalEvent(6),
+    ]);
+
+    const w = watcher(ingress, api);
+    await w.openRun("run_1", turn());
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+
+    const fallbackMessages = api.sendMessage.mock.calls.slice(1)
+      .map((call) => String(call[1]));
+    expect(fallbackMessages).toHaveLength(2);
+    expect(fallbackMessages[0]).toContain(
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
+    );
+    expect(fallbackMessages.join("").match(
+      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
+    )).toHaveLength(1);
+    expect(fallbackMessages).not.toContain(
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
+    );
+    w.abort();
+  });
+
+  it("ignores a foreign Run save request before projecting the matching Run", async () => {
+    const api = makeApi();
+    const ingress = makeIngress();
+    let releaseForeign!: () => void;
+    let markForeignProcessed!: () => void;
+    let markMatchingProcessed!: () => void;
+    const foreignGate = new Promise<void>((resolve) => {
+      releaseForeign = resolve;
+    });
+    const foreignProcessed = new Promise<void>((resolve) => {
+      markForeignProcessed = resolve;
+    });
+    const matchingProcessed = new Promise<void>((resolve) => {
+      markMatchingProcessed = resolve;
+    });
+    ingress.events = vi.fn(async function* (
+      _sessionId: string,
+      opts: { signal: AbortSignal },
+    ) {
+      yield flowSaveRequestedEvent(5, "run_2");
+      markForeignProcessed();
+      await foreignGate;
+      yield flowSaveRequestedEvent(6, "run_1");
+      markMatchingProcessed();
+      await new Promise<void>((resolve) =>
+        opts.signal.addEventListener("abort", () => resolve()),
+      );
+    });
+
+    const w = watcher(ingress, api);
+    w.resumeRun(
+      "run_1",
+      "8",
+      "turn_1",
+      "telegram:old:run_1",
+      false,
+      "telegram:42",
+      undefined,
+    );
+    w.start(0);
+
+    await foreignProcessed;
+    expect(api.editMessage).not.toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+
+    releaseForeign();
+    await matchingProcessed;
+
+    expect(String(api.editMessage.mock.calls.at(-1)?.[2])).toContain(
+      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
+    );
+    expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
     expect(api.sendMessage).not.toHaveBeenCalled();
     w.abort();
   });

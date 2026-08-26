@@ -7,6 +7,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import type {
   AgentAvailableCommand,
   AgentEvent,
@@ -17,6 +18,7 @@ import type {
   CliSessionSummary,
   ProviderSessionHistoryEvent,
 } from "./session-discovery.js";
+import { createPiFlowSaveTool } from "./pi-flow-save-tool.js";
 
 /** The small native-session surface used by the runner and by adapter tests. */
 export interface PiSession {
@@ -497,16 +499,33 @@ export async function deletePiSession(
   return { ok: true };
 }
 
-async function createNativePiSession(ctx: RunContext): Promise<PiSession> {
-  const modelRuntime = await createPiModelRuntime();
-  const sessionManager = await resolvePiSessionManager(ctx);
+interface NativePiSessionDependencies {
+  createAgentSession?: (
+    options: CreateAgentSessionOptions,
+  ) => ReturnType<typeof createAgentSession>;
+  createModelRuntime?: typeof createPiModelRuntime;
+  resolveSessionManager?: typeof resolvePiSessionManager;
+}
+
+export async function createNativePiSession(
+  ctx: RunContext,
+  dependencies: NativePiSessionDependencies = {},
+): Promise<PiSession> {
+  const modelRuntime = await (dependencies.createModelRuntime ?? createPiModelRuntime)();
+  const sessionManager = await (
+    dependencies.resolveSessionManager ?? resolvePiSessionManager
+  )(ctx);
   const model = resolveModel(modelRuntime, ctx.backendConfig.model ?? ctx.model);
-  const { session } = await createAgentSession({
+  const createSession = dependencies.createAgentSession ?? createAgentSession;
+  const { session } = await createSession({
     cwd: ctx.cwd,
     sessionManager,
     model,
     thinkingLevel: resolveThinkingLevel(ctx.effort),
     modelRuntime,
+    customTools: ctx.flowSaveSourceAvailability
+      ? [createPiFlowSaveTool(ctx.flowSaveSourceAvailability)]
+      : [],
   });
   return session;
 }

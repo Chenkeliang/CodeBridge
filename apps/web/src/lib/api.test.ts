@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api, streamSessionEvents } from "./api";
-import type { AgentSession, FlowRecord, SessionCompositeSnapshot, SessionMessageReceipt, SessionRuntimeView, SessionTurnView } from "./types";
+import type { AgentSession, FlowRecord, FlowSaveInboxPage, SessionCompositeSnapshot, SessionMessageReceipt, SessionRuntimeView, SessionTurnView } from "./types";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -181,6 +181,85 @@ describe("workbench API client", () => {
     expect(init.method).toBe("POST");
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("confirm-1");
     expect(init.body).toBe(JSON.stringify({ draft_revision: 3 }));
+  });
+
+  it("sends caller-owned idempotency keys for Flow save intent commands", async () => {
+    const requestResponse = {
+      state: "requested",
+      request: { request_id: "fsr_one", source_run_id: "run_1" },
+    };
+    const confirmResponse = {
+      state: "completed",
+      request: requestResponse.request,
+      flow: { flow_id: "flow_one", status: "candidate" },
+    };
+    const dismissResponse = {
+      state: "dismissed",
+      request: requestResponse.request,
+    };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json(requestResponse, { status: 201 }))
+      .mockResolvedValueOnce(Response.json(confirmResponse, { status: 201 }))
+      .mockResolvedValueOnce(Response.json(dismissResponse));
+    vi.stubGlobal("fetch", fetch);
+
+    await api.requestFlowSave("sess_1", "run_1", "request-key");
+    await api.confirmFlowSave("fsr_one", "confirm-key");
+    await api.dismissFlowSave("fsr_one", "dismiss-key");
+
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      "/v1/sessions/sess_1/flow-save-requests",
+      "/v1/flow-save-requests/fsr_one/confirm",
+      "/v1/flow-save-requests/fsr_one/dismiss",
+    ]);
+    for (const call of fetch.mock.calls) {
+      expect(new Headers((call[1] as RequestInit).headers).get("Idempotency-Key"))
+        .toMatch(/-key$/);
+    }
+    expect((fetch.mock.calls[0]?.[1] as RequestInit).body).toBe(JSON.stringify({
+      source_run_id: "run_1",
+      source: "turn_action",
+    }));
+    expect((fetch.mock.calls[1]?.[1] as RequestInit).body).toBeUndefined();
+    expect((fetch.mock.calls[2]?.[1] as RequestInit).body).toBeUndefined();
+  });
+
+  it("loads the pending Flow save inbox with an opaque cursor and caller AbortSignal", async () => {
+    const controller = new AbortController();
+    const page: FlowSaveInboxPage = {
+      requests: [{
+        request_id: "fsr_one",
+        session_id: "sess_1",
+        agent_id: "pi",
+        session_title: "仓配排查",
+        request_turn_id: "turn_request",
+        request_run_id: "run_request",
+        source_turn_id: "turn_source",
+        source_run_id: "run_source",
+        source_title: "核对仓配异常",
+        source: "agent_intent",
+        user_message: "以后都按这个流程",
+        intent_summary: "保存仓配排查步骤",
+        name_hint: "仓配排查",
+        source_imported: false,
+        created_at: "2026-08-26T04:00:00.000Z",
+        event_sequence: 42,
+      }],
+      next_cursor: "opaque.cursor",
+    };
+    const fetch = vi.fn().mockResolvedValue(Response.json(page));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(api.pendingFlowSaveRequests({
+      limit: 50,
+      cursor: "opaque.cursor",
+      signal: controller.signal,
+    })).resolves.toEqual(page);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/v1/flow-save-requests?state=pending&limit=50&cursor=opaque.cursor",
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 
   it("uses the existing Runtime approval query and write contracts", async () => {
@@ -455,40 +534,9 @@ describe("workbench API client", () => {
     ]);
   });
 
-  it("lists Agent Run proposals and saves a confirmed Guide draft", async () => {
-    const proposal = {
-      session_id: "sess_1",
-      run_id: "run_1",
-      agent_id: "codex",
-      run_status: "succeeded",
-      kind: "structured_plan",
-      saveable: true,
-      reason: null,
-      source_definition_revision: "sha256:source",
-      guide: {
-        name: "核验仓配订单",
-        description: "来自 Agent Run",
-        steps: [{ id: "step_1", purpose: "查询订单" }],
-      },
-    } as const;
-    const fetch = vi.fn()
-      .mockResolvedValueOnce(Response.json({ proposals: [proposal] }))
-      .mockResolvedValueOnce(Response.json({ flow_id: "flow_guide", kind: "guide", status: "draft" }, { status: 201 }));
-    vi.stubGlobal("fetch", fetch);
-
-    const proposals = await api.flowProposals("sess_1");
-    const guide = await api.saveGuide("sess_1", "run_1");
-
-    expect(proposals).toEqual([proposal]);
-    expect(guide).toMatchObject({ flow_id: "flow_guide", kind: "guide", status: "draft" });
-    expect(fetch.mock.calls[0]?.[0]).toBe("/v1/sessions/sess_1/flow-proposals");
-    expect(fetch.mock.calls[1]).toEqual([
-      "/v1/flows/guides",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ session_id: "sess_1", run_id: "run_1" }),
-      }),
-    ]);
+  it("does not expose legacy run-based Guide APIs", () => {
+    expect(api).not.toHaveProperty("flowProposals");
+    expect(api).not.toHaveProperty("saveGuide");
   });
 
   it("creates and updates a manually authored Guide draft", async () => {

@@ -12,6 +12,8 @@ function readSource(): string {
     "./conversation.tsx",
     "./session-chrome.tsx",
     "./session-timeline.tsx",
+    "./flow-save-request-card.tsx",
+    "./flow-save-inbox-detail.tsx",
     "./command-palette.tsx",
   ]
     .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
@@ -36,6 +38,7 @@ describe("Workbench component policy", () => {
       "./composer-controls.tsx",
       "./markdown-composer/markdown-composer.tsx",
       "./design-preview.tsx",
+      "./flow-save-inbox-detail.tsx",
       "./ui/button.tsx",
       "./ui/textarea.tsx",
       "./ui/badge.tsx",
@@ -220,6 +223,59 @@ describe("Workbench component policy", () => {
 
     expect(source).toContain("useSessionView(selectedSessionId)");
     expect(source).not.toContain("setEvents(");
+  });
+
+  it("does not fetch or pass legacy automatic Flow proposals", () => {
+    const source = readSource();
+
+    expect(source).not.toContain("api.flowProposals(");
+    expect(source).not.toContain("flowProposals={");
+  });
+
+  it("keeps Flow save intent writes caller-owned and Timeline state server-owned", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+    const card = readFileSync(new URL("./flow-save-request-card.tsx", import.meta.url), "utf8");
+
+    expect(workbench).toContain("flowSaveCommand");
+    expect(workbench).toContain("api.requestFlowSave(");
+    expect(workbench).toContain("api.confirmFlowSave(");
+    expect(workbench).toContain("api.dismissFlowSave(");
+    expect(workbench).toContain("crypto.randomUUID()");
+    expect(workbench).toContain("sessionConnection.refresh(");
+    expect(workbench).not.toContain("FLOW_SAVE_REQUESTED");
+    expect(workbench).not.toContain("FLOW_CANDIDATE_CREATED");
+    expect(card).not.toContain("@/lib/api");
+    expect(card).not.toContain("crypto.");
+    expect(card).not.toContain("sessionViewStore");
+  });
+
+  it("loads the global Flow save inbox through one race-safe polling lifecycle", () => {
+    const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
+
+    expect(workbench).toContain("new FlowSaveInboxState");
+    expect(workbench).toContain("api.pendingFlowSaveRequests(");
+    expect(workbench).toContain('document.addEventListener("visibilitychange"');
+    expect(workbench).toContain('refreshFlowSaveInboxRef.current("periodic")');
+    expect(workbench.match(/window\.setInterval/g) ?? []).toHaveLength(1);
+    expect(workbench).not.toMatch(/event_sequence[^;\n]*[<>]=?/);
+  });
+
+  it("keeps the Flow save inbox inside narrow viewport containment rules", () => {
+    const detail = readFileSync(new URL("./flow-save-inbox-detail.tsx", import.meta.url), "utf8");
+    const chrome = readFileSync(new URL("./session-chrome.tsx", import.meta.url), "utf8");
+
+    expect(detail).toContain("min-w-0");
+    expect(detail).toContain("[overflow-wrap:anywhere]");
+    expect(detail).not.toContain("overflow-x-hidden");
+    expect(chrome).toContain("data-flow-save-inbox-request");
+    expect(chrome).toContain("[overflow-wrap:anywhere]");
+  });
+
+  it("uses the shared Popover primitive for Turn actions", () => {
+    const timeline = readFileSync(new URL("./session-timeline.tsx", import.meta.url), "utf8");
+    expect(timeline).toContain('from "@/components/ui/popover"');
+    expect(timeline).not.toContain('role="menu"');
+    expect(timeline).not.toContain('aria-haspopup="menu"');
   });
 
   it("does not block the first paint on provider Session import", () => {

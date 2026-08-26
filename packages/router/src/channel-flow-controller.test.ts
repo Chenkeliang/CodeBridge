@@ -48,7 +48,6 @@ function context(
     management?: {
       flows: ChannelManageableFlow[];
       review: ChannelFlowReviewSummary;
-      save?: ReturnType<typeof vi.fn>;
       update?: ReturnType<typeof vi.fn>;
       reject?: ReturnType<typeof vi.fn>;
     };
@@ -67,7 +66,6 @@ function context(
     listFlows: async () => options.flows ?? [demoFlow],
     getSessionId: async () => "sess_1",
     listManageableFlows: options.management ? async () => options.management!.flows : undefined,
-    saveLatestGuide: options.management?.save,
     getFlowReviewSummary: options.management ? async () => options.management!.review : undefined,
     updateCandidateSummary: options.management?.update,
     rejectCandidate: options.management?.reject,
@@ -135,13 +133,14 @@ describe("ChannelFlowController", () => {
       flow, changedFields: ["step ~lookup"], provenance: { sourceRunId: "run_1", sourceSessionId: "sess_1" },
       evidenceCount: 1, validationIssues: [],
     };
-    const save = vi.fn(async () => ({ ...flow, flowId: "flow_guide", kind: "guide" as const, status: "draft" as const }));
     const update = vi.fn(async () => ({ ...flow, name: "新名称", definitionRevision: "sha256:next" }));
     const reject = vi.fn(async () => ({ ...flow, reviewStatus: "rejected" }));
-    const management = { flows: [flow], review, save, update, reject };
+    const management = { flows: [flow], review, update, reject };
 
     await expect(context(controller, "/flow manage", { management })).resolves.toMatchObject({ text: expect.stringContaining("runbook/candidate") });
-    await expect(context(controller, "/flow guide save", { management })).resolves.toMatchObject({ text: expect.stringContaining("flow_guide") });
+    await expect(context(controller, "/flow guide save", { management })).resolves.toMatchObject({
+      text: expect.stringMatching(/已停用.*Web.*存为 Flow/s),
+    });
     await expect(context(controller, "/flow diff flow_candidate", { management })).resolves.toMatchObject({ text: expect.stringContaining("Dry-run 成功证据：1") });
     await context(controller, "/flow edit flow_candidate name=新名称", { management });
     expect(update).toHaveBeenCalledWith("flow_candidate", { name: "新名称" });

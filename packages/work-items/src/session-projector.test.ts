@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DatabaseSync } from "node:sqlite";
 import { SqliteEventStore, type DomainEventType } from "./index.js";
+import { projectSessionEvent } from "./session-projector.js";
 
 function setup() {
   const store = new SqliteEventStore(":memory:");
@@ -385,6 +386,268 @@ describe("Session projector", () => {
       .listTimelineTurns("sess_1", { limit: 50 })
       .turns[0]!;
     expect(turn.status).toBe("succeeded");
+    store.close();
+  });
+
+  it.each([
+    {
+      terminalType: "FLOW_SAVE_DISMISSED" as const,
+      terminalPayload: { request_id: "fsr_one", source_run_id: "run_source" },
+      expectedStatus: "dismissed",
+    },
+    {
+      terminalType: "FLOW_SAVE_FAILED" as const,
+      terminalPayload: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        code: "source_run_not_extractable",
+      },
+      expectedStatus: "failed",
+    },
+    {
+      terminalType: "FLOW_CANDIDATE_CREATED" as const,
+      terminalPayload: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        flow_id: "flow_candidate",
+        definition_revision: "sha256:definition",
+      },
+      expectedStatus: "completed",
+    },
+  ])("projects $terminalType onto the original Flow save request block", ({
+    terminalType,
+    terminalPayload,
+    expectedStatus,
+  }) => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "user",
+      target: "fsr_one",
+      payload: {
+        request_id: "fsr_one",
+        request_run_id: "run_1",
+        request_turn_id: "turn_request",
+        source_run_id: "run_source",
+        source_turn_id: "turn_source",
+        source_title: "查询公司权益并核对交付",
+        source_imported: false,
+      },
+    });
+    const pending = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.filter((block) => block.kind === "flow_save_request");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      blockId: "flow_save:fsr_one",
+      kind: "flow_save_request",
+      status: "pending",
+      metadata: expect.objectContaining({
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        source_title: "查询公司权益并核对交付",
+        source_imported: false,
+      }),
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: terminalType,
+      actor: "system",
+      target: "fsr_one",
+      payload: terminalPayload,
+    });
+
+    const blocks = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.filter((block) => block.kind === "flow_save_request");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      blockId: "flow_save:fsr_one",
+      kind: "flow_save_request",
+      status: expectedStatus,
+      metadata: expect.objectContaining({
+        source_imported: false,
+        ...terminalPayload,
+      }),
+    });
+    store.close();
+  });
+
+  it("does not regress a completed Flow save request when an older event is replayed", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "user",
+      target: "fsr_one",
+      payload: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        source_imported: false,
+      },
+    });
+    const completed = store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_CANDIDATE_CREATED",
+      actor: "system",
+      target: "fsr_one",
+      payload: {
+        request_id: "fsr_one",
+        source_run_id: "run_source",
+        flow_id: "flow_candidate",
+        definition_revision: "sha256:definition",
+      },
+    });
+
+    projectSessionEvent(rawDatabase(store), "sess_1", {
+      ...completed,
+      eventId: "evt_older_dismiss",
+      sequence: completed.sequence - 1,
+      type: "FLOW_SAVE_DISMISSED",
+      payload: { request_id: "fsr_one", source_run_id: "run_source" },
+    });
+
+    const block = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.find((candidate) => candidate.blockId === "flow_save:fsr_one");
+    expect(block?.status).toBe("completed");
+    store.close();
+  });
+
+  it("preserves Flow save identity when display metadata exceeds sixteen KiB", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    const large = "x".repeat(17_000);
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "user",
+      target: "fsr_large",
+      payload: {
+        request_id: "fsr_large",
+        request_turn_id: "turn_request",
+        source_run_id: "run_source",
+        source_imported: true,
+        user_message: large,
+        intent_summary: large,
+        name_hint: large,
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_SAVE_FAILED",
+      actor: "system",
+      target: "fsr_large",
+      payload: {
+        request_id: "fsr_large",
+        source_run_id: "run_source",
+        code: "source_run_not_extractable",
+      },
+    });
+
+    const block = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.find((candidate) => candidate.blockId === "flow_save:fsr_large");
+    expect(block).toMatchObject({
+      status: "failed",
+      metadata: expect.objectContaining({
+        request_id: "fsr_large",
+        source_run_id: "run_source",
+        source_imported: true,
+        status: "failed",
+        error_code: "source_run_not_extractable",
+        truncated: true,
+      }),
+    });
+    expect(String(block?.metadata.user_message)).toHaveLength(2_048);
+    expect(String(block?.metadata.intent_summary)).toHaveLength(2_048);
+    expect(String(block?.metadata.name_hint)).toHaveLength(2_048);
+
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "user",
+      target: "fsr_large_candidate",
+      payload: {
+        request_id: "fsr_large_candidate",
+        request_turn_id: "turn_request",
+        source_run_id: "run_source",
+        source_imported: false,
+        user_message: large,
+        intent_summary: large,
+        name_hint: large,
+      },
+    });
+    store.appendEvent({
+      workItemId: item.id,
+      runId: "run_1",
+      type: "FLOW_CANDIDATE_CREATED",
+      actor: "system",
+      target: "fsr_large_candidate",
+      payload: {
+        request_id: "fsr_large_candidate",
+        source_run_id: "run_source",
+        flow_id: "flow_candidate",
+        definition_revision: "sha256:definition",
+      },
+    });
+    const candidate = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.find((entry) => entry.blockId === "flow_save:fsr_large_candidate");
+    expect(candidate).toMatchObject({
+      status: "completed",
+      metadata: expect.objectContaining({
+        request_id: "fsr_large_candidate",
+        source_run_id: "run_source",
+        source_imported: false,
+        status: "completed",
+        flow_id: "flow_candidate",
+        truncated: true,
+      }),
+    });
+    store.close();
+  });
+
+  it("never falls back to the latest Turn for a new Flow save request", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    const turnId = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!.turnId;
+
+    store.appendEvent({
+      workItemId: item.id,
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "user",
+      target: "fsr_missing_turn",
+      payload: {
+        request_id: "fsr_missing_turn",
+        request_turn_id: "turn_missing",
+        source_run_id: "run_source",
+      },
+    });
+    expect(store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!.blocks)
+      .not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ blockId: "flow_save:fsr_missing_turn" }),
+      ]));
+
+    store.appendEvent({
+      workItemId: item.id,
+      type: "FLOW_SAVE_REQUESTED",
+      actor: "user",
+      target: "fsr_exact_turn",
+      payload: {
+        request_id: "fsr_exact_turn",
+        request_turn_id: turnId,
+        source_run_id: "run_source",
+      },
+    });
+    const exact = store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]!
+      .blocks.find((entry) => entry.blockId === "flow_save:fsr_exact_turn");
+    expect(exact?.status).toBe("pending");
     store.close();
   });
 

@@ -10,33 +10,26 @@ import {
 import type { CapabilityRegistry, CapabilityRuntime } from "@codebridge/policy";
 import { compileWorkflow, definitionHash, validatePostcondition, WorkflowValidationError } from "@codebridge/workflow-engine";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
-import type { SqliteEventStore } from "@codebridge/work-items";
-import type { DomainEvent } from "@codebridge/work-items";
+import type { DomainEvent, SqliteEventStore } from "@codebridge/work-items";
+import {
+  buildCandidateDefinition,
+  FlowSaveIntentError,
+  type FlowSaveIntentService,
+  type FlowSaveRequest,
+  type FlowSaveRequestState,
+} from "./flow-save-intent.js";
+import type {
+  FlowSaveInboxRequest,
+  FlowSaveInboxService,
+} from "./flow-save-inbox.js";
 
 export interface FlowApiOptions {
   sessions?: SessionCatalogStore;
   events?: SqliteEventStore;
   capabilities?: CapabilityRegistry;
   runtime?: CapabilityRuntime;
-}
-
-type FlowProposalKind = "structured_plan" | "observed_trace" | "unavailable";
-
-interface AgentFlowProposal {
-  sessionId: string;
-  runId: string;
-  agentId: string;
-  runStatus: string;
-  kind: FlowProposalKind;
-  saveable: boolean;
-  reason: string | null;
-  sourceFlowId: string | null;
-  sourceDefinitionRevision: string | null;
-  guide: {
-    name: string;
-    description: string | null;
-    steps: Array<{ id: string; purpose: string; dependsOn: string[] }>;
-  } | null;
+  flowSaveIntents?: FlowSaveIntentService;
+  flowSaveInbox?: FlowSaveInboxService;
 }
 
 export function createFlowApp(catalog: FlowCatalogStore, token: string, options: FlowApiOptions = {}) {
@@ -53,6 +46,27 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
     const predicate = view === "manage" ? isManageable : isConsumable;
     return c.json({ flows: catalog.list().filter(predicate).map(toApiFlow) });
   });
+  app.get("/v1/flow-save-requests", (c) => {
+    if (c.req.query("state") !== "pending") {
+      return c.json({ error: "flow_save_request_state_invalid" }, 400);
+    }
+    const limit = parseFlowSaveInboxLimit(c.req.query("limit"));
+    if (limit === null) {
+      return c.json({ error: "flow_save_request_limit_invalid" }, 400);
+    }
+    const cursor = parseFlowSaveInboxCursor(c.req.query("cursor"));
+    if (cursor === undefined) {
+      return c.json({ error: "flow_save_request_cursor_invalid" }, 400);
+    }
+    if (!options.flowSaveInbox) {
+      return c.json({ error: "flow_save_inbox_unavailable" }, 503);
+    }
+    const page = options.flowSaveInbox.listPending({ limit, cursor });
+    return c.json({
+      requests: page.requests.map(toApiFlowSaveInboxRequest),
+      next_cursor: page.nextCursor ? encodeFlowSaveInboxCursor(page.nextCursor) : null,
+    });
+  });
   app.get("/v1/capabilities", (c) => {
     const capabilities = options.capabilities?.list() ?? [];
     return c.json({
@@ -65,15 +79,73 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       })),
     });
   });
+  app.post("/v1/sessions/:session_id/flow-save-requests", async (c) => {
+    const key = c.req.header("idempotency-key")?.trim();
+    if (!key) return c.json({ error: "idempotency_key_required" }, 400);
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const sourceRunId = typeof body?.source_run_id === "string"
+      ? body.source_run_id.trim()
+      : "";
+    if (!sourceRunId) return c.json({ error: "source_run_id_required" }, 400);
+    if (body?.source !== "turn_action") {
+      return c.json({ error: "flow_save_request_source_invalid" }, 400);
+    }
+    if (!options.flowSaveIntents) {
+      return c.json({ error: "flow_save_intent_unavailable" }, 503);
+    }
+    try {
+      const request = options.flowSaveIntents.requestManual({
+        sessionId: c.req.param("session_id"),
+        sourceRunId,
+        ...(typeof body.intent_summary === "string"
+          ? { intentSummary: body.intent_summary }
+          : {}),
+        ...(typeof body.name_hint === "string" ? { nameHint: body.name_hint } : {}),
+      }, key);
+      return c.json(flowSaveStateResponse({ state: "requested", request }), 201);
+    } catch (error) {
+      if (!(error instanceof FlowSaveIntentError)) throw error;
+      const mapped = flowSaveHttpError(error);
+      return c.json(mapped.body, mapped.status);
+    }
+  });
+  app.post("/v1/flow-save-requests/:request_id/confirm", async (c) => {
+    const key = c.req.header("idempotency-key")?.trim();
+    if (!key) return c.json({ error: "idempotency_key_required" }, 400);
+    if (!options.flowSaveIntents) {
+      return c.json({ error: "flow_save_intent_unavailable" }, 503);
+    }
+    try {
+      const prior = options.flowSaveIntents.getRequestState(c.req.param("request_id"));
+      const result = await options.flowSaveIntents.confirm(c.req.param("request_id"), key);
+      return c.json({
+        state: "completed" as const,
+        request: toApiFlowSaveRequest(result.request),
+        flow: toApiFlow(result.flow),
+      }, prior.state === "completed" ? 200 : 201);
+    } catch (error) {
+      if (!(error instanceof FlowSaveIntentError)) throw error;
+      const mapped = flowSaveHttpError(error);
+      return c.json(mapped.body, mapped.status);
+    }
+  });
+  app.post("/v1/flow-save-requests/:request_id/dismiss", (c) => {
+    const key = c.req.header("idempotency-key")?.trim();
+    if (!key) return c.json({ error: "idempotency_key_required" }, 400);
+    if (!options.flowSaveIntents) {
+      return c.json({ error: "flow_save_intent_unavailable" }, 503);
+    }
+    try {
+      const state = options.flowSaveIntents.dismiss(c.req.param("request_id"), key);
+      return c.json(flowSaveStateResponse(state));
+    } catch (error) {
+      if (!(error instanceof FlowSaveIntentError)) throw error;
+      const mapped = flowSaveHttpError(error);
+      return c.json(mapped.body, mapped.status);
+    }
+  });
   app.get("/v1/sessions/:session_id/flow-proposals", (c) => {
-    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
-    if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
-    const session = options.sessions.getSession(c.req.param("session_id"));
-    if (!session) return c.json({ error: "session_not_found" }, 404);
-    return c.json({
-      proposals: proposalsForSession(session.id, session.agentId, session.taskRecordId, options.events)
-        .map(toApiFlowProposal),
-    });
+    return c.json({ error: "flow_proposals_deprecated" }, 410);
   });
   app.get("/v1/sessions/:session_id/flow-recommendations", (c) => {
     if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
@@ -302,108 +374,29 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
   });
   app.post("/v1/flows/guides", async (c) => {
     const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
-    if (body?.flow && typeof body.flow === "object" && !Array.isArray(body.flow)) {
-      const parsed = parseGuideDraft(body.flow);
-      if ("error" in parsed) return c.json({ error: parsed.error }, 400);
-      const flowId = `flow_${randomUUID().replaceAll("-", "")}`;
-      return c.json(toApiFlow(catalog.save({
-        flowId,
-        ...parsed,
-        kind: "guide",
-        status: "draft",
-        source: "user_selected",
-        definitionRevision: guideDefinitionRevision(flowId, parsed),
-        planIrHash: null,
-        inputs: [],
-        reviewStatus: "pending",
-        gitRevision: null,
-        validationIssues: [],
-        lineageRootFlowId: flowId,
-        parentFlowId: null,
-        provenance: null,
-        publicationSequence: 0,
-      })), 201);
+    if (body && (Object.hasOwn(body, "session_id") || Object.hasOwn(body, "run_id"))) {
+      return c.json({ error: "run_guide_save_deprecated" }, 410);
     }
-    if (!options.sessions) return c.json({ error: "session_catalog_unavailable" }, 503);
-    if (!options.events) return c.json({ error: "event_store_unavailable" }, 503);
-    const sessionId = typeof body?.session_id === "string" ? body.session_id : undefined;
-    const runId = typeof body?.run_id === "string" ? body.run_id : undefined;
-    if (!sessionId) return c.json({ error: "session_id is required" }, 400);
-    if (!runId) return c.json({ error: "run_id is required" }, 400);
-    const session = options.sessions.getSession(sessionId);
-    if (!session) return c.json({ error: "session_not_found" }, 404);
-    const run = options.events.getRun(runId);
-    if (!run || run.sessionId !== session.id) return c.json({ error: "run_not_found" }, 404);
-    if (run.status !== "succeeded") return c.json({ error: "run_not_succeeded" }, 409);
-    const proposal = proposalsForSession(
-      session.id,
-      session.agentId,
-      session.taskRecordId,
-      options.events,
-    ).find((entry) => entry.runId === run.id);
-    if (!proposal?.saveable || !proposal.guide || !proposal.sourceFlowId || !proposal.sourceDefinitionRevision) {
-      return c.json({
-        error: "run_not_extractable",
-        reason: proposal?.reason ?? "Run 没有可复用的计划或工具轨迹",
-      }, 409);
-    }
-    const prior = catalog.list().find((flow) =>
-      flow.kind === "guide"
-      && flow.source === "agent_generated"
-      && flow.provenance?.sourceRunId === run.id
-      && flow.provenance.sourceSessionId === session.id
-      && flow.provenance.sourceDefinitionRevision === proposal.sourceDefinitionRevision
-    );
-    if (prior) return c.json(toApiFlow(prior));
-
+    const parsed = parseGuideDraft(body?.flow);
+    if ("error" in parsed) return c.json({ error: parsed.error }, 400);
     const flowId = `flow_${randomUUID().replaceAll("-", "")}`;
-    const name = typeof body?.name === "string" && body.name.trim()
-      ? body.name.trim()
-      : proposal.guide.name;
-    const description = typeof body?.description === "string"
-      ? body.description
-      : proposal.guide.description;
-    const definition = {
-      schema_version: 1,
-      workflow_id: flowId,
-      name,
-      kind: "guide" as const,
-      status: "draft" as const,
-      description: description ?? undefined,
-      inputs: [],
-      steps: proposal.guide.steps.map((step) => ({
-        id: step.id,
-        purpose: step.purpose,
-        mode: "manual" as const,
-        depends_on: step.dependsOn,
-        approval: "none" as const,
-      })),
-    };
-    const saved = catalog.save({
+    return c.json(toApiFlow(catalog.save({
       flowId,
-      name,
-      description,
+      ...parsed,
       kind: "guide",
       status: "draft",
-      source: "agent_generated",
-      definitionRevision: definitionHash(definition),
+      source: "user_selected",
+      definitionRevision: guideDefinitionRevision(flowId, parsed),
       planIrHash: null,
       inputs: [],
-      steps: proposal.guide.steps.map((step) => ({
-        id: step.id,
-        purpose: step.purpose,
-        mode: "manual",
-        dependsOn: step.dependsOn,
-        approval: "none",
-      })),
-      provenance: {
-        sourceRunId: run.id,
-        sourceSessionId: session.id,
-        sourceFlowId: proposal.sourceFlowId,
-        sourceDefinitionRevision: proposal.sourceDefinitionRevision,
-      },
-    });
-    return c.json(toApiFlow(saved), 201);
+      reviewStatus: "pending",
+      gitRevision: null,
+      validationIssues: [],
+      lineageRootFlowId: flowId,
+      parentFlowId: null,
+      provenance: null,
+      publicationSequence: 0,
+    })), 201);
   });
   app.put("/v1/flows/:flow_id/guide", async (c) => {
     const existing = catalog.get(c.req.param("flow_id"));
@@ -506,20 +499,17 @@ export function createFlowApp(catalog: FlowCatalogStore, token: string, options:
       : derivedFrom ? derivedFrom.steps.map(toWorkflowStep) : [];
     const rawInputs = Array.isArray(input.inputs) ? input.inputs : derivedFrom?.inputs ?? [];
     const source: FlowRecord["source"] = "user_selected";
-    const definition = {
-      schema_version: 1,
-      workflow_id: flowId,
+    const definition = buildCandidateDefinition({
+      flowId,
       name: typeof input.name === "string" && input.name.trim()
         ? input.name.trim()
         : derivedFrom?.name ?? existing?.name ?? flowId,
-      kind: "runbook" as const,
-      status: "draft",
       description: typeof input.description === "string"
         ? input.description
         : input.description === null ? undefined : derivedFrom?.description ?? existing?.description ?? undefined,
       inputs: rawInputs,
       steps: rawSteps,
-    };
+    });
     // The server owns revision computation (spec §6.2): a caller-supplied
     // definition_revision is accepted for backward compatibility but ignored.
     const definitionRevision = definitionHash(definition);
@@ -714,205 +704,6 @@ function toApiFlowRecommendation(
   };
 }
 
-function proposalsForSession(
-  sessionId: string,
-  agentId: string,
-  taskRecordId: string | null,
-  events: SqliteEventStore,
-): AgentFlowProposal[] {
-  const workItem = taskRecordId
-    ? events.getWorkItem(taskRecordId)
-    : events.getWorkItemBySessionId(sessionId);
-  if (!workItem) return [];
-  const sessionEvents = events.listEvents(workItem.id);
-  return events.listRuns(workItem.id)
-    .filter((run) => run.sessionId === sessionId)
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    .map((run) => proposalForRun(
-      sessionId,
-      run.id,
-      run.agentId ?? agentId,
-      run.status,
-      workItem.title,
-      sessionEvents.filter((event) => event.runId === run.id),
-    ));
-}
-
-function proposalForRun(
-  sessionId: string,
-  runId: string,
-  agentId: string,
-  runStatus: string,
-  title: string,
-  runEvents: ReturnType<SqliteEventStore["listEvents"]>,
-): AgentFlowProposal {
-  if (runStatus !== "succeeded") {
-    return unavailableProposal(sessionId, runId, agentId, runStatus, "Run 未成功，不能沉淀为 Guide");
-  }
-  const structured = [...runEvents].reverse().find((event) =>
-    event.type === "FLOW_PROPOSED" && event.payload.flow && typeof event.payload.flow === "object"
-  );
-  if (structured) {
-    const payload = structured.payload as Record<string, unknown>;
-    const flow = payload.flow as Record<string, unknown>;
-    const rawSteps = Array.isArray(flow.steps) ? flow.steps : [];
-    const steps = rawSteps.flatMap((raw, index) => {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
-      const step = raw as Record<string, unknown>;
-      const purpose = typeof step.purpose === "string" ? step.purpose.trim() : "";
-      if (!purpose) return [];
-      const id = typeof step.id === "string" && step.id.trim()
-        ? step.id.trim()
-        : `step_${index + 1}`;
-      return [{
-        id,
-        purpose,
-        dependsOn: Array.isArray(step.depends_on)
-          ? step.depends_on.filter((value): value is string => typeof value === "string")
-          : index ? [`step_${index}`] : [],
-      }];
-    });
-    const sourceFlowId = typeof flow.workflow_id === "string"
-      ? flow.workflow_id
-      : `flow_ephemeral_${runId}`;
-    const sourceDefinitionRevision = typeof payload.definition_revision === "string"
-      ? payload.definition_revision
-      : `agent:${definitionHash({ runId, steps })}`;
-    if (steps.length > 0) {
-      return {
-        sessionId,
-        runId,
-        agentId,
-        runStatus,
-        kind: "structured_plan",
-        saveable: true,
-        reason: null,
-        sourceFlowId,
-        sourceDefinitionRevision,
-        guide: {
-          name: sanitizedGuideName(
-            typeof flow.name === "string" && flow.name.trim() ? flow.name : title,
-            `${agentId} Run Guide`,
-          ),
-          description: `基于 ${agentId} 成功 Run 的结构化 Agent 计划整理。`,
-          steps,
-        },
-      };
-    }
-  }
-
-  const toolNames = runEvents.flatMap((event) => {
-    if (event.type !== "AGENT_EVENT") return [];
-    const agentEvent = event.payload.event;
-    if (!agentEvent || typeof agentEvent !== "object" || Array.isArray(agentEvent)) return [];
-    const value = agentEvent as Record<string, unknown>;
-    return value.type === "tool_start" && typeof value.name === "string"
-      ? [value.name]
-      : [];
-  });
-  if (toolNames.length >= 2) {
-    const purposes = toolNames
-      .map(sanitizedToolPurpose)
-      .filter((purpose, index, values) => index === 0 || purpose !== values[index - 1])
-      .slice(0, 12);
-    const steps = purposes.map((purpose, index) => ({
-      id: `step_${index + 1}`,
-      purpose,
-      dependsOn: index ? [`step_${index}`] : [],
-    }));
-    const sourceDefinitionRevision = `trace:${definitionHash({ runId, purposes })}`;
-    return {
-      sessionId,
-      runId,
-      agentId,
-      runStatus,
-      kind: "observed_trace",
-      saveable: true,
-      reason: "基于实际工具轨迹生成，未映射 Capability，需人工整理",
-      sourceFlowId: `flow_ephemeral_${runId}`,
-      sourceDefinitionRevision,
-      guide: {
-        name: sanitizedGuideName(title, `${agentId} Run Guide`),
-        description: `基于 ${agentId} 成功 Run 的已执行工具轨迹整理；参数已移除。`,
-        steps,
-      },
-    };
-  }
-  return unavailableProposal(
-    sessionId,
-    runId,
-    agentId,
-    runStatus,
-    "Run 没有结构化 Agent 计划，也没有足够的工具调用证据",
-  );
-}
-
-function sanitizedToolPurpose(name: string): string {
-  const skillScript = name.match(/\/skills\/([^/\s]+)\/scripts\/([^/\s`]+)/i);
-  if (skillScript) {
-    const script = skillScript[2]!.replace(/\.(?:py|js|ts|sh)$/i, "");
-    return `使用 ${skillScript[1]} · ${script}`;
-  }
-  const plain = name.trim();
-  if (/^[\p{L}\p{N} _.-]{1,48}$/u.test(plain)) return `使用 ${plain}`;
-  return "执行受控工具步骤";
-}
-
-function sanitizedGuideName(value: string, fallback: string): string {
-  const firstLine = value.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? fallback;
-  const redacted = firstLine
-    .replace(/https?:\/\/\S+/gi, "链接")
-    .replace(/(?:\/Users|\/home|[A-Za-z]:\\)[^\s]+/g, "本地路径")
-    .replace(/\b(?=[A-Za-z0-9_-]{6,}\b)(?=[A-Za-z0-9_-]*\d{6,})[A-Za-z0-9_-]+\b/g, "参数")
-    .replace(/\s+/g, " ")
-    .trim();
-  const characters = Array.from(redacted || fallback);
-  return characters.length > 60 ? `${characters.slice(0, 60).join("")}…` : characters.join("");
-}
-
-function unavailableProposal(
-  sessionId: string,
-  runId: string,
-  agentId: string,
-  runStatus: string,
-  reason: string,
-): AgentFlowProposal {
-  return {
-    sessionId,
-    runId,
-    agentId,
-    runStatus,
-    kind: "unavailable",
-    saveable: false,
-    reason,
-    sourceFlowId: null,
-    sourceDefinitionRevision: null,
-    guide: null,
-  };
-}
-
-function toApiFlowProposal(proposal: AgentFlowProposal): Record<string, unknown> {
-  return {
-    session_id: proposal.sessionId,
-    run_id: proposal.runId,
-    agent_id: proposal.agentId,
-    run_status: proposal.runStatus,
-    kind: proposal.kind,
-    saveable: proposal.saveable,
-    reason: proposal.reason,
-    source_definition_revision: proposal.sourceDefinitionRevision,
-    guide: proposal.guide ? {
-      name: proposal.guide.name,
-      description: proposal.guide.description,
-      steps: proposal.guide.steps.map((step) => ({
-        id: step.id,
-        purpose: step.purpose,
-        depends_on: step.dependsOn,
-      })),
-    } : null,
-  };
-}
-
 function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, unknown> {
   if (!flow) throw new Error("flow is required");
   return {
@@ -951,12 +742,118 @@ function toApiFlow(flow: ReturnType<FlowCatalogStore["get"]>): Record<string, un
   };
 }
 
+function toApiFlowSaveRequest(request: FlowSaveRequest): Record<string, unknown> {
+  return {
+    request_id: request.requestId,
+    session_id: request.sessionId,
+    request_turn_id: request.requestTurnId,
+    request_run_id: request.requestRunId,
+    source_turn_id: request.sourceTurnId,
+    source_run_id: request.sourceRunId,
+    source_title: request.sourceTitle,
+    source: request.source,
+    user_message: request.userMessage,
+    intent_summary: request.intentSummary,
+    name_hint: request.nameHint,
+    source_imported: request.sourceImported,
+    created_at: request.createdAt,
+  };
+}
+
+function toApiFlowSaveInboxRequest(
+  request: FlowSaveInboxRequest,
+): Record<string, unknown> {
+  return {
+    ...toApiFlowSaveRequest(request),
+    agent_id: request.agentId,
+    session_title: request.sessionTitle,
+    event_sequence: request.eventSequence,
+  };
+}
+
+function parseFlowSaveInboxLimit(value: string | undefined): number | null {
+  if (value === undefined) return 50;
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed <= 100 ? parsed : null;
+}
+
+function parseFlowSaveInboxCursor(
+  value: string | undefined,
+): { occurredAt: string; eventId: string } | null | undefined {
+  if (value === undefined) return null;
+  if (!value || !/^[A-Za-z0-9_-]+$/.test(value)) return undefined;
+  try {
+    const buffer = Buffer.from(value, "base64url");
+    if (buffer.toString("base64url") !== value) return undefined;
+    const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      Object.keys(record).sort().join(",") !== "event_id,occurred_at"
+      || typeof record.occurred_at !== "string"
+      || typeof record.event_id !== "string"
+      || !record.event_id
+    ) return undefined;
+    const occurredAt = record.occurred_at;
+    const timestamp = new Date(occurredAt);
+    if (!Number.isFinite(timestamp.getTime()) || timestamp.toISOString() !== occurredAt) {
+      return undefined;
+    }
+    return { occurredAt, eventId: record.event_id };
+  } catch {
+    return undefined;
+  }
+}
+
+function encodeFlowSaveInboxCursor(cursor: {
+  occurredAt: string;
+  eventId: string;
+}): string {
+  return Buffer.from(JSON.stringify({
+    occurred_at: cursor.occurredAt,
+    event_id: cursor.eventId,
+  })).toString("base64url");
+}
+
+function flowSaveStateResponse(state: FlowSaveRequestState): Record<string, unknown> {
+  return {
+    state: state.state,
+    request: toApiFlowSaveRequest(state.request),
+    ...(state.state === "completed"
+      ? {
+          flow_id: state.flowId,
+          definition_revision: state.definitionRevision,
+        }
+      : {}),
+    ...(state.state === "failed" ? { code: state.code } : {}),
+  };
+}
+
+function flowSaveHttpError(error: FlowSaveIntentError): {
+  status: 404 | 409 | 503;
+  body: { error: string };
+} {
+  const code = error.code === "flow_save_request_already_completed"
+    ? "flow_save_request_state_conflict"
+    : error.code;
+  return {
+    status: error.status,
+    body: { error: code },
+  };
+}
+
 function toApiProvenance(provenance: FlowRecord["provenance"]): Record<string, string> | null {
   return provenance ? {
     source_run_id: provenance.sourceRunId,
     source_session_id: provenance.sourceSessionId,
     source_flow_id: provenance.sourceFlowId,
     source_definition_revision: provenance.sourceDefinitionRevision,
+    ...(provenance.sourceRequestId
+      ? { source_request_id: provenance.sourceRequestId }
+      : {}),
   } : null;
 }
 

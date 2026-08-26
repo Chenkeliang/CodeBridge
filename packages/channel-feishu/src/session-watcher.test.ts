@@ -13,6 +13,7 @@ import {
 } from "./session-watcher.js";
 
 function makeHost() {
+  const contents: string[] = [];
   const stream = vi.fn(
     async (
       _chatId: string,
@@ -29,14 +30,16 @@ function makeHost() {
         .markdown({
           cardId: "cardkit-1",
           messageId: "card-1",
-          setContent: async () => {},
+          setContent: async (content) => {
+            contents.push(content);
+          },
         })
         .catch(() => {});
     },
   );
   const host: FeishuCardHost = {
     channel: { stream } as never,
-    sendMarkdown: async () => {},
+    sendMarkdown: vi.fn(async () => {}),
     resolveCardId: vi.fn(async () => "cardkit-resolved"),
     updateCard: vi.fn(async () => {}),
     registerPendingStream: () => {},
@@ -44,7 +47,7 @@ function makeHost() {
     log: () => {},
     isDisconnecting: () => false,
   };
-  return { host, stream };
+  return { host, stream, contents };
 }
 
 function makeIngress() {
@@ -161,6 +164,27 @@ function terminalEvent(
     target: null,
     resultRef: null,
     payload: {},
+  };
+}
+
+function flowSaveRequestedEvent(
+  sequence: number,
+  runId = "run_1",
+): ChannelSessionEvent {
+  const requestId = runId === "run_1" ? "fsr_1" : `fsr_${runId}`;
+  return {
+    type: "FLOW_SAVE_REQUESTED",
+    sequence,
+    runId,
+    executionKind: "agent",
+    occurredAt: "2026-08-21T10:00:30.000Z",
+    target: requestId,
+    resultRef: null,
+    payload: {
+      request_id: requestId,
+      request_run_id: runId,
+      source_run_id: "run_previous",
+    },
   };
 }
 
@@ -653,6 +677,129 @@ describe("FeishuSessionWatcher", () => {
     w.abort();
   });
 
+  it("keeps one Flow save request notice on the same card through replay and Run completion", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    const requested = flowSaveRequestedEvent(7);
+    let releasePostTerminal!: () => void;
+    let markPostTerminalProcessed!: () => void;
+    const postTerminalGate = new Promise<void>((resolve) => {
+      releasePostTerminal = resolve;
+    });
+    const postTerminalProcessed = new Promise<void>((resolve) => {
+      markPostTerminalProcessed = resolve;
+    });
+    ingress.events = vi.fn(async function* (
+      _sessionId: string,
+      opts: { signal: AbortSignal },
+    ) {
+      yield requested;
+      yield requested;
+      yield terminalEvent(8);
+      await postTerminalGate;
+      yield {
+        ...requested,
+        type: "FLOW_SAVE_DISMISSED",
+        sequence: 9,
+      };
+      yield {
+        ...requested,
+        type: "FLOW_CANDIDATE_CREATED",
+        sequence: 10,
+      };
+      markPostTerminalProcessed();
+      await new Promise<void>((resolve) =>
+        opts.signal.addEventListener("abort", () => resolve()),
+      );
+    });
+
+    const w = watcher(ingress, host);
+    w.resumeCardForRun(
+      "run_1",
+      "card-old",
+      "turn_1",
+      "feishu:old:run_1",
+      false,
+      "cardkit-old",
+    );
+    w.start(0);
+
+    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+    const writesAtTerminal = vi.mocked(host.updateCard).mock.calls.length;
+    releasePostTerminal();
+    await postTerminalProcessed;
+
+    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+    expect(final).toContain("✅ **已完成**");
+    expect(final.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
+      .toHaveLength(1);
+    expect(vi.mocked(host.updateCard).mock.calls.every(([cardId]) =>
+      cardId === "cardkit-old"
+    )).toBe(true);
+    expect(host.sendMarkdown).not.toHaveBeenCalled();
+    expect(host.updateCard).toHaveBeenCalledTimes(writesAtTerminal);
+    expect(ingress.events).toHaveBeenCalledTimes(1);
+    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
+    w.abort();
+  });
+
+  it("ignores a foreign Run save request before projecting the matching Run", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    let releaseForeign!: () => void;
+    let markForeignProcessed!: () => void;
+    let markMatchingProcessed!: () => void;
+    const foreignGate = new Promise<void>((resolve) => {
+      releaseForeign = resolve;
+    });
+    const foreignProcessed = new Promise<void>((resolve) => {
+      markForeignProcessed = resolve;
+    });
+    const matchingProcessed = new Promise<void>((resolve) => {
+      markMatchingProcessed = resolve;
+    });
+    ingress.events = vi.fn(async function* (
+      _sessionId: string,
+      opts: { signal: AbortSignal },
+    ) {
+      yield flowSaveRequestedEvent(7, "run_2");
+      markForeignProcessed();
+      await foreignGate;
+      yield flowSaveRequestedEvent(8, "run_1");
+      markMatchingProcessed();
+      await new Promise<void>((resolve) =>
+        opts.signal.addEventListener("abort", () => resolve()),
+      );
+    });
+
+    const w = watcher(ingress, host);
+    w.resumeCardForRun(
+      "run_1",
+      "card-old",
+      "turn_1",
+      "feishu:old:run_1",
+      false,
+      "cardkit-old",
+    );
+    w.start(0);
+
+    await foreignProcessed;
+    const writesAfterForeign = vi.mocked(host.updateCard).mock.calls.length;
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1)))
+      .not.toContain("已记录“存为 Flow”请求");
+    expect(host.sendMarkdown).not.toHaveBeenCalled();
+
+    releaseForeign();
+    await matchingProcessed;
+
+    expect(vi.mocked(host.updateCard).mock.calls.length)
+      .toBeGreaterThan(writesAfterForeign);
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1)))
+      .toContain("已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。");
+    expect(host.sendMarkdown).not.toHaveBeenCalled();
+    w.abort();
+  });
+
   it.each([
     ["RUN_SUCCEEDED", "✅ **已完成**"],
     ["RUN_FAILED", "❌ **已失败**"],
@@ -833,6 +980,58 @@ describe("FeishuSessionWatcher", () => {
 describe("FeishuRunCard", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("keeps one Flow save request footer on the live card through terminal rendering", async () => {
+    const contents: string[] = [];
+    const sendMarkdown = vi.fn(async () => {});
+    const host: FeishuCardHost = {
+      channel: {
+        stream: async (
+          _chatId: string,
+          input: {
+            markdown(controller: {
+              cardId: string;
+              messageId: string;
+              setContent(full: string): Promise<void>;
+            }): Promise<void>;
+          },
+        ) => {
+          void input.markdown({
+            cardId: "cardkit-1",
+            messageId: "card-1",
+            setContent: async (full) => {
+              contents.push(full);
+            },
+          }).catch(() => {});
+        },
+      } as never,
+      sendMarkdown,
+      updateCard: async () => {},
+      registerPendingStream: () => {},
+      clearPendingStream: () => {},
+      log: () => {},
+      isDisconnecting: () => false,
+    };
+    const card = new FeishuRunCard(host, "chat", "src", "run_1", false);
+    await card.open();
+    const longResult = "完整正文".repeat(1_600);
+    await card.onAgentEvent({
+      type: "text_delta",
+      phase: "final_answer",
+      messageId: "long-final",
+      text: longResult,
+    });
+    await card.onFlowSaveRequested();
+    await card.onFlowSaveRequested();
+    await card.finalize("succeeded");
+
+    expect(contents.at(-1)).toContain("✅ **已完成**");
+    expect(contents.at(-1)).toContain(longResult);
+    expect(contents.at(-1)?.match(
+      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
+    )).toHaveLength(1);
+    expect(sendMarkdown).not.toHaveBeenCalled();
   });
 
   it("keeps a ten-minute run and its terminal result on the original card", async () => {

@@ -1,5 +1,5 @@
 import type { SessionEvent, TimelineBlockView, TimelineTurnView } from "./types";
-import { isFlowProjectionEvent } from "@codebridge/core";
+import { flowSaveIntentProjection, isFlowProjectionEvent } from "@codebridge/core";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -57,6 +57,68 @@ function textBlock(
 
 function stepBlockId(runId: string, stepId: string): string {
   return blockId("flow_step", runId, stepId);
+}
+
+export function applyFlowSaveIntentEvent(
+  turns: TimelineTurnView[],
+  event: SessionEvent,
+): TimelineTurnView[] {
+  const payload = asRecord(event.payload);
+  const projection = flowSaveIntentProjection({
+    type: event.type,
+    sequence: event.sequence,
+    occurredAt: event.occurred_at,
+    payload,
+  });
+  if (!projection) return turns;
+  const id = `flow_save:${projection.requestId}`;
+  let turnIndex = turns.findIndex((turn) =>
+    turn.blocks.some((block) => block.block_id === id)
+  );
+  if (turnIndex < 0 && event.run_id) {
+    turnIndex = turns.findIndex((turn) => turn.run_id === event.run_id);
+  }
+  if (turnIndex < 0 && typeof payload.request_turn_id === "string") {
+    turnIndex = turns.findIndex((turn) => turn.turn_id === payload.request_turn_id);
+  }
+  if (turnIndex < 0) return turns;
+  const current = turns[turnIndex]!.blocks.find((block) => block.block_id === id);
+  const currentSequence = current?.metadata.event_sequence;
+  if (typeof currentSequence === "number" && currentSequence >= event.sequence) {
+    return turns;
+  }
+  const nextBlockIndex = Math.max(
+    -1,
+    ...turns[turnIndex]!.blocks.map((candidate) => candidate.block_index),
+  ) + 1;
+  const block: TimelineBlockView = {
+    block_id: id,
+    block_index: current?.block_index ?? nextBlockIndex,
+    kind: "flow_save_request",
+    status: projection.status,
+    metadata: {
+      ...projection.metadata,
+      ...(current ? {} : { started_at: event.occurred_at }),
+    },
+    segments: [],
+    next_segment_cursor: null,
+  };
+  const nextTurns = [...turns];
+  const turn = nextTurns[turnIndex]!;
+  const blocks = [...turn.blocks];
+  const blockIndex = blocks.findIndex((candidate) => candidate.block_id === id);
+  if (blockIndex >= 0) {
+    const existing = blocks[blockIndex]!;
+    blocks[blockIndex] = {
+      ...block,
+      metadata: { ...existing.metadata, ...block.metadata },
+      segments: block.segments.length ? block.segments : existing.segments,
+    };
+  } else {
+    blocks.push(block);
+  }
+  nextTurns[turnIndex] = { ...turn, blocks };
+  return nextTurns;
 }
 
 export function applyFlowEvent(turns: TimelineTurnView[], event: SessionEvent): TimelineTurnView[] {

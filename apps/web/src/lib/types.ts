@@ -126,6 +126,51 @@ export interface FlowProvenance {
   source_session_id: string;
   source_flow_id: string;
   source_definition_revision: string;
+  source_request_id?: string;
+}
+
+export interface FlowSaveRequest {
+  request_id: string;
+  session_id: string;
+  request_turn_id: string;
+  request_run_id: string;
+  source_turn_id: string;
+  source_run_id: string;
+  source_title: string;
+  source: "agent_intent" | "turn_action";
+  user_message: string;
+  intent_summary: string | null;
+  name_hint: string | null;
+  source_imported: boolean;
+  created_at: string;
+}
+
+export interface FlowSaveInboxRequest extends FlowSaveRequest {
+  agent_id: string;
+  session_title: string | null;
+  event_sequence: number;
+}
+
+export interface FlowSaveInboxPage {
+  requests: FlowSaveInboxRequest[];
+  next_cursor: string | null;
+}
+
+export type FlowSaveRequestState =
+  | { state: "requested"; request: FlowSaveRequest }
+  | { state: "dismissed"; request: FlowSaveRequest }
+  | {
+      state: "completed";
+      request: FlowSaveRequest;
+      flow_id: string;
+      definition_revision: string;
+    }
+  | { state: "failed"; request: FlowSaveRequest; code: string };
+
+export interface FlowSaveConfirmResult {
+  state: "completed";
+  request: FlowSaveRequest;
+  flow: FlowRecord;
 }
 
 export interface FlowEvidence {
@@ -169,25 +214,6 @@ export interface FlowCapability {
   risk: "read_only" | "workspace_write" | "git_write" | "production_write";
   description: string | null;
   side_effects: boolean | null;
-}
-
-export interface FlowProposal {
-  session_id: string;
-  run_id: string;
-  agent_id: string;
-  run_status: string;
-  kind: "structured_plan" | "observed_trace" | "unavailable";
-  saveable: boolean;
-  reason: string | null;
-  source_definition_revision: string | null;
-  guide: {
-    name: string;
-    description: string | null;
-    steps: Array<{
-      id: string;
-      purpose: string;
-    }>;
-  } | null;
 }
 
 export interface FlowRecommendation {
@@ -409,7 +435,7 @@ export interface TimelineSegmentView {
 export interface TimelineBlockView {
   block_id: string;
   block_index: number;
-  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error" | "flow_param" | "flow_step" | "flow_run" | "flow_failure" | "flow_batch";
+  kind: "user_message" | "assistant" | "thought" | "work" | "tool" | "approval" | "error" | "flow_param" | "flow_step" | "flow_run" | "flow_failure" | "flow_batch" | "flow_save_request";
   status: string;
   metadata: Record<string, unknown>;
   segments: TimelineSegmentView[];
