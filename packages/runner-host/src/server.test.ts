@@ -892,7 +892,7 @@ describe("RunnerHost Pi SDK backend", () => {
     await collect(host.executeRun({
       runId: "pi-no-flow-save-run",
       sessionKey: { chatId: "chat", backendId: "pi", cwd },
-      prompt: "ordinary task",
+      prompt: "把刚才的流程存为 Flow",
     }));
 
     expect(captured?.flowSaveSourceAvailability).toBeUndefined();

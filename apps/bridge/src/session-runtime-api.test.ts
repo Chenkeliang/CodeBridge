@@ -63,6 +63,7 @@ function setup(overrides: {
 
 function setupRuntimeLoop(overrides: {
   flows?: FlowCatalogStore;
+  exposeFlowSaveAvailability?: boolean;
   flowSaveAvailability?: { available: true } | {
     available: false;
     code: "no_extractable_previous_run";
@@ -103,7 +104,7 @@ function setupRuntimeLoop(overrides: {
         runId: run.id,
         sessionKey: { chatId: workItem.conversationId, backendId: "pi", cwd: "/workspace" },
         prompt: "unused",
-        ...(linkedSessionId
+        ...(linkedSessionId && overrides.exposeFlowSaveAvailability !== false
           ? {
               flowSaveSourceAvailability: previewPreviousSource({
                 sessionId: linkedSessionId,
@@ -990,6 +991,31 @@ describe("Session runtime command API", () => {
     });
     expect(JSON.stringify(fixture.runner.requests[0]?.flowSaveSourceAvailability))
       .not.toContain("run_");
+    fixture.registry.close();
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
+  it("dispatches no Flow save availability or request when the confirmation surface is unavailable", async () => {
+    const fixture = setupRuntimeLoop({
+      exposeFlowSaveAvailability: false,
+      flowSaveAvailability: { available: true },
+    });
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      request("把刚才的流程存下来", "loop_flow_save_web_disabled"),
+    );
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => {
+      expect(fixture.runner.requests).toHaveLength(1);
+    });
+
+    expect(fixture.previewPreviousSource).not.toHaveBeenCalled();
+    expect(fixture.runner.requests[0]?.flowSaveSourceAvailability).toBeUndefined();
+    const workItemId = fixture.workItems.getWorkItemBySessionId(fixture.session.id)!.id;
+    expect(fixture.workItems.listEvents(workItemId).some((event) =>
+      event.type === "FLOW_SAVE_REQUESTED"
+    )).toBe(false);
     fixture.registry.close();
     fixture.catalog.close();
     fixture.workItems.close();
