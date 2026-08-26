@@ -1,6 +1,6 @@
 # Flow 待生成中心：跨 Session 发现与确认
 
-状态：Review draft
+状态：Accepted（非 Telegram V1 已验证）
 
 日期：2026-08-26
 
