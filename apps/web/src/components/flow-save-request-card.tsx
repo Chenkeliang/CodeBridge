@@ -26,10 +26,10 @@ export function FlowSaveRequestCard(props: {
 }) {
   const { block } = props;
   const requestId = stringMetadata(block.metadata, "request_id");
-  const sourceSummary = stringMetadata(block.metadata, "user_message")
-    ?? stringMetadata(block.metadata, "intent_summary")
+  const sourceSummary = stringMetadata(block.metadata, "source_title")
     ?? stringMetadata(block.metadata, "source_run_id")
     ?? "已选择的 Agent 回复";
+  const userMessage = stringMetadata(block.metadata, "user_message");
   const imported = block.metadata.source_imported === true;
   const busy = props.actionState?.phase != null;
 
@@ -86,6 +86,9 @@ export function FlowSaveRequestCard(props: {
         <p className="mt-1 [overflow-wrap:anywhere] text-xs leading-5 text-ink-soft">
           <span className="text-muted">来源：</span>{sourceSummary}
         </p>
+        {userMessage && userMessage !== sourceSummary && <p className="mt-1 [overflow-wrap:anywhere] text-xs leading-5 text-muted">
+          你的请求：{userMessage}
+        </p>}
         {imported && <p className="mt-2 flex items-start gap-1.5 rounded-md border border-warning/30 bg-warning-soft px-2.5 py-2 text-xs leading-5 text-warning">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>来源为导入历史，请确认其步骤仍然适用。</span>

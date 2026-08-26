@@ -981,7 +981,10 @@ describe("FlowSaveIntentService", () => {
   it("selects the latest preceding successful Agent Run by canonical sequence", () => {
     const fixture = saveIntentFixture();
     seedSaveIntentRun(fixture, { id: "run_old" });
-    const latest = seedSaveIntentRun(fixture, { id: "run_latest" });
+    const latest = seedSaveIntentRun(fixture, {
+      id: "run_latest",
+      text: "查询公司权益并核对交付\n第二行是执行细节",
+    });
     seedSaveIntentRun(fixture, { id: "run_flow", executionKind: "flow" });
     seedSaveIntentRun(fixture, { id: "run_failed", status: "failed" });
     seedSaveIntentRun(fixture, {
@@ -1006,6 +1009,13 @@ describe("FlowSaveIntentService", () => {
 
     expect(request.sourceRunId).toBe(latest.id);
     expect(request.requestRunId).toBe(requestRun.id);
+    expect(request.sourceTitle).toBe("查询公司权益并核对交付");
+    expect(request.userMessage).toBe("存为 Flow");
+    expect(fixture.events.listEventsByTarget(request.requestId)[0]?.payload)
+      .toMatchObject({
+        source_title: "查询公司权益并核对交付",
+        user_message: "存为 Flow",
+      });
   });
 
   it("never selects an earlier Flow save request Run as the reusable source", () => {

@@ -136,6 +136,7 @@ export interface FlowSaveRequest {
   request_run_id: string;
   source_turn_id: string;
   source_run_id: string;
+  source_title: string;
   source: "agent_intent" | "turn_action";
   user_message: string;
   intent_summary: string | null;

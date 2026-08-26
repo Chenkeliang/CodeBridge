@@ -44,6 +44,7 @@ export interface FlowSaveRequest {
   requestRunId: string;
   sourceTurnId: string;
   sourceRunId: string;
+  sourceTitle: string;
   source: FlowSaveRequestSource;
   userMessage: string;
   intentSummary: string | null;
@@ -538,6 +539,7 @@ export class FlowSaveIntentService {
         request_run_id: input.requestRun.id,
         source_turn_id: input.source.run.turnId,
         source_run_id: input.source.run.id,
+        source_title: readableSourceTitle(input.source.title),
         source: input.sourceType,
         user_message: input.userMessage,
         intent_summary: nullableHint(input.intentSummary),
@@ -705,6 +707,7 @@ function requestFromEvent(event: DomainEvent): FlowSaveRequest {
     requestRunId: requiredPayloadString(event, "request_run_id"),
     sourceTurnId: requiredPayloadString(event, "source_turn_id"),
     sourceRunId: requiredPayloadString(event, "source_run_id"),
+    sourceTitle: requiredPayloadString(event, "source_title"),
     source: requiredPayloadString(event, "source") as FlowSaveRequestSource,
     userMessage: requiredPayloadString(event, "user_message"),
     intentSummary: optionalPayloadString(event, "intent_summary"),
@@ -731,6 +734,11 @@ function nullableHint(value: string | undefined | null): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? Array.from(trimmed).slice(0, 240).join("") : null;
+}
+
+function readableSourceTitle(value: string): string {
+  const firstLine = value.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? value.trim();
+  return Array.from(firstLine).slice(0, 240).join("");
 }
 
 function noPreviousSource(): {

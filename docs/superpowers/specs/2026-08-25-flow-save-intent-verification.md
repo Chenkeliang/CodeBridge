@@ -1,9 +1,10 @@
 # Explicit Flow Save Intent — V1 Verification Evidence
 
 > Evidence date: 2026-08-26 (Asia/Shanghai)  
-> Branch: `codex/fix-session-history-overflow`  
-> Verified implementation HEAD: `7015a9d5e9bbb0ff019974550b193d55ee8122d7`  
-> Baseline: `origin/main@4784a8269c871bbf47056fa9299b8a26631fc2fe`  
+> PR branch: `feat_flow_save_intent`  
+> PR base: `origin/main@fbe8bf7b389d6a449f8014038e1c768cf1d89dce`  
+> PR: `#4 — feat: explicit Flow save intent (non-Telegram V1)`  
+> Split head before review fixes: `349b4199a1af0b0724c698dbd37ec32202f648d0`  
 > Runtime: Node `v24.8.0`, pnpm `10.34.1`
 
 ## 1. Result
@@ -16,26 +17,29 @@ All non-Telegram V1 gates pass, so the design status is `Implemented and verifie
 
 ## 2. Commit map
 
-| Commit | Delivery |
-|---|---|
-| `3602e84` | Design explicit Flow Save Intent |
-| `8743b36` | Executable implementation plan |
-| `c186630` | Save Intent domain events |
-| `4d485b5` | Pure Run extraction separated from recommendation |
-| `b5ca66c` | Persistent state machine and startup reconciliation |
-| `a7000cd` | Remove automatic Guide suggestions from active Web |
-| `ad5a93c` | Hydrate/SSE Timeline projection |
-| `65dd1fb` | Request, confirm, and dismiss command APIs |
-| `869956a` | Retire legacy proposal and run-based Guide paths |
-| `b3e0390` | Internal Agent save-request tool |
-| `53f6674` | Translate persisted Agent tool events |
-| `07d3cb6` | Web confirmation closed loop |
-| `27792bb` | Feishu same-card Save Intent notice |
-| `6e33967` | Telegram same-message Save Intent notice |
-| `3e7c2be` | Preserve ACP invocation identity and safe extraction |
-| `839788a` | Accept strict canonical ACP tool-start envelopes |
-| `b24d8e4` | Exclude save-request Runs from automatic source selection |
-| `7015a9d` | Keep confirmation-entry ownership in clients |
+PR #4 is a history-preserving cherry-pick of the original feature range onto the merged Provider History baseline. Before the review-fix commit, `codex/fix-session-history-overflow@16bb00b` and `feat_flow_save_intent@349b419` had the same tree (`056c9b6bff0a7e3f83cdf5035772a174b16fae91`). The mapping below makes the active verification evidence reachable from the PR history.
+
+| Original commit | PR #4 commit | Delivery |
+|---|---|---|
+| `3602e84` | `49adb7d` | Design explicit Flow Save Intent |
+| `8743b36` | `b842762` | Executable implementation plan |
+| `c186630` | `1985b6d` | Save Intent domain events |
+| `4d485b5` | `1511ba0` | Pure Run extraction separated from recommendation |
+| `b5ca66c` | `634d4c0` | Persistent state machine and startup reconciliation |
+| `a7000cd` | `f524286` | Remove automatic Guide suggestions from active Web |
+| `ad5a93c` | `bbee23e` | Hydrate/SSE Timeline projection |
+| `65dd1fb` | `edefc09` | Request, confirm, and dismiss command APIs |
+| `869956a` | `4509bf4` | Retire legacy proposal and run-based Guide paths |
+| `b3e0390` | `3648abc` | Internal Agent save-request tool |
+| `53f6674` | `32a38b4` | Translate persisted Agent tool events |
+| `07d3cb6` | `139f129` | Web confirmation closed loop |
+| `27792bb` | `2efbc32` | Feishu same-card Save Intent notice |
+| `6e33967` | `9d986c8` | Telegram same-message Save Intent notice |
+| `3e7c2be` | `b4291ad` | Preserve ACP invocation identity and safe extraction |
+| `839788a` | `234ac79` | Accept strict canonical ACP tool-start envelopes |
+| `b24d8e4` | `d56a099` | Exclude save-request Runs from automatic source selection |
+| `7015a9d` | `7fa0100` | Keep confirmation-entry ownership in clients |
+| `16bb00b` | `349b419` | Verification evidence and split head |
 
 ## 3. Automated verification
 
@@ -44,7 +48,8 @@ All listed test executions completed with zero failures and were not retried to 
 | Gate | Command / coverage | Result |
 |---|---|---|
 | Domain and crash recovery | `vitest` over `flow-save-intent`, integration, translator, Flow API, and Session projector | 5 files, 156/156 |
-| Agent adapters | Core tool, MCP server, RunnerHost, Pi, Pi Session Runner, real ACP active-session path | 6 files, 80/80 |
+| Agent adapters | Core tool, MCP server, RunnerHost, Pi, Pi Session Runner, real ACP active-session path | 6 files, 81/81 |
+| PR review fixes | Web-disabled tool gate, source title event/API/projection/card chain, RunnerHost no-MCP boundary | 7 files, 191/191 |
 | Post-fix prompt contract | Core tool description, Pi prompt guideline, MCP description | 3 files, 17/17 |
 | Presentation surfaces | Web card/Timeline/store, Feishu live/recovery, Telegram live/recovery, real Session wire contract | 8 files, 115/115 |
 | Browser closed loop and overflow | `e2e/flow-save-intent.spec.ts` and `e2e/provider-history-overflow.spec.ts` | 2 specs, 39/39 at 320/768/1280/1536 widths |
@@ -56,6 +61,8 @@ The implementation plan contained one stale test path: `packages/backends/src/ac
 The Web build emitted existing non-blocking warnings for Node built-ins externalized in the browser build, runtime-resolved Workbench fonts, and chunks above 500 kB. It emitted no type or bundle error.
 
 ## 4. Active build and process evidence
+
+This section records the active verification of the pre-review split tree. The later PR review fixes—gating the tool when Web is disabled and carrying `source_title` through the confirmation card—were verified in the PR worktree by automated contract, browser, and build gates; this PR update did not redeploy the local launchd services.
 
 After `7015a9d`, the repository was fully rebuilt and the launchd services were forcibly restarted.
 
@@ -162,6 +169,7 @@ Telegram same-message live/recovery/restart behavior is implemented and tested, 
 ## 8. GitNexus and remaining risks
 
 - The complete Flow Save Intent range affects active Agent, Web, Runtime projection, and channel paths and is correctly reported as CRITICAL at aggregate branch scope.
+- The PR review remediation changes 16 files and 26 indexed symbols across 15 existing flows; GitNexus reports HIGH, concentrated in `resolveRequest` and the existing request/confirm/dismiss event chain.
 - Each HIGH/CRITICAL edit boundary was reported before implementation and covered by focused contract plus active-surface tests.
 - The final prompt-contract commit is LOW: 5 files, 1 changed symbol, 0 affected execution processes.
 - No periodic Save Intent reconciler, duplicate channel state machine, or channel-side Catalog write was introduced.

@@ -859,6 +859,47 @@ describe("RunnerHost session lifecycle", () => {
 });
 
 describe("RunnerHost Pi SDK backend", () => {
+  it("does not configure the internal Flow save MCP without a confirmation snapshot", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-no-flow-save-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-no-flow-save-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    let captured: RunContext | undefined;
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      piSessionFactory: async (ctx) => {
+        captured = ctx;
+        return {
+          sessionId: "pi-no-flow-save",
+          subscribe(listener) {
+            listener({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: "ready" },
+            });
+            return () => {};
+          },
+          async prompt() {},
+          async steer() {},
+          async abort() {},
+          dispose() {},
+        };
+      },
+    });
+
+    await collect(host.executeRun({
+      runId: "pi-no-flow-save-run",
+      sessionKey: { chatId: "chat", backendId: "pi", cwd },
+      prompt: "ordinary task",
+    }));
+
+    expect(captured?.flowSaveSourceAvailability).toBeUndefined();
+    expect(captured?.mcpServers).toBeUndefined();
+    host.shutdown();
+  });
+
   it("copies the read-only Flow save availability snapshot into RunContext", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-flow-save-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-flow-save-"));
