@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api, streamSessionEvents } from "./api";
-import type { AgentSession, FlowRecord, SessionCompositeSnapshot, SessionMessageReceipt, SessionRuntimeView, SessionTurnView } from "./types";
+import type { AgentSession, FlowRecord, FlowSaveInboxPage, SessionCompositeSnapshot, SessionMessageReceipt, SessionRuntimeView, SessionTurnView } from "./types";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -222,6 +222,44 @@ describe("workbench API client", () => {
     }));
     expect((fetch.mock.calls[1]?.[1] as RequestInit).body).toBeUndefined();
     expect((fetch.mock.calls[2]?.[1] as RequestInit).body).toBeUndefined();
+  });
+
+  it("loads the pending Flow save inbox with an opaque cursor and caller AbortSignal", async () => {
+    const controller = new AbortController();
+    const page: FlowSaveInboxPage = {
+      requests: [{
+        request_id: "fsr_one",
+        session_id: "sess_1",
+        agent_id: "pi",
+        session_title: "仓配排查",
+        request_turn_id: "turn_request",
+        request_run_id: "run_request",
+        source_turn_id: "turn_source",
+        source_run_id: "run_source",
+        source_title: "核对仓配异常",
+        source: "agent_intent",
+        user_message: "以后都按这个流程",
+        intent_summary: "保存仓配排查步骤",
+        name_hint: "仓配排查",
+        source_imported: false,
+        created_at: "2026-08-26T04:00:00.000Z",
+        event_sequence: 42,
+      }],
+      next_cursor: "opaque.cursor",
+    };
+    const fetch = vi.fn().mockResolvedValue(Response.json(page));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(api.pendingFlowSaveRequests({
+      limit: 50,
+      cursor: "opaque.cursor",
+      signal: controller.signal,
+    })).resolves.toEqual(page);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/v1/flow-save-requests?state=pending&limit=50&cursor=opaque.cursor",
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 
   it("uses the existing Runtime approval query and write contracts", async () => {

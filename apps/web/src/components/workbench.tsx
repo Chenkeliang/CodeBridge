@@ -33,6 +33,10 @@ import {
   reconcileFlowSaveCommands,
   type FlowSaveCommandRecord,
 } from "@/lib/flow-save-command-state";
+import {
+  FlowSaveInboxState,
+  type FlowSaveInboxRefreshKind,
+} from "@/lib/flow-save-inbox-state";
 import type {
   AgentCommand,
   AgentProfile,
@@ -120,6 +124,11 @@ export function Workbench() {
   const flowSaveCommands = useRef(new Map<string, FlowSaveCommandRecord>());
   const [requestingFlowRunIds, setRequestingFlowRunIds] = useState<Set<string>>(() => new Set());
   const [flowSaveActionStates, setFlowSaveActionStates] = useState<Record<string, FlowSaveRequestActionState>>({});
+  const flowSaveInboxState = useRef(new FlowSaveInboxState({ pollIntervalMs: 15_000 }));
+  const [flowSaveInbox, setFlowSaveInbox] = useState(() => flowSaveInboxState.current.snapshot());
+  const [selectedPendingFlowSaveRequestId, setSelectedPendingFlowSaveRequestId] = useState<string | null>(null);
+  const flowSaveInboxTimer = useRef<number | null>(null);
+  const refreshFlowSaveInboxRef = useRef<(kind: FlowSaveInboxRefreshKind) => Promise<void>>(async () => {});
   const [providerHistory, setProviderHistory] = useState<ProviderHistoryImportState>({ kind: "idle" });
   const providerHistoryRequestVersion = useRef(0);
   const pendingHistoryImportKey = useRef<{ sessionId: string; key: string } | null>(null);
@@ -210,6 +219,59 @@ export function Workbench() {
     window.setTimeout(() => setNotice((current) => current?.text === message ? null : current), 4000);
   }, []);
 
+  const syncFlowSaveInbox = useCallback(() => {
+    setFlowSaveInbox(flowSaveInboxState.current.snapshot());
+  }, []);
+
+  const scheduleFlowSaveInboxPoll = useCallback(() => {
+    if (flowSaveInboxTimer.current !== null) {
+      window.clearTimeout(flowSaveInboxTimer.current);
+    }
+    const nextPollAt = flowSaveInboxState.current.snapshot().nextPollAt;
+    const delay = Math.max(0, (nextPollAt ?? Date.now() + 15_000) - Date.now());
+    flowSaveInboxTimer.current = window.setTimeout(() => {
+      flowSaveInboxTimer.current = null;
+      void refreshFlowSaveInboxRef.current("periodic");
+    }, delay);
+  }, []);
+
+  const refreshFlowSaveInbox = useCallback(async (
+    kind: FlowSaveInboxRefreshKind = "immediate",
+  ): Promise<void> => {
+    if (kind === "immediate" && flowSaveInboxTimer.current !== null) {
+      window.clearTimeout(flowSaveInboxTimer.current);
+      flowSaveInboxTimer.current = null;
+    }
+    const token = flowSaveInboxState.current.begin(kind, Date.now());
+    if (!token) return;
+    syncFlowSaveInbox();
+
+    const pages = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    let settled = false;
+    try {
+      do {
+        const page = await api.pendingFlowSaveRequests({
+          limit: 100,
+          cursor,
+          signal: token.signal,
+        });
+        pages.push(page);
+        cursor = page.next_cursor;
+        if (cursor && seenCursors.has(cursor)) throw new Error("flow_save_inbox_cursor_cycle");
+        if (cursor) seenCursors.add(cursor);
+      } while (cursor);
+      settled = flowSaveInboxState.current.succeed(token, pages, Date.now());
+    } catch (caught) {
+      settled = flowSaveInboxState.current.fail(token, caught, Date.now());
+    }
+    if (!settled) return;
+    syncFlowSaveInbox();
+    scheduleFlowSaveInboxPoll();
+  }, [scheduleFlowSaveInboxPoll, syncFlowSaveInbox]);
+  refreshFlowSaveInboxRef.current = refreshFlowSaveInbox;
+
   const previewProviderHistory = useCallback(async (sessionId: string): Promise<void> => {
     const requestVersion = ++providerHistoryRequestVersion.current;
     setProviderHistory({ kind: "previewing", sessionId });
@@ -276,6 +338,35 @@ export function Workbench() {
   }, []);
 
   useEffect(() => { void reload(false).then(() => void reload(true, true)); }, [reload]);
+
+  useEffect(() => {
+    void refreshFlowSaveInbox("immediate");
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshFlowSaveInbox("immediate");
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (flowSaveInboxTimer.current !== null) {
+        window.clearTimeout(flowSaveInboxTimer.current);
+        flowSaveInboxTimer.current = null;
+      }
+      flowSaveInboxState.current.cancel();
+    };
+  }, [refreshFlowSaveInbox]);
+
+  useEffect(() => {
+    if (area === "flows") void refreshFlowSaveInbox("immediate");
+  }, [area, refreshFlowSaveInbox]);
+
+  useEffect(() => {
+    if (
+      selectedPendingFlowSaveRequestId
+      && !flowSaveInbox.requests.some((request) => request.request_id === selectedPendingFlowSaveRequestId)
+    ) {
+      setSelectedPendingFlowSaveRequestId(null);
+    }
+  }, [flowSaveInbox.requests, selectedPendingFlowSaveRequestId]);
 
   useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
   useEffect(() => {

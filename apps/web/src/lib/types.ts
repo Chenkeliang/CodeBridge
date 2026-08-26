@@ -145,6 +145,17 @@ export interface FlowSaveRequest {
   created_at: string;
 }
 
+export interface FlowSaveInboxRequest extends FlowSaveRequest {
+  agent_id: string;
+  session_title: string | null;
+  event_sequence: number;
+}
+
+export interface FlowSaveInboxPage {
+  requests: FlowSaveInboxRequest[];
+  next_cursor: string | null;
+}
+
 export type FlowSaveRequestState =
   | { state: "requested"; request: FlowSaveRequest }
   | { state: "dismissed"; request: FlowSaveRequest }
