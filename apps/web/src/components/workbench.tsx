@@ -1002,8 +1002,12 @@ export function Workbench() {
       }));
       return;
     }
+    const candidateDetailExpectedSessionId = selectedPendingFlowSaveRequestRef.current === null
+      && selectedSessionRef.current === sessionId
+      ? sessionId
+      : undefined;
     const shouldOpenCandidate = selectedPendingFlowSaveRequestRef.current === requestId
-      || (selectedPendingFlowSaveRequestRef.current === null && selectedSessionRef.current === sessionId);
+      || candidateDetailExpectedSessionId !== undefined;
     flowSaveCommands.current.delete(commandId);
     setFlowSaveActionStates((current) => {
       const next = { ...current };
@@ -1020,8 +1024,13 @@ export function Workbench() {
     }
     const opened = await refreshFlowCatalog(
       shouldOpenCandidate ? result.flow.flow_id : undefined,
+      candidateDetailExpectedSessionId,
     ).catch((caught) => {
       if (!shouldOpenCandidate) return null;
+      if (
+        candidateDetailExpectedSessionId !== undefined
+        && selectedSessionRef.current !== candidateDetailExpectedSessionId
+      ) return null;
       notify(`Candidate 已生成，但详情打开失败：${messageOf(caught)}`, "error");
       return null;
     });

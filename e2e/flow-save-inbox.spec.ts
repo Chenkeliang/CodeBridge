@@ -76,7 +76,7 @@ function session(sessionId: string, agentId: "pi" | "codex", title: string) {
 function pendingRequest(
   requestId: string,
   sessionId: string,
-  agentId: "pi" | "codex",
+  agentId: string,
   title: string,
 ) {
   return {
@@ -504,4 +504,65 @@ test("a delayed success from request A cannot replace newly selected detail B", 
 
   await expect.poll(() => fixture.confirmCalls.length).toBe(1);
   await expect(page.locator('[data-flow-save-inbox-detail="fsr_b"]')).toBeVisible();
+});
+
+test("100 hostile pending requests stay contained from 320 through 1536 pixels", async ({ page }) => {
+  const uuid = "83944f05-2d18-4935-8296-773caa8165fc";
+  const hostilePath = `/Users/keliang/${"unbroken-path-segment/".repeat(120)}`;
+  const pending = Array.from({ length: 100 }, (_, index) => ({
+    ...pendingRequest(
+      `fsr_bulk_${index}_${uuid}`,
+      index % 2 === 0 ? "sess_a" : "sess_b",
+      index === 1 ? "missing-agent" : index % 2 === 0 ? "pi" : "codex",
+      index % 2 === 0 ? "Pi Session A" : "Codex Session B",
+    ),
+    name_hint: `待生成_${uuid}_${"LONG".repeat(180)}`,
+    source_title: `来源 ${hostilePath}`,
+    user_message: `请保存 ${uuid} ${hostilePath}`,
+    intent_summary: `复用摘要_${"without-break".repeat(240)}`,
+    source_imported: index === 0,
+    event_sequence: 100 + index,
+  }));
+  await installFixture(page, { pending });
+  await page.goto("/workbench/");
+  await page.getByRole("button", { name: /^Flows/ }).click();
+
+  await expect(page.locator("[data-flow-save-badge]")).toHaveText("99+");
+  await expect(page.locator("[data-flow-save-inbox-request]")).toHaveCount(100);
+  await page.locator("[data-flow-save-inbox-request]").first().click();
+  await expect(page.getByText("来源为导入历史，请确认其步骤仍然适用。")).toBeVisible();
+
+  for (const width of [320, 768, 1280, 1536]) {
+    await page.setViewportSize({ width, height: 900 });
+    const metrics = await page.evaluate(() => {
+      const item = document.querySelector<HTMLElement>("[data-flow-save-inbox-request]");
+      const list = item?.parentElement?.parentElement;
+      const detail = document.querySelector<HTMLElement>("[data-flow-save-inbox-detail]");
+      return {
+        document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        list: list ? list.scrollWidth - list.clientWidth : -1,
+        listVisible: Boolean(list?.getClientRects().length),
+        listScrolls: list ? list.scrollHeight > list.clientHeight : false,
+        detail: detail ? detail.scrollWidth - detail.clientWidth : -1,
+      };
+    });
+    expect(metrics.document, `document overflow at ${width}`).toBeLessThanOrEqual(0);
+    expect(metrics.list, `pending list overflow at ${width}`).toBeLessThanOrEqual(0);
+    if (width < 768) {
+      expect(metrics.listVisible, `responsive pending list visibility at ${width}`).toBe(false);
+    } else {
+      expect(metrics.listVisible, `responsive pending list visibility at ${width}`).toBe(true);
+      expect(metrics.listScrolls, `pending list must scroll internally at ${width}`).toBe(true);
+    }
+    expect(metrics.detail, `pending detail overflow at ${width}`).toBeLessThanOrEqual(0);
+    const confirm = page.getByRole("button", { name: "生成 Candidate" });
+    const dismiss = page.getByRole("button", { name: "忽略" });
+    await confirm.scrollIntoViewIfNeeded();
+    await expect(confirm).toBeInViewport();
+    await dismiss.scrollIntoViewIfNeeded();
+    await expect(dismiss).toBeInViewport();
+  }
+
+  await page.locator("[data-flow-save-inbox-request]").nth(1).click();
+  await expect(page.getByText("Agent · missing-agent")).toBeVisible();
 });
