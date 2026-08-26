@@ -27,6 +27,10 @@ import {
   createHeadlessClientApp,
 } from "./headless-client.js";
 import { killProcessTree } from "./acp-kill.js";
+import {
+  fileAttachmentPromptSuffix,
+  partitionAttachments,
+} from "../attachment-prompt.js";
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
 import {
   applySessionConfigOptions,
@@ -116,8 +120,9 @@ export function steerAcpSession(
 }
 
 async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
+  const { images, files } = partitionAttachments(ctx.attachments);
   const blocks: ContentBlock[] = [];
-  for (const att of ctx.attachments ?? []) {
+  for (const att of images) {
     const data = await fs.readFile(att.path, { encoding: "base64" });
     blocks.push({
       type: "image",
@@ -126,7 +131,10 @@ async function buildPromptBlocks(ctx: RunContext): Promise<ContentBlock[]> {
       uri: att.path,
     });
   }
-  blocks.push({ type: "text", text: ctx.prompt });
+  blocks.push({
+    type: "text",
+    text: ctx.prompt + fileAttachmentPromptSuffix(files),
+  });
   return blocks;
 }
 

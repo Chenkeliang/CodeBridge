@@ -19,6 +19,10 @@ import type {
   ProviderSessionHistoryEvent,
 } from "./session-discovery.js";
 import { createPiFlowSaveTool } from "./pi-flow-save-tool.js";
+import {
+  fileAttachmentPromptSuffix,
+  partitionAttachments,
+} from "./attachment-prompt.js";
 
 /** The small native-session surface used by the runner and by adapter tests. */
 export interface PiSession {
@@ -575,8 +579,11 @@ async function buildPrompt(ctx: RunContext): Promise<{
   options?: { images?: unknown[] };
 }> {
   if (!ctx.attachments?.length) return { text: ctx.prompt };
-  const images = await Promise.all(
-    ctx.attachments.map(async (attachment) => ({
+  const { images, files } = partitionAttachments(ctx.attachments);
+  const text = ctx.prompt + fileAttachmentPromptSuffix(files);
+  if (!images.length) return { text };
+  const imageBlocks = await Promise.all(
+    images.map(async (attachment) => ({
       type: "image",
       source: {
         type: "base64",
@@ -585,5 +592,5 @@ async function buildPrompt(ctx: RunContext): Promise<{
       },
     })),
   );
-  return { text: ctx.prompt, options: { images } };
+  return { text, options: { images: imageBlocks } };
 }

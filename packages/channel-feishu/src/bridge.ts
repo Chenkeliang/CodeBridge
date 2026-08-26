@@ -38,7 +38,7 @@ import {
   type FeishuCardHost,
 } from "./session-watcher.js";
 import {
-  downloadInboundImages,
+  downloadInboundAttachments,
   resolveInboundPrompt,
 } from "./feishu-inbound-media.js";
 import { resolveOutboundFile } from "./feishu-outbound-file.js";
@@ -370,29 +370,34 @@ export class FeishuBridge {
       `[inbound] ${msg.messageId} ${msg.content.slice(0, 60).replace(/\n/g, " ")}`,
     );
     let attachments: RunAttachment[] = [];
-    const imageResources =
-      msg.resources?.filter((r) => r.type === "image") ?? [];
-    if (imageResources.length > 0 && this.channel) {
+    if ((msg.resources?.length ?? 0) > 0 && this.channel) {
       try {
-        attachments = await downloadInboundImages(
+        const result = await downloadInboundAttachments(
           this.channel,
           msg.messageId,
-          imageResources,
+          msg.resources ?? [],
         );
+        attachments = result.attachments;
+        if (result.skipped.length > 0) {
+          await this.sendMarkdown(
+            msg.chatId,
+            `部分附件未处理：\n${result.skipped.map((item) => `- ${item}`).join("\n")}`,
+            msg.messageId,
+          );
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         await this.sendMarkdown(
           msg.chatId,
-          `❌ 图片下载失败，将仅按文字处理：${message}\n\n` +
-            "用户发送的图片需使用「消息资源」接口下载，请确认应用已开通：\n" +
+          `❌ 附件下载失败，将仅按文字处理：${message}\n\n` +
+            "用户发送的图片和文件需使用「消息资源」接口下载，请确认应用已开通：\n" +
             "- `im:message` 或 `im:message:readonly`\n" +
-            "- `im:resource`（上传用；下载用户图片主要靠前者）",
+            "- `im:resource`（上传用；下载用户附件主要靠前者）",
           msg.messageId,
         );
-        // 图片下载失败仅降级为纯文字处理，不中断整条消息；
-        // 若消息本身没有可用文字内容（纯图片消息），则没有必要继续触发一次空跑。
-        if (!resolveInboundPrompt(msg.content, 0)) return;
       }
+      // 附件全部失败且没有可用文字时，不要空跑 Agent。
+      if (!attachments.length && !resolveInboundPrompt(msg.content, 0)) return;
     }
 
     await this.handleMessage({

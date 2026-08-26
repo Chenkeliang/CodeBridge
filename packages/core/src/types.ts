@@ -12,7 +12,7 @@ export interface LocalMediaPath {
   name?: string;
 }
 
-/** Bridge → Runner：图片以 base64 传输，Runner 落盘后再交给 ACP Agent */
+/** Bridge → Runner：附件以 base64 传输，Runner 落盘后再交给 Agent */
 export interface RunAttachment {
   name: string;
   mimeType: string;
