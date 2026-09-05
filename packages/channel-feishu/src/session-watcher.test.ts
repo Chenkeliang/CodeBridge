@@ -1113,7 +1113,7 @@ describe("FeishuRunCard", () => {
     }, "connected");
 
     expect(sendMarkdown).not.toHaveBeenCalled();
-    expect(contents.at(-1)).toContain("已运行 10 分 0 秒");
+    expect(contents.at(-1)).toContain("运行时长：10 分 0 秒");
 
     await card.onAgentEvent({
       type: "text_delta",
@@ -1242,6 +1242,7 @@ describe("FeishuRunCard", () => {
     expect(live.startsWith(stableProgress)).toBe(true);
     expect(live).toContain("🟢 **执行中**");
     expect(live.match(/你好/g)).toHaveLength(1);
+    expect(live.split("\n\n---\n\n").at(-1)?.split("\n")).toHaveLength(4);
 
     const writesBeforeStatusRefresh = contents.length;
     await card.setCoreEventStreamState("reconnecting");
@@ -1250,6 +1251,7 @@ describe("FeishuRunCard", () => {
     expect(refreshed.startsWith(stableProgress)).toBe(true);
     expect(refreshed).toContain("事件流重连中");
     expect(refreshed.match(/你好/g)).toHaveLength(1);
+    expect(refreshed.split("\n\n---\n\n").at(-1)?.split("\n")).toHaveLength(4);
 
     await card.onAgentEvent({
       type: "text_delta",
