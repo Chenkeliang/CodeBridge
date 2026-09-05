@@ -59,7 +59,7 @@ function extractPostText(parsed: unknown): string {
   return lines.join("\n");
 }
 
-/** 兜底：递归收集对象里的 text/content 字符串字段（卡片消息等） */
+/** 兜底：递归收集对象里的 title/text/content 字符串字段（卡片消息等） */
 function collectTextFields(value: unknown, depth = 0): string {
   if (depth > 8) return "";
   if (typeof value === "string") return "";
@@ -72,7 +72,10 @@ function collectTextFields(value: unknown, depth = 0): string {
   if (typeof value === "object" && value !== null) {
     const out: string[] = [];
     for (const [k, v] of Object.entries(value)) {
-      if ((k === "text" || k === "content") && typeof v === "string") {
+      if (
+        (k === "title" || k === "text" || k === "content") &&
+        typeof v === "string"
+      ) {
         out.push(v);
       } else {
         const nested = collectTextFields(v, depth + 1);

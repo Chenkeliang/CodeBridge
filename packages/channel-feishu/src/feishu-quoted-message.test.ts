@@ -42,6 +42,26 @@ describe("extractMessageText", () => {
     expect(out).toContain("err: AddOrder fail");
   });
 
+  it("旧版互动卡片保留顶层标题与 text 元素", () => {
+    const content = JSON.stringify({
+      title: "【协议签约】续费定时任务-扣款失败",
+      elements: [
+        [
+          { tag: "text", text: "error_code:" },
+          { tag: "text", text: "\n2000305" },
+        ],
+        [
+          { tag: "text", text: "order_id:" },
+          { tag: "text", text: "\nBJN695XYKLF9MPKX5L" },
+        ],
+      ],
+    });
+
+    expect(extractMessageText("interactive", content)).toBe(
+      "【协议签约】续费定时任务-扣款失败\nerror_code:\n\n2000305\norder_id:\n\nBJN695XYKLF9MPKX5L",
+    );
+  });
+
   it("无可提取文字时回退到类型占位", () => {
     expect(extractMessageText("audio", JSON.stringify({ file_key: "k" }))).toBe(
       "[audio 消息]",

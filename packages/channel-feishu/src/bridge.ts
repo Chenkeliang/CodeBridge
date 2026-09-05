@@ -43,6 +43,7 @@ import {
 } from "./feishu-inbound-media.js";
 import { resolveOutboundFile } from "./feishu-outbound-file.js";
 import { buildInboundPromptPrefix } from "./feishu-inbound-context.js";
+import { extractMessageText } from "./feishu-quoted-message.js";
 import {
   shouldAcceptGroupMessage,
   topicActiveForMessage,
@@ -72,6 +73,8 @@ export interface FeishuMessage {
   mentionedBot?: boolean;
   mentions?: FeishuMention[];
   attachments?: RunAttachment[];
+  rawContentType?: string;
+  raw?: unknown;
 }
 
 export interface FeishuMention {
@@ -94,6 +97,8 @@ const FEISHU_MSG_CHUNK_CHARS = 12000;
 /** 只在卡片保留最新进度，避免长任务把数百条 commentary 累积成超长卡片。 */
 const FEISHU_LIVE_PROGRESS_CHARS = 1200;
 
+const FEISHU_INTERACTIVE_CARD_PLACEHOLDER = "[interactive card]";
+
 const FEISHU_OUTPUT_STYLE_GUIDANCE =
   "【飞书输出样式】最终答复可按需少量使用飞书官方 `<text_tag color='blue'>文本</text_tag>`：blue 表示分组/信息，orange 表示需关注的修改，green 表示成功，red 表示失败/阻塞；每次最多 3 个，其余使用标准 Markdown，不必强行加色。";
 
@@ -108,6 +113,37 @@ interface ChannelFlowSubmission {
   definitionRevision: string;
   inputs: Record<string, unknown>;
   idempotencyKey: string;
+}
+
+function rawFeishuMessageContent(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const message = (raw as { message?: unknown }).message;
+  if (!message || typeof message !== "object") return undefined;
+  const content = (message as { content?: unknown }).content;
+  return typeof content === "string" ? content : undefined;
+}
+
+function recoverInteractiveCardContent(
+  message: Pick<FeishuMessage, "content" | "rawContentType" | "raw">,
+): string {
+  if (
+    message.rawContentType !== "interactive" ||
+    message.content !== FEISHU_INTERACTIVE_CARD_PLACEHOLDER
+  ) {
+    return message.content;
+  }
+
+  const rawContent = rawFeishuMessageContent(message.raw);
+  if (!rawContent?.trim()) return message.content;
+  try {
+    JSON.parse(rawContent);
+  } catch {
+    return message.content;
+  }
+  const recovered = extractMessageText("interactive", rawContent);
+  return recovered && recovered !== "[interactive 消息]"
+    ? recovered
+    : message.content;
 }
 
 function interruptedStreamCard(): object {
@@ -244,6 +280,7 @@ export class FeishuBridge {
       appSecret: feishu.appSecret,
       domain: feishu.domain,
       loggerLevel: LoggerLevel.info,
+      includeRawEvent: true,
       policy: {
         requireMention: false,
         dmMode: (feishu.policy?.dmMode === "disabled"
@@ -365,9 +402,12 @@ export class FeishuBridge {
     mentionedBot?: boolean;
     mentions?: FeishuMention[];
     resources?: ResourceDescriptor[];
+    rawContentType?: string;
+    raw?: unknown;
   }): Promise<void> {
+    const content = recoverInteractiveCardContent(msg);
     this.options.onLog?.(
-      `[inbound] ${msg.messageId} ${msg.content.slice(0, 60).replace(/\n/g, " ")}`,
+      `[inbound] ${msg.messageId} ${content.slice(0, 60).replace(/\n/g, " ")}`,
     );
     let attachments: RunAttachment[] = [];
     if ((msg.resources?.length ?? 0) > 0 && this.channel) {
@@ -397,7 +437,7 @@ export class FeishuBridge {
         );
       }
       // 附件全部失败且没有可用文字时，不要空跑 Agent。
-      if (!attachments.length && !resolveInboundPrompt(msg.content, 0)) return;
+      if (!attachments.length && !resolveInboundPrompt(content, 0)) return;
     }
 
     await this.handleMessage({
@@ -406,7 +446,7 @@ export class FeishuBridge {
       chatType: msg.chatType,
       senderId: msg.senderId,
       senderName: msg.senderName,
-      content: msg.content,
+      content,
       threadId: msg.threadId,
       rootId: msg.rootId,
       replyToMessageId: msg.replyToMessageId,
