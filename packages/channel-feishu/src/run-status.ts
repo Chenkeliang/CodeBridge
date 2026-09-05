@@ -182,6 +182,13 @@ export function renderFeishuRunStatus(
   status: FeishuRunStatus,
   now = Date.now(),
 ): string {
+  const terminal = status.state !== "running";
+  const observedAt = terminal ? status.endedAt ?? now : now;
+  const elapsed = Math.max(0, observedAt - status.startedAt);
+  const sinceActivity = Math.max(0, observedAt - status.lastActivityAt);
+  let title: string;
+  let phase = status.phase.replace(/[\r\n]+/g, " ").trim() || "—";
+
   if (status.state !== "running") {
     const titles: Record<Exclude<FeishuRunState, "running">, string> = {
       succeeded: "✅ **已完成**",
@@ -189,37 +196,25 @@ export function renderFeishuRunStatus(
       cancelled: "⏹ **已停止**",
       interrupted: "⚠️ **已中断**",
     };
-    const endedAt = status.endedAt ?? now;
-    return [
-      `${titles[status.state]} · 总耗时 ${formatElapsed(Math.max(0, endedAt - status.startedAt))}`,
-      `最终阶段：${status.phase}`,
-    ].join("\n");
+    title = titles[status.state];
+  } else {
+    const quiet = sinceActivity >= FEISHU_LIVE_STATUS_QUIET_MS;
+    const coreEventStream = status.transport.coreEventStream;
+    title =
+      coreEventStream === "reconnecting"
+        ? "⚠️ **事件流重连中 · 后台任务仍在运行**"
+        : coreEventStream === "unavailable" || status.verificationError
+          ? "⚠️ **状态核验暂不可用 · 后台任务状态待确认**"
+          : quiet
+            ? "🟠 **任务运行中 · 暂无新事件**"
+            : "🟢 **执行中**";
+    if (quiet) phase = `${phase}（暂无新事件）`;
   }
 
-  const sinceActivity = Math.max(0, now - status.lastActivityAt);
-  const sinceVerification =
-    status.lastVerifiedAt === undefined
-      ? undefined
-      : Math.max(0, now - status.lastVerifiedAt);
-  const quiet = sinceActivity >= FEISHU_LIVE_STATUS_QUIET_MS;
-  const coreEventStream = status.transport.coreEventStream;
-  const title =
-    coreEventStream === "reconnecting"
-      ? "⚠️ **事件流重连中 · 后台任务仍在运行**"
-      : coreEventStream === "unavailable" || status.verificationError
-        ? "⚠️ **状态核验暂不可用 · 后台任务状态待确认**"
-        : quiet
-          ? "🟠 **任务运行中 · 暂无新事件**"
-          : "🟢 **执行中**";
   return [
-    `${title} · 已运行 ${formatElapsed(Math.max(0, now - status.startedAt))}`,
+    `任务状态：${title}`,
+    `运行时长：${formatElapsed(elapsed)}`,
     `最近任务事件：${formatElapsed(sinceActivity)}前`,
-    sinceVerification === undefined
-      ? "最近状态核验：尚未核验"
-      : `最近状态核验：${formatElapsed(sinceVerification)}前`,
-    quiet ? "暂未收到新的任务事件" : `当前阶段：${status.phase}`,
-    quiet ? `最近阶段：${status.phase}` : undefined,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
+    `当前阶段：${phase}`,
+  ].join("\n");
 }

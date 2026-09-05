@@ -694,7 +694,8 @@ describe("FeishuBridge streaming", () => {
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
     expect(notices).toHaveLength(0);
-    expect(contents.at(-1)).toContain("已运行 10 分 0 秒");
+    expect(contents.at(-1)).toContain("运行时长：10 分 0 秒");
+    expect(contents.at(-1)?.split("\n\n---\n\n")[0]?.split("\n")).toHaveLength(4);
 
     releaseAgent();
     await running;
