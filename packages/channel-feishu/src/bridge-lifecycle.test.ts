@@ -86,15 +86,151 @@ describe("FeishuBridge stream lifecycle", () => {
       disconnect: vi.fn(async () => {}),
       updatePolicy: vi.fn(),
     };
-    vi.spyOn(sdk, "createLarkChannel").mockReturnValueOnce(fakeChannel as never);
+    const createLarkChannel = vi
+      .spyOn(sdk, "createLarkChannel")
+      .mockReturnValueOnce(fakeChannel as never);
 
     await bridge.connect();
+    expect(createLarkChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ includeRawEvent: true }),
+    );
     expect(listDeliveries).toHaveBeenCalledTimes(1);
 
     lifecycleHandlers.get("reconnected")?.();
     await waitUntil(() => listDeliveries.mock.calls.length === 2);
     expect(listDeliveries).toHaveBeenCalledTimes(2);
     await bridge.disconnect();
+  });
+
+  it("recovers legacy interactive card text from the raw inbound event", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as {
+      dispatchInboundMessage(msg: {
+        messageId: string;
+        chatId: string;
+        chatType: "p2p";
+        senderId: string;
+        content: string;
+        rawContentType: string;
+        raw: unknown;
+      }): Promise<void>;
+      handleMessage(msg: FeishuMessage): Promise<void>;
+    };
+    const handleMessage = vi.fn(async () => {});
+    bridge.handleMessage = handleMessage;
+
+    const rawContent = JSON.stringify({
+      title: "【协议签约】续费定时任务-扣款失败",
+      elements: [
+        [
+          { tag: "text", text: "error_code:" },
+          { tag: "text", text: "\n2000305" },
+        ],
+        [
+          { tag: "text", text: "order_id:" },
+          { tag: "text", text: "\nBJN695XYKLF9MPKX5L" },
+        ],
+      ],
+    });
+
+    await bridge.dispatchInboundMessage({
+      messageId: "om_legacy_card",
+      chatId: "chat-1",
+      chatType: "p2p",
+      senderId: "user-1",
+      content: "[interactive card]",
+      rawContentType: "interactive",
+      raw: { message: { content: rawContent } },
+    });
+
+    expect(handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("【协议签约】续费定时任务-扣款失败"),
+      }),
+    );
+    expect(handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("BJN695XYKLF9MPKX5L"),
+      }),
+    );
+    expect(handleMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: "[interactive card]" }),
+    );
+  });
+
+  it.each([
+    ["malformed JSON", { message: { content: "{" } }],
+    ["whitespace", { message: { content: "   " } }],
+    ["empty object", { message: { content: "{}" } }],
+    ["missing raw event", undefined],
+  ])("keeps the interactive placeholder for %s", async (_case, raw) => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as {
+      dispatchInboundMessage(msg: {
+        messageId: string;
+        chatId: string;
+        chatType: "p2p";
+        senderId: string;
+        content: string;
+        rawContentType: string;
+        raw: unknown;
+      }): Promise<void>;
+      handleMessage(msg: FeishuMessage): Promise<void>;
+    };
+    const handleMessage = vi.fn(async () => {});
+    bridge.handleMessage = handleMessage;
+
+    await bridge.dispatchInboundMessage({
+      messageId: "om_invalid_card",
+      chatId: "chat-1",
+      chatType: "p2p",
+      senderId: "user-1",
+      content: "[interactive card]",
+      rawContentType: "interactive",
+      raw,
+    });
+
+    expect(handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "[interactive card]" }),
+    );
+  });
+
+  it("preserves content already normalized by the SDK", async () => {
+    const bridge = new FeishuBridge({
+      config: defaultConfig(),
+      dataDir: os.tmpdir(),
+    }) as unknown as {
+      dispatchInboundMessage(msg: {
+        messageId: string;
+        chatId: string;
+        chatType: "p2p";
+        senderId: string;
+        content: string;
+        rawContentType: string;
+        raw: unknown;
+      }): Promise<void>;
+      handleMessage(msg: FeishuMessage): Promise<void>;
+    };
+    const handleMessage = vi.fn(async () => {});
+    bridge.handleMessage = handleMessage;
+
+    await bridge.dispatchInboundMessage({
+      messageId: "om_modern_card",
+      chatId: "chat-1",
+      chatType: "p2p",
+      senderId: "user-1",
+      content: "Card title\nCard content",
+      rawContentType: "interactive",
+      raw: { message: { content: "{}" } },
+    });
+
+    expect(handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "Card title\nCard content" }),
+    );
   });
 
   it("streams two runs without aborting each other", async () => {
