@@ -65,7 +65,7 @@ export const DEFAULT_BACKEND_PROFILES: Record<
   codex: {
     type: "codex",
     acpCommand: "npx",
-    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.14"],
+    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.10.0"],
   },
   pi: { type: "pi-sdk" },
   opencode: {

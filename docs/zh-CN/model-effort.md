@@ -79,7 +79,7 @@ backends:
   codex:
     type: codex
     acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.1.9"]
+    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.10.0"]
 ```
 
 会话绑定持久化：`~/.codebridge/chat-bindings.json`（按 `chatId|topicId`）。

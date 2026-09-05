@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { defaultConfig } from "@codebridge/core";
 import {
   acpContinueMethod,
   resolveAcpSpawn,
@@ -18,7 +19,7 @@ describe("acp-spawn-profiles", () => {
     ]);
     expect(resolveAcpSpawn({ type: "codex" }).args).toEqual([
       "-y",
-      "@agentclientprotocol/codex-acp@1.1.14",
+      "@agentclientprotocol/codex-acp@1.10.0",
     ]);
   });
 
@@ -32,6 +33,14 @@ describe("acp-spawn-profiles", () => {
     ).toEqual({
       command: "npx",
       args: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
+    });
+  });
+
+  it("keeps the generated Codex profile aligned with the spawn fallback", () => {
+    const profile = defaultConfig().backends.codex!;
+    expect(resolveAcpSpawn(profile)).toEqual({
+      command: "npx",
+      args: ["-y", "@agentclientprotocol/codex-acp@1.10.0"],
     });
   });
 

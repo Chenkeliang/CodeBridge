@@ -175,7 +175,7 @@ Bridge 启动后可在本机打开 `http://127.0.0.1:19790/workbench/`。它和�
 |---------|--------------|
 | Cursor | `cursor-agent acp` |
 | Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.64.2` |
-| Codex | `npx -y @agentclientprotocol/codex-acp@1.1.9` |
+| Codex | `npx -y @agentclientprotocol/codex-acp@1.10.0` |
 
 续聊语义取决于 adapter：Claude/Codex 使用 `session/resume`，Cursor 使用 `session/load`。
 
