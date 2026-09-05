@@ -1238,8 +1238,18 @@ describe("FeishuRunCard", () => {
 
     await waitUntil(() => contents.at(-1)?.includes("你好，我来帮你处理") === true);
     const live = contents.at(-1)!;
+    const stableProgress = "**最新进度**\n你好，我来帮你处理";
+    expect(live.startsWith(stableProgress)).toBe(true);
     expect(live).toContain("🟢 **执行中**");
     expect(live.match(/你好/g)).toHaveLength(1);
+
+    const writesBeforeStatusRefresh = contents.length;
+    await card.setCoreEventStreamState("reconnecting");
+    await waitUntil(() => contents.length > writesBeforeStatusRefresh);
+    const refreshed = contents.at(-1)!;
+    expect(refreshed.startsWith(stableProgress)).toBe(true);
+    expect(refreshed).toContain("事件流重连中");
+    expect(refreshed.match(/你好/g)).toHaveLength(1);
 
     await card.onAgentEvent({
       type: "text_delta",

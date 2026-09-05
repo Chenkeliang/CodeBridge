@@ -235,7 +235,7 @@ export class FeishuRunCard {
               this.flowSaveRequested,
             );
             this.writer?.enqueue({
-              content: status && body ? `${status}\n\n---\n\n${body}` : status || body,
+              content: status && body ? `${body}\n\n---\n\n${status}` : body || status,
               statusOnly,
             });
           };
