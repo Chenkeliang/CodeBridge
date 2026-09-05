@@ -116,6 +116,11 @@ describe("ACP-only backend configuration", () => {
       acpCommand: "opencode",
       acpArgs: ["acp"],
     });
+    expect(config.backends.codex).toMatchObject({
+      type: "codex",
+      acpCommand: "npx",
+      acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.10.0"],
+    });
   });
 
   it("accepts optional Telegram and arbitrary ACP config overrides", () => {

@@ -13,7 +13,7 @@ const DEFAULTS: Record<Exclude<BackendProfile["type"], "pi-sdk">, AcpSpawnProfil
   },
   codex: {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp@1.1.14"],
+    args: ["-y", "@agentclientprotocol/codex-acp@1.10.0"],
   },
   "generic-spawn": { command: "npx", args: [] },
 };
