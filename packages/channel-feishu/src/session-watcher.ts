@@ -461,9 +461,11 @@ export class FeishuSessionWatcher {
       return;
     }
 
+    let card = this.cards.get(delivery.runId);
     if (!delivery.surfaceMessageId) {
       await this.openCardForRun(delivery.runId, turn);
-    } else {
+      card = this.cards.get(delivery.runId);
+    } else if (!card) {
       let surfaceCardId = delivery.surfaceCardId;
       if (!surfaceCardId) {
         try {
@@ -504,12 +506,12 @@ export class FeishuSessionWatcher {
       );
     }
 
-    const card = this.cards.get(delivery.runId);
     if (card) {
       try {
-        await card.setInboundWebSocketState(inboundState);
         if (delivery.runSnapshot) {
           await card.reconcileRun(delivery.runSnapshot, inboundState);
+        } else {
+          await card.setInboundWebSocketState(inboundState);
         }
       } catch (error) {
         const messageId = card.cardMessageId;
@@ -526,7 +528,7 @@ export class FeishuSessionWatcher {
       }
     }
 
-    const resumed = this.resumedCards.get(delivery.runId);
+    const resumed = card ? undefined : this.resumedCards.get(delivery.runId);
     if (resumed) {
       setInboundWebSocket(resumed.runStatus, inboundState);
       const terminal = isTerminalRunSnapshot(delivery.runSnapshot);

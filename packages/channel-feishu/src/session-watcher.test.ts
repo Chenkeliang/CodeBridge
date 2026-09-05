@@ -223,6 +223,31 @@ describe("FeishuSessionWatcher", () => {
     );
   });
 
+  it.each([
+    ["with a Run snapshot", true],
+    ["without a Run snapshot", false],
+  ])(
+    "reconciles an active stream card exactly once %s",
+    async (_case, withRunSnapshot) => {
+      const { host, contents } = makeHost();
+      const ingress = makeIngress();
+      const w = watcher(ingress, host);
+      await w.openCardForRun("run_1", turn());
+      await waitUntil(() => contents.length > 0);
+      const writesBeforeReconcile = contents.length;
+      const row = delivery("running");
+      row.surfaceMessageId = "card-1";
+      row.surfaceCardId = "cardkit-1";
+      if (!withRunSnapshot) row.runSnapshot = null;
+
+      await w.reconcileDelivery(row, turn(), "connected");
+
+      expect(contents).toHaveLength(writesBeforeReconcile + 1);
+      expect(host.updateCard).not.toHaveBeenCalled();
+      w.abort();
+    },
+  );
+
   it("restores persisted final output and completes without a terminal SSE event", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
