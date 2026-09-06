@@ -57,6 +57,7 @@ import {
   type FeishuConnectionState,
 } from "./run-status.js";
 import { FeishuDeliveryReconciler } from "./delivery-reconciler.js";
+import { durableMarkdownCard } from "./durable-markdown-card.js";
 
 export interface FeishuMessage {
   messageId: string;
@@ -222,11 +223,14 @@ export class FeishuBridge {
   private inboundWebSocketState: FeishuConnectionState = "unavailable";
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
-  private readonly cardUpdateSequences = new Map<string, number>();
+  private readonly cardUpdateSequences: JsonMapStore<number>;
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
     this.sessionIngress = options.sessionIngress;
+    this.cardUpdateSequences = new JsonMapStore<number>(
+      path.join(options.dataDir, "feishu-card-sequences.json"),
+    );
     this.pendingStreams = new JsonMapStore<PendingFeishuStream>(
       path.join(options.dataDir, "feishu-pending-streams.json"),
     );
@@ -782,8 +786,7 @@ export class FeishuBridge {
   }
 
   private cardHost(): FeishuCardHost {
-    return {
-      channel: this.channel,
+    const host: FeishuCardHost = {
       sendMarkdown: (chatId, markdown, replyTo) =>
         this.sendMarkdown(chatId, markdown, replyTo),
       resolveCardId: async (messageId) => {
@@ -805,12 +808,12 @@ export class FeishuBridge {
         const wallClockSequence = Math.floor(Date.now() / 1000);
         const sequence = Math.max(
           wallClockSequence,
-          (this.cardUpdateSequences.get(cardId) ?? 0) + 1,
+          (this.cardUpdateSequences.read()[cardId] ?? 0) + 1,
         );
         if (sequence > 2_147_483_647) {
           throw new Error("CardKit update sequence exceeds int32 range");
         }
-        this.cardUpdateSequences.set(cardId, sequence);
+        this.cardUpdateSequences.update((all) => ({ ...all, [cardId]: sequence }));
         const response = await this.channel.rawClient.cardkit.v1.card.update({
           path: { card_id: cardId },
           data: {
@@ -838,6 +841,10 @@ export class FeishuBridge {
       log: (message) => this.options.onLog?.(message),
       isDisconnecting: () => this.disconnecting,
     };
+    host.channel = this.channel
+      ? durableMarkdownCard(this.channel, host.updateCard)
+      : undefined;
+    return host;
   }
 
   private buildFullSlot(chatId: string, topicId?: string): ChannelSlot {
@@ -895,11 +902,18 @@ export class FeishuBridge {
             return next;
           });
         }
-        await watcher.reconcileDelivery(
-          delivery,
-          turn,
-          this.inboundWebSocketState,
-        );
+        try {
+          await watcher.reconcileDelivery(delivery, turn, this.inboundWebSocketState);
+        } catch (error) {
+          // A broken historical card must not prevent live cards being refreshed.
+          this.options.onLog?.(JSON.stringify({
+            event: "feishu_delivery_reconcile_failed",
+            runId: delivery.runId,
+            turnId: delivery.turnId,
+            cardId: delivery.surfaceCardId,
+            message: error instanceof Error ? error.message : String(error),
+          }));
+        }
       }
       watcher.start(minAccepted);
     }

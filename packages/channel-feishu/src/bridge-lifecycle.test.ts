@@ -474,8 +474,7 @@ describe("FeishuBridge stream lifecycle", () => {
     bridge.channel = {
       async stream(_chatId, input) {
         await input.markdown({
-          cardId: "cardkit-1",
-          messageId: "card-1",
+          cardId: "cardkit-1", messageId: "card-1",
           async append(chunk: string) { rendered += chunk; },
           async setContent(full: string) { rendered = full; },
         });
@@ -520,16 +519,19 @@ describe("FeishuBridge stream lifecycle", () => {
       listDeliveries: async () => [],
     } as unknown as ChannelSessionIngress;
     bridge.channel = {
-      async stream(_chatId, input) {
-        await input.markdown({
-          cardId: "cardkit-1",
-          messageId: "card-1",
-          async append(chunk: string) { rendered += chunk; },
-          async setContent(full: string) { rendered = full; },
-        });
+      rawClient: {
+        cardkit: {v1: {card: {
+          create: async () => ({code: 0, data: {card_id: "cardkit-1"}}),
+          idConvert: async () => ({code: 0, data: {card_id: "cardkit-1"}}),
+          update: async (request: {data: {card: {data: string}}}) => {
+            rendered = JSON.parse(request.data.card.data).body.elements[0].content;
+            return {code: 0};
+          },
+        }}},
+        im: {v1: {message: {reply: async () => ({code: 0, data: {message_id: "card-1"}})}}},
       },
       async disconnect() {},
-    };
+    } as unknown as TestableBridge["channel"];
     bridge.orchestrator = {
       router: {
         getBinding: () => ({ showThinking: false, backendId: "pi", cwd: "/tmp/p" }) as never,
@@ -540,7 +542,7 @@ describe("FeishuBridge stream lifecycle", () => {
     };
 
     await bridge.submitAndStream(message("m1"), "hi");
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await waitUntil(() => complete.mock.calls.length === 1);
 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
