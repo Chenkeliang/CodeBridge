@@ -40,7 +40,7 @@ export function classifyFeishuCardWriteError(
   error: unknown,
 ): "transient" | "permanent" {
   const text = error instanceof Error ? error.message : String(error);
-  return /11310|card\s*id\s*invalid|cardid\s*invalid/i.test(text)
+  return /\b(?:11310|200740|200750|300311)\b|card\s*id\s*invalid|cardid\s*invalid/i.test(text)
     ? "permanent"
     : "transient";
 }
