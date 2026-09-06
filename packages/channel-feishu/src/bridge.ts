@@ -58,6 +58,7 @@ import {
 } from "./run-status.js";
 import { FeishuDeliveryReconciler } from "./delivery-reconciler.js";
 import { durableMarkdownCard } from "./durable-markdown-card.js";
+import { feishuHttpClient } from "./feishu-http.js";
 
 export interface FeishuMessage {
   messageId: string;
@@ -224,6 +225,7 @@ export class FeishuBridge {
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
   private readonly cardUpdateSequences: JsonMapStore<number>;
+  private readonly deliveryRetries = new Map<string, { attempts: number; after: number }>();
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
@@ -285,6 +287,7 @@ export class FeishuBridge {
       domain: feishu.domain,
       loggerLevel: LoggerLevel.info,
       includeRawEvent: true,
+      httpInstance: feishuHttpClient(),
       policy: {
         requireMention: false,
         dmMode: (feishu.policy?.dmMode === "disabled"
@@ -794,7 +797,7 @@ export class FeishuBridge {
         const response = await this.channel.rawClient.cardkit.v1.card.idConvert({
           data: { message_id: messageId },
         });
-        if (response.code !== undefined && response.code !== 0) {
+        if (response.code !== 0) {
           throw new Error(
             `CardKit id conversion failed (${response.code}): ${response.msg ?? "unknown"}`,
           );
@@ -822,7 +825,7 @@ export class FeishuBridge {
             uuid: `recovery_${randomUUID()}`,
           },
         });
-        if (response.code !== undefined && response.code !== 0) {
+        if (response.code !== 0) {
           throw new Error(
             `CardKit update failed (${response.code}): ${response.msg ?? "unknown"}`,
           );
@@ -874,6 +877,10 @@ export class FeishuBridge {
   private async reconcileDeliveries(): Promise<void> {
     if (!this.sessionIngress || !this.channel) return;
     const deliveries = await this.sessionIngress.listDeliveries("feishu");
+    const pendingIds = new Set(deliveries.map((delivery) => delivery.turnId));
+    for (const turnId of this.deliveryRetries.keys()) {
+      if (!pendingIds.has(turnId)) this.deliveryRetries.delete(turnId);
+    }
     const bySession = new Map<string, typeof deliveries>();
     for (const delivery of deliveries) {
       const list = bySession.get(delivery.sessionId) ?? [];
@@ -886,6 +893,8 @@ export class FeishuBridge {
         ...list.map((delivery) => delivery.acceptedSequence),
       );
       for (const delivery of list) {
+        const retry = this.deliveryRetries.get(delivery.turnId);
+        if (retry && retry.after > Date.now()) continue;
         const chatId =
           delivery.conversationId.split("|")[0] ?? delivery.conversationId;
         const turn = {
@@ -904,7 +913,13 @@ export class FeishuBridge {
         }
         try {
           await watcher.reconcileDelivery(delivery, turn, this.inboundWebSocketState);
+          this.deliveryRetries.delete(delivery.turnId);
         } catch (error) {
+          const attempts = (retry?.attempts ?? 0) + 1;
+          this.deliveryRetries.set(delivery.turnId, {
+            attempts,
+            after: Date.now() + Math.min(300_000, 15_000 * 2 ** Math.min(attempts, 5)),
+          });
           // A broken historical card must not prevent live cards being refreshed.
           this.options.onLog?.(JSON.stringify({
             event: "feishu_delivery_reconcile_failed",

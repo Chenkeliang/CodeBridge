@@ -32,6 +32,7 @@ const channel = vi.hoisted(() => ({
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   LoggerLevel: { info: "info" },
+  defaultHttpInstance: {request: vi.fn()},
   createLarkChannel: () => channel,
 }));
 
@@ -254,6 +255,9 @@ describe("FeishuBridge interrupted stream recovery", () => {
     expect(live.reconcileDelivery).toHaveBeenCalledTimes(1);
     expect(live.start).toHaveBeenCalledWith(1);
     expect(log).toHaveBeenCalledWith(expect.stringContaining('"cardId":"card-old"'));
+    await internal.reconcileDeliveries();
+    expect(old.reconcileDelivery).toHaveBeenCalledTimes(1);
+    expect(live.reconcileDelivery).toHaveBeenCalledTimes(2);
   });
 
   it("uses a monotonic 32-bit sequence for CardKit recovery writes", async () => {
