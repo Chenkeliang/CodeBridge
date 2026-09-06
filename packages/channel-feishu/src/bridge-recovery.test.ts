@@ -230,6 +230,32 @@ describe("FeishuBridge interrupted stream recovery", () => {
     await bridge.disconnect();
   });
 
+  it("continues reconciling live deliveries after a historical card fails", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-recovery-"));
+    const rows = ["old", "live"].map((id) => ({
+      sessionId: `session-${id}`, turnId: `turn-${id}`, runId: `run-${id}`,
+      acceptedSequence: 1, conversationId: "chat|", replyToMessageId: "source",
+      surfaceMessageId: `message-${id}`, surfaceCardId: `card-${id}`, showThinking: false,
+    }));
+    const log = vi.fn();
+    const bridge = new FeishuBridge({config: defaultConfig(), dataDir, onLog: log,
+      sessionIngress: {listDeliveries: async () => rows} as unknown as ChannelSessionIngress,
+    });
+    const internal = bridge as unknown as {
+      channel: unknown;
+      ensureSessionWatcher(id: string): unknown;
+      reconcileDeliveries(): Promise<void>;
+    };
+    internal.channel = channel;
+    const live = {reconcileDelivery: vi.fn(async () => {}), start: vi.fn()};
+    const old = {reconcileDelivery: vi.fn(async () => {throw new Error("300307");}), start: vi.fn()};
+    vi.spyOn(internal, "ensureSessionWatcher").mockImplementation((id) => id === "session-old" ? old : live);
+    await internal.reconcileDeliveries();
+    expect(live.reconcileDelivery).toHaveBeenCalledTimes(1);
+    expect(live.start).toHaveBeenCalledWith(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('"cardId":"card-old"'));
+  });
+
   it("uses a monotonic 32-bit sequence for CardKit recovery writes", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-recovery-"));
     const bridge = new FeishuBridge({
@@ -250,5 +276,14 @@ describe("FeishuBridge interrupted stream recovery", () => {
     expect(first).toBeLessThanOrEqual(2_147_483_647);
     expect(second).toBe(first + 1);
     await bridge.disconnect();
+
+    const restarted = new FeishuBridge({config: defaultConfig(), dataDir});
+    await restarted.connect();
+    const restartedHost = (restarted as unknown as {
+      cardHost(): {updateCard(cardId: string, card: object): Promise<void>};
+    }).cardHost();
+    await restartedHost.updateCard("cardkit-sequence", {schema: "2.0"});
+    expect(channel.rawClient.cardkit.v1.card.update.mock.calls.at(-1)?.[0].data.sequence).toBeGreaterThan(second);
+    await restarted.disconnect();
   });
 });

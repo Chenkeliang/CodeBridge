@@ -1,4 +1,4 @@
-import type { LarkChannel } from "@larksuiteoapi/node-sdk";
+import { markdownCard, type MarkdownCardStream } from "./durable-markdown-card.js";
 import type {
   AgentEvent,
   ChannelDeliveryRow,
@@ -52,7 +52,7 @@ export interface PendingFeishuStream {
 }
 
 export interface FeishuCardHost {
-  channel?: LarkChannel;
+  channel?: MarkdownCardStream;
   sendMarkdown(chatId: string, markdown: string, replyTo?: string): Promise<void>;
   resolveCardId?(messageId: string): Promise<string>;
   /** Update the CardKit instance itself, never the referencing IM message. */
@@ -61,15 +61,6 @@ export interface FeishuCardHost {
   clearPendingStream(messageId: string): void;
   log(message: string): void;
   isDisconnecting(): boolean;
-}
-
-function markdownCard(content: string): object {
-  return {
-    schema: "2.0",
-    body: {
-      elements: [{ tag: "markdown", content }],
-    },
-  };
 }
 
 type CardSnapshot = { content: string; statusOnly: boolean };
