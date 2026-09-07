@@ -364,8 +364,16 @@ class Deployer:
                 raise DeployError("running source baseline unknown")
             baseline = self.a.command([self.c.get("gitPath", "/usr/bin/git"), "-C", directory, "rev-parse", "HEAD"]).decode().strip()
         changes = self.git("diff", "--name-only", baseline, job["commit"]).decode().splitlines()
-        if any(name in ("scripts/host-deployer.py", "scripts/install-host-deployer.mjs") for name in changes):
-            raise DeployError("此版本修改了独立发布控制器或安装器，请先单独安装控制器；普通业务发布不会更新已安装的控制器。")
+        for name, config_key in (("scripts/host-deployer.py", "installedControllerHash"),
+                                 ("scripts/install-host-deployer.mjs", "installerHash")):
+            if name not in changes:
+                continue
+            installed_hash = self.c.get(config_key)
+            if name == "scripts/host-deployer.py" and not installed_hash:
+                installed_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+            candidate = self.git("show", job["commit"] + ":" + name)
+            if not installed_hash or hashlib.sha256(candidate).hexdigest() != installed_hash:
+                raise DeployError("此版本修改了独立发布控制器或安装器，请先单独安装控制器；普通业务发布不会更新已安装的控制器。")
         patch = self.git("diff", "--unified=0", baseline, job["commit"], "--", "*.ts", "*.sql").decode()
         if any(re.search(r"\b(CREATE|ALTER|DROP)\s+TABLE\b", line, re.I)
                for line in patch.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))):
@@ -374,6 +382,15 @@ class Deployer:
                        "packages/session-coordinator/", "packages/work-items/", "docs/", "scripts/")
         job["restartRunner"] = any(not (name.endswith(".md") or name.startswith(bridge_only))
                                    or name.endswith("package.json") for name in changes)
+        if self.c.get("runnerPlist"):
+            runner = plistlib.loads(Path(self.c["runnerPlist"]).read_bytes())
+            args = runner.get("ProgramArguments", [])
+            directory = Path(runner.get("WorkingDirectory", "/")).resolve()
+            releases = self.root / "releases"
+            frozen = (directory.name == "app" and directory.parent.parent == releases
+                      and len(args) >= 2 and Path(args[1]).resolve() == directory / "packages/runner-host/dist/cli.js")
+            if not frozen:
+                job["restartRunner"] = True
         if job["restartRunner"] and not self.c.get("runnerPlist"):
             raise DeployError("Runner restart requires runnerPlist configuration")
 

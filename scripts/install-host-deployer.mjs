@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ConfigStore } from "../packages/core/dist/index.js";
@@ -39,6 +39,8 @@ fs.accessSync(controllerSource, fs.constants.R_OK);
 const settings = {
   ...previous, rootDir, dataDir, sourceRepo, ownerOpenId, nodePath, pythonPath, pnpmPath, gitPath,
   token: previous.token || randomBytes(32).toString("hex"),
+  installedControllerHash: createHash("sha256").update(fs.readFileSync(controllerSource)).digest("hex"),
+  installerHash: createHash("sha256").update(fs.readFileSync(fileURLToPath(import.meta.url))).digest("hex"),
   bridgePlist, runnerPlist, bridgeLabel: "com.codebridge.bridge", runnerLabel: "com.codebridge.runner",
   apiPort: config.bridge?.apiPort ?? 19790,
   runnerToken: config.runner.token, runnerUrl: config.runner.url,

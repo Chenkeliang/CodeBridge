@@ -415,6 +415,31 @@ class Tests(unittest.TestCase):
                 with self.assertRaisesRegex(m.DeployError, "请先单独安装控制器"):
                     self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
 
+    def test_matching_separately_installed_controller_changes_allowed(self):
+        self.job["commit"] = "newcommit"
+        payload = b"installed bytes"
+        self.config["installedControllerHash"] = m.hashlib.sha256(payload).hexdigest()
+        self.config["installerHash"] = m.hashlib.sha256(payload).hexdigest()
+        def git(*args):
+            if args[:2] == ("diff", "--name-only"):
+                return b"scripts/host-deployer.py\nscripts/install-host-deployer.mjs"
+            return payload if args[0] == "show" else b""
+        with patch.object(self.d, "git", side_effect=git):
+            self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+
+    def test_mutable_runner_is_frozen_even_without_code_diff(self):
+        self.job["commit"] = "abc123"
+        runner = self.root / "runner.plist"
+        self.config["runnerPlist"] = str(runner)
+        runner.write_bytes(plistlib.dumps({"WorkingDirectory": str(self.source), "ProgramArguments": ["/bin/sh", str(self.source / "packages/runner-host/dist/cli.js")]}))
+        old = {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "abc123"}}
+        self.d.compatible(self.job, old)
+        self.assertTrue(self.job["restartRunner"])
+        frozen = self.d.root / "releases" / "older" / "app"
+        runner.write_bytes(plistlib.dumps({"WorkingDirectory": str(frozen), "ProgramArguments": ["/bin/sh", str(frozen / "packages/runner-host/dist/cli.js")]}))
+        self.d.compatible(self.job, old)
+        self.assertFalse(self.job["restartRunner"])
+
 
 if __name__ == "__main__":
     unittest.main()
