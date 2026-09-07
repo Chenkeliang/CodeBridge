@@ -1,8 +1,11 @@
+import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import type { LarkChannel, ResourceDescriptor } from "@larksuiteoapi/node-sdk";
 import {
   MAX_INBOUND_ATTACHMENT_BYTES,
   downloadInboundAttachments,
+  downloadMessageResource,
+  inboundResourceType,
   fileAttachmentName,
   imageAttachmentName,
   mimeFromFileName,
@@ -125,8 +128,58 @@ describe("feishu-inbound-media", () => {
     ]);
     expect(result.skipped).toEqual([
       "secret.pdf（下载失败：permission denied）",
-      "big.xlsx（20.0MB，超过 20.0MB）",
+      "big.xlsx（100.0MB，超过 100.0MB；单条消息总量限制 100.0MB）",
       "st_1（不支持的资源类型 sticker）",
     ]);
   });
+  it.each(["audio", "video"])("downloads native %s using the file resource endpoint", async (type) => {
+    const result = await downloadInboundAttachments(fakeChannel({"file:media": Buffer.from("media")}), "om_media", [
+      {type: type as "video" | "audio", fileKey: "media", fileName: type === "video" ? "movie.MOV" : "voice.mp3"},
+    ]);
+    expect(result.skipped).toEqual([]);
+    expect(result.attachments[0]?.mimeType).toBe(type === "video" ? "video/quicktime" : "audio/mpeg");
+    expect(Buffer.from(result.attachments[0]!.dataBase64, "base64").toString()).toBe("media");
+    expect(inboundResourceType(type)).toBe("file");
+    expect(resolveInboundPrompt(`<${type} key="media"/>`, 0)).toBe("");
+    expect(resolveInboundPrompt(`<${type} key="media"/>`, 1)).toBe("请查看用户发送的附件。");
+  });
+
+  it.each(["pdf", "doc", "docx", "xls", "xlsx", "txt", "ppt", "pptx", "csv", "tsv", "mp4", "webm", "zip", "7z"])("retains %s bytes and detects its MIME", async (extension) => {
+    const data = Buffer.from([0, 1, 127, 255]);
+    const result = await downloadInboundAttachments(fakeChannel({"file:key":data}), "om", [{type:"file",fileKey:"key",fileName:`测试.${extension}`}]);
+    expect(result.attachments[0]?.mimeType).toBe(mimeFromFileName(`测试.${extension}`));
+    expect(Buffer.from(result.attachments[0]!.dataBase64,"base64")).toEqual(data);
+  });
+
+  it("keeps unrecognized file extensions as binary rather than rejecting them", async () => {
+    const result = await downloadInboundAttachments(fakeChannel({"file:k":Buffer.from("unknown")}), "om", [{type:"file",fileKey:"k",fileName:"custom.xyz"}]);
+    expect(result.attachments[0]).toMatchObject({name:"custom.xyz",mimeType:"application/octet-stream"});
+  });
+
+  it("stops and destroys a streamed response as soon as its byte limit is crossed", async () => {
+    let read = 0;
+    const stream = Readable.from((async function* () { for(let i=0;i<100;i++){read++; yield Buffer.alloc(4);} })());
+    const channel = {rawClient:{im:{v1:{messageResource:{get:async()=>({getReadableStream:()=>stream})}}}}} as unknown as LarkChannel;
+    await expect(downloadMessageResource(channel,"om","k","file",8)).rejects.toThrow("超过");
+    expect(read).toBeLessThan(100);
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it("caps the aggregate accepted message payload and still accepts a smaller later file", async () => {
+    const result = await downloadInboundAttachments(fakeChannel({
+      "file:first":Buffer.alloc(6), "file:large":Buffer.alloc(4), "file:last":Buffer.alloc(2),
+    }), "om", [
+      {type:"file",fileKey:"first",fileName:"one.txt"},
+      {type:"file",fileKey:"large",fileName:"two.txt"},
+      {type:"file",fileKey:"last",fileName:"three.txt"},
+    ], 8);
+    expect(result.attachments.map((a)=>a.name)).toEqual(["one.txt","three.txt"]);
+    expect(result.skipped).toHaveLength(1);
+  });
+
+  it("does not mislabel unsupported or corrupt images as PNG", () => {
+    expect(sniffImageMime(Buffer.from("not an image"))).toBe("application/octet-stream");
+    expect(sniffImageMime(Buffer.from("0000ftypheic"))).toBe("image/heic");
+  });
+
 });
