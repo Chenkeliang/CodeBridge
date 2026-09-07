@@ -65,6 +65,8 @@ import {
   FlowSaveToolTranslator,
 } from "./flow-save-tool-translator.js";
 
+import { DeploymentService, mountDeploymentRoutes } from "./deployment.js";
+
 const program = new Command();
 
 program
@@ -90,10 +92,17 @@ program
     const config = store.get();
     const surfaces = resolveStartupSurfaces(config, { web: opts.web });
 
-    const bridge = surfaces.feishu
+    const deployment: DeploymentService = new DeploymentService({
+      configPath: path.join(dataDir, "deployer", "config.json"),
+      feishuConnected: () => bridge?.isConnected ?? false,
+      activeRuns: () => workItemStore.listRunsByStatus(["running"]).length,
+    });
+    const bridge: FeishuBridge | undefined = surfaces.feishu
       ? new FeishuBridge({
           config,
           dataDir,
+          onDeploymentMessage: (message) => deployment.handleFeishuMessage(message),
+          isMaintenance: () => deployment.isMaintenance(),
           onLog: (m) => console.log(m),
         })
       : undefined;
@@ -209,6 +218,7 @@ program
     );
     const executorOwner = `${hostname()}:${process.pid}`;
     const runExecutor = new RunExecutor(workItemStore, runnerClient, {
+      shouldPauseDispatch: () => deployment.isMaintenance(),
       approvals: approvalService,
       policy: policyEngine,
       capabilities: capabilityRuntime,
@@ -261,9 +271,11 @@ program
         const recommendationGuidance = !step && !workItem.workflowId
           ? buildFlowRecommendationGuidance(flowCatalog.list())
           : "";
+        const deploymentGuidance = deployment.guidanceForRun(run.id, workItemStore);
+        const guidedPrompt = deploymentGuidance ? `${basePrompt}\n\n${deploymentGuidance}` : basePrompt;
         const ordinaryPrompt = recommendationGuidance
-          ? `${basePrompt}\n\n${recommendationGuidance}`
-          : basePrompt;
+          ? `${guidedPrompt}\n\n${recommendationGuidance}`
+          : guidedPrompt;
         const prompt = step
           ? [
               `[Workflow ${workItem.workflowId ?? "临时计划"}${run.workflowRevision ? ` @ ${run.workflowRevision}` : ""}]`,
@@ -309,6 +321,7 @@ program
     sessionRecovery.scanExpired();
     sessionRecovery.scanCancellationDeadlines();
     const reclaimQueued = (): void => {
+      if (deployment.isMaintenance()) return;
       try {
         reclaimQueuedRuns({
           store: workItemStore,
@@ -529,8 +542,7 @@ program
     const apiPort = config.bridge?.apiPort ?? 19790;
     const { serve } = await import("@hono/node-server");
     const { createBridgeApp } = await import("./outbound-api.js");
-    serve({
-      fetch: createBridgeApp(
+    const apiApp = createBridgeApp(
         {
           sendOutboundFile: (chatId, rawPath, topicId) =>
             chatId.startsWith("telegram:")
@@ -568,7 +580,10 @@ program
         flowBatchApp,
         mcpApp,
         skillApp,
-      ).fetch,
+      );
+    mountDeploymentRoutes(apiApp, deployment, workItemStore);
+    serve({
+      fetch: apiApp.fetch,
       hostname: "127.0.0.1",
       port: apiPort,
     });

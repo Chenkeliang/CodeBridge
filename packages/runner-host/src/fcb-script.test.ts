@@ -100,4 +100,35 @@ describe("writeFcbScript", () => {
     });
     expect(received).not.toHaveProperty("session_id");
   });
+  it("submits a deployment request using only its trusted run identity", async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-deploy-"));
+    tmpDirs.push(dataDir);
+    const binDir = await writeFcbScript(dataDir);
+    const received: unknown[] = [];
+    const server = http.createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        expect(request.url).toBe("/deploy/command");
+        received.push(JSON.parse(Buffer.concat(chunks).toString()));
+        response.writeHead(200, {"content-type": "application/json"});
+        response.end('{"message":"准备中"}');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("missing address");
+    const env = {...process.env, FCB_API: `http://127.0.0.1:${address.port}`, FCB_TOKEN: "token",
+      FCB_CHAT_ID: "untrusted-chat", FCB_RUN_ID: "run-original"};
+    try {
+      await executeFile(path.join(binDir, "fcb"), ["deploy", "prepare", "--publish", "--ref", "HEAD"], {env});
+      expect(received).toEqual([{runId: "run-original", action: "prepare", publishAfterPrepare: true, ref: "HEAD"}]);
+      await expect(executeFile(path.join(binDir, "fcb"), ["deploy", "prepare", "--owner", "someone"], {env})).rejects.toThrow();
+      await expect(executeFile(path.join(binDir, "fcb"), ["deploy", "apply"], {env: {...env, FCB_RUN_ID: ""}})).rejects.toThrow();
+      expect(received).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
 });

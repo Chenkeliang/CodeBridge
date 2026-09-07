@@ -92,6 +92,8 @@ export interface FeishuBridgeOptions {
   dataDir: string;
   onLog?: (msg: string) => void;
   sessionIngress?: ChannelSessionIngress;
+  onDeploymentMessage?: (message: FeishuMessage) => Promise<string | undefined>;
+  isMaintenance?: () => boolean;
 }
 
 /** 降级时单条普通消息的最大字符数；结果超过就用 chunkMarkdown 分条发，避免撞飞书消息长度上限 */
@@ -251,6 +253,10 @@ export class FeishuBridge {
         );
       },
     });
+  }
+
+  get isConnected(): boolean {
+    return this.inboundWebSocketState === "connected" && !this.disconnecting;
   }
 
   get orchestratorRef(): RunOrchestrator {
@@ -521,6 +527,12 @@ export class FeishuBridge {
       this.chatKey(msg.chatId, topicId),
       msg.messageId,
     );
+
+    const deploymentReply = await this.options.onDeploymentMessage?.(msg);
+    if (deploymentReply !== undefined) {
+      await this.sendMarkdown(msg.chatId, deploymentReply, msg.messageId);
+      return;
+    }
 
     const flowCommand = this.sessionIngress
       ? await this.flowController.handle({
@@ -930,6 +942,10 @@ export class FeishuBridge {
     topicId: string | undefined,
     flow?: ChannelFlowSubmission,
   ): Promise<void> {
+    if (this.options.isMaintenance?.()) {
+      await this.sendMarkdown(msg.chatId, "正在安全发布，当前任务会先完成；新任务暂不接收，请发布完成后重发。可以发送“发布状态”或“取消这次发布”。", msg.messageId);
+      return;
+    }
     if (!this.sessionIngress) {
       await this.streamAgentReply(msg, prompt, topicId);
       return;
