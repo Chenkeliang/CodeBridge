@@ -24,6 +24,11 @@ const channel = vi.hoisted(() => ({
             data: { card_id: "cardkit-resolved" },
           }),
           update: vi.fn().mockResolvedValue({ code: 0 }),
+          settings: vi.fn().mockResolvedValue({ code: 0 }),
+        },
+        cardElement: {
+          content: vi.fn().mockResolvedValue({code: 0}),
+          update: vi.fn().mockResolvedValue({code: 0}),
         },
       },
     },
@@ -185,14 +190,16 @@ describe("FeishuBridge interrupted stream recovery", () => {
       "✅ **已完成**",
     );
     const writes = JSON.stringify(
-      channel.rawClient.cardkit.v1.card.update.mock.calls,
+      [channel.rawClient.cardkit.v1.card.update.mock.calls,
+       channel.rawClient.cardkit.v1.cardElement.update.mock.calls],
     );
     expect(writes).toContain("public result");
     expect(writes).toContain(
       "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     const finalWrite = JSON.stringify(
-      channel.rawClient.cardkit.v1.card.update.mock.calls.at(-1),
+      channel.rawClient.cardkit.v1.cardElement.update.mock.calls.filter(([r]) => r.path.element_id === "progress").at(-1)
+        ?? channel.rawClient.cardkit.v1.card.update.mock.calls.at(-1),
     );
     expect(finalWrite.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
       .toHaveLength(1);
@@ -226,7 +233,7 @@ describe("FeishuBridge interrupted stream recovery", () => {
     }).cardHost();
 
     await expect(host.updateCard("cardkit-1", { schema: "2.0" }))
-      .rejects.toThrow("CardKit update failed (999): rejected");
+      .rejects.toThrow("CardKit write failed (999): rejected");
 
     await bridge.disconnect();
   });

@@ -5,6 +5,7 @@ import { SqliteEventStore } from "@codebridge/work-items";
 import {
   SessionCoordinator,
   SessionLeaseService,
+  SessionRecoveryService,
 } from "@codebridge/session-coordinator";
 import {
   ApprovalService,
@@ -230,6 +231,97 @@ describe("RunExecutor", () => {
       status: "succeeded",
     });
     store.close();
+  });
+
+  it("renews the Session lease when Agent events prove the Run is active", async () => {
+    const startedAt = new Date("2026-09-06T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt);
+    const { store, coordinator, leaseService, run } = setupSessionRun();
+    try {
+      const renew = vi.spyOn(leaseService, "renew");
+      const renewProvider = vi.spyOn(store, "renewProviderSession");
+      const executorOwner = "bridge:123";
+      const runner = {
+        async *run(): AsyncGenerator<AgentEvent> {
+          yield { type: "session", sessionId: "prov_1" };
+          vi.setSystemTime(new Date(startedAt.getTime() + 20_000));
+          yield { type: "session_info_update" };
+          vi.setSystemTime(new Date(startedAt.getTime() + 40_000));
+          yield { type: "session_info_update" };
+          vi.setSystemTime(new Date(startedAt.getTime() + 61_000));
+          yield { type: "done", exitCode: 0 };
+        },
+      };
+      const executor = new RunExecutor(store, runner, {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: leaseService,
+        executorOwner,
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+      });
+
+      expect((await executor.execute(run.id)).status).toBe("succeeded");
+      expect(renew).toHaveBeenCalledWith(run.id, executorOwner);
+      expect(renewProvider).toHaveBeenCalledWith(expect.objectContaining({
+        providerSessionId: "prov_1",
+        runId: run.id,
+      }));
+    } finally {
+      store.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects the first Agent event after the Session lease has expired", async () => {
+    const startedAt = new Date("2026-09-06T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt);
+    const { store, coordinator, leaseService, run } = setupSessionRun();
+    try {
+      const executor = new RunExecutor(store, {
+        async *run(): AsyncGenerator<AgentEvent> {
+          vi.setSystemTime(new Date(startedAt.getTime() + 61_000));
+          yield { type: "session_info_update" };
+        },
+      }, {
+        sessionCoordinator: coordinator,
+        sessionLeaseService: leaseService,
+        executorOwner: "bridge:123",
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: "conv_sess_1",
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+      });
+
+      expect((await executor.execute(run.id)).status).toBe("running");
+      expect(store.listEvents(run.workItemId).filter((event) =>
+        event.type === "AGENT_EVENT"
+      )).toHaveLength(0);
+      const recovery = new SessionRecoveryService(
+        store,
+        coordinator,
+        new SessionLeaseService(store, { now: () => new Date() }),
+      );
+      expect(recovery.scanExpired()).toEqual([
+        { runId: run.id, action: "interrupted" },
+      ]);
+    } finally {
+      store.close();
+      vi.useRealTimers();
+    }
   });
 
   it("rejects execution events after a Session Run loses ownership", () => {

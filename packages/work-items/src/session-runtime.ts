@@ -274,6 +274,7 @@ export interface SessionRuntimeTransaction {
   renewRunLease(
     runId: string,
     owner: string,
+    now: string,
     expiresAt: string,
   ): Run | null;
   listExpiredRunningRuns(now: string, limit: number): Run[];
@@ -899,19 +900,21 @@ export function createSqliteSessionRuntimeTransaction(
         : null;
     },
 
-    renewRunLease(runId, owner, expiresAt) {
+    renewRunLease(runId, owner, now, expiresAt) {
       assertActive();
       const result = database
         .prepare(
           `UPDATE runs
            SET lease_expires_at = ?, updated_at = ?
-           WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+           WHERE id = ? AND status = 'running' AND lease_owner = ?
+             AND lease_expires_at >= ?`,
         )
         .run(
           expiresAt,
           new Date().toISOString(),
           runId,
           owner,
+          now,
         );
       return Number(result.changes) === 1
         ? transaction.getRun(runId) ?? null

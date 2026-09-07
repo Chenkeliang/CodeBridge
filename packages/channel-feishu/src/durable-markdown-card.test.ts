@@ -17,7 +17,7 @@ function fixture() {
 describe("durable task cards", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("updates the same non-streaming entity past 10 minutes and acknowledges the final result", async () => {
+  it("updates the same streaming entity past 10 minutes and acknowledges the final result", async () => {
     vi.useFakeTimers();
     const start = new Date("2026-09-06T00:00:00Z").getTime();
     vi.setSystemTime(start);
@@ -32,7 +32,7 @@ describe("durable task cards", () => {
     const card = new FeishuRunCard(host, "chat", "source", "run", false);
     await card.open();
     await vi.advanceTimersByTimeAsync(500);
-    expect(JSON.stringify(f.create.mock.calls[0])).toContain('\\"streaming_mode\\":false');
+    expect(JSON.parse((f.create.mock.calls[0][0] as {data: {data: string}}).data.data).config.streaming_mode).toBe(true);
     vi.setSystemTime(start + 11 * 60_000);
     await card.onAgentEvent({type: "text_delta", phase: "final_answer", text: "最终答案"});
     await vi.advanceTimersByTimeAsync(500);
