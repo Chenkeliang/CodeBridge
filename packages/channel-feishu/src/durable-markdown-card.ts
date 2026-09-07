@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { runCardJson, type RunCardParts } from "./cardkit-writer.js";
 import type { LarkChannel } from "@larksuiteoapi/node-sdk";
 
 export interface MarkdownCardController {
   cardId: string;
   messageId: string;
   setContent(content: string): Promise<void>;
+  setSnapshot?(parts: RunCardParts): Promise<void>;
 }
 
 export interface MarkdownCardStream {
@@ -15,17 +17,17 @@ export interface MarkdownCardStream {
   ): Promise<void>;
 }
 
-/** Ordinary CardKit updates have no native streaming session to expire at 10m. */
+/** Use explicit CardKit acknowledgements for both live and terminal snapshots. */
 export function durableMarkdownCard(
   channel: LarkChannel,
-  update: (cardId: string, card: object) => Promise<void>,
+  update: (cardId: string, card: object, replyTo?: string) => Promise<void>,
 ): MarkdownCardStream {
   return {
     async stream(_chatId, input, options) {
       const created = await channel.rawClient.cardkit.v1.card.create({
         data: {
           type: "card_json",
-          data: JSON.stringify(markdownCard("正在启动任务…")),
+          data: JSON.stringify(runCardJson({ answer: "", progress: "", status: "正在启动任务…", terminal: false })),
         },
       });
       if (created.code !== 0 || !created.data?.card_id) {
@@ -56,6 +58,9 @@ export function durableMarkdownCard(
       await input.markdown({
         cardId,
         messageId: sent.data.message_id,
+        async setSnapshot(parts) {
+          await update(cardId, runCardJson(parts), sent.data!.message_id!);
+        },
         async setContent(content) {
           const delay = Math.max(0, 350 - (Date.now() - lastWriteAt));
           if (delay) await new Promise((resolve) => setTimeout(resolve, delay));

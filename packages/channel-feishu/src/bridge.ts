@@ -1,3 +1,4 @@
+import { CardKitWriter } from "./cardkit-writer.js";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -224,6 +225,7 @@ export class FeishuBridge {
   private inboundWebSocketState: FeishuConnectionState = "unavailable";
   private disconnecting = false;
   private sessionIngress?: ChannelSessionIngress;
+  private cardKitWriter?: CardKitWriter;
   private readonly cardUpdateSequences: JsonMapStore<number>;
   private readonly deliveryRetries = new Map<string, { attempts: number; after: number }>();
 
@@ -806,30 +808,18 @@ export class FeishuBridge {
         if (!cardId) throw new Error("CardKit id conversion returned no card_id");
         return cardId;
       },
-      updateCard: async (cardId, card) => {
+      updateCard: async (cardId, card, replyTo) => {
         if (!this.channel) throw new Error("Feishu channel is unavailable");
-        const wallClockSequence = Math.floor(Date.now() / 1000);
-        const sequence = Math.max(
-          wallClockSequence,
-          (this.cardUpdateSequences.read()[cardId] ?? 0) + 1,
-        );
-        if (sequence > 2_147_483_647) {
-          throw new Error("CardKit update sequence exceeds int32 range");
-        }
-        this.cardUpdateSequences.update((all) => ({ ...all, [cardId]: sequence }));
-        const response = await this.channel.rawClient.cardkit.v1.card.update({
-          path: { card_id: cardId },
-          data: {
-            card: { type: "card_json", data: JSON.stringify(card) },
-            sequence,
-            uuid: `recovery_${randomUUID()}`,
-          },
-        });
-        if (response.code !== 0) {
-          throw new Error(
-            `CardKit update failed (${response.code}): ${response.msg ?? "unknown"}`,
+        this.cardKitWriter ??= new CardKitWriter(this.channel, (id) => {
+          const sequence = Math.max(
+            Math.floor(Date.now() / 1000),
+            (this.cardUpdateSequences.read()[id] ?? 0) + 1,
           );
-        }
+          if (sequence > 2_147_483_647) throw new Error("CardKit update sequence exceeds int32 range");
+          this.cardUpdateSequences.update((all) => ({ ...all, [id]: sequence }));
+          return sequence;
+        }, new JsonMapStore<string>(path.join(this.options.dataDir, "feishu-result-receipts.json")));
+        await this.cardKitWriter.write(cardId, card, replyTo);
       },
       registerPendingStream: (messageId, entry) => {
         this.pendingStreams.update((all) => ({ ...all, [messageId]: entry }));

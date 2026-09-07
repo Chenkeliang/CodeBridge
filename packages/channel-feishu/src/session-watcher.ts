@@ -1,4 +1,5 @@
-import { markdownCard, type MarkdownCardStream } from "./durable-markdown-card.js";
+import { runCardJson, type RunCardParts } from "./cardkit-writer.js";
+import { type MarkdownCardStream } from "./durable-markdown-card.js";
 import type {
   AgentEvent,
   ChannelDeliveryRow,
@@ -56,14 +57,14 @@ export interface FeishuCardHost {
   sendMarkdown(chatId: string, markdown: string, replyTo?: string): Promise<void>;
   resolveCardId?(messageId: string): Promise<string>;
   /** Update the CardKit instance itself, never the referencing IM message. */
-  updateCard(cardId: string, card: object): Promise<void>;
+  updateCard(cardId: string, card: object, replyTo?: string): Promise<void>;
   registerPendingStream(messageId: string, entry: PendingFeishuStream): void;
   clearPendingStream(messageId: string): void;
   log(message: string): void;
   isDisconnecting(): boolean;
 }
 
-type CardSnapshot = { content: string; statusOnly: boolean };
+type CardSnapshot = { content: string; parts: RunCardParts; statusOnly: boolean };
 
 function isStructuredFlowEvent(type: string): boolean {
   return type === "STEP_STARTED"
@@ -186,7 +187,8 @@ export class FeishuRunCard {
             async (snapshot) => {
               if (this.abortController.signal.aborted) return;
               try {
-                await s.setContent(snapshot.content);
+                if (s.setSnapshot) await s.setSnapshot(snapshot.parts);
+                else await s.setContent(snapshot.content);
                 this.lastWriteError = undefined;
                 setHttpWrite(this.runStatus, "healthy");
               } catch (err) {
@@ -227,6 +229,16 @@ export class FeishuRunCard {
             );
             this.writer?.enqueue({
               content: status && body ? `${body}\n\n---\n\n${status}` : body || status,
+              parts: {
+                answer: this.runStatus.state === "running" ? snapshot.result : agentText,
+                progress: composeFeishuRunBody(
+                  this.runStatus.state === "running"
+                    ? [snapshot.thinking, snapshot.progress].filter(Boolean).join("\n\n") : "",
+                  flowText, this.flowSaveRequested,
+                ),
+                status,
+                terminal: this.runStatus.state !== "running",
+              },
               statusOnly,
             });
           };
@@ -353,6 +365,8 @@ interface ResumedFeishuCard {
   flowProjector: ChannelFlowProjector;
   runStatus: FeishuRunStatus;
   resultRecovery: "pending" | "confirmed";
+  projectionReady: boolean;
+  pendingReplayEvents: ChannelSessionEvent[];
   projectedSequences: Set<number>;
   flowSaveRequested: boolean;
 }
@@ -430,6 +444,8 @@ export class FeishuSessionWatcher {
       flowProjector: createChannelFlowProjector(),
       runStatus,
       resultRecovery: "pending",
+      projectionReady: false,
+      pendingReplayEvents: [],
       projectedSequences: new Set<number>(),
       flowSaveRequested: false,
     });
@@ -523,7 +539,7 @@ export class FeishuSessionWatcher {
     if (resumed) {
       setInboundWebSocket(resumed.runStatus, inboundState);
       const terminal = isTerminalRunSnapshot(delivery.runSnapshot);
-      if (terminal) {
+      if (terminal || !resumed.projectionReady) {
         await this.restorePersistedResult(delivery, resumed);
       }
       if (delivery.runSnapshot) {
@@ -559,9 +575,8 @@ export class FeishuSessionWatcher {
       const events = await this.ingress.replayEvents(delivery.sessionId, {
         afterSequence: delivery.acceptedSequence,
       });
-      for (const event of events) {
-        this.applyRecoveredEvent(delivery.runId, resumed, event);
-      }
+      this.finishProjectionReplay(delivery.runId, resumed, events);
+      if (!isTerminalRunSnapshot(delivery.runSnapshot)) return;
       const expectedTerminalState = delivery.runSnapshot?.status;
       const hasMatchingTerminalEvent = events.some((event) =>
         event.runId === delivery.runId
@@ -583,6 +598,20 @@ export class FeishuSessionWatcher {
     }
   }
 
+  private finishProjectionReplay(runId: string, resumed: ResumedFeishuCard, events: ChannelSessionEvent[]): void {
+    const ordered = [...events, ...resumed.pendingReplayEvents].sort((a, b) => a.sequence - b.sequence);
+    resumed.pendingReplayEvents = [];
+    resumed.projectionReady = true;
+    for (const event of ordered) {
+      this.applyRecoveredEvent(runId, resumed, event);
+      const terminal = event.runId === runId ? terminalStateForEvent(event.type) : undefined;
+      if (terminal) {
+        finishFeishuRunStatus(resumed.runStatus, terminal);
+        resumed.resultRecovery = "confirmed";
+      }
+    }
+  }
+
   private applyRecoveredEvent(
     runId: string,
     resumed: ResumedFeishuCard,
@@ -592,6 +621,10 @@ export class FeishuSessionWatcher {
       event.runId !== runId
       || resumed.projectedSequences.has(event.sequence)
     ) return;
+    if (!resumed.projectionReady) {
+      resumed.pendingReplayEvents.push(event);
+      return;
+    }
     if (event.type === "FLOW_SAVE_REQUESTED") {
       resumed.flowSaveRequested = true;
       resumed.projectedSequences.add(event.sequence);
@@ -691,10 +724,14 @@ export class FeishuSessionWatcher {
     resumed: ResumedFeishuCard,
   ): Promise<boolean> {
     if (this.permanentlyInvalidCardIds.has(resumed.surfaceCardId)) return false;
+    // Connection heartbeats must never replace an existing card with an empty projection.
+    if (!resumed.projectionReady && resumed.resultRecovery !== "confirmed") return false;
+    if (resumed.runStatus.state !== "running" && resumed.resultRecovery !== "confirmed") return false;
     try {
       await this.host.updateCard(
         resumed.surfaceCardId,
         this.resumedCardBody(resumed),
+        resumed.surfaceMessageId,
       );
       setHttpWrite(resumed.runStatus, "healthy");
       return true;
@@ -728,15 +765,16 @@ export class FeishuSessionWatcher {
         : flowText && !snapshot.result.trim()
           ? ""
           : snapshot.finalText;
-    const body = composeFeishuRunBody(
-      agentText,
-      flowText,
-      resumed.flowSaveRequested,
-    );
-    const markdown = status && body
-      ? `${status}\n\n---\n\n${body}`
-      : status || body || "（运行中）";
-    return markdownCard(markdown);
+    return runCardJson({
+      answer: resumed.runStatus.state === "running" ? snapshot.result : agentText,
+      progress: composeFeishuRunBody(
+        resumed.runStatus.state === "running"
+          ? [snapshot.thinking, snapshot.progress].filter(Boolean).join("\n\n") : "",
+        flowText, resumed.flowSaveRequested,
+      ),
+      status,
+      terminal: resumed.runStatus.state !== "running",
+    });
   }
 
   async openCardForRun(runId: string, turn: PendingTurn): Promise<void> {
@@ -782,6 +820,13 @@ export class FeishuSessionWatcher {
   private async run(): Promise<void> {
     while (!this.abortController.signal.aborted) {
       try {
+        const pending = [...this.resumedCards.entries()].filter(([, card]) => !card.projectionReady);
+        if (pending.length && this.ingress.replayEvents) {
+          const history = await this.ingress.replayEvents(this.sessionId, { afterSequence: this.afterSequence });
+          for (const [runId, card] of pending) {
+            this.finishProjectionReplay(runId, card, history);
+          }
+        }
         await this.setCoreEventStreamState("connected").catch(() => {});
         for await (const event of this.ingress.events(this.sessionId, {
           afterSequence: this.afterSequence,
@@ -884,6 +929,12 @@ export class FeishuSessionWatcher {
       }
       const resumed = this.resumedCards.get(event.runId);
       if (resumed) {
+        if (!resumed.projectionReady) {
+          resumed.pendingReplayEvents.push(event);
+          if (this.ingress.replayEvents) return;
+          // Legacy ingress replays its ordered event stream through the terminal event.
+          this.finishProjectionReplay(event.runId, resumed, []);
+        }
         resumed.resultRecovery = "confirmed";
         finishFeishuRunStatus(resumed.runStatus, terminalState);
         const written = await this.writeResumedCard(event.runId, resumed);

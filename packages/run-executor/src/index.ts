@@ -28,6 +28,7 @@ import { AgentEventAggregator } from "./agent-event-aggregator.js";
 import { RunHeartbeat } from "./run-heartbeat.js";
 
 const PROVIDER_LEASE_MS = 60_000;
+const AGENT_EVENT_LEASE_RENEW_INTERVAL_MS = 15_000;
 
 class ProviderSessionBusyError extends Error {
   constructor() {
@@ -829,11 +830,27 @@ export class RunExecutor {
     let replaySafety =
       this.store.getRun(run.id)?.replaySafety ?? "safe";
     let droppedOccupiedResume = false;
+    let renewFromEventAfter = 0;
     const persistAgentEvent = (event: AgentEvent): void => {
       this.throwIfCancellationRequested(run.id);
       // provider lease 丢失后，persist 入口直接拒绝写入（不依赖 runner 尊重 abort）。
       if (signal?.aborted) {
         throw new RunCancellationRequested();
+      }
+      // Agent 事件本身就是执行器仍存活的持久证据。定时心跳若因事件循环抖动
+      // 错过一个窗口，先续租再落事件，避免恢复扫描把仍在产出事件的 Run 误判中断。
+      const now = Date.now();
+      if (run.sessionId && now >= renewFromEventAfter) {
+        if (!this.options.sessionLeaseService!.renew(
+          run.id,
+          this.options.executorOwner!,
+        )) {
+          throw new Error("run_lease_lost");
+        }
+        if (!this.renewProviderSession(run.id)) {
+          throw new ProviderSessionBusyError();
+        }
+        renewFromEventAfter = now + AGENT_EVENT_LEASE_RENEW_INTERVAL_MS;
       }
       if (
         event.type === "error"

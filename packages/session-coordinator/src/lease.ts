@@ -27,6 +27,7 @@ export class SessionLeaseService {
     return this.store.renewRunLease(
       runId,
       owner,
+      now.toISOString(),
       new Date(now.getTime() + LEASE_MS).toISOString(),
     );
   }

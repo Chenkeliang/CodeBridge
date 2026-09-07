@@ -65,6 +65,8 @@ describe("Session leases", () => {
     expect(leases.renew(runId, "bridge:123")?.leaseExpiresAt)
       .toBe("2026-08-14T00:01:15.000Z");
     expect(leases.renew(runId, "bridge:456")).toBeNull();
+    clock.now = new Date("2026-08-14T00:01:16.000Z");
+    expect(leases.renew(runId, "bridge:123")).toBeNull();
     store.close();
   });
 

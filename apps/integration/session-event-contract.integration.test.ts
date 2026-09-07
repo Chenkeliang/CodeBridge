@@ -26,6 +26,11 @@ const feishu = vi.hoisted(() => ({
             data: { card_id: "cardkit-recovered" },
           }),
           update: vi.fn().mockResolvedValue({ code: 0 }),
+          settings: vi.fn().mockResolvedValue({ code: 0 }),
+        },
+        cardElement: {
+          content: vi.fn().mockResolvedValue({code: 0}),
+          update: vi.fn().mockResolvedValue({code: 0}),
         },
       },
     },
@@ -58,6 +63,9 @@ beforeEach(() => {
     data: { card_id: "cardkit-recovered" },
   });
   feishu.rawClient.cardkit.v1.card.update.mockResolvedValue({ code: 0 });
+  feishu.rawClient.cardkit.v1.card.settings.mockResolvedValue({code: 0});
+  feishu.rawClient.cardkit.v1.cardElement.content.mockResolvedValue({code: 0});
+  feishu.rawClient.cardkit.v1.cardElement.update.mockResolvedValue({code: 0});
 });
 
 afterEach(() => {
@@ -247,7 +255,7 @@ describe("Session event wire contract integration", () => {
           target: "fsr_contract",
         }),
       ]));
-      const writes = JSON.stringify(feishu.rawClient.cardkit.v1.card.update.mock.calls);
+      const writes = JSON.stringify([feishu.rawClient.cardkit.v1.card.update.mock.calls, feishu.rawClient.cardkit.v1.cardElement.update.mock.calls, feishu.rawClient.cardkit.v1.card.settings.mock.calls]);
       expect(writes).toContain("真实持久化的最终答案");
       expect(writes).toContain("✅ **已完成**");
       expect(writes).toContain(
@@ -306,7 +314,7 @@ describe("Session event wire contract integration", () => {
         afterSequence: fixture.delivery.acceptedSequence,
         signal: expect.any(AbortSignal),
       }));
-      const writes = JSON.stringify(feishu.rawClient.cardkit.v1.card.update.mock.calls);
+      const writes = JSON.stringify([feishu.rawClient.cardkit.v1.card.update.mock.calls, feishu.rawClient.cardkit.v1.cardElement.update.mock.calls, feishu.rawClient.cardkit.v1.card.settings.mock.calls]);
       expect(writes).toContain("实时 SSE 的最终答案");
       expect(writes).toContain("✅ **已完成**");
       expect(writes).not.toContain("本次无输出");

@@ -523,10 +523,14 @@ describe("FeishuBridge stream lifecycle", () => {
         cardkit: {v1: {card: {
           create: async () => ({code: 0, data: {card_id: "cardkit-1"}}),
           idConvert: async () => ({code: 0, data: {card_id: "cardkit-1"}}),
+          settings: async () => ({code: 0}),
           update: async (request: {data: {card: {data: string}}}) => {
-            rendered = JSON.parse(request.data.card.data).body.elements[0].content;
+            rendered = JSON.parse(request.data.card.data).body.elements.map((e: {content: string}) => e.content).join("\n");
             return {code: 0};
           },
+        }, cardElement: {
+          content: async (r: {data: {content: string}}) => { rendered += r.data.content; return {code: 0}; },
+          update: async (r: {data: {element: string}}) => { rendered += JSON.parse(r.data.element).content; return {code: 0}; },
         }}},
         im: {v1: {message: {reply: async () => ({code: 0, data: {message_id: "card-1"}})}}},
       },

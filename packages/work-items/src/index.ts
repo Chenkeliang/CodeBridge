@@ -1782,10 +1782,11 @@ export class SqliteEventStore {
   renewRunLease(
     runId: string,
     owner: string,
+    now: string,
     expiresAt: string,
   ): Run | null {
     return this.withSessionTransaction((tx) =>
-      tx.renewRunLease(runId, owner, expiresAt)
+      tx.renewRunLease(runId, owner, now, expiresAt)
     );
   }
 

@@ -302,9 +302,8 @@ describe("FeishuSessionWatcher", () => {
 
     await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
 
-    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
-    expect(final).toContain("结果恢复中");
-    expect(final).not.toContain("本次无输出");
+    // Preserve the existing answer while recovery is unavailable.
+    expect(host.updateCard).not.toHaveBeenCalled();
     expect(ingress.completeDelivery).not.toHaveBeenCalled();
     expect(logs.some((line) => line.includes("feishu_terminal_result_recovery_failed"))).toBe(true);
     w.abort();
@@ -338,9 +337,8 @@ describe("FeishuSessionWatcher", () => {
 
     await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
 
-    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
-    expect(final).toContain("结果恢复中");
-    expect(final).not.toContain("本次无输出");
+    // Preserve the existing answer while recovery is unavailable.
+    expect(host.updateCard).not.toHaveBeenCalled();
     expect(ingress.completeDelivery).not.toHaveBeenCalled();
     expect(logs.some((line) =>
       line.includes("matching terminal event is missing")
@@ -428,16 +426,18 @@ describe("FeishuSessionWatcher", () => {
   it("never lets a stale live snapshot reverse a terminal card", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
-    ingress.replayEvents.mockRejectedValue(new Error("history unavailable"));
+    ingress.replayEvents.mockResolvedValue([terminalEvent(9)]);
     const w = watcher(ingress, host);
 
     await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+    const writes = vi.mocked(host.updateCard).mock.calls.length;
+    ingress.replayEvents.mockRejectedValue(new Error("history unavailable"));
     await w.reconcileDelivery(delivery("running"), turn(), "connected");
 
     expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain(
       "✅ **已完成**",
     );
-    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    expect(vi.mocked(host.updateCard).mock.calls.length).toBe(writes);
     w.abort();
   });
 
@@ -552,6 +552,57 @@ describe("FeishuSessionWatcher", () => {
     w.abort();
   });
 
+  it("orders live deltas behind the finite replay prefix", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    let release!: (events: ChannelSessionEvent[]) => void;
+    ingress.replayEvents.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const w = watcher(ingress, host);
+    const replay = w.reconcileDelivery(delivery("running"), turn(), "connected");
+    const delta = (sequence: number, text: string): ChannelSessionEvent => ({
+      type: "AGENT_EVENT", sequence, runId: "run_1", target: null,
+      executionKind: "agent", occurredAt: new Date().toISOString(), resultRef: null,
+      payload: {event: {type: "text_delta", phase: "final_answer", text}},
+    });
+    await (w as unknown as {handle(e: ChannelSessionEvent): Promise<void>}).handle(delta(2, "B"));
+    release([delta(1, "A"), delta(2, "B")]);
+    await replay;
+    const result = vi.mocked(host.updateCard).mock.calls.at(-1)?.[1] as {body: {elements: {element_id: string;content:string}[]}};
+    expect(result.body.elements.find((e) => e.element_id === "answer")?.content).toBe("AB");
+    w.abort();
+  });
+
+  it("does not confirm terminal delivery ahead of pending historical replay", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    let release!: (events: ChannelSessionEvent[]) => void;
+    ingress.replayEvents.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const w = watcher(ingress, host);
+    const replay = w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
+    await (w as unknown as {handle(e: ChannelSessionEvent): Promise<void>}).handle(terminalEvent(9));
+    expect(ingress.completeDelivery).not.toHaveBeenCalled();
+    release([{type: "AGENT_EVENT", sequence: 8, runId: "run_1", target: null,
+      executionKind: "agent", occurredAt: new Date().toISOString(), resultRef: null,
+      payload: {event: {type: "text_delta", phase: "final_answer", text: "complete answer"}}}, terminalEvent(9)]);
+    await replay;
+    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain("complete answer");
+    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
+    w.abort();
+  });
+
+  it("does not overwrite a recovered card before its historical projection is ready", async () => {
+    const { host } = makeHost();
+    const ingress = makeIngress();
+    const w = watcher(ingress, host);
+    w.resumeCardForRun("run_1", "card-old", "turn_1", "old-owner", false, "cardkit-old");
+    await w.setInboundWebSocketState("connected");
+    expect(host.updateCard).not.toHaveBeenCalled();
+    ingress.replayEvents.mockRejectedValueOnce(new Error("offline"));
+    await w.reconcileDelivery(delivery("running"), turn(), "connected");
+    expect(host.updateCard).not.toHaveBeenCalled();
+    w.abort();
+  });
+
   it("recovers a delivering delivery by replaying and updating the original card", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
@@ -579,12 +630,13 @@ describe("FeishuSessionWatcher", () => {
       "cardkit-old",
       expect.objectContaining({
         body: {
-          elements: [{
-            tag: "markdown",
+          elements: expect.arrayContaining([expect.objectContaining({
+            element_id: "status",
             content: expect.stringContaining("✅ **已完成**"),
-          }],
+          })]),
         },
       }),
+      "card-old",
     );
     expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).toContain(
       "final answer",
@@ -601,6 +653,7 @@ describe("FeishuSessionWatcher", () => {
     const { host } = makeHost();
     const ingress = makeIngress();
     const row = delivery("succeeded");
+    ingress.replayEvents.mockResolvedValue([terminalEvent(9)]);
     row.surfaceCardId = null;
     const w = watcher(ingress, host);
 
@@ -616,6 +669,7 @@ describe("FeishuSessionWatcher", () => {
     expect(host.updateCard).toHaveBeenCalledWith(
       "cardkit-resolved",
       expect.any(Object),
+      "card-old",
     );
     w.abort();
   });
@@ -627,6 +681,7 @@ describe("FeishuSessionWatcher", () => {
     });
     const ingress = makeIngress();
     const row = delivery("succeeded");
+    ingress.replayEvents.mockResolvedValue([terminalEvent(9)]);
     row.surfaceCardId = null;
     const w = watcher(ingress, host);
 
@@ -971,12 +1026,13 @@ describe("FeishuSessionWatcher", () => {
       "cardkit-old",
       expect.objectContaining({
         body: {
-          elements: [{
-            tag: "markdown",
+          elements: expect.arrayContaining([expect.objectContaining({
+            element_id: "answer",
             content: expect.stringContaining("final answer"),
-          }],
+          })]),
         },
       }),
+      "card-old",
     );
     expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1))).not.toContain(
       "thinking…",
