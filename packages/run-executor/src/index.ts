@@ -81,6 +81,7 @@ export interface RunExecutorOptions {
   sessionLeaseService?: SessionLeaseService;
   executorOwner?: string;
   now?: () => Date;
+  shouldPauseDispatch?: () => boolean;
 }
 
 export interface DecisionTraceStep {
@@ -226,6 +227,7 @@ export class RunExecutor {
     const initial = this.store.getRun(runId);
     if (!initial) throw new Error(`Run not found: ${runId}`);
     if (initial.status !== "queued") return initial;
+    if (this.options.shouldPauseDispatch?.()) return initial;
     const workItem = this.store.getWorkItem(initial.workItemId);
     if (!workItem) throw new Error(`WorkItem not found: ${initial.workItemId}`);
     const plan = initial.planId ? this.store.getPlan(initial.planId) : undefined;

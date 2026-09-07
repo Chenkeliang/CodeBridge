@@ -7,7 +7,7 @@ import path from "node:path";
  */
 const FCB_SCRIPT = `#!/usr/bin/env node
 // fcb — 在 CodeBridge Agent 任务里把文件/消息发回当前聊天
-// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest ... | fcb flow batch <draft-json-file>
+// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest ... | fcb flow batch <draft-json-file> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -41,7 +41,25 @@ async function main() {
     fail("fcb: 缺少 FCB_API/FCB_TOKEN/FCB_CHAT_ID（仅在 CodeBridge 任务中可用）");
   }
   const [cmd, ...rest] = process.argv.slice(2);
-  if (cmd === "send" && rest[0]) {
+  if (cmd === "deploy") {
+    if (!runId) fail("fcb: 发布操作缺少当前任务身份，不能执行");
+    const actions = {prepare: "prepare", apply: "publish", status: "status", cancel: "cancel", rollback: "rollback"};
+    const action = actions[rest[0]];
+    if (!action) fail("fcb: 发布操作支持 prepare/apply/status/cancel/rollback");
+    const body = {runId, action};
+    const args = rest.slice(1);
+    if (action === "prepare") {
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === "--publish") body.publishAfterPrepare = true;
+        else if (args[i] === "--ref" && args[i + 1] && !args[i + 1].startsWith("-")) body.ref = args[++i];
+        else fail("fcb: 未识别的发布参数 " + args[i]);
+      }
+    } else {
+      if (args.length > 1 || (args[0] && args[0].startsWith("-"))) fail("fcb: 请只提供一个发布编号或省略");
+      if (args[0]) body.releaseId = args[0];
+    }
+    await post("/deploy/command", body);
+  } else if (cmd === "send" && rest[0]) {
     await post("/outbound/file", {
       chatId,
       topicId,
@@ -104,7 +122,7 @@ async function main() {
       extracted_inputs: extractedInputs,
     });
   } else {
-    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest <Flow ID> <revision> [参数=值] [--reason 原因] | fcb flow batch <draft-json-file>");
+    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb flow suggest <Flow ID> <revision> [参数=值] [--reason 原因] | fcb flow batch <draft-json-file> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]");
   }
 }
 
