@@ -869,12 +869,15 @@ export class RunnerHost {
         claudePermissionMode: request.claudePermissionMode,
         acpConfig: request.acpConfig,
         flowSaveSourceAvailability: request.flowSaveSourceAvailability,
-        mcpServers: request.flowSaveSourceAvailability
-          ? [createFlowSaveMcpServerConfig(
-              this.flowSaveMcpServerPath,
-              request.flowSaveSourceAvailability,
-            )]
-          : undefined,
+        mcpServers: [createFlowSaveMcpServerConfig(
+          this.flowSaveMcpServerPath,
+          request.flowSaveSourceAvailability,
+          {
+            api: `http://127.0.0.1:${this.options.config.bridge?.apiPort ?? 19790}`,
+            token: this.options.token,
+            runId: request.runId,
+          },
+        )],
         extraEnv: await this.buildAgentEnv(request),
       };
       if (lifecycle.cancelRequested) return;

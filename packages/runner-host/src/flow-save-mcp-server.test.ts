@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -19,6 +20,7 @@ import {
 } from "@codebridge/core";
 import {
   createFlowSaveMcpServer,
+  createFlowSaveMcpServerConfig,
   readFlowSaveAvailabilityFromEnv,
 } from "./flow-save-mcp-server.js";
 
@@ -248,4 +250,62 @@ describe("CodeBridge internal Flow save MCP server", () => {
     expect(protocolErrors).toEqual([]);
     expect(stderr).toBe("");
   }, 15_000);
+});
+
+
+describe("deployment MCP transport", () => {
+  it("binds each server config to a distinct run even without flow availability", () => {
+    const first = createFlowSaveMcpServerConfig("/tmp/server.js", undefined, { api: "http://127.0.0.1:19790", token: "private", runId: "run_one" });
+    const second = createFlowSaveMcpServerConfig("/tmp/server.js", undefined, { api: "http://127.0.0.1:19790", token: "private", runId: "run_two" });
+    expect(first.env.FCB_RUN_ID).toBe("run_one");
+    expect(second.env.FCB_RUN_ID).toBe("run_two");
+    expect(JSON.stringify(first.env)).not.toBe(JSON.stringify(second.env));
+    expect(first.env.CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY).toBeUndefined();
+  });
+  it("serves a strict deployment tool over stdio using only its trusted environment identity", async () => {
+    const requests: { body: unknown; auth?: string }[] = [];
+    let status = 200;
+    const httpServer = http.createServer(async (req, res) => {
+      const chunks = []; for await (const chunk of req) chunks.push(chunk);
+      requests.push({ body: JSON.parse(Buffer.concat(chunks).toString()), auth: req.headers.authorization });
+      res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify({ message: status === 200 ? "准备完成" : "explicit_publish_intent_required" }));
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address() as { port: number };
+    const client = new Client({ name: "deployment-test", version: "1.0.0" });
+    const transport = new StdioClientTransport({ command: process.execPath, args: [builtServerPath], env: {
+      FCB_API: `http://127.0.0.1:${address.port}`, FCB_TOKEN: "private-token", FCB_RUN_ID: "run_native",
+    }, stderr: "pipe" });
+    try {
+      await client.connect(transport);
+      const tools = (await client.listTools()).tools;
+      expect(tools.map((tool) => tool.name)).toEqual(["codebridge_deploy"]);
+      expect(tools[0]?.inputSchema.additionalProperties).toBe(false);
+      expect(Object.keys(tools[0]?.inputSchema.properties ?? {})).toEqual(["action", "ref", "releaseId", "publishAfterPrepare"]);
+      const spoof = await client.callTool({ name: "codebridge_deploy", arguments: { action: "status", runId: "forged" } });
+      expect(spoof.isError).toBe(true); expect(requests).toHaveLength(0);
+      const result = await client.callTool({ name: "codebridge_deploy", arguments: { action: "prepare", publishAfterPrepare: true, ref: "HEAD" } });
+      expect(result.isError).toBe(false);
+      expect(requests).toEqual([{ body: { action: "prepare", publishAfterPrepare: true, ref: "HEAD", runId: "run_native" }, auth: "Bearer private-token" }]);
+      status = 403;
+      const rejected = await client.callTool({ name: "codebridge_deploy", arguments: { action: "publish" } });
+      expect(rejected.isError).toBe(true);
+      expect(JSON.stringify(rejected.content)).toContain("explicit_publish_intent_required");
+    } finally {
+      await client.close();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
+  });
+  it("rejects missing run identity before any HTTP request", async () => {
+    const client = new Client({ name: "deployment-missing-run-test", version: "1.0.0" });
+    const transport = new StdioClientTransport({ command: process.execPath, args: [builtServerPath], env: {
+      FCB_API: "http://127.0.0.1:1", FCB_TOKEN: "private-token", FCB_RUN_ID: "",
+    }, stderr: "pipe" });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: "codebridge_deploy", arguments: { action: "status" } });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("缺少当前任务身份");
+    } finally { await client.close(); }
+  });
 });

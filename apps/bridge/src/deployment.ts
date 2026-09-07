@@ -99,7 +99,7 @@ export class DeploymentService {
   guidance(actorId: string, text: string): string {
     if (!this.isOwner(actorId)) return "";
     const sourceRepo = this.readConfig()?.sourceRepo;
-    return (sourceRepo ? `CodeBridge 修改目录：${sourceRepo}。必须在此目录修改并提交候选。` : "") + (hasPublishIntent(text) ? "本轮已明确授权测试通过后上线。" : "本轮未授权自动上线，只可准备候选。") + "【CodeBridge 自身修改】仅在本任务修改 CodeBridge 时，验证并提交后用 fcb deploy prepare 准备候选；禁止直接重启或覆盖运行目录。只有用户本轮明确要求测试通过后上线，才可用 fcb deploy prepare --publish；否则只准备并报告结果。";
+    return (sourceRepo ? `CodeBridge 修改目录：${sourceRepo}。必须在此目录修改并提交候选。` : "") + (hasPublishIntent(text) ? "本轮已明确授权测试通过后上线。" : "本轮未授权自动上线，只可准备候选。") + "【CodeBridge 自身修改】仅在本任务修改 CodeBridge 时，验证并提交后优先用 MCP 工具 codebridge_deploy（action=prepare）准备候选；沙箱内不要通过 shell/fcb 访问网络；禁止直接重启或覆盖运行目录。只有用户本轮明确要求测试通过后上线，才可用 codebridge_deploy（action=prepare,publishAfterPrepare=true）；否则只准备并报告结果。MCP 不可用时才考虑 fcb，禁止为发布关闭沙箱或放宽网络权限。";
   }
   guidanceForRun(runId: string, store: SqliteEventStore): string {
     const run = store.getRun(runId);

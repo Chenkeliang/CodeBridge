@@ -131,4 +131,23 @@ describe("writeFcbScript", () => {
     }
   });
 
+  it("directs a sandbox-denied deploy call to the bound MCP tool without exposing credentials", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-sandbox-"));
+    tmpDirs.push(dir);
+    const bin = await writeFcbScript(dir);
+    const preload = path.join(dir, "network.cjs");
+    await fs.writeFile(preload, 'global.fetch = async () => { throw Object.assign(new Error("fetch failed"), {cause:{code:"EPERM"}}); };');
+    try {
+      await executeFile(path.join(bin, "fcb"), ["deploy", "status"], {env: {
+        ...process.env, NODE_OPTIONS: `--require=${preload}`, FCB_API: "http://127.0.0.1:19790",
+        FCB_TOKEN: "must-not-leak", FCB_CHAT_ID: "oc_test", FCB_RUN_ID: "run_test",
+      }});
+      throw new Error("expected denial");
+    } catch (error) {
+      const stderr = (error as {stderr?: string}).stderr ?? "";
+      expect(stderr).toContain("codebridge_deploy MCP");
+      expect(stderr).not.toContain("must-not-leak");
+    }
+  });
+
 });

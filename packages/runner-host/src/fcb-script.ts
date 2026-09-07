@@ -126,7 +126,12 @@ async function main() {
   }
 }
 
-main().catch((err) => fail("fcb: " + (err instanceof Error ? err.message : String(err))));
+main().catch((err) => {
+  if (process.argv[2] === "deploy" && ["EPERM", "EACCES"].includes(err.cause?.code)) {
+    fail("fcb: 当前执行沙箱禁止本机网络，请使用 codebridge_deploy MCP 工具；不要关闭沙箱或重启服务。");
+  }
+  fail("fcb: " + (err instanceof Error ? err.message : String(err)));
+});
 `;
 
 /** 把 fcb 写入 <dataDir>/bin/fcb 并加执行位，返回 bin 目录 */
