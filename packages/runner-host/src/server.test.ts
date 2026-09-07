@@ -859,7 +859,7 @@ describe("RunnerHost session lifecycle", () => {
 });
 
 describe("RunnerHost Pi SDK backend", () => {
-  it("does not configure the internal Flow save MCP without a confirmation snapshot", async () => {
+  it("configures deployment MCP without exposing Flow save when no confirmation snapshot exists", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-no-flow-save-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-no-flow-save-"));
     tmpDirs.push(dataDir, cwd);
@@ -896,7 +896,8 @@ describe("RunnerHost Pi SDK backend", () => {
     }));
 
     expect(captured?.flowSaveSourceAvailability).toBeUndefined();
-    expect(captured?.mcpServers).toBeUndefined();
+    expect(captured?.mcpServers).toHaveLength(1);
+    expect(captured?.mcpServers?.[0]?.env).toEqual({ FCB_API: "http://127.0.0.1:19790", FCB_TOKEN: "token", FCB_RUN_ID: "pi-no-flow-save-run" });
     host.shutdown();
   });
 
@@ -945,6 +946,7 @@ describe("RunnerHost Pi SDK backend", () => {
       args: ["/absolute/flow-save-mcp-server.js"],
       env: {
         CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY: "true",
+        FCB_API: "http://127.0.0.1:19790", FCB_TOKEN: "token", FCB_RUN_ID: "pi-flow-save-run",
       },
     }]);
     host.shutdown();

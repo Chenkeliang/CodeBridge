@@ -315,3 +315,11 @@ describe("AcpSessionPool", () => {
     pool.shutdown();
   });
 });
+
+
+it("does not reuse MCP identity across deployment runs", () => {
+  const base: RunContext = { runId: "run_one", cwd: "/tmp", prompt: "test", backendConfig: defaultConfig().backends.codex! };
+  const key = (runId: string) => buildSessionMatchKeys({ ...base, mcpServers: [{ name: "codebridge-internal", command: "/usr/bin/node", args: ["/server.js"], env: { FCB_RUN_ID: runId, FCB_API: "http://127.0.0.1:19790", FCB_TOKEN: "private" } }] }).mcpServersKey;
+  expect(key("run_one")).not.toBe(key("run_two"));
+  expect(key("run_one")).toBe(key("run_one"));
+});
