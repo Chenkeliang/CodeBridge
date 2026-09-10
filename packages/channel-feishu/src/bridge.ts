@@ -296,6 +296,9 @@ export class FeishuBridge {
       loggerLevel: LoggerLevel.info,
       includeRawEvent: true,
       httpInstance: feishuHttpClient(),
+      // SDK mergeBatch keeps only the last messageId while pooling resources.
+      // Preserve each message's resource ownership until the SDK carries it.
+      safety: { batch: { text: { maxMessages: 1 } } },
       policy: {
         requireMention: false,
         dmMode: (feishu.policy?.dmMode === "disabled"
