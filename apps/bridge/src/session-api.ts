@@ -1057,7 +1057,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const channel = c.req.query("channel");
     if (!channel) return c.json({ error: "channel_required" }, 400);
     return c.json({
-      deliveries: options.workItems.listDeliveries(channel),
+      deliveries: options.workItems.listDeliveries(channel, c.req.query("surface_message_id")),
     });
   });
 

@@ -770,7 +770,7 @@ export class FeishuBridge {
           },
           async (messageId) => {
             if (!this.sessionIngress?.replayEvents) return undefined;
-            const deliveries = await this.sessionIngress.listDeliveries("feishu");
+            const deliveries = await this.sessionIngress.listDeliveries("feishu", messageId);
             const delivery = deliveries.find((item) =>
               item.surfaceMessageId === messageId
               && item.conversationId === this.chatKey(msg.chatId, topicId));
