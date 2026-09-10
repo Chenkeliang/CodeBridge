@@ -744,6 +744,27 @@ export class FeishuBridge {
           msg,
           topicId,
           this.config.feishu.appId,
+          (text, messageId) => {
+            const attachments = msg.attachments ?? [];
+            const bytes = Buffer.byteLength(text, "utf8");
+            const total = attachments.reduce((sum, item) =>
+              sum + Buffer.byteLength(item.dataBase64, "base64"), 0);
+            if (attachments.length >= 10 || bytes > 10_000_000 || total + bytes > 25_000_000) {
+              throw new Error("quoted_attachment_limit");
+            }
+            const name = `quoted-${messageId.replace(/[^a-zA-Z0-9_-]/g, "_")}.txt`;
+            msg.attachments = [...attachments, {
+              name, mimeType: "text/plain", dataBase64: Buffer.from(text).toString("base64"),
+            }];
+            return name;
+          },
+          (attachment) => {
+            const attachments = msg.attachments ?? [];
+            const total = [...attachments, attachment].reduce((sum, item) =>
+              sum + Buffer.byteLength(item.dataBase64, "base64"), 0);
+            if (attachments.length >= 10 || total > 25_000_000) throw new Error("quoted_attachment_limit");
+            msg.attachments = [...attachments, attachment];
+          },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
