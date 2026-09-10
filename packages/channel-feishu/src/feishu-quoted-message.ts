@@ -1,4 +1,16 @@
 import type { LarkChannel } from "@larksuiteoapi/node-sdk";
+import type { RunAttachment } from "@codebridge/core";
+import { downloadMessageResource, sniffImageMime } from "./feishu-inbound-media.js";
+
+function quotedImageKeys(value: unknown, keys = new Set<string>()): Set<string> {
+  if (value && typeof value === "object") {
+    for (const [key, child] of Object.entries(value)) {
+      if ((key === "image_key" || key === "img_key") && typeof child === "string" && child) keys.add(child);
+      else if (child && typeof child === "object") quotedImageKeys(child, keys);
+    }
+  }
+  return keys;
+}
 
 /** 引用内容注入 prompt 的长度上限，防止长消息撑爆上下文 */
 export const QUOTE_MAX_CHARS = 2000;
@@ -44,6 +56,12 @@ export function extractMessageText(
 
 /** post 消息：{title, content: [[{tag, text|href|user_name}]]} 逐行拼接 */
 function extractPostText(parsed: unknown): string {
+  if (parsed && typeof parsed === "object" && !("content" in parsed)) {
+    const localized = Object.values(parsed).find((value) =>
+      value && typeof value === "object" && "content" in value,
+    );
+    if (localized) parsed = localized;
+  }
   const post = parsed as {
     title?: string;
     content?: Array<Array<{ tag?: string; text?: string; user_name?: string }>>;
@@ -125,12 +143,15 @@ export async function fetchMessageContext(
   options: {
     selfAppId?: string;
     skipSelfApp?: boolean;
+    preserveLongText?: (text: string, messageId: string) => string;
+    addImage?: (attachment: RunAttachment) => void;
     format: (text: string, senderName?: string) => string;
   },
 ): Promise<string | undefined> {
   const res = await channel.rawClient.im.v1.message.get({
     path: { message_id: messageId },
   });
+  if (res.code !== undefined && res.code !== 0) throw new Error("message_fetch_failed");
   const item = res.data?.items?.[0];
   if (!item?.body?.content) return undefined;
   if (
@@ -141,22 +162,51 @@ export async function fetchMessageContext(
   ) {
     return undefined;
   }
-  const text = extractMessageText(
+  let text = extractMessageText(
     item.msg_type,
     item.body.content,
     item.mentions?.map((m) => ({ key: m.key, name: m.name })),
   );
+  let keys = new Set<string>();
+  try { keys = quotedImageKeys(JSON.parse(item.body.content)); } catch { /* Plain text has no image keys. */ }
+  let index = 0;
+  for (const key of keys) {
+    index++;
+    if (!options.addImage || index > 10) {
+      text += "\n[引用图片未传递：附件数量或通道限制，请勿猜测图片内容]";
+      break;
+    }
+    try {
+      const data = await downloadMessageResource(channel, messageId, key, "image", 10_000_000);
+      const mimeType = sniffImageMime(data);
+      if (!mimeType.startsWith("image/")) throw new Error("invalid_image");
+      const name = `quoted-${messageId.replace(/[^a-zA-Z0-9_-]/g, "_")}-${index}.${mimeType.split("/")[1]}`;
+      options.addImage({ name, mimeType, dataBase64: data.toString("base64") });
+      text += `\n[引用图片附件：${name}；请读取原图，若模型不支持视觉请明确说明]`;
+    } catch {
+      text += `\n[引用图片 ${index} 未读取成功，请勿猜测图片内容]`;
+    }
+  }
   if (!text) return undefined;
-  return options.format(text, item.sender?.sender_name);
+  const fullText = text.length > QUOTE_MAX_CHARS
+    ? options.preserveLongText?.(text, messageId)
+    : undefined;
+  return `${options.format(text, item.sender?.sender_name)}\n引用消息 ID：${messageId}`
+    + (fullText ? `\n完整内容见附件：${fullText}；处理代码或参数前请先读取全文。` : "");
 }
 
 export async function fetchQuotedMessage(
   channel: LarkChannel,
   messageId: string,
   selfAppId?: string,
+  preserveLongText?: (text: string, messageId: string) => string,
+  addImage?: (attachment: RunAttachment) => void,
 ): Promise<string | undefined> {
   return fetchMessageContext(channel, messageId, {
     selfAppId,
+    skipSelfApp: false,
+    preserveLongText,
+    addImage,
     format: formatQuotedContext,
   });
 }
