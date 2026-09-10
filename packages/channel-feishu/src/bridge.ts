@@ -765,6 +765,24 @@ export class FeishuBridge {
             if (attachments.length >= 10 || total > 25_000_000) throw new Error("quoted_attachment_limit");
             msg.attachments = [...attachments, attachment];
           },
+          async (messageId) => {
+            if (!this.sessionIngress?.replayEvents) return undefined;
+            const deliveries = await this.sessionIngress.listDeliveries("feishu");
+            const delivery = deliveries.find((item) =>
+              item.surfaceMessageId === messageId
+              && item.conversationId === this.chatKey(msg.chatId, topicId));
+            if (!delivery?.runId) return undefined;
+            const events = await this.sessionIngress.replayEvents(delivery.sessionId, {
+              afterSequence: delivery.acceptedSequence,
+            });
+            const projector = createChannelStreamProjector({ showThinking: false });
+            for (const event of events) {
+              if (event.runId === delivery.runId && event.type === "AGENT_EVENT" && event.payload.event) {
+                projector.apply(event.payload.event as AgentEvent);
+              }
+            }
+            return projector.snapshot().result || undefined;
+          },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

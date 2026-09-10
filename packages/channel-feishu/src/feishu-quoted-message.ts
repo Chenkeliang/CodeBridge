@@ -145,6 +145,7 @@ export async function fetchMessageContext(
     skipSelfApp?: boolean;
     preserveLongText?: (text: string, messageId: string) => string;
     addImage?: (attachment: RunAttachment) => void;
+    resolveOwnText?: (messageId: string) => Promise<string | undefined>;
     format: (text: string, senderName?: string) => string;
   },
 ): Promise<string | undefined> {
@@ -167,8 +168,17 @@ export async function fetchMessageContext(
     item.body.content,
     item.mentions?.map((m) => ({ key: m.key, name: m.name })),
   );
+  const placeholder = item.msg_type === "interactive" && text.includes("请升级至最新版本客户端");
+  if (placeholder) {
+    const ownText = item.sender?.sender_type === "app" && item.sender.id === options.selfAppId
+      ? await options.resolveOwnText?.(messageId) : undefined;
+    if (!ownText) throw new Error("interactive_card_content_unavailable");
+    text = ownText;
+  }
   let keys = new Set<string>();
-  try { keys = quotedImageKeys(JSON.parse(item.body.content)); } catch { /* Plain text has no image keys. */ }
+  if (!placeholder) {
+    try { keys = quotedImageKeys(JSON.parse(item.body.content)); } catch { /* Plain text has no image keys. */ }
+  }
   let index = 0;
   for (const key of keys) {
     index++;
@@ -201,12 +211,14 @@ export async function fetchQuotedMessage(
   selfAppId?: string,
   preserveLongText?: (text: string, messageId: string) => string,
   addImage?: (attachment: RunAttachment) => void,
+  resolveOwnText?: (messageId: string) => Promise<string | undefined>,
 ): Promise<string | undefined> {
   return fetchMessageContext(channel, messageId, {
     selfAppId,
     skipSelfApp: false,
     preserveLongText,
     addImage,
+    resolveOwnText,
     format: formatQuotedContext,
   });
 }

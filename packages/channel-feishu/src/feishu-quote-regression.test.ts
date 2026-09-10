@@ -13,6 +13,40 @@ function channel(text: string) {
 }
 
 describe("explicit Feishu quotations", () => {
+  it.each([true, false])("recovers placeholder cards only within their conversation (%s)", async (sameConversation) => {
+    const config = defaultConfig();
+    config.feishu.appId = "self";
+    const target = new FeishuBridge({ config, dataDir: os.tmpdir() }) as unknown as {
+      channel: unknown; sessionIngress: unknown; submitAndStream: ReturnType<typeof vi.fn>;
+      chatKey: (chat: string, topic?: string) => string;
+      dispatchToAgent: (msg: unknown, prompt: string) => Promise<void>;
+    };
+    const getImage = vi.fn();
+    target.channel = { rawClient: { im: { v1: {
+      message: { get: vi.fn().mockResolvedValue({ data: { items: [{ msg_type: "interactive",
+        sender: { sender_type: "app", id: "self" }, body: { content: JSON.stringify({ elements: [[
+          { tag: "img", image_key: "placeholder" }, { tag: "text", text: "请升级至最新版本客户端，以查看内容" },
+        ]] }) },
+      }] } }) }, messageResource: { get: getImage },
+    } } } };
+    const replay = vi.fn().mockResolvedValue([
+      { runId: "run", type: "AGENT_EVENT", payload: { event: { type: "text_delta", text: "完整卡片正文", phase: "final_answer" } } },
+      { runId: "other", type: "AGENT_EVENT", payload: { event: { type: "text_delta", text: "不能串入" } } },
+    ]);
+    target.sessionIngress = { listDeliveries: vi.fn().mockResolvedValue([{
+      surfaceMessageId: "om_card", conversationId: target.chatKey(sameConversation ? "chat" : "other"),
+      runId: "run", sessionId: "session", acceptedSequence: 1,
+    }]), replayEvents: replay };
+    target.submitAndStream = vi.fn().mockResolvedValue(undefined);
+    await target.dispatchToAgent({ chatId: "chat", messageId: "new", senderId: "user", senderName: "User",
+      replyToMessageId: "om_card" }, "我引用什么");
+    const prompt = target.submitAndStream.mock.calls[0]![1];
+    expect(prompt).toContain(sameConversation ? "完整卡片正文" : "未读取成功");
+    expect(prompt).not.toContain("不能串入");
+    expect(prompt).not.toContain("请升级");
+    expect(getImage).not.toHaveBeenCalled();
+    if (!sameConversation) expect(replay).not.toHaveBeenCalled();
+  });
   it.each(["image", "post", "interactive"])("forwards quoted %s images through active submission", async (type) => {
     const config = defaultConfig();
     config.feishu.appId = "self";
