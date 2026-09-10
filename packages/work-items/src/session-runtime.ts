@@ -343,7 +343,7 @@ export interface SessionRuntimeTransaction {
     surfaceCardId?: string,
   ): boolean;
   completeDelivery(turnId: string, owner: string): boolean;
-  listDeliveries(channel: string): ChannelDeliveryRow[];
+  listDeliveries(channel: string, surfaceMessageId?: string): ChannelDeliveryRow[];
   setSessionProviderSessionId(
     sessionId: string,
     providerSessionId: string | null,
@@ -1235,7 +1235,7 @@ export function createSqliteSessionRuntimeTransaction(
       return Number(result.changes) === 1;
     },
 
-    listDeliveries(channel) {
+    listDeliveries(channel, surfaceMessageId) {
       const rows = database
         .prepare(
           `SELECT d.*,
@@ -1249,10 +1249,11 @@ export function createSqliteSessionRuntimeTransaction(
            FROM channel_turn_delivery d
            LEFT JOIN runs r ON r.id = d.run_id
            LEFT JOIN session_runtime sr ON sr.session_id = d.session_id
-           WHERE d.channel = ? AND d.status != 'completed'
+           WHERE d.channel = ? AND ${surfaceMessageId !== undefined
+             ? "d.surface_message_id = ?" : "d.status != 'completed'"}
            ORDER BY d.accepted_sequence ASC`,
         )
-        .all(channel) as SqliteRow[];
+        .all(...(surfaceMessageId !== undefined ? [channel, surfaceMessageId] : [channel])) as SqliteRow[];
       return rows.map(toChannelDeliveryRow);
     },
 
