@@ -210,12 +210,12 @@ export class FeishuBridge {
   private orchestrator: RunOrchestrator;
   private config: AppConfig;
   /** chat|topic → 最近一条入站消息 id（出站消息回贴话题用） */
-  private readonly lastInboundMessageId = new Map<string, string>();
+  private readonly lastInboundMessageId: JsonMapStore<string>;
   /** 普通群回复串 → 会话 topic 映射 */
   private readonly chainTopics = new ChainTopicTracker();
   /** bot 已参与过的话题（内存；重启后由 Catalog 槽位绑定续上） */
   private readonly botParticipatedTopics = new Set<string>();
-  private readonly mentionRegistry = new MentionRegistry();
+  private readonly mentionRegistry: MentionRegistry;
   private readonly pendingStreams: JsonMapStore<PendingFeishuStream>;
   /** 所有活动流的 AbortController（非 chat-scoped），disconnect 时统一 abort */
   private readonly activeAborts = new Set<AbortController>();
@@ -232,6 +232,12 @@ export class FeishuBridge {
   private readonly deliveryRetries = new Map<string, { attempts: number; after: number }>();
 
   constructor(private readonly options: FeishuBridgeOptions) {
+    this.lastInboundMessageId = new JsonMapStore<string>(
+      path.join(options.dataDir, "feishu-outbound-reply-targets.json"),
+    );
+    this.mentionRegistry = new MentionRegistry(
+      path.join(options.dataDir, "feishu-mention-targets.json"),
+    );
     this.config = options.config;
     this.sessionIngress = options.sessionIngress;
     this.cardUpdateSequences = new JsonMapStore<number>(
@@ -526,10 +532,10 @@ export class FeishuBridge {
     }
 
     // 记录话题/会话最近一条入站消息，供出站 API 回贴到正确的话题
-    this.lastInboundMessageId.set(
-      this.chatKey(msg.chatId, topicId),
-      msg.messageId,
-    );
+    this.lastInboundMessageId.update((current) => ({
+      ...current,
+      [this.chatKey(msg.chatId, topicId)]: msg.messageId,
+    }));
 
     const deploymentReply = await this.options.onDeploymentMessage?.(msg);
     if (deploymentReply !== undefined) {
@@ -1328,9 +1334,7 @@ export class FeishuBridge {
     topicId?: string,
   ): { replyTo: string; replyInThread: true } | undefined {
     if (!topicId) return undefined;
-    const replyTo = this.lastInboundMessageId.get(
-      this.chatKey(chatId, topicId),
-    );
+    const replyTo = this.lastInboundMessageId.read()[this.chatKey(chatId, topicId)];
     if (!replyTo) return undefined;
     return { replyTo, replyInThread: true };
   }
