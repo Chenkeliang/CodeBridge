@@ -23,6 +23,7 @@ export async function buildInboundPromptPrefix(
   selfAppId: string,
   preserveLongText?: (text: string, messageId: string) => string,
   addImage?: (attachment: RunAttachment) => void,
+  resolveOwnText?: (messageId: string) => Promise<string | undefined>,
 ): Promise<string | undefined> {
   const blocks: string[] = [];
   const rootId = msg.threadId ?? topicId;
@@ -34,6 +35,7 @@ export async function buildInboundPromptPrefix(
         skipSelfApp: false,
         preserveLongText,
         addImage,
+        resolveOwnText,
         format: formatTopicRootContext,
       });
       if (root) blocks.push(root);
@@ -51,6 +53,7 @@ export async function buildInboundPromptPrefix(
         selfAppId,
         preserveLongText,
         addImage,
+        resolveOwnText,
       );
       if (quoted) blocks.push(quoted);
       else blocks.push(`【引用消息未读取成功：${msg.replyToMessageId}；请说明缺失，不要猜测原文。】`);
