@@ -351,8 +351,8 @@ describe("SessionCoordinator submit", () => {
     store.close();
   });
 
-  it("keeps new submissions queued while paused", () => {
-    const { coordinator } = setup();
+  it("auto-resumes an empty paused queue for the next submission", () => {
+    const { store, coordinator } = setup();
     const first = submit(coordinator, "first", "一");
     coordinator.finishRun({
       sessionId: "sess_1",
@@ -361,9 +361,34 @@ describe("SessionCoordinator submit", () => {
       reason: "provider_disconnected",
     });
     const later = submit(coordinator, "later", "稍后继续");
+    expect(later.acceptance).toBe("dispatched");
+    expect(later.run?.turnId).toBe(later.turn.turnId);
+    expect(later.runtime).toMatchObject({
+      queueState: "ready",
+      queuePauseReason: null,
+      activeRunId: later.run!.id,
+    });
+    expect(store.listQueuedTurns("sess_1", { limit: 10 }).total).toBe(0);
+  });
+
+  it("keeps new submissions paused when an earlier Turn is queued", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    const waiting = submit(coordinator, "waiting", "二");
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "failed",
+      reason: "provider_failed",
+    });
+
+    const later = submit(coordinator, "later", "三");
+
+    expect(waiting.acceptance).toBe("queued");
     expect(later.acceptance).toBe("queued");
     expect(later.run).toBeNull();
     expect(later.runtime.queueState).toBe("paused");
+    expect(store.listQueuedTurns("sess_1", { limit: 10 }).total).toBe(2);
   });
 
   it("scopes identical keys by Session", () => {
