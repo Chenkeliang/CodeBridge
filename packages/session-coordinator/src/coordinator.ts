@@ -86,11 +86,19 @@ export class SessionCoordinator {
         attachmentIds: attachments.map((attachment) => attachment.id),
       };
       let runtime = tx.ensureRuntime(input.sessionId);
-      if (
-        tx.countQueuedTurns(input.sessionId)
-        >= this.options.maxQueuedTurns
-      ) {
+      const queuedTurns = tx.countQueuedTurns(input.sessionId);
+      if (queuedTurns >= this.options.maxQueuedTurns) {
         throw new SessionCommandError("queue_full", 422);
+      }
+      if (
+        runtime.activeRunId === null
+        && runtime.queueState === "paused"
+        && queuedTurns === 0
+      ) {
+        runtime = tx.updateRuntime(input.sessionId, {
+          queueState: "ready",
+          queuePauseReason: null,
+        });
       }
 
       const submitted = tx.insertTurn(

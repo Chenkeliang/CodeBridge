@@ -242,6 +242,57 @@ describe("Session runtime command API", () => {
     fixture.workItems.close();
   });
 
+  it("dispatches the next message when the paused queue was empty", async () => {
+    const fixture = setup();
+    const first = fixture.coordinator.submitTurn({
+      sessionId: fixture.session.id,
+      idempotencyKey: "message_failed",
+      message: {
+        text: "失败任务",
+        attachmentIds: [],
+        flowId: null,
+        executionKind: "agent",
+        model: null,
+        effort: null,
+        permissionMode: null,
+        plan: null,
+      },
+      workItem: {
+        title: "Session",
+        mode: "auto",
+        conversationId: `conv_${fixture.session.id}`,
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    });
+    fixture.coordinator.finishRun({
+      sessionId: fixture.session.id,
+      runId: first.run!.id,
+      status: "failed",
+      reason: "provider_failed",
+    });
+
+    const response = await fixture.app.request(
+      `/v1/sessions/${fixture.session.id}/messages`,
+      request("直接继续", "message_after_pause"),
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({
+      acceptance: "dispatched",
+      turn: { status: "dispatched" },
+      runtime: {
+        queue_state: "ready",
+        queue_pause_reason: null,
+        active_run: { status: "queued" },
+        queue: { total: 0 },
+      },
+    });
+    fixture.catalog.close();
+    fixture.workItems.close();
+  });
+
   it("returns the committed receipt for an ambiguous retry", async () => {
     const fixture = setup();
     const first = await fixture.app.request(
