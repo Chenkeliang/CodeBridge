@@ -13,8 +13,7 @@ const fs = require("node:fs");
 
 const api = process.env.FCB_API;
 const token = process.env.FCB_TOKEN;
-const chatId = process.env.FCB_CHAT_ID;
-const topicId = process.env.FCB_TOPIC_ID;
+// Destination is resolved by Bridge from FCB_RUN_ID; never use FCB_CHAT_ID to send.
 const runId = process.env.FCB_RUN_ID;
 
 function fail(msg) {
@@ -37,8 +36,8 @@ async function post(route, body) {
 }
 
 async function main() {
-  if (!api || !token || !chatId) {
-    fail("fcb: 缺少 FCB_API/FCB_TOKEN/FCB_CHAT_ID（仅在 CodeBridge 任务中可用）");
+  if (!api || !token || !runId) {
+    fail("fcb: 缺少 FCB_API/FCB_TOKEN/FCB_RUN_ID（仅在 CodeBridge 任务中可用）");
   }
   const [cmd, ...rest] = process.argv.slice(2);
   if (cmd === "deploy") {
@@ -61,20 +60,17 @@ async function main() {
     await post("/deploy/command", body);
   } else if (cmd === "send" && rest[0]) {
     await post("/outbound/file", {
-      chatId,
-      topicId,
+      runId,
       path: path.resolve(rest[0]),
     });
   } else if (cmd === "say" && rest.length) {
     await post("/outbound/markdown", {
-      chatId,
-      topicId,
+      runId,
       markdown: rest.join(" "),
     });
   } else if (cmd === "mention" && rest[0] && rest.length > 1) {
     await post("/outbound/mention", {
-      chatId,
-      topicId,
+      runId,
       ref: rest[0],
       text: rest.slice(1).join(" "),
     });
