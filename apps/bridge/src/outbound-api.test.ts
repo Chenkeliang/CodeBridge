@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { SqliteEventStore } from "@codebridge/work-items";
 import {
+  resolveOutboundTarget,
   createBridgeApp,
   createOutboundApp,
   type OutboundBridge,
@@ -222,5 +223,57 @@ describe("createOutboundApp", () => {
     expect(outboundResponse.status).toBe(401);
     store.close();
     fs.rmSync(directory, { recursive: true, force: true });
+  });
+});
+
+
+describe("Run-bound outbound routing", () => {
+  function storeFor(conversationId = "oc_source|om_topic", channel = "feishu") {
+    return {
+      getRun: (id: string) => id === "run_current" ? { id, turnId: "turn_current", status: "running" } : undefined,
+      listDeliveries: (name: string) => name === channel ? [
+        { runId: "run_old", turnId: "turn_old", conversationId: "oc_wrong|" },
+        { runId: "run_current", turnId: "turn_current", conversationId },
+      ] : [],
+    } as unknown as SqliteEventStore;
+  }
+
+  it.each(["file", "markdown", "mention"])("routes %s by persisted Run and ignores supplied recipient", async (kind) => {
+    const { bridge, calls } = makeApp();
+    const app = createBridgeApp(bridge, TOKEN, storeFor());
+    const response = await app.request(post(`/outbound/${kind}`, {
+      runId: "run_current", chatId: "conv_internal", topicId: "wrong_topic",
+      path: "/home/u/report.xlsx", markdown: "hello", ref: "owner", text: "hello",
+    }));
+    expect(response.status).toBe(200);
+    expect(calls[kind as keyof typeof calls][0]).toEqual(kind === "file"
+      ? ["oc_source", "/home/u/report.xlsx", "om_topic"]
+      : kind === "markdown" ? ["oc_source", "hello", "om_topic"]
+      : ["oc_source", "owner", "hello", "om_topic"]);
+  });
+
+  it("keeps Telegram delivery on its own channel", () => {
+    expect(resolveOutboundTarget(storeFor("telegram:-42|17", "telegram"), "run_current"))
+      .toEqual({ chatId: "telegram:-42", topicId: "17" });
+  });
+
+  it.each(["conv_internal", "ou_person", "employee123"])("rejects invalid persisted target %s", (id) => {
+    expect(() => resolveOutboundTarget(storeFor(id), "run_current")).toThrow("outbound_invalid_destination");
+  });
+
+  it("rejects missing, unknown, finished and ambiguous Runs without sending", async () => {
+    const { bridge, calls } = makeApp();
+    const store = storeFor();
+    const app = createBridgeApp(bridge, TOKEN, store);
+    for (const runId of [undefined, "unknown"]) {
+      expect((await app.request(post("/outbound/file", { runId, chatId: "oc_override", path: "/tmp/a.xlsx" }))).status).toBe(400);
+    }
+    const finished = { ...store, getRun: () => ({ id: "run_current", status: "completed", turnId: "turn_current" }) } as unknown as SqliteEventStore;
+    expect(() => resolveOutboundTarget(finished, "run_current")).toThrow("outbound_active_run_required");
+    const ambiguous = { ...store, listDeliveries: () => [{ runId: "run_current", turnId: "turn_current", conversationId: "oc_source|" }] } as unknown as SqliteEventStore;
+    expect(() => resolveOutboundTarget(ambiguous, "run_current")).toThrow("outbound_source_required");
+    const web = { ...store, listDeliveries: () => [] } as unknown as SqliteEventStore;
+    expect(() => resolveOutboundTarget(web, "run_current")).toThrow("outbound_source_required");
+    expect(calls.file).toEqual([]);
   });
 });
