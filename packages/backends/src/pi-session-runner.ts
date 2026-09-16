@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import {
   createAgentSession,
+  createBashToolDefinition,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
@@ -521,15 +522,19 @@ export async function createNativePiSession(
   )(ctx);
   const model = resolveModel(modelRuntime, ctx.backendConfig.model ?? ctx.model);
   const createSession = dependencies.createAgentSession ?? createAgentSession;
+  const runEnv = { ...ctx.extraEnv };
   const { session } = await createSession({
     cwd: ctx.cwd,
     sessionManager,
     model,
     thinkingLevel: resolveThinkingLevel(ctx.effort),
     modelRuntime,
-    customTools: ctx.flowSaveSourceAvailability
-      ? [createPiFlowSaveTool(ctx.flowSaveSourceAvailability)]
-      : [],
+    customTools: [
+      ...(ctx.extraEnv ? [createBashToolDefinition(ctx.cwd, {
+        spawnHook: (spawn) => ({ ...spawn, env: { ...spawn.env, ...runEnv } }),
+      }) as unknown as NonNullable<CreateAgentSessionOptions["customTools"]>[number]] : []),
+      ...(ctx.flowSaveSourceAvailability ? [createPiFlowSaveTool(ctx.flowSaveSourceAvailability)] : []),
+    ],
   });
   return session;
 }
