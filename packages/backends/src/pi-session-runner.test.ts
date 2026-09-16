@@ -555,3 +555,20 @@ describe("Pi event error surfacing", () => {
     expect(mapPiEvent({ type: "auto_retry_end", success: true, attempt: 2 })).toEqual([]);
   });
 });
+
+
+it("Pi bash receives isolated Run environment without changing the Runner process", async () => {
+  const original = process.env.FCB_RUN_ID;
+  const tools: any[] = [];
+  for (const runId of ["run_first", "run_second"]) {
+    await createNativePiSession(context({ cwd: os.tmpdir(), extraEnv: { FCB_RUN_ID: runId, PATH: process.env.PATH! } }), {
+      createAgentSession: async (value) => { tools.push(value.customTools!.find((tool) => tool.name === "bash")); return { session: new FakePiSession() } as never; },
+      createModelRuntime: async () => ({}) as never,
+      resolveSessionManager: async () => ({}) as never,
+    });
+  }
+  const results = await Promise.all(tools.map((tool) => tool.execute("test", { command: 'printf "%s" "$FCB_RUN_ID"' }, undefined, undefined, undefined)));
+  expect(results[0].content[0].text).toBe("run_first");
+  expect(results[1].content[0].text).toBe("run_second");
+  expect(process.env.FCB_RUN_ID).toBe(original);
+});
