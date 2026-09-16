@@ -151,3 +151,32 @@ describe("writeFcbScript", () => {
   });
 
 });
+
+
+it("fcb send sends Run identity and absolute path, never a guessed chat", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-send-"));
+  tmpDirs.push(dataDir);
+  const binDir = await writeFcbScript(dataDir);
+  let received: unknown;
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      received = JSON.parse(Buffer.concat(chunks).toString());
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, fileName: "report.xlsx" }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("missing address");
+  try {
+    await executeFile(path.join(binDir, "fcb"), ["send", "report.xlsx"], {
+      cwd: dataDir,
+      env: { ...process.env, FCB_API: `http://127.0.0.1:${address.port}`, FCB_TOKEN: "token", FCB_RUN_ID: "run_current", FCB_CHAT_ID: "conv_wrong", FCB_TOPIC_ID: "wrong" },
+    });
+    expect(received).toEqual({ runId: "run_current", path: path.join(await fs.realpath(dataDir), "report.xlsx") });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

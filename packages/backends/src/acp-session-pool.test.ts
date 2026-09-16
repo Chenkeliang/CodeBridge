@@ -323,3 +323,11 @@ it("does not reuse MCP identity across deployment runs", () => {
   expect(key("run_one")).not.toBe(key("run_two"));
   expect(key("run_one")).toBe(key("run_one"));
 });
+
+
+it("does not reuse an ACP process with a previous Run's outbound identity", () => {
+  const base: RunContext = { runId: "run-1", cwd: "/w", prompt: "hi", backendConfig: defaultConfig().backends.cursor! };
+  const key = (runId: string) => buildSessionMatchKeys({ ...base, extraEnv: { FCB_CHAT_ID: "conv_same", FCB_RUN_ID: runId } }).envKey;
+  expect(key("run-1")).not.toBe(key("run-2"));
+  expect(key("run-1")).toBe(key("run-1"));
+});
