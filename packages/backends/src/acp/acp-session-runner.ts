@@ -442,7 +442,7 @@ export function buildSessionMatchKeys(ctx: RunContext): {
     .sort();
   return {
     spawnKey: `${profile.command} ${profile.args.join(" ")}`,
-    envKey: `${ctx.extraEnv?.FCB_CHAT_ID ?? ""}|${ctx.extraEnv?.FCB_TOPIC_ID ?? ""}`,
+    envKey: `${ctx.extraEnv?.FCB_CHAT_ID ?? ""}|${ctx.extraEnv?.FCB_TOPIC_ID ?? ""}|${ctx.extraEnv?.FCB_RUN_ID ?? ""}`,
     additionalDirectoriesKey: (ctx.additionalDirectories ?? []).join("\0"),
     mcpServersKey: `sha256:${createHash("sha256")
       .update(JSON.stringify(canonicalMcpServers))
