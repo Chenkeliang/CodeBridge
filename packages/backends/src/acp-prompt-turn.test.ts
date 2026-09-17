@@ -480,7 +480,13 @@ describe("runActivePromptTurn", () => {
   });
 
   it("pre-drain has a hard deadline and stays interruptible by /stop", async () => {
-    // 场景 1：残余后台以 <15ms 间隔持续产出，1.5s 时限后仍要把新 prompt 发出去
+    // 预排干在队列静默 15ms 时退出。用定时器按固定间隔喂数会和这个阈值赛跑：机器一忙，
+    // 定时器抖动就超过 15ms，预排干提前退出，两个场景都不再测到它们想测的东西
+    // （场景 1 变成没有时限也能通过，场景 2 则直接失败）。这里改成永远就绪的队列，
+    // 用不着定时器，预排干必然一直有活干，行为与"残余后台持续产出"等价且不受负载影响。
+    const alwaysReady = () => Promise.resolve(textChunk("x"));
+
+    // 场景 1：残余后台持续产出，1.5s 时限后仍要把新 prompt 发出去
     {
       const queue = new FakeUpdateQueue();
       let promptCalled = false;
@@ -489,9 +495,8 @@ describe("runActivePromptTurn", () => {
           promptCalled = true;
           return new Promise(() => {});
         },
-        nextUpdate: () => queue.next(),
+        nextUpdate: () => (promptCalled ? queue.next() : alwaysReady()),
       } as unknown as ActiveSession;
-      const feed = setInterval(() => queue.enqueue(textChunk("x")), 8);
       const gen = runActivePromptTurn(active, [], {
         permissionPolicy: "auto_allow",
         isAborted: () => false,
@@ -500,14 +505,12 @@ describe("runActivePromptTurn", () => {
       });
       const done = collect(gen);
       await sleep(2_000); // > 1.5s 预排干时限
-      clearInterval(feed);
       expect(promptCalled).toBe(true);
       queue.enqueue(stopMessage);
       await done;
     }
     // 场景 2：/stop 能打断预排干（旧实现里打不断）
     {
-      const queue = new FakeUpdateQueue();
       let aborted = false;
       let promptCalled = false;
       const active = {
@@ -515,9 +518,8 @@ describe("runActivePromptTurn", () => {
           promptCalled = true;
           return new Promise(() => {});
         },
-        nextUpdate: () => queue.next(),
+        nextUpdate: alwaysReady,
       } as unknown as ActiveSession;
-      const feed = setInterval(() => queue.enqueue(textChunk("x")), 8);
       const gen = runActivePromptTurn(active, [], {
         permissionPolicy: "auto_allow",
         isAborted: () => aborted,
@@ -528,7 +530,6 @@ describe("runActivePromptTurn", () => {
       aborted = true;
       const start = Date.now();
       await done;
-      clearInterval(feed);
       expect(Date.now() - start).toBeLessThan(400);
       expect(promptCalled).toBe(false); // 中止后不再发新 prompt
     }
