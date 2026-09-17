@@ -30,6 +30,20 @@ Codex 默认 shell 沙箱禁止访问本机网络，不能依赖 shell 中的 HT
 
 数据库结构变更不自动发布；检测到迁移需单独审核。发布器和安装器自身更新也不能走普通发布，需在宿主机独立安装，保持救援入口不随业务版本一起变化。
 
+## 发布源目录约定
+
+发布取的是 `config.json` 里 `sourceRepo` 指向目录的提交，聊天命令固定用该目录的 `HEAD`，无法在话里指定分支。所以这个目录必须是一个只用于发布的独立克隆，长期停在 `main`，任何人都不在里面改代码或切分支。
+
+当前为 `/Users/keliang/projects/CodeBridge-deploy`。不要把它指向 worktree 或日常开发目录：worktree 会因为同名分支不能在两处检出而被迫进入游离头指针，开发目录则常带未提交改动，而准备阶段遇到脏工作区会直接拒绝。两种情况都发生过，后者表现为发布报错，前者更糟，会静默发布错误的分支。
+
+发布前更新该目录：
+
+```bash
+git -C /Users/keliang/projects/CodeBridge-deploy pull --ff-only
+```
+
+走 HTTP 接口发起时，请求里显式带 `"ref": "main"`，不要依赖 `HEAD` 的默认值。聊天入口没有这个参数，只能靠上面的目录纪律。
+
 ## 初次安装（维护者）
 
 先构建仓库，执行 scripts/install-host-deployer.mjs 的预览，确认宿主机、绝对解释器路径、数据目录与原始飞书发送者 open_id。明确 --install 后安装；敏感配置只存在权限600文件，发布器目录700。安装器不会顺带重启Bridge/Runner。
