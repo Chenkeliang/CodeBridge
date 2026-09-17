@@ -1,3 +1,5 @@
+import { JsonMapStore } from "./json-file-store.js";
+
 export type MentionTargetKind = "user" | "bot";
 
 export interface MentionScope {
@@ -17,6 +19,11 @@ export interface RegisteredMentionTarget extends MentionTarget {
   ref: string;
 }
 
+interface StoredMentionTarget {
+  target: RegisteredMentionTarget;
+  scopes: string[];
+}
+
 function scopeKey(scope: MentionScope): string {
   return `${scope.chatId}\0${scope.topicId ?? ""}`;
 }
@@ -31,6 +38,39 @@ export class MentionRegistry {
   private readonly refsByScope = new Map<string, Set<string>>();
   private nextUserRef = 1;
   private nextBotRef = 1;
+  private readonly store?: JsonMapStore<StoredMentionTarget>;
+
+  constructor(filePath?: string) {
+    if (!filePath) return;
+    this.store = new JsonMapStore<StoredMentionTarget>(filePath);
+    const saved = this.store.read();
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) {
+      throw new Error("Invalid persisted mention registry");
+    }
+    for (const [ref, entry] of Object.entries(saved)) {
+      const target = entry?.target;
+      const ordinal = Number(ref.slice(1));
+      if (!/^[ub][1-9]\d*$/.test(ref) || !Number.isSafeInteger(ordinal + 1)
+        || !target || target.ref !== ref
+        || target.kind !== (ref[0] === "u" ? "user" : "bot")
+        || typeof target.id !== "string" || !target.id
+        || typeof target.channel !== "string" || !target.channel
+        || !Array.isArray(entry.scopes)
+        || entry.scopes.some((scope) => typeof scope !== "string" || !scope.includes("\0"))
+        || this.targetByKey.has(targetKey(target))) {
+        throw new Error("Invalid persisted mention registry");
+      }
+      this.targetByKey.set(targetKey(target), target);
+      this.targetByRef.set(ref, target);
+      for (const scope of entry.scopes) {
+        const refs = this.refsByScope.get(scope) ?? new Set<string>();
+        refs.add(ref);
+        this.refsByScope.set(scope, refs);
+      }
+      if (target.kind === "user") this.nextUserRef = Math.max(this.nextUserRef, ordinal + 1);
+      else this.nextBotRef = Math.max(this.nextBotRef, ordinal + 1);
+    }
+  }
 
   register(
     scope: MentionScope,
@@ -58,6 +98,14 @@ export class MentionRegistry {
     const scoped = this.refsByScope.get(scopeKey(scope)) ?? new Set<string>();
     scoped.add(registered.ref);
     this.refsByScope.set(scopeKey(scope), scoped);
+    if (this.store) {
+      const saved: Record<string, StoredMentionTarget> = {};
+      for (const [ref, target] of this.targetByRef) saved[ref] = { target, scopes: [] };
+      for (const [key, refs] of this.refsByScope) {
+        for (const ref of refs) saved[ref]!.scopes.push(key);
+      }
+      this.store.write(saved);
+    }
     return registered;
   }
 

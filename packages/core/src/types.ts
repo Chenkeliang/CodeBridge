@@ -379,7 +379,7 @@ export interface ChannelSessionIngress {
     sessionId: string,
     opts: { afterSequence: number },
   ): Promise<ChannelSessionEvent[]>;
-  listDeliveries(channel: string): Promise<ChannelDeliveryRow[]>;
+  listDeliveries(channel: string, surfaceMessageId?: string): Promise<ChannelDeliveryRow[]>;
   claimDelivery(turnId: string, owner: string): Promise<boolean>;
   ackDelivery(
     turnId: string,

@@ -1794,6 +1794,19 @@ describe("session API", () => {
       surfaceMessageId: "message-42",
       surfaceCardId: "cardkit-42",
     });
+    // Reproduce a historical card whose delivery has already completed.
+    (workItems as unknown as { database: { prepare(sql: string): { run(...args: string[]): unknown } } })
+      .database.prepare("UPDATE channel_turn_delivery SET status = 'completed' WHERE turn_id = ?")
+      .run(deliveries[0]!.turnId);
+    expect(workItems.listDeliveries("feishu")).toHaveLength(0);
+    const historical = await app.request("/v1/deliveries?channel=feishu&surface_message_id=message-42", {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect((await historical.json() as { deliveries: unknown[] }).deliveries).toEqual([
+      expect.objectContaining({ status: "completed", surfaceMessageId: "message-42" }),
+    ]);
+    expect(workItems.listDeliveries("telegram", "message-42")).toHaveLength(0);
+    expect(workItems.listDeliveries("feishu", "nonexistent")).toHaveLength(0);
     catalog.close();
     workItems.close();
   });

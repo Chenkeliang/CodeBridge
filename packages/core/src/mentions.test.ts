@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   MentionRegistry,
   formatMentionGuidance,
@@ -8,6 +11,27 @@ import {
 const FEISHU_SCOPE = { chatId: "oc_1", topicId: "omt_1" };
 
 describe("MentionRegistry", () => {
+  it("restores refs and conversation scopes after a restart without reusing IDs", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cb-mentions-"));
+    try {
+      const file = path.join(directory, "mentions.json");
+      const original = new MentionRegistry(file);
+      const user = original.register(FEISHU_SCOPE, { channel: "feishu", kind: "user", id: "ou_first" });
+      const bot = original.register({ chatId: "oc_2" }, { channel: "feishu", kind: "bot", id: "ou_bot" });
+      original.register({ chatId: "oc_3" }, { channel: "feishu", kind: "user", id: "ou_first" });
+      const restarted = new MentionRegistry(file);
+      expect(restarted.resolve(FEISHU_SCOPE, user.ref)?.id).toBe("ou_first");
+      expect(restarted.resolve({ chatId: "oc_3" }, user.ref)?.id).toBe("ou_first");
+      expect(restarted.resolve({ chatId: "oc_2" }, user.ref)).toBeUndefined();
+      expect(restarted.resolve({ chatId: "oc_1" }, user.ref)).toBeUndefined();
+      expect(restarted.resolve({ chatId: "oc_2" }, bot.ref)?.id).toBe("ou_bot");
+      expect(restarted.register(FEISHU_SCOPE, { channel: "feishu", kind: "user", id: "ou_second" }).ref).toBe("u2");
+      expect(restarted.register(FEISHU_SCOPE, { channel: "feishu", kind: "bot", id: "ou_other_bot" }).ref).toBe("b2");
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps stable refs while restricting resolution to the conversation", () => {
     const registry = new MentionRegistry();
     const target: MentionTarget = {
