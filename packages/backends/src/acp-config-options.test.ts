@@ -272,6 +272,9 @@ describe("applySessionConfigOptions", () => {
       model: "gpt-5",
     });
     expect(warnings.some((w) => w.includes("gpt-5"))).toBe(true);
+    expect(warnings.some((w) => w.includes("适配器本次提供") && w.includes("sonnet"))).toBe(
+      true,
+    );
   });
 
   it("set 抛错收 warning、不抛出", async () => {

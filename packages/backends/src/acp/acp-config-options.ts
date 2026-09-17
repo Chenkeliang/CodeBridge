@@ -171,12 +171,20 @@ export async function applySessionConfigOptions(
     }
     const value = matchConfigValue(option, wanted);
     if (!value) {
+      const offered = flattenSelectOptions(option).map((o) => o.value);
+      const offeredText =
+        offered.length > 0 ? offered.join("、") : "（空）";
+      console.warn(
+        `[acp-config-options] session=${sessionId} field=${field} wanted=${wanted} offered=[${offeredText}] currentValue=${String(option.currentValue)}`,
+      );
       if (field === "model" && desired.strictModel) {
         throw new Error(
-          `ACP model=${wanted} 不在可选值内（strictModel 已启用，本轮已终止）。`,
+          `ACP model=${wanted} 不在可选值内（strictModel 已启用，本轮已终止）。 适配器本次提供：${offeredText}。`,
         );
       }
-      warnings.push(`ACP ${field}=${wanted} 不在可选值内，未生效。`);
+      warnings.push(
+        `ACP ${field}=${wanted} 不在可选值内，未生效。 适配器本次提供：${offeredText}。`,
+      );
       if (field === "model") {
         modelMismatch = {
           requested: wanted,
