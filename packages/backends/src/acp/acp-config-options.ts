@@ -40,16 +40,26 @@ function flattenSelectOptions(
  * 精确 value → 大小写不敏感 name → 大小写不敏感 value 前缀（把 `opus` 映射到 `opus[1m]`）。
  * 匹配不到返回 undefined。
  */
+const TRAILING_BRACKET_HINT = /\[[^\]]*\]$/;
+
+/** 去掉末尾一个方括号提示（如 `[1m]`），供上下文窗口变体不一致时兜底匹配 */
+function stripTrailingHint(value: string): string {
+  return value.replace(TRAILING_BRACKET_HINT, "");
+}
+
 export function matchConfigValue(
   option: SessionConfigOption,
   desired: string,
 ): string | undefined {
   const opts = flattenSelectOptions(option);
   const want = desired.trim().toLowerCase();
+  const wantStripped = stripTrailingHint(want);
   return (
     opts.find((o) => o.value.toLowerCase() === want)?.value ??
     opts.find((o) => o.name.toLowerCase() === want)?.value ??
-    opts.find((o) => o.value.toLowerCase().startsWith(want))?.value
+    opts.find((o) => o.value.toLowerCase().startsWith(want))?.value ??
+    opts.find((o) => stripTrailingHint(o.value.toLowerCase()) === wantStripped)
+      ?.value
   );
 }
 
@@ -170,6 +180,18 @@ export async function applySessionConfigOptions(
       continue;
     }
     const value = matchConfigValue(option, wanted);
+    if (
+      value &&
+      field === "model" &&
+      TRAILING_BRACKET_HINT.test(wanted.trim()) &&
+      value.toLowerCase() !== wanted.trim().toLowerCase() &&
+      stripTrailingHint(value.toLowerCase()) ===
+        stripTrailingHint(wanted.trim().toLowerCase())
+    ) {
+      warnings.push(
+        `ACP model=${wanted} 本次以 ${value} 生效（适配器未提供相同的上下文窗口变体）。`,
+      );
+    }
     if (!value) {
       const offered = flattenSelectOptions(option).map((o) => o.value);
       const offeredText =
