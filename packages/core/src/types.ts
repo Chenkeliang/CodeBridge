@@ -143,7 +143,7 @@ export type AgentEvent =
   | { type: "permission_request"; requestId: string; title: string }
   | { type: "done"; exitCode: number }
   /** 请求的 model 未被 ACP 适配器采纳、实际以 effective 落地（见 applySessionConfigOptions） */
-  | { type: "model_resolved"; requested: string; effective: string };
+  | { type: "model_resolved"; requested: string; effective?: string };
 
 export interface ChannelFlowInput {
   id: string;

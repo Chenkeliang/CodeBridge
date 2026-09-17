@@ -33,7 +33,7 @@ export interface FeishuRunStatus {
   transport: FeishuTransportSnapshot;
   verificationError?: string;
   /** 请求的 model 未被适配器采纳时的请求值/实际生效值对照（见 model_resolved 事件） */
-  modelMismatch?: { requested: string; effective: string };
+  modelMismatch?: { requested: string; effective?: string };
 }
 
 export function createFeishuRunStatus(now = Date.now()): FeishuRunStatus {
@@ -227,8 +227,11 @@ export function renderFeishuRunStatus(
   ];
   // 只在实际生效模型与用户请求不一致时提示，避免正常运行多一行噪音
   if (status.modelMismatch) {
+    const { requested, effective } = status.modelMismatch;
     lines.push(
-      `实际使用模型：${status.modelMismatch.effective}（请求：${status.modelMismatch.requested}，未生效）`,
+      effective
+        ? `实际使用模型：${effective}（请求：${requested}，未生效）`
+        : `请求的模型 ${requested} 未生效，本次运行使用了该 Agent 的默认模型。`,
     );
   }
   return lines.join("\n");
