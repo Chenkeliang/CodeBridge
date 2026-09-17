@@ -232,6 +232,7 @@ describe("applySessionConfigOptions", () => {
     expect(result.modelMismatch).toEqual({
       requested: "gpt-5",
       effective: "claude-fable-5[1m]",
+      effectiveName: "Fable", // 带上适配器给的可读名，供上层说人话
     });
   });
 

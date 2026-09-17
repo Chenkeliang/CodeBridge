@@ -693,6 +693,7 @@ export async function* runAcpSession(
             type: "model_resolved",
             requested: result.modelMismatch.requested,
             effective: result.modelMismatch.effective,
+            effectiveName: result.modelMismatch.effectiveName,
           });
         }
         return events;
