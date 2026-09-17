@@ -68,8 +68,16 @@ export class ConfigStore {
 
   private persist(): void {
     const dir = path.dirname(this.configPath);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(this.configPath, stringifyYaml(this.config), "utf8");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const existed = fs.existsSync(this.configPath);
+    fs.writeFileSync(this.configPath, stringifyYaml(this.config), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    // writeFileSync's `mode` only applies when creating the file, so an
+    // already-existing config.yaml keeps its prior permissions unless
+    // explicitly tightened here.
+    if (existed) fs.chmodSync(this.configPath, 0o600);
   }
 
   private loadFromDisk(): AppConfig {
