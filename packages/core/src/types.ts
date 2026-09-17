@@ -141,7 +141,9 @@ export type AgentEvent =
   | { type: "error"; message: string; fatal?: boolean }
   /** prompt_feishu 权限模式：agent 请求权限，等待用户 /approve 或 /deny */
   | { type: "permission_request"; requestId: string; title: string }
-  | { type: "done"; exitCode: number };
+  | { type: "done"; exitCode: number }
+  /** 请求的 model 未被 ACP 适配器采纳、实际以 effective 落地（见 applySessionConfigOptions） */
+  | { type: "model_resolved"; requested: string; effective: string };
 
 export interface ChannelFlowInput {
   id: string;
@@ -469,6 +471,8 @@ export interface BackendProfile {
   effort?: string;
   /** Claude ACP mode 的兼容默认值；飞书非交互场景建议 bypassPermissions */
   claudePermissionMode?: ClaudePermissionMode;
+  /** true 时，若适配器未 advertise 想要的 model，本轮直接失败而非静默用适配器默认；默认 false */
+  strictModel?: boolean;
 }
 
 export function serializeSessionKey(key: SessionKey): string {
