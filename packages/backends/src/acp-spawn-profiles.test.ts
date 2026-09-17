@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { defaultConfig } from "@codebridge/core";
+import {
+  ACP_CLAUDE_AGENT_ACP_VERSION,
+  ACP_CODEX_ACP_VERSION,
+  defaultConfig,
+} from "@codebridge/core";
 import {
   acpContinueMethod,
   resolveAcpSpawn,
@@ -15,11 +19,11 @@ describe("acp-spawn-profiles", () => {
   it("uses the current Claude and Codex ACP adapters", () => {
     expect(resolveAcpSpawn({ type: "claude-code" }).args).toEqual([
       "-y",
-      "@agentclientprotocol/claude-agent-acp@0.64.2",
+      `@agentclientprotocol/claude-agent-acp@${ACP_CLAUDE_AGENT_ACP_VERSION}`,
     ]);
     expect(resolveAcpSpawn({ type: "codex" }).args).toEqual([
       "-y",
-      "@agentclientprotocol/codex-acp@1.10.0",
+      `@agentclientprotocol/codex-acp@${ACP_CODEX_ACP_VERSION}`,
     ]);
   });
 
@@ -40,7 +44,7 @@ describe("acp-spawn-profiles", () => {
     const profile = defaultConfig().backends.codex!;
     expect(resolveAcpSpawn(profile)).toEqual({
       command: "npx",
-      args: ["-y", "@agentclientprotocol/codex-acp@1.10.0"],
+      args: ["-y", `@agentclientprotocol/codex-acp@${ACP_CODEX_ACP_VERSION}`],
     });
   });
 

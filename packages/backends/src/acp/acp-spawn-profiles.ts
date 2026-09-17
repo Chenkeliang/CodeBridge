@@ -1,4 +1,8 @@
-import type { BackendProfile } from "@codebridge/core";
+import {
+  ACP_CLAUDE_AGENT_ACP_VERSION,
+  ACP_CODEX_ACP_VERSION,
+  type BackendProfile,
+} from "@codebridge/core";
 
 export interface AcpSpawnProfile {
   command: string;
@@ -9,11 +13,11 @@ const DEFAULTS: Record<Exclude<BackendProfile["type"], "pi-sdk">, AcpSpawnProfil
   "cursor-cli": { command: "cursor-agent", args: ["acp"] },
   "claude-code": {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.64.2"],
+    args: ["-y", `@agentclientprotocol/claude-agent-acp@${ACP_CLAUDE_AGENT_ACP_VERSION}`],
   },
   codex: {
     command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp@1.10.0"],
+    args: ["-y", `@agentclientprotocol/codex-acp@${ACP_CODEX_ACP_VERSION}`],
   },
   "generic-spawn": { command: "npx", args: [] },
 };

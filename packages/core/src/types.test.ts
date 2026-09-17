@@ -6,6 +6,7 @@ import {
   type AgentEvent,
 } from "./types.js";
 import {
+  ACP_CODEX_ACP_VERSION,
   ConfigSchema,
   defaultConfig,
   resolveDefaultAgentId,
@@ -119,7 +120,7 @@ describe("ACP-only backend configuration", () => {
     expect(config.backends.codex).toMatchObject({
       type: "codex",
       acpCommand: "npx",
-      acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.10.0"],
+      acpArgs: ["-y", `@agentclientprotocol/codex-acp@${ACP_CODEX_ACP_VERSION}`],
     });
   });
 
