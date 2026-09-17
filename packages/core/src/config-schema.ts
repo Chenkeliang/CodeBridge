@@ -214,11 +214,6 @@ export const ConfigSchema = z.object({
       apiPort: z.number().int().positive().default(19790),
     })
     .optional(),
-  plugins: z
-    .object({
-      memory: z.object({ enabled: z.boolean().default(false) }).optional(),
-    })
-    .optional(),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
