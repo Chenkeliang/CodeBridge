@@ -277,3 +277,60 @@ describe("Run-bound outbound routing", () => {
     expect(calls.file).toEqual([]);
   });
 });
+
+
+describe("Publisher-token outbound routing", () => {
+  const PUBLISHER = {
+    label: "stock-daily-trade",
+    token: "publisher-token-abcdefghijklmnop",
+    chatId: "oc_bound",
+    topicId: "om_bound",
+  };
+
+  function publisherApp() {
+    const { bridge, calls } = makeApp();
+    const store = {
+      getRun: () => undefined,
+      listDeliveries: () => [],
+    } as unknown as SqliteEventStore;
+    const app = createBridgeApp(
+      bridge, TOKEN, store,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined,
+      [PUBLISHER],
+    );
+    return { app, calls };
+  }
+
+  it("sends without a runId and ignores the recipient in the body", async () => {
+    const { app, calls } = publisherApp();
+    const response = await app.request(post("/outbound/markdown", {
+      chatId: "oc_elsewhere", topicId: "om_elsewhere", markdown: "收盘复盘",
+    }, PUBLISHER.token));
+    expect(response.status).toBe(200);
+    expect(calls.markdown).toEqual([["oc_bound", "收盘复盘", "om_bound"]]);
+  });
+
+  it("still requires a runId from the runner token", async () => {
+    const { app, calls } = publisherApp();
+    const response = await app.request(post("/outbound/markdown", { chatId: "oc_1", markdown: "hi" }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: expect.stringContaining("outbound_run_required") });
+    expect(calls.markdown).toEqual([]);
+  });
+
+  it("does not let a publisher token reach non-outbound routes", async () => {
+    const { app } = publisherApp();
+    const response = await app.request("/v1/work-items", {
+      headers: { authorization: `Bearer ${PUBLISHER.token}` },
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it("rejects an unknown token on outbound routes", async () => {
+    const { app, calls } = publisherApp();
+    const response = await app.request(post("/outbound/markdown", { markdown: "hi" }, "publisher-token-wrong-000000000"));
+    expect(response.status).toBe(401);
+    expect(calls.markdown).toEqual([]);
+  });
+});

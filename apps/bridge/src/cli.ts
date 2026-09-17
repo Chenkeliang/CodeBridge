@@ -21,6 +21,7 @@ import {
   registerDemoCapabilities,
   registerEquityCapabilities,
 } from "@codebridge/policy";
+import type { OutboundPublisher } from "./outbound-publishers.js";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
 import {
@@ -542,6 +543,14 @@ program
     const apiPort = config.bridge?.apiPort ?? 19790;
     const { serve } = await import("@hono/node-server");
     const { createBridgeApp } = await import("./outbound-api.js");
+    const { loadOutboundPublishers } = await import("./outbound-publishers.js");
+    // 凭据文件坏掉只该让定时任务发不出去，不该连带拖垮整个 Bridge。
+    let publishers: OutboundPublisher[] = [];
+    try {
+      publishers = loadOutboundPublishers(dataDir, config.runner.token);
+    } catch (error) {
+      console.error(`出站发布者配置无效，已全部忽略：${error instanceof Error ? error.message : String(error)}`);
+    }
     const apiApp = createBridgeApp(
         {
           sendOutboundFile: (chatId, rawPath, topicId) =>
@@ -580,6 +589,7 @@ program
         flowBatchApp,
         mcpApp,
         skillApp,
+        publishers,
       );
     mountDeploymentRoutes(apiApp, deployment, workItemStore);
     serve({
@@ -590,6 +600,7 @@ program
     console.log(`Core API 监听 http://127.0.0.1:${apiPort}`);
     console.log(`Web: ${surfaces.web ? `enabled at http://127.0.0.1:${apiPort}/workbench/` : "disabled"}`);
     console.log(`Feishu: ${surfaces.feishu ? "enabled" : "disabled"}`);
+    console.log(`出站发布者: ${publishers.length ? publishers.map((row) => row.label).join(", ") : "none"}`);
     console.log(`Telegram: ${surfaces.telegram ? "enabled" : "disabled"}`);
   });
 
