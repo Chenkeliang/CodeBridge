@@ -144,7 +144,12 @@ describe("Feishu run status", () => {
     expect(
       recordFeishuRunActivity(
         status,
-        { type: "model_resolved", requested: "claude-fable-5-1[1m]", effective: "opus[1m]" },
+        {
+          type: "model_resolved",
+          requested: "claude-fable-5-1[1m]",
+          effective: "opus[1m]",
+          effectiveName: "Opus 5",
+        },
         2_000,
       ),
     ).toBe(true);
@@ -153,7 +158,26 @@ describe("Feishu run status", () => {
     const lines = rendered.split("\n");
     expect(lines).toHaveLength(5);
     expect(lines[4]).toBe(
-      "实际使用模型：opus[1m]（请求：claude-fable-5-1[1m]，未生效）",
+      "实际使用模型：Opus 5（opus[1m]），请求的是 claude-fable-5-1[1m]",
+    );
+  });
+
+  it("falls back to the raw adapter value when it has no readable name", () => {
+    const status = createFeishuRunStatus(1_000);
+
+    recordFeishuRunActivity(
+      status,
+      {
+        type: "model_resolved",
+        requested: "claude-fable-5-1[1m]",
+        effective: "gpt-5.6-sol",
+      },
+      2_000,
+    );
+
+    const lines = renderFeishuRunStatus(status, 3_000).split("\n");
+    expect(lines[4]).toBe(
+      "实际使用模型：gpt-5.6-sol，请求的是 claude-fable-5-1[1m]",
     );
   });
 

@@ -33,7 +33,7 @@ export interface FeishuRunStatus {
   transport: FeishuTransportSnapshot;
   verificationError?: string;
   /** 请求的 model 未被适配器采纳时的请求值/实际生效值对照（见 model_resolved 事件） */
-  modelMismatch?: { requested: string; effective?: string };
+  modelMismatch?: { requested: string; effective?: string; effectiveName?: string };
 }
 
 export function createFeishuRunStatus(now = Date.now()): FeishuRunStatus {
@@ -136,7 +136,11 @@ export function recordFeishuRunActivity(
   if (status.state !== "running") return false;
 
   if (event.type === "model_resolved") {
-    status.modelMismatch = { requested: event.requested, effective: event.effective };
+    status.modelMismatch = {
+      requested: event.requested,
+      effective: event.effective,
+      effectiveName: event.effectiveName,
+    };
     status.lastActivityAt = now;
     return true;
   }
@@ -227,10 +231,13 @@ export function renderFeishuRunStatus(
   ];
   // 只在实际生效模型与用户请求不一致时提示，避免正常运行多一行噪音
   if (status.modelMismatch) {
-    const { requested, effective } = status.modelMismatch;
+    const { requested, effective, effectiveName } = status.modelMismatch;
+    // 适配器的 value 机器味重（`opus[1m]`、`grok-4.6[effort=high,fast=true]`），
+    // 有可读 name 就以 name 为主、原值放括号里，两边都能对上。
+    const shown = effectiveName ? `${effectiveName}（${effective}）` : effective;
     lines.push(
-      effective
-        ? `实际使用模型：${effective}（请求：${requested}，未生效）`
+      shown
+        ? `实际使用模型：${shown}，请求的是 ${requested}`
         : `请求的模型 ${requested} 未生效，本次运行使用了该 Agent 的默认模型。`,
     );
   }

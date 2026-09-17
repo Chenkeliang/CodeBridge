@@ -148,11 +148,13 @@ export async function applySessionConfigOptions(
   effectiveModel?: string;
   /** desired.model 未被适配器采纳时的请求值/实际生效值对照，供上层告知用户。
    *  effective 缺省表示适配器没有报告实际模型，此时不要编造一个名字。 */
-  modelMismatch?: { requested: string; effective?: string };
+  modelMismatch?: { requested: string; effective?: string; effectiveName?: string };
 }> {
   const warnings: string[] = [];
   let currentOptions = configOptions;
-  let modelMismatch: { requested: string; effective?: string } | undefined;
+  let modelMismatch:
+    | { requested: string; effective?: string; effectiveName?: string }
+    | undefined;
   for (const [field, category] of Object.entries(CATEGORY_BY_FIELD)) {
     const wanted = desired[field as keyof DesiredSessionConfig];
     if (!wanted || typeof wanted !== "string") continue;
@@ -245,11 +247,22 @@ export async function applySessionConfigOptions(
   }
   // 读回本轮 set-config 回合后 model 分类的实际 currentValue：适配器可能规范化了 value，
   // 或（未 strictModel 时）压根没采纳 desired.model，这里给上层一个真相来源而非「想要的值」。
-  const modelCurrentValue = currentOptions.find((o) => o.category === "model")?.currentValue;
+  const modelOption = currentOptions.find((o) => o.category === "model");
+  const modelCurrentValue = modelOption?.currentValue;
   const effectiveModel =
     typeof modelCurrentValue === "string" ? modelCurrentValue : undefined;
   if (modelMismatch && effectiveModel !== undefined) {
     modelMismatch = { ...modelMismatch, effective: effectiveModel };
+  }
+  // 适配器的 value 是机器口径（`opus[1m]`、`grok-4.6[effort=high,fast=true]`），
+  // 同一条目自带可读的 name（`Opus 5`、`grok-4.6`）。带上 name，让上层能说人话。
+  if (modelMismatch?.effective && modelOption) {
+    const name = flattenSelectOptions(modelOption).find(
+      (candidate) => candidate.value === modelMismatch!.effective,
+    )?.name;
+    if (name && name !== modelMismatch.effective) {
+      modelMismatch = { ...modelMismatch, effectiveName: name };
+    }
   }
   return { warnings, configOptions: currentOptions, effectiveModel, modelMismatch };
 }
