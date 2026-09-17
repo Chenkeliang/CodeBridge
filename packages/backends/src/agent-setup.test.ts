@@ -103,4 +103,67 @@ describe("AgentSetupService", () => {
       .toContain("Authorization: ******");
     expect(redactSetupOutput("api_key=sk-secret-token")).not.toContain("sk-secret-token");
   });
+
+  describe("probeAuth", () => {
+    it("reports claude auth status without ever throwing (advisory only)", async () => {
+      const service = setupService(async (command, args) => {
+        if (command === "claude" && args.join(" ") === "auth status") {
+          return { ok: false, exitCode: 1, stdout: "", stderr: "Not logged in" };
+        }
+        throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+      });
+
+      await expect(service.probeAuth("claude")).resolves.toMatchObject({
+        ok: false,
+        advisory: true,
+        message: expect.stringContaining("Not logged in"),
+      });
+    });
+
+    it("reports cursor auth status via `agent status`", async () => {
+      const service = setupService(async (command, args) => {
+        if (command === "agent" && args.join(" ") === "status") {
+          return { ok: true, exitCode: 0, stdout: "logged in as x@y.com", stderr: "" };
+        }
+        throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+      });
+
+      await expect(service.probeAuth("cursor")).resolves.toMatchObject({
+        ok: true,
+        advisory: true,
+      });
+    });
+
+    it("falls back to config-file presence for codex (no live status command)", async () => {
+      const service = new AgentSetupService({
+        manifests: [opencodeManifest],
+        homeDir: () => "/home/nobody",
+        exists: async (filePath) => filePath.endsWith(".codex/config.toml"),
+      });
+
+      await expect(service.probeAuth("codex")).resolves.toMatchObject({
+        ok: true,
+        advisory: true,
+      });
+    });
+
+    it("never rejects when the probe command itself throws", async () => {
+      const service = setupService(async () => {
+        throw new Error("ENOENT: claude not found");
+      });
+
+      await expect(service.probeAuth("claude")).resolves.toMatchObject({
+        ok: false,
+        advisory: true,
+      });
+    });
+
+    it("returns an advisory no-op for agents without a known probe", async () => {
+      const service = setupService();
+      await expect(service.probeAuth("pi")).resolves.toMatchObject({
+        ok: true,
+        advisory: true,
+      });
+    });
+  });
 });

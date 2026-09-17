@@ -28,6 +28,13 @@ export interface AgentSetupInstallResult extends AgentSetupRecord {
   ok: boolean;
 }
 
+/** doctor 用的认证探测结果：advisory 恒为 true，调用方绝不能把 ok:false 当硬门槛。 */
+export interface AgentAuthProbe {
+  ok: boolean;
+  advisory: true;
+  message: string;
+}
+
 export interface AgentSetupServiceOptions {
   manifests: AgentSetupManifest[];
   run?: (command: string, args: string[]) => Promise<AgentCommandResult>;
@@ -211,6 +218,77 @@ export class AgentSetupService {
         },
       };
     }
+  }
+
+  /**
+   * 只探测「是否已登录」，不影响 detect()/install() 的既有结果——供 doctor 展示各已配置 ACP
+   * 后端的认证状态用。探测结果只作参考：本机验证过 `claude auth status` 在裸环境下会误报
+   * 未登录（即便 launchd 托管的 runner 实际认证正常），调用方绝不能把这当硬门槛拦运行。
+   */
+  async probeAuth(agentId: string): Promise<AgentAuthProbe> {
+    switch (agentId) {
+      case "claude": {
+        const result = await this.probeCommand("claude", ["auth", "status"]);
+        return {
+          ok: result.ok,
+          advisory: true,
+          message: result.ok
+            ? versionFromOutput(result.stdout) ?? "claude auth status: ok"
+            : joinSetupOutput(result) || "claude auth status reports not logged in",
+        };
+      }
+      case "cursor": {
+        const result = await this.probeCommand("agent", ["status"]);
+        return {
+          ok: result.ok,
+          advisory: true,
+          message: result.ok
+            ? versionFromOutput(result.stdout) ?? "agent status: ok"
+            : joinSetupOutput(result) || "agent status reports not logged in",
+        };
+      }
+      case "codex": {
+        // 未确认过实时的 codex 登录状态子命令，退回复用既有的配置文件/环境变量检测——
+        // 只能证明「配置存在」，不能证明 token 仍有效，因此同样标 advisory。
+        const configured = await this.hasCodexConfiguration();
+        return {
+          ok: configured,
+          advisory: true,
+          message: configured
+            ? "codex config file or API key env present (not a live token check)"
+            : "no codex config file or API key env found; run `codex login` on the host",
+        };
+      }
+      case "opencode": {
+        const result = await this.probeCommand("opencode", ["auth", "list"]);
+        return {
+          ok: result.ok,
+          advisory: true,
+          message: result.ok
+            ? versionFromOutput(result.stdout) ?? "opencode auth list: ok"
+            : joinSetupOutput(result) || "opencode auth list reports not logged in",
+        };
+      }
+      default:
+        return { ok: true, advisory: true, message: "no auth probe for this agent" };
+    }
+  }
+
+  /** probeAuth 专用：加超时兜底，diagnostics 页面绝不能被一次卡住的登录探测拖死 */
+  private async probeCommand(
+    command: string,
+    args: string[],
+    timeoutMs = 5_000,
+  ): Promise<AgentCommandResult> {
+    return Promise.race([
+      this.safeRun(command, args),
+      new Promise<AgentCommandResult>((resolve) => {
+        setTimeout(
+          () => resolve({ ok: false, exitCode: null, stdout: "", stderr: "auth probe timed out" }),
+          timeoutMs,
+        );
+      }),
+    ]);
   }
 
   private async detectGeneric(manifest: AgentSetupManifest): Promise<AgentSetupState> {
