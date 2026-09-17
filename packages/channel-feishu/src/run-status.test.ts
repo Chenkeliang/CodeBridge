@@ -157,7 +157,7 @@ describe("Feishu run status", () => {
     const rendered = renderFeishuRunStatus(status, 3_000);
     const lines = rendered.split("\n");
     expect(lines).toHaveLength(5);
-    expect(lines[4]).toBe(
+    expect(lines[3]).toBe(
       "实际使用模型：Opus 5（opus[1m]），请求的是 claude-fable-5-1[1m]",
     );
   });
@@ -176,7 +176,7 @@ describe("Feishu run status", () => {
     );
 
     const lines = renderFeishuRunStatus(status, 3_000).split("\n");
-    expect(lines[4]).toBe(
+    expect(lines[3]).toBe(
       "实际使用模型：gpt-5.6-sol，请求的是 claude-fable-5-1[1m]",
     );
   });
@@ -194,7 +194,7 @@ describe("Feishu run status", () => {
 
     const lines = renderFeishuRunStatus(status, 3_000).split("\n");
     expect(lines).toHaveLength(5);
-    expect(lines[4]).toBe(
+    expect(lines[3]).toBe(
       "请求的模型 claude-fable-5-1[1m] 未生效，本次运行使用了该 Agent 的默认模型。",
     );
   });
