@@ -35,7 +35,7 @@ afterEach(() => {
 const VALID = {
   label: "stock-daily-trade",
   token: "publisher-token-abcdefghijklmnop",
-  chatId: "oc_625b1a8f",
+  chatId: "oc_example1",
   topicId: "om_1",
   routes: ["file", "markdown", "mention"] as const,
 };
