@@ -102,6 +102,9 @@ const FEISHU_MSG_CHUNK_CHARS = 12000;
 /** 只在卡片保留最新进度，避免长任务把数百条 commentary 累积成超长卡片。 */
 const FEISHU_LIVE_PROGRESS_CHARS = 1200;
 
+/** 单条 delivery 的 reconcile 重试上限；超过后放弃并打点，避免无限重试刷屏日志。 */
+const FEISHU_DELIVERY_RECONCILE_MAX_ATTEMPTS = 20;
+
 const FEISHU_INTERACTIVE_CARD_PLACEHOLDER = "[interactive card]";
 
 const FEISHU_OUTPUT_STYLE_GUIDANCE =
@@ -230,6 +233,8 @@ export class FeishuBridge {
   private cardKitWriter?: CardKitWriter;
   private readonly cardUpdateSequences: JsonMapStore<number>;
   private readonly deliveryRetries = new Map<string, { attempts: number; after: number }>();
+  /** turnIds abandoned after FEISHU_DELIVERY_RECONCILE_MAX_ATTEMPTS; reconcileDeliveries skips these until the delivery itself disappears. */
+  private readonly abandonedDeliveries = new Set<string>();
 
   constructor(private readonly options: FeishuBridgeOptions) {
     this.config = options.config;
@@ -883,6 +888,9 @@ export class FeishuBridge {
     for (const turnId of this.deliveryRetries.keys()) {
       if (!pendingIds.has(turnId)) this.deliveryRetries.delete(turnId);
     }
+    for (const turnId of this.abandonedDeliveries) {
+      if (!pendingIds.has(turnId)) this.abandonedDeliveries.delete(turnId);
+    }
     const bySession = new Map<string, typeof deliveries>();
     for (const delivery of deliveries) {
       const list = bySession.get(delivery.sessionId) ?? [];
@@ -895,6 +903,7 @@ export class FeishuBridge {
         ...list.map((delivery) => delivery.acceptedSequence),
       );
       for (const delivery of list) {
+        if (this.abandonedDeliveries.has(delivery.turnId)) continue;
         const retry = this.deliveryRetries.get(delivery.turnId);
         if (retry && retry.after > Date.now()) continue;
         const chatId =
@@ -918,6 +927,19 @@ export class FeishuBridge {
           this.deliveryRetries.delete(delivery.turnId);
         } catch (error) {
           const attempts = (retry?.attempts ?? 0) + 1;
+          if (attempts >= FEISHU_DELIVERY_RECONCILE_MAX_ATTEMPTS) {
+            this.deliveryRetries.delete(delivery.turnId);
+            this.abandonedDeliveries.add(delivery.turnId);
+            this.options.onLog?.(JSON.stringify({
+              event: "feishu_delivery_reconcile_abandoned",
+              runId: delivery.runId,
+              turnId: delivery.turnId,
+              cardId: delivery.surfaceCardId,
+              attempts,
+              message: error instanceof Error ? error.message : String(error),
+            }));
+            continue;
+          }
           this.deliveryRetries.set(delivery.turnId, {
             attempts,
             after: Date.now() + Math.min(300_000, 15_000 * 2 ** Math.min(attempts, 5)),
