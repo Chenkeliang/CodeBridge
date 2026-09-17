@@ -221,6 +221,40 @@ describe("applySessionConfigOptions", () => {
     expect(warnings.some((w) => w.includes("effort"))).toBe(true);
   });
 
+  it("model 不在可选范围时，返回 effectiveModel 与 modelMismatch（strictModel=false）", async () => {
+    const { agent } = fakeAgent();
+    const result = await applySessionConfigOptions(agent, "s1", options, {
+      model: "gpt-5",
+    });
+    expect(result.warnings.some((w) => w.includes("gpt-5"))).toBe(true);
+    // 未被采纳，适配器仍停在 configOptions 快照里的 currentValue
+    expect(result.effectiveModel).toBe("claude-fable-5[1m]");
+    expect(result.modelMismatch).toEqual({
+      requested: "gpt-5",
+      effective: "claude-fable-5[1m]",
+    });
+  });
+
+  it("model 不在可选范围且 strictModel=true 时直接抛错，不静默继续", async () => {
+    const { agent, calls } = fakeAgent();
+    await expect(
+      applySessionConfigOptions(agent, "s1", options, {
+        model: "gpt-5",
+        strictModel: true,
+      }),
+    ).rejects.toThrow(/gpt-5/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("model 命中时不产生 modelMismatch，effectiveModel 取自 set_config_option 响应", async () => {
+    const { agent } = fakeAgent();
+    const result = await applySessionConfigOptions(agent, "s1", options, {
+      model: "sonnet",
+    });
+    expect(result.modelMismatch).toBeUndefined();
+    expect(result.effectiveModel).toBe("claude-fable-5[1m]");
+  });
+
   it("值不在可选范围收 warning", async () => {
     const { agent } = fakeAgent();
     const { warnings } = await applySessionConfigOptions(agent, "s1", options, {
