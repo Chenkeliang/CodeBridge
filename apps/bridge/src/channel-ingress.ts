@@ -442,9 +442,11 @@ export function createChannelSessionIngress(
 
   const listDeliveries = async (
     channel: string,
+    surfaceMessageId?: string,
   ): Promise<ChannelDeliveryRow[]> => {
     const response = await app.request(
-      `/v1/deliveries?channel=${encodeURIComponent(channel)}`,
+      `/v1/deliveries?channel=${encodeURIComponent(channel)}`
+        + (surfaceMessageId !== undefined ? `&surface_message_id=${encodeURIComponent(surfaceMessageId)}` : ""),
       { headers: auth },
     );
     if (!response.ok) {

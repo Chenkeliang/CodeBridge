@@ -213,12 +213,12 @@ export class FeishuBridge {
   private orchestrator: RunOrchestrator;
   private config: AppConfig;
   /** chat|topic → 最近一条入站消息 id（出站消息回贴话题用） */
-  private readonly lastInboundMessageId = new Map<string, string>();
+  private readonly lastInboundMessageId: JsonMapStore<string>;
   /** 普通群回复串 → 会话 topic 映射 */
   private readonly chainTopics = new ChainTopicTracker();
   /** bot 已参与过的话题（内存；重启后由 Catalog 槽位绑定续上） */
   private readonly botParticipatedTopics = new Set<string>();
-  private readonly mentionRegistry = new MentionRegistry();
+  private readonly mentionRegistry: MentionRegistry;
   private readonly pendingStreams: JsonMapStore<PendingFeishuStream>;
   /** 所有活动流的 AbortController（非 chat-scoped），disconnect 时统一 abort */
   private readonly activeAborts = new Set<AbortController>();
@@ -237,6 +237,12 @@ export class FeishuBridge {
   private readonly abandonedDeliveries = new Set<string>();
 
   constructor(private readonly options: FeishuBridgeOptions) {
+    this.lastInboundMessageId = new JsonMapStore<string>(
+      path.join(options.dataDir, "feishu-outbound-reply-targets.json"),
+    );
+    this.mentionRegistry = new MentionRegistry(
+      path.join(options.dataDir, "feishu-mention-targets.json"),
+    );
     this.config = options.config;
     this.sessionIngress = options.sessionIngress;
     this.cardUpdateSequences = new JsonMapStore<number>(
@@ -301,6 +307,9 @@ export class FeishuBridge {
       loggerLevel: LoggerLevel.info,
       includeRawEvent: true,
       httpInstance: feishuHttpClient(),
+      // SDK mergeBatch keeps only the last messageId while pooling resources.
+      // Preserve each message's resource ownership until the SDK carries it.
+      safety: { batch: { text: { maxMessages: 1 } } },
       policy: {
         requireMention: false,
         dmMode: (feishu.policy?.dmMode === "disabled"
@@ -528,10 +537,10 @@ export class FeishuBridge {
     }
 
     // 记录话题/会话最近一条入站消息，供出站 API 回贴到正确的话题
-    this.lastInboundMessageId.set(
-      this.chatKey(msg.chatId, topicId),
-      msg.messageId,
-    );
+    this.lastInboundMessageId.update((current) => ({
+      ...current,
+      [this.chatKey(msg.chatId, topicId)]: msg.messageId,
+    }));
 
     const deploymentReply = await this.options.onDeploymentMessage?.(msg);
     if (deploymentReply !== undefined) {
@@ -749,6 +758,45 @@ export class FeishuBridge {
           msg,
           topicId,
           this.config.feishu.appId,
+          (text, messageId) => {
+            const attachments = msg.attachments ?? [];
+            const bytes = Buffer.byteLength(text, "utf8");
+            const total = attachments.reduce((sum, item) =>
+              sum + Buffer.byteLength(item.dataBase64, "base64"), 0);
+            if (attachments.length >= 10 || bytes > 10_000_000 || total + bytes > 25_000_000) {
+              throw new Error("quoted_attachment_limit");
+            }
+            const name = `quoted-${messageId.replace(/[^a-zA-Z0-9_-]/g, "_")}.txt`;
+            msg.attachments = [...attachments, {
+              name, mimeType: "text/plain", dataBase64: Buffer.from(text).toString("base64"),
+            }];
+            return name;
+          },
+          (attachment) => {
+            const attachments = msg.attachments ?? [];
+            const total = [...attachments, attachment].reduce((sum, item) =>
+              sum + Buffer.byteLength(item.dataBase64, "base64"), 0);
+            if (attachments.length >= 10 || total > 25_000_000) throw new Error("quoted_attachment_limit");
+            msg.attachments = [...attachments, attachment];
+          },
+          async (messageId) => {
+            if (!this.sessionIngress?.replayEvents) return undefined;
+            const deliveries = await this.sessionIngress.listDeliveries("feishu", messageId);
+            const delivery = deliveries.find((item) =>
+              item.surfaceMessageId === messageId
+              && item.conversationId === this.chatKey(msg.chatId, topicId));
+            if (!delivery?.runId) return undefined;
+            const events = await this.sessionIngress.replayEvents(delivery.sessionId, {
+              afterSequence: delivery.acceptedSequence,
+            });
+            const projector = createChannelStreamProjector({ showThinking: false });
+            for (const event of events) {
+              if (event.runId === delivery.runId && event.type === "AGENT_EVENT" && event.payload.event) {
+                projector.apply(event.payload.event as AgentEvent);
+              }
+            }
+            return projector.snapshot().result || undefined;
+          },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1308,9 +1356,7 @@ export class FeishuBridge {
     topicId?: string,
   ): { replyTo: string; replyInThread: true } | undefined {
     if (!topicId) return undefined;
-    const replyTo = this.lastInboundMessageId.get(
-      this.chatKey(chatId, topicId),
-    );
+    const replyTo = this.lastInboundMessageId.read()[this.chatKey(chatId, topicId)];
     if (!replyTo) return undefined;
     return { replyTo, replyInThread: true };
   }
