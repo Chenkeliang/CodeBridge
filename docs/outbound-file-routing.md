@@ -40,3 +40,13 @@ codebridge publisher revoke --label stock-daily-trade
 2026-09-16：pnpm build 通过；pnpm lint 通过（Web 原有 8 个 warning）；全量 vitest 与最终针对性路由/CLI测试通过。GitNexus detect-changes 判定低风险。ACP 进程复用键包含 FCB_RUN_ID，防止跨 Run 继承旧发送身份；重建进程后继续按 provider session 恢复原会话。
 
 发布集成必须保留当前生产 e810514 的空队列自动恢复变更；此功能分支从 origin/main 5273552 创建，不能直接替换生产而遗漏该提交。
+
+## 生产验收结果（2026-09-16）
+
+发布 20260916-155853-adb91f70，集成提交 24807c735d7454afc72d1a2d552bf354a6ec76f1，控制器终态 published。集成构建及 154 个测试文件、1565 项测试通过。
+
+真实 Pi 验收最初暴露 SDK 未传递 extraEnv，导致 fcb 不在 PATH；补充 createBashToolDefinition 的逐任务 spawnHook，独立注入 PATH/FCB_RUN_ID 等变量并验证并发任务不串环境。
+
+最终 Run 仅执行一次 fcb send，返回 ok:true。飞书历史消息回查确认该 xlsx 文件出现在原聊天，消息 deleted:false。具体 Run ID、聊天 ID、消息 ID 和文件名属于本机验收记录，不入公开仓库；复核时从 bridge.log 和飞书消息记录读取。该回查证明真实文件消息已生成，不等于用户已打开下载。
+
+Surface 状态更新：Agent/Pi → 飞书原窗口已 reachable、closed-loop；飞书话题、Telegram 分支通过候选路由测试，未进行真实通道发送验收。
