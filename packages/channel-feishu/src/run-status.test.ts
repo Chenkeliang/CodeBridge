@@ -138,6 +138,25 @@ describe("Feishu run status", () => {
     expect(rendered).not.toContain("最近确认活动");
   });
 
+  it("surfaces the effective model only when it differs from what was requested", () => {
+    const status = createFeishuRunStatus(1_000);
+
+    expect(
+      recordFeishuRunActivity(
+        status,
+        { type: "model_resolved", requested: "claude-fable-5-1[1m]", effective: "opus[1m]" },
+        2_000,
+      ),
+    ).toBe(true);
+
+    const rendered = renderFeishuRunStatus(status, 3_000);
+    const lines = rendered.split("\n");
+    expect(lines).toHaveLength(5);
+    expect(lines[4]).toBe(
+      "实际使用模型：opus[1m]（请求：claude-fable-5-1[1m]，未生效）",
+    );
+  });
+
   it("keeps the first terminal state and rejects later activity", () => {
     const status = createFeishuRunStatus(1_000);
 

@@ -32,6 +32,8 @@ export interface FeishuRunStatus {
   endedAt?: number;
   transport: FeishuTransportSnapshot;
   verificationError?: string;
+  /** 请求的 model 未被适配器采纳时的请求值/实际生效值对照（见 model_resolved 事件） */
+  modelMismatch?: { requested: string; effective: string };
 }
 
 export function createFeishuRunStatus(now = Date.now()): FeishuRunStatus {
@@ -133,6 +135,12 @@ export function recordFeishuRunActivity(
 ): boolean {
   if (status.state !== "running") return false;
 
+  if (event.type === "model_resolved") {
+    status.modelMismatch = { requested: event.requested, effective: event.effective };
+    status.lastActivityAt = now;
+    return true;
+  }
+
   let phase: string | undefined;
   switch (event.type) {
     case "thought_delta":
@@ -211,10 +219,17 @@ export function renderFeishuRunStatus(
     if (quiet) phase = `${phase}（暂无新事件）`;
   }
 
-  return [
+  const lines = [
     `任务状态：${title}`,
     `运行时长：${formatElapsed(elapsed)}`,
     `最近任务事件：${formatElapsed(sinceActivity)}前`,
     `当前阶段：${phase}`,
-  ].join("\n");
+  ];
+  // 只在实际生效模型与用户请求不一致时提示，避免正常运行多一行噪音
+  if (status.modelMismatch) {
+    lines.push(
+      `实际使用模型：${status.modelMismatch.effective}（请求：${status.modelMismatch.requested}，未生效）`,
+    );
+  }
+  return lines.join("\n");
 }
