@@ -16,6 +16,8 @@ export interface DesiredSessionConfig {
   model?: string;
   effort?: string;
   permissionMode?: string;
+  /** true 时，想要的 model 不在适配器可选值内会直接抛错中止本轮，而非静默沿用适配器默认 */
+  strictModel?: boolean;
 }
 
 export type CustomSessionConfig = Record<string, string | boolean>;
@@ -66,6 +68,7 @@ export function resolveDesiredConfig(
     model: ctx.model ?? bc.model,
     effort: ctx.effort ?? bc.effort,
     permissionMode: ctx.mode,
+    strictModel: bc.strictModel ?? false,
   };
   if (bc.type === "claude-code") {
     // prompt_deny / prompt_feishu 都需要适配器真的「发问」（default 模式）：
@@ -130,7 +133,7 @@ const CATEGORY_BY_FIELD = {
  * 想要的 model/effort/permission 应用到会话上。适配器 advertise 的选项来自
  * `newSessionResponse.configOptions`（新建 + claude 续聊均带）。每次运行都要重设：续聊到新
  * 适配器进程时 model 会退回适配器默认（实测 Fable 5）。匹配不到的项只收集非致命 warning、不中断
- * ——适配器没有对应 category 时就自然跳过。
+ * ——适配器没有对应 category 时就自然跳过（除非 desired.strictModel 对 model 字段要求硬失败）。
  */
 export async function applySessionConfigOptions(
   agent: Agent,
@@ -138,20 +141,45 @@ export async function applySessionConfigOptions(
   configOptions: SessionConfigOption[],
   desired: DesiredSessionConfig,
   custom: CustomSessionConfig = {},
-): Promise<{ warnings: string[]; configOptions: SessionConfigOption[] }> {
+): Promise<{
+  warnings: string[];
+  configOptions: SessionConfigOption[];
+  /** model 分类选项在本轮 set-config 回合后的实际 currentValue（可能与 desired.model 不同） */
+  effectiveModel?: string;
+  /** desired.model 未被适配器采纳时的请求值/实际生效值对照，供上层告知用户 */
+  modelMismatch?: { requested: string; effective: string };
+}> {
   const warnings: string[] = [];
   let currentOptions = configOptions;
+  let modelMismatch: { requested: string; effective: string } | undefined;
   for (const [field, category] of Object.entries(CATEGORY_BY_FIELD)) {
     const wanted = desired[field as keyof DesiredSessionConfig];
-    if (!wanted) continue;
+    if (!wanted || typeof wanted !== "string") continue;
     const option = currentOptions.find((o) => o.category === category);
     if (!option) {
+      if (field === "model" && desired.strictModel) {
+        throw new Error(
+          `ACP model=${wanted} 未生效：当前会话未提供 model 配置项（strictModel 已启用，本轮已终止）。`,
+        );
+      }
       warnings.push(`ACP 会话未提供 ${field} 选项，${field}=${wanted} 未生效。`);
+      if (field === "model") modelMismatch = { requested: wanted, effective: "adapter 默认" };
       continue;
     }
     const value = matchConfigValue(option, wanted);
     if (!value) {
+      if (field === "model" && desired.strictModel) {
+        throw new Error(
+          `ACP model=${wanted} 不在可选值内（strictModel 已启用，本轮已终止）。`,
+        );
+      }
       warnings.push(`ACP ${field}=${wanted} 不在可选值内，未生效。`);
+      if (field === "model") {
+        modelMismatch = {
+          requested: wanted,
+          effective: typeof option.currentValue === "string" ? option.currentValue : "adapter 默认",
+        };
+      }
       continue;
     }
     try {
@@ -164,6 +192,12 @@ export async function applySessionConfigOptions(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       warnings.push(`ACP 设置 ${field}=${value} 失败：${msg}`);
+      if (field === "model") {
+        modelMismatch = {
+          requested: wanted,
+          effective: typeof option.currentValue === "string" ? option.currentValue : "adapter 默认",
+        };
+      }
     }
   }
   for (const [configId, wanted] of Object.entries(custom)) {
@@ -204,5 +238,13 @@ export async function applySessionConfigOptions(
       warnings.push(`ACP 设置 config=${configId} 失败：${msg}`);
     }
   }
-  return { warnings, configOptions: currentOptions };
+  // 读回本轮 set-config 回合后 model 分类的实际 currentValue：适配器可能规范化了 value，
+  // 或（未 strictModel 时）压根没采纳 desired.model，这里给上层一个真相来源而非「想要的值」。
+  const modelCurrentValue = currentOptions.find((o) => o.category === "model")?.currentValue;
+  const effectiveModel =
+    typeof modelCurrentValue === "string" ? modelCurrentValue : undefined;
+  if (modelMismatch && effectiveModel !== undefined) {
+    modelMismatch = { ...modelMismatch, effective: effectiveModel };
+  }
+  return { warnings, configOptions: currentOptions, effectiveModel, modelMismatch };
 }

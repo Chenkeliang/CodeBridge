@@ -97,11 +97,17 @@ export {
 export {
   AgentSetupService,
   redactSetupOutput,
+  type AgentAuthProbe,
   type AgentCommandResult,
   type AgentSetupInstallResult,
   type AgentSetupRecord,
   type AgentSetupServiceOptions,
 } from "./agent-setup.js";
+
+export {
+  isAuthErrorMessage,
+  friendlyAuthErrorMessage,
+} from "./auth-error-hints.js";
 
 export {
   PI_PROVIDER_PRESETS,

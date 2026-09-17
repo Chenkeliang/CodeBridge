@@ -38,6 +38,8 @@ export const BackendProfileSchema = z.object({
   acpArgs: z.array(z.string()).optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
+  /** true 时，若适配器未 advertise 想要的 model，本轮直接失败而非静默用适配器默认；默认 false */
+  strictModel: z.boolean().optional(),
   /** Claude ACP mode 的兼容默认值，默认 bypassPermissions 避免 dontAsk 拒绝 Bash */
   claudePermissionMode: z
     .enum([
