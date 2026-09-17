@@ -148,6 +148,92 @@ describe("RunnerClient session history", () => {
 });
 
 describe("RunnerClient cancellation", () => {
+  it("lets heartbeat timers run while consuming buffered Agent events", async () => {
+    const events = Array.from({ length: 40 }, (_, index) => ({
+      type: "text_delta", text: String(index),
+    }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      [...events, { type: "done", exitCode: 0 }]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    )));
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+    let heartbeats = 0;
+    const heartbeat = setInterval(() => { heartbeats += 1; }, 1);
+    try {
+      for await (const event of client.run({
+        runId: "r1",
+        sessionKey: { chatId: "chat", backendId: "codex", cwd: "/workspace" },
+        prompt: "buffered output",
+      })) {
+        if (event.type === "done") break;
+        // Model synchronous persistence/projection while all SSE data is ready.
+        const until = performance.now() + 2;
+        while (performance.now() < until) { /* synchronous consumer work */ }
+      }
+      expect(heartbeats).toBeGreaterThan(0);
+    } finally {
+      clearInterval(heartbeat);
+    }
+  });
+
+  it("cancels and awaits the remote task when event persistence throws", async () => {
+    let acknowledgeCancellation!: () => void;
+    const acknowledged = new Promise<void>((resolve) => {
+      acknowledgeCancellation = resolve;
+    });
+    const streamCancelled = vi.fn();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/cancel")) {
+        await acknowledged;
+        return new Response(JSON.stringify({ ok: true }));
+      }
+      return new Response(new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode('data: {"type":"tool_start","id":"t1","name":"write"}\n\n'));
+        },
+        cancel: streamCancelled,
+      }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+    let settled = false;
+    const consume = (async () => {
+      for await (const _event of client.run({
+        runId: "r1",
+        sessionKey: { chatId: "chat", backendId: "codex", cwd: "/workspace" },
+        prompt: "work",
+      })) {
+        throw new Error("run_lease_lost");
+      }
+    })().finally(() => { settled = true; });
+    const result = consume.catch((error: Error) => error.message);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/cancel"))).toHaveLength(1);
+    acknowledgeCancellation();
+    expect(await result).toBe("run_lease_lost");
+    expect(streamCancelled).toHaveBeenCalledOnce();
+  });
+
+  it("cancels an unfinished stream on break but does not cancel a completed run", async () => {
+    const fetchMock = vi.fn((url: string) => Promise.resolve(new Response(
+      url.endsWith("/cancel")
+        ? JSON.stringify({ ok: true })
+        : 'data: {"type":"text_delta","text":"hello"}\n\ndata: {"type":"done","exitCode":0}\n\n',
+    )));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+    const request = {
+      runId: "r1",
+      sessionKey: { chatId: "chat", backendId: "codex", cwd: "/workspace" },
+      prompt: "work",
+    };
+    for await (const _event of client.run(request)) break;
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/cancel"))).toHaveLength(1);
+    for await (const _event of client.run({ ...request, runId: "r2" })) { /* consume */ }
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/cancel"))).toHaveLength(1);
+  });
+
   it("cancels the remote Runner task when an active stream is aborted", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn((url: string) => {

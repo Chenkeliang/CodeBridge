@@ -9,6 +9,7 @@ import {
   type RunRequest,
 } from "@codebridge/core";
 import { createRunnerApp, RunnerHost } from "./server.js";
+import { RunnerClient } from "@codebridge/runner-client";
 import type { PiSession } from "@codebridge/backends";
 
 const tmpDirs: string[] = [];
@@ -611,6 +612,84 @@ describe("RunnerHost steering", () => {
 });
 
 describe("RunnerHost session lifecycle", () => {
+  it("closes the provider through the HTTP contract when its event consumer fails", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-consumer-failure-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-consumer-failure-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    let finishPrompt!: () => void;
+    const promptFinished = new Promise<void>((resolve) => { finishPrompt = resolve; });
+    const abort = vi.fn(async () => { finishPrompt(); });
+    const dispose = vi.fn();
+    const host = new RunnerHost({
+      token: "token", config, dataDir,
+      piSessionFactory: async () => ({
+        sessionId: "pi-consumer-failure",
+        subscribe(listener) {
+          listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "working" } });
+          return () => {};
+        },
+        prompt: async () => { await promptFinished; },
+        async steer() {}, abort, dispose,
+      }),
+    });
+    const app = createRunnerApp(host, "token");
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) => app.request(url, init));
+    const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+    try {
+      await expect((async () => {
+        for await (const _event of client.run({
+          runId: "consumer-failure",
+          sessionKey: { chatId: "chat", backendId: "pi", cwd },
+          prompt: "work",
+        })) {
+          throw new Error("run_lease_lost");
+        }
+      })()).rejects.toThrow("run_lease_lost");
+      expect(abort).toHaveBeenCalledOnce();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(await host.steer("consumer-failure", "still active?")).toMatchObject({ ok: false });
+    } finally {
+      vi.unstubAllGlobals();
+      host.shutdown();
+    }
+  });
+
+  it("does not poison a retry when cancellation arrives after the prior attempt completed", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-late-cancel-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-late-cancel-"));
+    tmpDirs.push(dataDir, cwd);
+    const config = defaultConfig();
+    config.backends.pi = { type: "pi-sdk" };
+    const prompt = vi.fn(async () => {});
+    const host = new RunnerHost({
+      token: "token", config, dataDir,
+      piSessionFactory: async () => ({
+        sessionId: "pi-retry",
+        subscribe(listener) {
+          listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ok" } });
+          return () => {};
+        },
+        prompt,
+        async steer() {}, async abort() {}, dispose() {},
+      }),
+    });
+    const attempt = {
+      runId: "retry",
+      sessionKey: { chatId: "chat", backendId: "pi", cwd },
+      prompt: "work",
+    };
+    try {
+      expect((await collect(host.executeRun(attempt))).at(-1)).toEqual({ type: "done", exitCode: 0 });
+      expect(await host.cancelAndWait(attempt.runId)).toBe(true);
+      expect((await collect(host.executeRun(attempt))).at(-1)).toEqual({ type: "done", exitCode: 0 });
+      expect(prompt).toHaveBeenCalledTimes(2);
+    } finally {
+      host.shutdown();
+    }
+  });
+
   it("acknowledges cancellation only after the active run releases its session", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-cancel-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-cancel-"));
