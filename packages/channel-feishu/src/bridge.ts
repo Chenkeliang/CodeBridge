@@ -1,4 +1,5 @@
 import { CardKitWriter } from "./cardkit-writer.js";
+import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -208,6 +209,23 @@ function waitForBatchPoll(signal: AbortSignal): Promise<void> {
   });
 }
 
+/** Mention refs are a convenience cache; a corrupt file must not crash bridge startup. */
+function createMentionRegistry(filePath: string): MentionRegistry {
+  try {
+    return new MentionRegistry(filePath);
+  } catch (error) {
+    console.warn(
+      `飞书 mention registry 持久化文件损坏，已重建: ${filePath} (${error instanceof Error ? error.message : String(error)})`,
+    );
+    try {
+      fs.renameSync(filePath, `${filePath}.corrupt-${Date.now()}`);
+    } catch {
+      // ignore rename failure
+    }
+    return new MentionRegistry(filePath);
+  }
+}
+
 export class FeishuBridge {
   private channel?: LarkChannel;
   private orchestrator: RunOrchestrator;
@@ -240,7 +258,7 @@ export class FeishuBridge {
     this.lastInboundMessageId = new JsonMapStore<string>(
       path.join(options.dataDir, "feishu-outbound-reply-targets.json"),
     );
-    this.mentionRegistry = new MentionRegistry(
+    this.mentionRegistry = createMentionRegistry(
       path.join(options.dataDir, "feishu-mention-targets.json"),
     );
     this.config = options.config;

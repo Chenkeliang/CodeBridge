@@ -37,4 +37,17 @@ describe("Feishu persisted mention recovery", () => {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   });
+
+  it("recovers from a corrupt persisted mention registry instead of crashing", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-feishu-mention-corrupt-"));
+    const filePath = path.join(dataDir, "feishu-mention-targets.json");
+    try {
+      fs.writeFileSync(filePath, "not valid json{{{", "utf8");
+      expect(() => new FeishuBridge({ config: defaultConfig(), dataDir })).not.toThrow();
+      const movedAside = fs.readdirSync(dataDir).some((name) => name.startsWith("feishu-mention-targets.json.corrupt-"));
+      expect(movedAside).toBe(true);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });
