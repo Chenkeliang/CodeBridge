@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { createWorkItemApp } from "./work-item-api.js";
 import { type SqliteEventStore } from "@codebridge/work-items";
-import type { OutboundPublisher } from "./outbound-publishers.js";
+import { OUTBOUND_ROUTES, type OutboundPublisher, type OutboundRoute } from "./outbound-publishers.js";
 import type { ApprovalService } from "@codebridge/policy";
 import type { RunExecutor } from "@codebridge/run-executor";
 
@@ -28,7 +28,7 @@ export interface OutboundBridge {
 interface OutboundAppOptions {
   publicPathPrefixes?: string[];
   workItemStore?: SqliteEventStore;
-  publishers?: OutboundPublisher[];
+  publishers?: () => OutboundPublisher[];
 }
 
 /** 装配出站能力、兼容 TaskRecord API 和 Session-first API，共享同一个本地 Bearer Token。 */
@@ -45,7 +45,7 @@ export function createBridgeApp(
   flowBatchApp?: Hono,
   mcpApp?: Hono,
   skillApp?: Hono,
-  publishers?: OutboundPublisher[],
+  publishers?: () => OutboundPublisher[],
 ) {
   const app = createOutboundApp(bridge, token, {
     workItemStore,
@@ -66,8 +66,12 @@ export function createBridgeApp(
   return app;
 }
 
-function isOutboundPath(requestPath: string): boolean {
-  return requestPath === "/outbound" || requestPath.startsWith("/outbound/");
+/** 把 /outbound/<name> 映射成路由名；不是已知出站路由时返回 undefined。 */
+function outboundRouteOf(requestPath: string): OutboundRoute | undefined {
+  const prefix = "/outbound/";
+  if (!requestPath.startsWith(prefix)) return undefined;
+  const name = requestPath.slice(prefix.length);
+  return OUTBOUND_ROUTES.includes(name as OutboundRoute) ? (name as OutboundRoute) : undefined;
 }
 
 /** Resolve only the current Run's persisted delivery; never infer a recipient from an ID prefix. */
@@ -106,7 +110,7 @@ export function createOutboundApp(
   const app = new Hono();
   const resolvedTargets = new WeakMap<Request, { chatId: string; topicId?: string }>();
   const publicPathPrefixes = options.publicPathPrefixes ?? [];
-  const publishers = options.publishers ?? [];
+  const publishers = options.publishers ?? (() => []);
 
   app.use("*", async (c, next) => {
     const isPublicPath = publicPathPrefixes.some(
@@ -121,13 +125,17 @@ export function createOutboundApp(
       await next();
       return;
     }
-    // 发布者凭据只认 /outbound/*，且收件人只取配置里写死的那一个：
+    // 发布者凭据只认已知的 /outbound/<route>，且收件人只取配置里写死的那一个：
     // 请求体给出的 chatId 依旧会被覆盖，发送方无法自己选收件人。
-    const publisher = isOutboundPath(c.req.path)
-      ? publishers.find((row) => auth === `Bearer ${row.token}`)
+    const route = outboundRouteOf(c.req.path);
+    const publisher = route
+      ? publishers().find((row) => auth === `Bearer ${row.token}`)
       : undefined;
-    if (!publisher) {
+    if (!publisher || !route) {
       return c.json({ error: "unauthorized" }, 401);
+    }
+    if (!publisher.routes.includes(route)) {
+      return c.json({ error: `outbound_route_forbidden：${publisher.label} 未获授权发送 ${route}` }, 403);
     }
     resolvedTargets.set(c.req.raw, {
       chatId: publisher.chatId,
