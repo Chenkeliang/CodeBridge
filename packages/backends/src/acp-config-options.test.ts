@@ -329,7 +329,7 @@ describe("applySessionConfigOptions", () => {
     expect(result.effectiveModel).toBe("claude-fable-5[1m]");
   });
 
-  it("model 仅通过剥离 hint 命中时：setConfigOption 用剥离后的值、收 warning、不设 modelMismatch", async () => {
+  it("model 仅通过剥离 hint 命中时：setConfigOption 用剥离后的值、视为同一模型：不收 warning、不设 modelMismatch", async () => {
     const fableOption = {
       id: "model",
       name: "Model",
@@ -351,11 +351,7 @@ describe("applySessionConfigOptions", () => {
     expect(calls.map((c) => c.params)).toEqual([
       { sessionId: "s1", configId: "model", value: "claude-fable-5-1" },
     ]);
-    expect(
-      result.warnings.some(
-        (w) => w.includes("claude-fable-5-1[1m]") && w.includes("claude-fable-5-1"),
-      ),
-    ).toBe(true);
+    expect(result.warnings).toEqual([]);
     expect(result.modelMismatch).toBeUndefined();
   });
 
