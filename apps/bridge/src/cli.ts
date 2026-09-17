@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import path from "node:path";
 import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -21,7 +22,16 @@ import {
   registerDemoCapabilities,
   registerEquityCapabilities,
 } from "@codebridge/policy";
-import type { OutboundPublisher } from "./outbound-publishers.js";
+import {
+  DEFAULT_ROUTES,
+  OUTBOUND_ROUTES,
+  OutboundPublisherStore,
+  addPublisher,
+  listPublishers,
+  publishersPath,
+  revokePublisher,
+  type OutboundRoute,
+} from "./outbound-publishers.js";
 import { RunnerClient } from "@codebridge/runner-client";
 import { RunExecutor } from "@codebridge/run-executor";
 import {
@@ -543,14 +553,10 @@ program
     const apiPort = config.bridge?.apiPort ?? 19790;
     const { serve } = await import("@hono/node-server");
     const { createBridgeApp } = await import("./outbound-api.js");
-    const { loadOutboundPublishers } = await import("./outbound-publishers.js");
     // 凭据文件坏掉只该让定时任务发不出去，不该连带拖垮整个 Bridge。
-    let publishers: OutboundPublisher[] = [];
-    try {
-      publishers = loadOutboundPublishers(dataDir, config.runner.token);
-    } catch (error) {
-      console.error(`出站发布者配置无效，已全部忽略：${error instanceof Error ? error.message : String(error)}`);
-    }
+    const publisherStore = new OutboundPublisherStore(dataDir, config.runner.token, (error) => {
+      console.error(`出站发布者配置无效，沿用上一份可用凭据：${error.message}`);
+    });
     const apiApp = createBridgeApp(
         {
           sendOutboundFile: (chatId, rawPath, topicId) =>
@@ -589,7 +595,7 @@ program
         flowBatchApp,
         mcpApp,
         skillApp,
-        publishers,
+        () => publisherStore.current(),
       );
     mountDeploymentRoutes(apiApp, deployment, workItemStore);
     serve({
@@ -600,7 +606,10 @@ program
     console.log(`Core API 监听 http://127.0.0.1:${apiPort}`);
     console.log(`Web: ${surfaces.web ? `enabled at http://127.0.0.1:${apiPort}/workbench/` : "disabled"}`);
     console.log(`Feishu: ${surfaces.feishu ? "enabled" : "disabled"}`);
-    console.log(`出站发布者: ${publishers.length ? publishers.map((row) => row.label).join(", ") : "none"}`);
+    const loadedPublishers = publisherStore.current();
+    console.log(`出站发布者: ${loadedPublishers.length
+      ? loadedPublishers.map((row) => `${row.label}[${row.routes.join("/")}]`).join(", ")
+      : "none"}`);
     console.log(`Telegram: ${surfaces.telegram ? "enabled" : "disabled"}`);
   });
 
@@ -623,6 +632,73 @@ program
     const config = store.get();
     const report = await runDoctor(config, opts.dataDir);
     console.log(JSON.stringify(report, null, 2));
+  });
+
+const publisher = program
+  .command("publisher")
+  .description("管理定时任务等非 Agent 发送方的出站凭据");
+
+function runnerTokenOf(dataDir: string): string {
+  const store = new ConfigStore({ dataDir });
+  // 没有 config.yaml 时 ConfigStore 会回落到占位 token，静默把凭据写进错的目录。
+  if (!fs.existsSync(store.path)) {
+    throw new Error(`${store.path} 不存在：--data-dir 指错了，或该目录尚未 codebridge init`);
+  }
+  return store.get().runner.token;
+}
+
+function parseRouteOption(value: string): OutboundRoute[] {
+  const routes = value.split(",").map((item) => item.trim()).filter(Boolean);
+  if (routes.length === 0) {
+    throw new Error(`--routes 不能为空，省略它即表示只授予 ${DEFAULT_ROUTES.join("、")}`);
+  }
+  for (const route of routes) {
+    if (!OUTBOUND_ROUTES.includes(route as OutboundRoute)) {
+      throw new Error(`未知路由 ${route}，可选：${OUTBOUND_ROUTES.join("、")}`);
+    }
+  }
+  return routes as OutboundRoute[];
+}
+
+publisher
+  .command("add")
+  .description("签发一条凭据；同名 label 视为轮换，旧 token 立即作废")
+  .requiredOption("--label <name>", "调用方名字，例如 stock-daily-trade")
+  .requiredOption("--chat <id>", "固定收件人：飞书 oc_ 开头，Telegram telegram: 开头")
+  .option("--topic <id>", "话题 ID")
+  .option("--routes <list>", `逗号分隔，默认 markdown,mention；可选 ${OUTBOUND_ROUTES.join("、")}`)
+  .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
+  .action((opts: { label: string; chat: string; topic?: string; routes?: string; dataDir: string }) => {
+    const issued = addPublisher(opts.dataDir, runnerTokenOf(opts.dataDir), {
+      label: opts.label,
+      chatId: opts.chat,
+      topicId: opts.topic,
+      routes: opts.routes === undefined ? undefined : parseRouteOption(opts.routes),
+    });
+    console.log(JSON.stringify({
+      label: issued.label, token: issued.token, chatId: issued.chatId,
+      topicId: issued.topicId, routes: issued.routes, path: publishersPath(opts.dataDir),
+    }, null, 2));
+    console.error("token 只在此刻打印一次，请立刻写入调用方配置；Bridge 会自动热加载，无需重启。");
+  });
+
+publisher
+  .command("list")
+  .description("列出已登记的发布者（不含 token）")
+  .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
+  .action((opts: { dataDir: string }) => {
+    console.log(JSON.stringify(listPublishers(opts.dataDir, runnerTokenOf(opts.dataDir)), null, 2));
+  });
+
+publisher
+  .command("revoke")
+  .description("吊销一条凭据")
+  .requiredOption("--label <name>", "要吊销的 label")
+  .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
+  .action((opts: { label: string; dataDir: string }) => {
+    const removed = revokePublisher(opts.dataDir, runnerTokenOf(opts.dataDir), opts.label);
+    console.log(JSON.stringify({ label: opts.label, revoked: removed }, null, 2));
+    if (!removed) process.exitCode = 1;
   });
 
 program.parseAsync(process.argv).catch((err) => {

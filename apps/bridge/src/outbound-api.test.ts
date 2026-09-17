@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { SqliteEventStore } from "@codebridge/work-items";
+import type { OutboundPublisher, OutboundRoute } from "./outbound-publishers.js";
 import {
   resolveOutboundTarget,
   createBridgeApp,
@@ -285,9 +286,10 @@ describe("Publisher-token outbound routing", () => {
     token: "publisher-token-abcdefghijklmnop",
     chatId: "oc_bound",
     topicId: "om_bound",
+    routes: ["file", "markdown", "mention"] as OutboundRoute[],
   };
 
-  function publisherApp() {
+  function publisherApp(publishers: OutboundPublisher[] = [PUBLISHER]) {
     const { bridge, calls } = makeApp();
     const store = {
       getRun: () => undefined,
@@ -297,7 +299,7 @@ describe("Publisher-token outbound routing", () => {
       bridge, TOKEN, store,
       undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, undefined,
-      [PUBLISHER],
+      () => publishers,
     );
     return { app, calls };
   }
@@ -325,6 +327,30 @@ describe("Publisher-token outbound routing", () => {
       headers: { authorization: `Bearer ${PUBLISHER.token}` },
     });
     expect(response.status).toBe(401);
+  });
+
+  it("refuses a route the publisher was not granted", async () => {
+    const { app, calls } = publisherApp([{ ...PUBLISHER, routes: ["markdown"] }]);
+    const response = await app.request(post("/outbound/file", { path: "/home/u/a.csv" }, PUBLISHER.token));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: expect.stringContaining("outbound_route_forbidden") });
+    expect(calls.file).toEqual([]);
+  });
+
+  it("reads the publisher list per request so rotation needs no restart", async () => {
+    let live: OutboundPublisher[] = [];
+    const { bridge, calls } = makeApp();
+    const store = { getRun: () => undefined, listDeliveries: () => [] } as unknown as SqliteEventStore;
+    const app = createBridgeApp(
+      bridge, TOKEN, store,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined,
+      () => live,
+    );
+    expect((await app.request(post("/outbound/markdown", { markdown: "hi" }, PUBLISHER.token))).status).toBe(401);
+    live = [PUBLISHER];
+    expect((await app.request(post("/outbound/markdown", { markdown: "hi" }, PUBLISHER.token))).status).toBe(200);
+    expect(calls.markdown).toEqual([["oc_bound", "hi", "om_bound"]]);
   });
 
   it("rejects an unknown token on outbound routes", async () => {
