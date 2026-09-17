@@ -267,6 +267,43 @@ describe("FeishuBridge interrupted stream recovery", () => {
     expect(live.reconcileDelivery).toHaveBeenCalledTimes(2);
   });
 
+  it("stops retrying a delivery after the reconcile attempt cap and logs an abandonment event", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-recovery-"));
+    const rows = [{
+      sessionId: "session-stuck", turnId: "turn-stuck", runId: "run-stuck",
+      acceptedSequence: 1, conversationId: "chat|", replyToMessageId: "source",
+      surfaceMessageId: "message-stuck", surfaceCardId: "card-stuck", showThinking: false,
+    }];
+    const log = vi.fn();
+    const bridge = new FeishuBridge({config: defaultConfig(), dataDir, onLog: log,
+      sessionIngress: {listDeliveries: async () => rows} as unknown as ChannelSessionIngress,
+    });
+    const internal = bridge as unknown as {
+      channel: unknown;
+      ensureSessionWatcher(id: string): unknown;
+      reconcileDeliveries(): Promise<void>;
+      deliveryRetries: Map<string, { attempts: number; after: number }>;
+    };
+    internal.channel = channel;
+    const stuck = {reconcileDelivery: vi.fn(async () => {throw new Error("300307");}), start: vi.fn()};
+    vi.spyOn(internal, "ensureSessionWatcher").mockReturnValue(stuck);
+
+    // Fast-forward past every backoff window instead of waiting for real time to pass.
+    for (let i = 0; i < 20; i++) {
+      await internal.reconcileDeliveries();
+      const retry = internal.deliveryRetries.get("turn-stuck");
+      if (retry) retry.after = 0;
+    }
+
+    expect(stuck.reconcileDelivery.mock.calls.length).toBe(20);
+    expect(internal.deliveryRetries.has("turn-stuck")).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("feishu_delivery_reconcile_abandoned"));
+
+    // One more tick must not retry the abandoned delivery again.
+    await internal.reconcileDeliveries();
+    expect(stuck.reconcileDelivery.mock.calls.length).toBe(20);
+  });
+
   it("uses a monotonic 32-bit sequence for CardKit recovery writes", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-recovery-"));
     const bridge = new FeishuBridge({

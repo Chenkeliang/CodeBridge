@@ -74,12 +74,12 @@ backends:
   claude:
     type: claude-code
     acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.64.2"]
+    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"]
     claudePermissionMode: bypassPermissions
   codex:
     type: codex
     acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.10.0"]
+    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.12.0"]
 ```
 
 会话绑定持久化：`~/.codebridge/chat-bindings.json`（按 `chatId|topicId`）。

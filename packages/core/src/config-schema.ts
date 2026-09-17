@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+/** Single source of truth for the npm ACP adapter package versions used as spawn defaults. */
+export const ACP_CLAUDE_AGENT_ACP_VERSION = "0.78.0";
+export const ACP_CODEX_ACP_VERSION = "1.12.0";
+
 export const PolicyScenarioSchema = z.object({
   name: z.string(),
   chats: z.array(z.string()),
@@ -59,13 +63,13 @@ export const DEFAULT_BACKEND_PROFILES: Record<
   claude: {
     type: "claude-code",
     acpCommand: "npx",
-    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.64.2"],
+    acpArgs: ["-y", `@agentclientprotocol/claude-agent-acp@${ACP_CLAUDE_AGENT_ACP_VERSION}`],
     claudePermissionMode: "bypassPermissions",
   },
   codex: {
     type: "codex",
     acpCommand: "npx",
-    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.10.0"],
+    acpArgs: ["-y", `@agentclientprotocol/codex-acp@${ACP_CODEX_ACP_VERSION}`],
   },
   pi: { type: "pi-sdk" },
   opencode: {
