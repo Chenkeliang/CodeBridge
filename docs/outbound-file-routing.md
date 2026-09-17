@@ -6,6 +6,16 @@ Bridge 校验 Run 正在运行，并按 Run ID + Turn ID 读取持久化 Channel
 
 缺少 Run、无来源、多来源或内部 conv_ ID 都在调用飞书前失败。Web 独立任务没有聊天来源时必须从目标聊天重新发起，不能搜索最近聊天作为回退。API 返回成功仅代表通道发送调用完成；失败时 fcb 非零退出，不得声称文件已送达。上传或发送结果不明确时先核对，禁止盲目重复发送。
 
+## 本地定时任务（publisher 凭据）
+
+launchd 之类的本地定时任务不是 Run，拿不到 FCB_RUN_ID，因此不能走上面的来源解析。它们改用 `<dataDir>/publisher-tokens.json` 里登记的独立凭据：每条记录写死 label、token、chatId 和可选 topicId，Bridge 启动时读取并校验（文件必须 0600，token 至少 24 位且不得等于 runner token）。
+
+该凭据只对 `/outbound/*` 有效，其余 API 一律 401；收件人取自配置而非请求体，请求里手填的 chatId 同样被覆盖。凭据不进入 runner 配置，也不随 FCB_TOKEN 注入任何 Agent 子进程，因此 Agent 不会自动持有它，runner token 本身也仍然必须带 runId。
+
+边界要说清楚：Agent 子进程与 Bridge 是同一个系统用户，能读文件的 Agent 可以读到这份凭据并自行调用出站 API，把消息发进该 publisher 绑定的聊天。0600 只挡别的系统用户，挡不住同用户进程；本仓库没有沙箱。需要注意的是，任意 `$HOME` 文件经 `/outbound/file` 外发这一能力本来就存在（路径校验只限制在主目录内，见 `feishu-outbound-file.ts`），publisher 增加的只是"多一个固定收件人"，不是新增的文件读取能力。要真正收敛，得给 Agent 子进程做文件系统隔离，或把 `/outbound/file` 的路径白名单收窄到每个 Run 的工作目录。
+
+新增或更换凭据后需重启 Bridge：该文件只在启动时读取。文件损坏时 Bridge 记录错误并按"没有发布者"继续启动，不因此中断飞书通道。
+
 ## Surface Matrix
 
 | Surface | entry/read/write | event consumption | error/recovery | terminal feedback | 验证状态 |
