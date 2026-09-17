@@ -227,7 +227,6 @@ export function renderFeishuRunStatus(
     `任务状态：${title}`,
     `运行时长：${formatElapsed(elapsed)}`,
     `最近任务事件：${formatElapsed(sinceActivity)}前`,
-    `当前阶段：${phase}`,
   ];
   // 只在实际生效模型与用户请求不一致时提示，避免正常运行多一行噪音
   if (status.modelMismatch) {
@@ -241,5 +240,6 @@ export function renderFeishuRunStatus(
         : `请求的模型 ${requested} 未生效，本次运行使用了该 Agent 的默认模型。`,
     );
   }
+  lines.push(`当前阶段：${phase}`);
   return lines.join("\n");
 }
