@@ -496,6 +496,7 @@ export class RunnerClient {
         await cancelRemote();
         return;
       }
+      let yieldedAt = performance.now();
       while (true) {
         if (signal?.aborted) {
           await reader.cancel().catch(() => {});
@@ -521,6 +522,14 @@ export class RunnerClient {
           const event = JSON.parse(json) as AgentEvent;
           if (event.type === "done") sawDone = true;
           yield event;
+          // A buffered SSE backlog resolves read()/yield through microtasks only.
+          // Bound that work so lease heartbeats and cancellation timers can run,
+          // including when the consumer performs synchronous persistence work.
+          if (performance.now() - yieldedAt >= 16) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            yieldedAt = performance.now();
+          }
+          if (signal?.aborted) break;
         }
       }
       if (!sawDone && !signal?.aborted) {
@@ -529,9 +538,19 @@ export class RunnerClient {
         );
       }
     } finally {
-      if (signal?.aborted) await cancelRemote();
-      signal?.removeEventListener("abort", onAbort);
-      reader?.releaseLock();
+      try {
+        // Consumer errors (for example lost persistence ownership) invoke return()
+        // without aborting the signal. The remote execution still belongs to this
+        // stream and must stop before another attempt can reuse the session.
+        if (signal?.aborted || (reader && !sawDone)) {
+          const cancellation = cancelRemote();
+          await reader?.cancel().catch(() => {});
+          await cancellation;
+        }
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
+        reader?.releaseLock();
+      }
     }
   }
 

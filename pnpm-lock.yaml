@@ -433,6 +433,9 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@codebridge/runner-client':
+        specifier: workspace:*
+        version: link:../runner-client
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

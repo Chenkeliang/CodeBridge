@@ -115,6 +115,7 @@ interface ActiveRun {
 
 interface RunLifecycle {
   started: boolean;
+  completed: boolean;
   cancelRequested: boolean;
   finished: Promise<void>;
   finish: () => void;
@@ -364,6 +365,7 @@ export class RunnerHost {
 
   async cancelAndWait(runId: string): Promise<boolean> {
     const lifecycle = this.runLifecycles.get(runId) ?? this.createRunLifecycle(runId);
+    if (lifecycle.completed) return true;
     lifecycle.cancelRequested = true;
     this.cancel(runId);
     if (!lifecycle.started) {
@@ -386,6 +388,7 @@ export class RunnerHost {
     });
     const lifecycle: RunLifecycle = {
       started: false,
+      completed: false,
       cancelRequested: false,
       finished,
       finish,
@@ -784,18 +787,27 @@ export class RunnerHost {
   }
 
   async *executeRun(request: RunRequest): AsyncGenerator<AgentEvent> {
+    const previous = this.runLifecycles.get(request.runId);
+    if (previous?.expiry) clearTimeout(previous.expiry);
     const lifecycle =
-      this.runLifecycles.get(request.runId) ?? this.createRunLifecycle(request.runId);
+      previous && !previous.completed ? previous : this.createRunLifecycle(request.runId);
     lifecycle.started = true;
     if (lifecycle.expiry) clearTimeout(lifecycle.expiry);
     try {
       if (lifecycle.cancelRequested) return;
       yield* this.executeRunInner(request, lifecycle);
     } finally {
+      lifecycle.completed = true;
       lifecycle.finish();
-      if (this.runLifecycles.get(request.runId) === lifecycle) {
-        this.runLifecycles.delete(request.runId);
-      }
+      // A consumer may reject a fatal event after this attempt already ended.
+      // Remember that completion so its late cancel cannot create a pre-start
+      // cancellation tombstone that suppresses a retry with the same Run ID.
+      lifecycle.expiry = setTimeout(() => {
+        if (this.runLifecycles.get(request.runId) === lifecycle) {
+          this.runLifecycles.delete(request.runId);
+        }
+      }, 60_000);
+      lifecycle.expiry.unref();
     }
   }
 
