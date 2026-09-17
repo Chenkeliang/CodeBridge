@@ -85,6 +85,69 @@ describe("matchConfigValue", () => {
   it("匹配不到返回 undefined", () => {
     expect(matchConfigValue(modelOption, "gpt-5")).toBeUndefined();
   });
+  it("剥离末尾方括号提示后兜底匹配（如 claude-fable-5-1[1m] → claude-fable-5-1）", () => {
+    const option = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "claude-fable-5-1",
+      options: [
+        { value: "default", name: "Default" },
+        { value: "opus[1m]", name: "Opus" },
+        { value: "claude-fable-5-1", name: "Fable" },
+        { value: "sonnet", name: "Sonnet" },
+        { value: "haiku", name: "Haiku" },
+      ],
+    } as unknown as SessionConfigOption;
+    expect(matchConfigValue(option, "claude-fable-5-1[1m]")).toBe(
+      "claude-fable-5-1",
+    );
+  });
+
+  it("反过来：wanted 无 hint、offered 带 hint 仍靠原有前缀匹配命中", () => {
+    const option = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "claude-fable-5-1[1m]",
+      options: [{ value: "claude-fable-5-1[1m]", name: "Fable" }],
+    } as unknown as SessionConfigOption;
+    expect(matchConfigValue(option, "claude-fable-5-1")).toBe(
+      "claude-fable-5-1[1m]",
+    );
+  });
+
+  it("精确匹配优先于剥离 hint 的兜底匹配", () => {
+    const option = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "opus",
+      options: [
+        { value: "opus", name: "Opus" },
+        { value: "opus[1m]", name: "Opus 1M" },
+      ],
+    } as unknown as SessionConfigOption;
+    expect(matchConfigValue(option, "opus")).toBe("opus");
+    expect(matchConfigValue(option, "opus[1m]")).toBe("opus[1m]");
+  });
+
+  it("剥离 hint 后仍不匹配不同模型族，不做模糊匹配", () => {
+    const option = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "sonnet",
+      options: [
+        { value: "claude-fable-5[1m]", name: "Fable 5" },
+        { value: "sonnet", name: "Sonnet" },
+      ],
+    } as unknown as SessionConfigOption;
+    expect(
+      matchConfigValue(option, "claude-fable-5-1[1m]"),
+    ).toBeUndefined();
+  });
+
   it("展平分组选项", () => {
     const grouped = {
       id: "model",
@@ -264,6 +327,36 @@ describe("applySessionConfigOptions", () => {
     });
     expect(result.modelMismatch).toBeUndefined();
     expect(result.effectiveModel).toBe("claude-fable-5[1m]");
+  });
+
+  it("model 仅通过剥离 hint 命中时：setConfigOption 用剥离后的值、收 warning、不设 modelMismatch", async () => {
+    const fableOption = {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "claude-fable-5-1",
+      options: [
+        { value: "default", name: "Default" },
+        { value: "opus[1m]", name: "Opus" },
+        { value: "claude-fable-5-1", name: "Fable" },
+        { value: "sonnet", name: "Sonnet" },
+        { value: "haiku", name: "Haiku" },
+      ],
+    } as unknown as SessionConfigOption;
+    const { agent, calls } = fakeAgent([fableOption]);
+    const result = await applySessionConfigOptions(agent, "s1", [fableOption], {
+      model: "claude-fable-5-1[1m]",
+    });
+    expect(calls.map((c) => c.params)).toEqual([
+      { sessionId: "s1", configId: "model", value: "claude-fable-5-1" },
+    ]);
+    expect(
+      result.warnings.some(
+        (w) => w.includes("claude-fable-5-1[1m]") && w.includes("claude-fable-5-1"),
+      ),
+    ).toBe(true);
+    expect(result.modelMismatch).toBeUndefined();
   });
 
   it("值不在可选范围收 warning", async () => {
