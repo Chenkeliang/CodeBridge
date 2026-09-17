@@ -76,6 +76,52 @@ function setupAgentSetupService(overrides: Partial<{
   };
 }
 
+describe("RunnerHost doctor auth probes", () => {
+  it("reports each configured ACP backend's auth probe, and never aborts on a failing/throwing probe", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-doctor-"));
+    tmpDirs.push(dataDir);
+    const probeAuth = vi.fn(async (agentId: string) => {
+      if (agentId === "claude") {
+        return { ok: false, advisory: true, message: "Not logged in" };
+      }
+      if (agentId === "codex") {
+        throw new Error("probe blew up");
+      }
+      return { ok: true, advisory: true, message: "ok" };
+    });
+    const service = { ...setupAgentSetupService(), probeAuth };
+    const config = {
+      ...defaultConfig(),
+      backends: {
+        // 无效命令让 registry.doctor() 的 ACP initialize 探测快速失败，而非真去 spawn npx
+        claude: { type: "claude-code" as const, acpCommand: "definitely-not-a-real-binary-xyz" },
+        codex: { type: "codex" as const, acpCommand: "definitely-not-a-real-binary-xyz" },
+        cursor: { type: "cursor-cli" as const, acpCommand: "definitely-not-a-real-binary-xyz" },
+        pi: { type: "pi-sdk" as const },
+      },
+    };
+    const host = new RunnerHost({
+      token: "token",
+      config,
+      dataDir,
+      agentSetupService: service as never,
+    });
+
+    const result = await host.doctor();
+
+    expect(result.authProbes).toEqual({
+      claude: { ok: false, advisory: true, message: "Not logged in" },
+      codex: { ok: false, advisory: true, message: "probe blew up" },
+      cursor: { ok: true, advisory: true, message: "ok" },
+      // pi-sdk 不在 AGENT_ID_BY_BACKEND_TYPE 映射内，doctor 不为它探测认证状态
+    });
+    expect(probeAuth).toHaveBeenCalledWith("claude");
+    expect(probeAuth).toHaveBeenCalledWith("codex");
+    expect(probeAuth).toHaveBeenCalledWith("cursor");
+    expect(probeAuth).not.toHaveBeenCalledWith("pi");
+  });
+});
+
 describe("RunnerHost Agent setup", () => {
   it("lists setup states and relays detect/install results", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-setup-"));

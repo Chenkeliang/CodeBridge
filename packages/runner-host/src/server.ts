@@ -15,6 +15,7 @@ import {
   type SkillCatalogSnapshot,
   type SkillMutationPlan,
   type SkillMutationResult,
+  type AgentAuthProbe,
   type AgentSetupInstallResult,
   type AgentSetupRecord,
   deleteAcpSession,
@@ -52,6 +53,7 @@ import type {
   AcpPermissionPolicy,
   AppConfig,
   BackendConfigOption,
+  BackendProfile,
   LocalMediaPath,
   RunContext,
   RunRequest,
@@ -66,6 +68,14 @@ import { writeFcbScript } from "./fcb-script.js";
 import { inspectForeignCodexSessionOwners } from "./codex-session-ownership.js";
 import { SessionLeaseStore, type SessionLease } from "./session-lease.js";
 import { createFlowSaveMcpServerConfig } from "./flow-save-mcp-server.js";
+
+/** doctor 的认证探测：BackendProfile.type → AgentSetupService 的 agentId 命名空间 */
+const AGENT_ID_BY_BACKEND_TYPE: Partial<Record<BackendProfile["type"], string>> = {
+  "claude-code": "claude",
+  codex: "codex",
+  "cursor-cli": "cursor",
+  "generic-spawn": "opencode",
+};
 
 export interface RunnerHostOptions {
   token: string;
@@ -293,11 +303,37 @@ export class RunnerHost {
 
   async doctor() {
     const backend = await this.registry.doctor(resolveDoctorCwd(this.options.config));
+    const authProbes = await this.probeConfiguredBackendAuth();
     return {
       version: VERSION,
       backends: this.registry.ids(),
+      authProbes,
       ...backend,
     };
+  }
+
+  /**
+   * 每个已配置的 ACP 后端各探一次登录状态，纯展示用：探测失败/未知也照样返回，绝不让
+   * doctor 整体失败，调用方也绝不能拿这个当拦截运行的硬门槛（见 AgentAuthProbe 注释）。
+   */
+  private async probeConfiguredBackendAuth(): Promise<
+    Record<string, AgentAuthProbe>
+  > {
+    const results: Record<string, AgentAuthProbe> = {};
+    for (const [backendId, profile] of Object.entries(this.options.config.backends)) {
+      const agentId = AGENT_ID_BY_BACKEND_TYPE[profile.type];
+      if (!agentId) continue;
+      try {
+        results[backendId] = await this.agentSetup.probeAuth(agentId);
+      } catch (err) {
+        results[backendId] = {
+          ok: false,
+          advisory: true,
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+    return results;
   }
 
   async listAgentSetup(): Promise<AgentSetupRecord[]> {

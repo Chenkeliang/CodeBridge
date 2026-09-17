@@ -36,6 +36,7 @@ import {
   applySessionConfigOptions,
   resolveDesiredConfig,
 } from "./acp-config-options.js";
+import { friendlyAuthErrorMessage } from "../auth-error-hints.js";
 import {
   resourcesAlive,
   teardownResources,
@@ -682,26 +683,37 @@ export async function* runAcpSession(
           ctx.acpConfig,
         );
         r.configOptions = [...result.configOptions];
-        return result.warnings.map((message) => ({
+        const events: AgentEvent[] = result.warnings.map((message) => ({
           type: "error" as const,
           message,
           fatal: false,
         }));
+        if (result.modelMismatch) {
+          events.push({
+            type: "model_resolved",
+            requested: result.modelMismatch.requested,
+            effective: result.modelMismatch.effective,
+          });
+        }
+        return events;
       },
     })) {
       if (event.type === "error" && event.fatal) sawFatal = true;
-      yield event;
+      // 认证失败（OAuth 过期/未登录）常年只表现为一条不可操作的原始报错；这里就地改写成
+      // 「哪个后端 + 该在宿主机跑什么命令」，detail 保留原文不吞。命中的后端才有具体命令。
+      yield event.type === "error"
+        ? { ...event, message: friendlyAuthErrorMessage(ctx.backendConfig.type, event.message) }
+        : event;
     }
     healthy = !sawFatal && !options.isAborted() && resourcesAlive(r);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const detail = resources?.readStderr().trim() ?? "";
+    const combined =
+      detail && !message.includes(detail) ? `${message}\n\n${detail}` : message;
     yield {
       type: "error",
-      message:
-        detail && !message.includes(detail)
-          ? `${message}\n\n${detail}`
-          : message,
+      message: friendlyAuthErrorMessage(ctx.backendConfig.type, combined),
       fatal: true,
     };
   } finally {
