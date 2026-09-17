@@ -56,9 +56,6 @@ importers:
       '@codebridge/mcp-runtime':
         specifier: workspace:*
         version: link:../../packages/mcp-runtime
-      '@codebridge/memory-plugin':
-        specifier: workspace:*
-        version: link:../../packages/memory-plugin
       '@codebridge/policy':
         specifier: workspace:*
         version: link:../../packages/policy
@@ -323,16 +320,6 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.0)(jsdom@30.0.1)(lightningcss@1.33.0)
 
-  packages/memory-plugin:
-    dependencies:
-      '@codebridge/core':
-        specifier: workspace:*
-        version: link:../core
-    devDependencies:
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-
   packages/policy:
     dependencies:
       '@codebridge/work-items':
@@ -433,12 +420,12 @@ importers:
       '@codebridge/core':
         specifier: workspace:*
         version: link:../core
-      '@modelcontextprotocol/sdk':
-        specifier: 1.30.0
-        version: 1.30.0(zod@3.25.76)
       '@hono/node-server':
         specifier: ^1.13.7
         version: 1.19.14(hono@4.12.27)
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.0
+        version: 1.30.0(zod@3.25.76)
       hono:
         specifier: ^4.6.14
         version: 4.12.27
