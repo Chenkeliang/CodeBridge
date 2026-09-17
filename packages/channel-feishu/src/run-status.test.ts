@@ -157,6 +157,24 @@ describe("Feishu run status", () => {
     );
   });
 
+  it("says which model actually ran only when the adapter reported one", () => {
+    const status = createFeishuRunStatus(1_000);
+
+    expect(
+      recordFeishuRunActivity(
+        status,
+        { type: "model_resolved", requested: "claude-fable-5-1[1m]" },
+        2_000,
+      ),
+    ).toBe(true);
+
+    const lines = renderFeishuRunStatus(status, 3_000).split("\n");
+    expect(lines).toHaveLength(5);
+    expect(lines[4]).toBe(
+      "请求的模型 claude-fable-5-1[1m] 未生效，本次运行使用了该 Agent 的默认模型。",
+    );
+  });
+
   it("keeps the first terminal state and rejects later activity", () => {
     const status = createFeishuRunStatus(1_000);
 

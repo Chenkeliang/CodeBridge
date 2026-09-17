@@ -235,6 +235,16 @@ describe("applySessionConfigOptions", () => {
     });
   });
 
+  it("适配器完全不提供 model 选项时，modelMismatch 不带 effective（不编造模型名）", async () => {
+    const { agent } = fakeAgent([]);
+    const result = await applySessionConfigOptions(agent, "s1", [], {
+      model: "claude-fable-5-1[1m]",
+    });
+    expect(result.modelMismatch).toEqual({ requested: "claude-fable-5-1[1m]" });
+    expect(result.modelMismatch?.effective).toBeUndefined();
+    expect(result.effectiveModel).toBeUndefined();
+  });
+
   it("model 不在可选范围且 strictModel=true 时直接抛错，不静默继续", async () => {
     const { agent, calls } = fakeAgent();
     await expect(

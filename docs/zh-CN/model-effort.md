@@ -26,6 +26,21 @@
 
 优先级：**会话 slash 覆盖** > **config.yaml 默认** > **ACP 适配器默认**。
 
+### 模型没生效时会怎样
+
+适配器不接受所选模型时，默认行为是**照常运行在适配器的默认模型上**，并在任务卡片里多加一行说明实际用的是哪个。适配器没报告实际模型时，那行会写明请求的模型未生效、本次用了该 Agent 的默认模型。正常运行不会多出这一行。
+
+不接受这种替换的，给该后端加 `strictModel: true`，此时模型不匹配会直接让本轮失败而不是替换：
+
+```yaml
+backends:
+  claude:
+    type: claude-code
+    strictModel: true
+```
+
+默认为 `false`，也就是保持替换并提示的行为。
+
 ### ACP mode / 权限（飞书必看）
 
 `/permission`（别名 `/perm`）直接读取各 adapter 的 `mode`：Cursor 通常提供 `agent/plan/ask`，Claude 提供 permission mode，Codex 提供 `read-only/agent/agent-full-access`。Claude 仍兼容配置默认值：
