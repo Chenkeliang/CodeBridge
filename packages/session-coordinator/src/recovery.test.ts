@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { vi, describe, expect, it } from "vitest";
 import { SqliteEventStore, type ReplaySafety } from "@codebridge/work-items";
 import { SessionCoordinator } from "./coordinator.js";
 import { SessionLeaseService } from "./lease.js";
@@ -95,6 +95,111 @@ describe("SessionRecoveryService", () => {
 
     expect(recovery.scanExpired()).toEqual([]);
     expect(store.getRun(run.id)?.status).toBe("waiting");
+    store.close();
+  });
+
+  it("reclaims an expired Run this process is still executing instead of interrupting it", () => {
+    const { store, run } = setupRunningRun();
+    const coordinator = new SessionCoordinator(store, {
+      maxQueuedTurns: 100,
+      now: () => expiredAt,
+    });
+    const recovery = new SessionRecoveryService(
+      store,
+      coordinator,
+      new SessionLeaseService(store, { now: () => expiredAt }),
+      () => expiredAt,
+      { owner: "bridge:123", isExecuting: (id) => id === run.id },
+    );
+
+    expect(recovery.scanExpired()).toEqual([
+      { runId: run.id, action: "reclaimed_own" },
+    ]);
+    const reclaimed = store.getRun(run.id)!;
+    expect(reclaimed.status).toBe("running");
+    expect(reclaimed.leaseOwner).toBe("bridge:123");
+    expect(new Date(reclaimed.leaseExpiresAt!).getTime()).toBeGreaterThan(
+      expiredAt.getTime(),
+    );
+    store.close();
+  });
+
+  it("does not reclaim when the provider session was taken over during the stall", () => {
+    const { store, coordinator, run } = setupRunningRun();
+    const leases = new SessionLeaseService(store, { now: () => expiredAt });
+    vi.spyOn(leases, "listExpired").mockReturnValue([
+      { ...store.getRun(run.id)!, agentId: "claude", providerSessionId: "provider-1" },
+    ]);
+    vi.spyOn(store, "renewProviderSession").mockReturnValue(false);
+    const recovery = new SessionRecoveryService(
+      store,
+      coordinator,
+      leases,
+      () => expiredAt,
+      { owner: "bridge:123", isExecuting: () => true },
+    );
+
+    expect(recovery.scanExpired()).toEqual([
+      { runId: run.id, action: "interrupted" },
+    ]);
+    expect(store.getRun(run.id)?.status).toBe("interrupted");
+    store.close();
+  });
+
+  it("interrupts an expired Run owned by a different process", () => {
+    const { store, coordinator, run } = setupRunningRun();
+    const recovery = new SessionRecoveryService(
+      store,
+      coordinator,
+      new SessionLeaseService(store, { now: () => expiredAt }),
+      () => expiredAt,
+      { owner: "bridge:999", isExecuting: () => true },
+    );
+
+    expect(recovery.scanExpired()).toEqual([
+      { runId: run.id, action: "interrupted" },
+    ]);
+    expect(store.getRun(run.id)?.status).toBe("interrupted");
+    store.close();
+  });
+
+  it("interrupts own owner's expired Run when it is not actually executing", () => {
+    const { store, coordinator, run } = setupRunningRun();
+    const recovery = new SessionRecoveryService(
+      store,
+      coordinator,
+      new SessionLeaseService(store, { now: () => expiredAt }),
+      () => expiredAt,
+      { owner: "bridge:123", isExecuting: () => false },
+    );
+
+    expect(recovery.scanExpired()).toEqual([
+      { runId: run.id, action: "interrupted" },
+    ]);
+    expect(store.getRun(run.id)?.status).toBe("interrupted");
+    store.close();
+  });
+
+  it("still repairs from terminal evidence even when ownLiveRun is configured", () => {
+    const { store, coordinator, run, submitted } = setupRunningRun();
+    store.appendEvent({
+      workItemId: submitted.workItemId,
+      runId: run.id,
+      type: "RUN_SUCCEEDED",
+      actor: "system",
+    });
+    const recovery = new SessionRecoveryService(
+      store,
+      coordinator,
+      new SessionLeaseService(store, { now: () => expiredAt }),
+      () => expiredAt,
+      { owner: "bridge:123", isExecuting: () => true },
+    );
+
+    expect(recovery.scanExpired()).toEqual([
+      { runId: run.id, action: "repaired_succeeded" },
+    ]);
+    expect(store.getRun(run.id)?.status).toBe("succeeded");
     store.close();
   });
 

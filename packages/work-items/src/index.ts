@@ -1790,6 +1790,16 @@ export class SqliteEventStore {
     );
   }
 
+  reclaimRunLease(
+    runId: string,
+    owner: string,
+    expiresAt: string,
+  ): Run | null {
+    return this.withSessionTransaction((tx) =>
+      tx.reclaimRunLease(runId, owner, expiresAt)
+    );
+  }
+
   updateLeasedRunReplaySafety(
     runId: string,
     owner: string,

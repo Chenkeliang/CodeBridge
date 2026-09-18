@@ -277,6 +277,11 @@ export interface SessionRuntimeTransaction {
     now: string,
     expiresAt: string,
   ): Run | null;
+  reclaimRunLease(
+    runId: string,
+    owner: string,
+    expiresAt: string,
+  ): Run | null;
   listExpiredRunningRuns(now: string, limit: number): Run[];
   listCancellationDeadlineRuns(now: string, limit: number): Run[];
   updateRuntime(
@@ -915,6 +920,28 @@ export function createSqliteSessionRuntimeTransaction(
           runId,
           owner,
           now,
+        );
+      return Number(result.changes) === 1
+        ? transaction.getRun(runId) ?? null
+        : null;
+    },
+
+    reclaimRunLease(runId, owner, expiresAt) {
+      assertActive();
+      // 与 renewRunLease 相同，但不要求 lease_expires_at >= now：允许 Run 的
+      // 原持有者在自己仍在执行（isExecuting）时，把已过期但尚未被恢复扫描
+      // 接管的租约续回来，而不是被自己误判中断。
+      const result = database
+        .prepare(
+          `UPDATE runs
+           SET lease_expires_at = ?, updated_at = ?
+           WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+        )
+        .run(
+          expiresAt,
+          new Date().toISOString(),
+          runId,
+          owner,
         );
       return Number(result.changes) === 1
         ? transaction.getRun(runId) ?? null

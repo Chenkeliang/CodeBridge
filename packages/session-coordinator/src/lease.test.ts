@@ -70,6 +70,34 @@ describe("Session leases", () => {
     store.close();
   });
 
+  it("reclaims an expired lease for the same owner, refuses others and non-running Runs", () => {
+    const clock = {
+      now: new Date("2026-08-14T00:00:00.000Z"),
+    };
+    const { store, runId } = setupQueuedRun();
+    const leases = new SessionLeaseService(
+      store,
+      { now: () => clock.now },
+    );
+    leases.claim(runId, "bridge:123");
+    clock.now = new Date("2026-08-14T00:01:05.000Z");
+
+    expect(leases.reclaimOwn(runId, "bridge:456")).toBeNull();
+    expect(leases.reclaimOwn(runId, "bridge:123")).toMatchObject({
+      status: "running",
+      leaseOwner: "bridge:123",
+      leaseExpiresAt: "2026-08-14T00:02:05.000Z",
+    });
+
+    store.updateRunControl(runId, {
+      status: "waiting",
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+    expect(leases.reclaimOwn(runId, "bridge:123")).toBeNull();
+    store.close();
+  });
+
   it("finds expired running leases but never waiting Runs", () => {
     const clock = {
       now: new Date("2026-08-14T00:00:00.000Z"),
