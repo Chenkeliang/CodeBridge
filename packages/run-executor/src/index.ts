@@ -155,6 +155,12 @@ export class RunExecutor {
     });
   }
 
+  /** 本进程是否仍在执行该 Run（供恢复扫描判断能否自我续租，而不是自杀）。 */
+  isExecuting(runId: string): boolean {
+    const controller = this.activeControllers.get(runId);
+    return controller !== undefined && !controller.signal.aborted;
+  }
+
   cancelRun(runId: string): Run {
     const run = this.store.getRun(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);

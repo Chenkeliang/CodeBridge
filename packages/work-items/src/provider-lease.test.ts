@@ -152,6 +152,58 @@ describe("provider session lease", () => {
     store.close();
   });
 
+  it("renew still succeeds for the original owner after the lease has expired, as long as no other run has claimed it", () => {
+    const store = new SqliteEventStore(":memory:");
+    store.claimProviderSession({
+      agentId: "agent_a",
+      providerSessionId: "prov_1",
+      runId: "run_1",
+      now: T0,
+      expiresAt: T1,
+    });
+    // T1 已过期，但没有其它 Run 抢占，owner 仍可把自己的租约续回来。
+    expect(
+      store.renewProviderSession({
+        agentId: "agent_a",
+        providerSessionId: "prov_1",
+        runId: "run_1",
+        expiresAt: "2026-01-01T02:00:00.000Z",
+      }),
+    ).toBe(true);
+    store.close();
+  });
+
+  it("refuses to renew once another run has claimed the expired provider session", () => {
+    const store = new SqliteEventStore(":memory:");
+    store.claimProviderSession({
+      agentId: "agent_a",
+      providerSessionId: "prov_1",
+      runId: "run_1",
+      now: T0,
+      expiresAt: T1,
+    });
+    // T1 已过期，另一个 Run 抢占成功。
+    expect(
+      store.claimProviderSession({
+        agentId: "agent_a",
+        providerSessionId: "prov_1",
+        runId: "run_2",
+        now: "2026-01-01T00:06:00.000Z",
+        expiresAt: "2026-01-01T01:00:00.000Z",
+      }),
+    ).toBe(true);
+    // 原 owner 不能再把租约续回来，因为已经被别的 Run 拿走。
+    expect(
+      store.renewProviderSession({
+        agentId: "agent_a",
+        providerSessionId: "prov_1",
+        runId: "run_1",
+        expiresAt: "2026-01-01T02:00:00.000Z",
+      }),
+    ).toBe(false);
+    store.close();
+  });
+
   it("persists and reads the session_runtime provider_session_id", () => {
     const store = new SqliteEventStore(":memory:");
     store.withSessionTransaction((tx) => {

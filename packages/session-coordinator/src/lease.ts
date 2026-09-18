@@ -32,6 +32,16 @@ export class SessionLeaseService {
     );
   }
 
+  /** 同一 owner 在仍执行该 Run 时，把已过期的租约重新续回来。 */
+  reclaimOwn(runId: string, owner: string): Run | null {
+    const now = this.now();
+    return this.store.reclaimRunLease(
+      runId,
+      owner,
+      new Date(now.getTime() + LEASE_MS).toISOString(),
+    );
+  }
+
   listExpired(limit = 100): Run[] {
     return this.store.listExpiredRunningRuns(
       this.now().toISOString(),
