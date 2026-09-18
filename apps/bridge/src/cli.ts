@@ -77,6 +77,7 @@ import {
 } from "./flow-save-tool-translator.js";
 
 import { DeploymentService, mountDeploymentRoutes } from "./deployment.js";
+import { startEventLoopLagMonitor } from "./event-loop-lag.js";
 
 const program = new Command();
 
@@ -222,13 +223,24 @@ program
         config.orchestration?.session?.maxQueuedTurns ?? 100,
     });
     const sessionLeaseService = new SessionLeaseService(workItemStore);
+    // hostname:pid 保证重启后的进程永远不会匹配到上一个进程留下的 lease_owner，
+    // 这样 startup 阶段的 scanExpired（此时 runExecutor 还没执行任何 Run）
+    // 仍然会把上个进程遗留的 stale Run 正常中断，而不会被误判为「自己还在执行」。
+    const executorOwner = `${hostname()}:${process.pid}`;
+    // runExecutor 在下面才构造，这里先用闭包延迟引用，供恢复扫描判断
+    // 「这个过期租约是不是我自己仍在执行的 Run」。
+    let runExecutor: RunExecutor;
     const sessionRecovery = new SessionRecoveryService(
       workItemStore,
       sessionCoordinator,
       sessionLeaseService,
+      () => new Date(),
+      {
+        owner: executorOwner,
+        isExecuting: (runId) => runExecutor.isExecuting(runId),
+      },
     );
-    const executorOwner = `${hostname()}:${process.pid}`;
-    const runExecutor = new RunExecutor(workItemStore, runnerClient, {
+    runExecutor = new RunExecutor(workItemStore, runnerClient, {
       shouldPauseDispatch: () => deployment.isMaintenance(),
       approvals: approvalService,
       policy: policyEngine,
@@ -329,6 +341,7 @@ program
       executor: runExecutor,
     });
     await flowBatchService.recover();
+    const eventLoopLagMonitor = startEventLoopLagMonitor();
     sessionRecovery.scanExpired();
     sessionRecovery.scanCancellationDeadlines();
     const reclaimQueued = (): void => {
@@ -535,6 +548,7 @@ program
       capabilityRegistry.close();
       clearInterval(recoveryInterval);
       clearInterval(cancellationInterval);
+      eventLoopLagMonitor.stop();
       stopAgentHealthChecks();
       registry.close();
       projectDiscovery.close();
