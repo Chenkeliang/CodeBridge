@@ -478,6 +478,9 @@ describe("live ACP capabilities", () => {
 });
 
 describe("/resume <N> after /resume all", () => {
+  // 真实存在的目录：/resume 会校验工作目录可访问
+  const realCwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-real-cwd-"));
+
   it("reports ACP list failures instead of claiming there are no sessions", async () => {
     const ctx = makeCtx({ scopedSessions: [], allSessions: [] });
     ctx.listSessions = async () => {
@@ -536,8 +539,8 @@ describe("/resume <N> after /resume all", () => {
 
   it("without a prior list, falls back to the scoped query", async () => {
     const scoped = [
-      makeSession("scoped-1", "/Users/keliang/Projects", "first"),
-      makeSession("scoped-2", "/Users/keliang/Projects", "second"),
+      makeSession("scoped-1", realCwd, "first"),
+      makeSession("scoped-2", realCwd, "second"),
     ];
     const resumed: string[] = [];
     const ctx = makeCtx({ scopedSessions: scoped, allSessions: [], resumed });
@@ -549,8 +552,8 @@ describe("/resume <N> after /resume all", () => {
 
   it("plain /resume caches the scoped list for a later /resume <N>", async () => {
     const scoped = [
-      makeSession("scoped-1", "/Users/keliang/Projects", "first"),
-      makeSession("scoped-2", "/Users/keliang/Projects", "second"),
+      makeSession("scoped-1", realCwd, "first"),
+      makeSession("scoped-2", realCwd, "second"),
     ];
     const resumed: string[] = [];
     const ctx = makeCtx({ scopedSessions: scoped, allSessions: [], resumed });
@@ -562,7 +565,7 @@ describe("/resume <N> after /resume all", () => {
   });
 
   it("invalid index reports against the cached list's length", async () => {
-    const all = [makeSession("go-1", "/Users/keliang/go", "only one")];
+    const all = [makeSession("go-1", realCwd, "only one")];
     const ctx = makeCtx({ scopedSessions: [], allSessions: all });
 
     await handleSlashCommand({ ...ctx, text: "/resume all" });
@@ -571,7 +574,7 @@ describe("/resume <N> after /resume all", () => {
   });
 
   it("reports provider_session_busy from /resume", async () => {
-    const scoped = [makeSession("busy-1", "/Users/keliang/Projects", "busy")];
+    const scoped = [makeSession("busy-1", realCwd, "busy")];
     const ctx = makeCtx({
       scopedSessions: scoped,
       allSessions: [],
@@ -583,7 +586,7 @@ describe("/resume <N> after /resume all", () => {
   });
 
   it("bumps the slot generation once when the slot is bound to another session", async () => {
-    const scoped = [makeSession("conflict-1", "/Users/keliang/Projects", "conflict")];
+    const scoped = [makeSession("conflict-1", realCwd, "conflict")];
     let calls = 0;
     const ctx = makeCtx({ scopedSessions: scoped, allSessions: [] });
     ctx.resumeProviderSession = async (providerSessionId) => {
