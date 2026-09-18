@@ -334,23 +334,6 @@ export class SessionCoordinator {
           409,
         );
       }
-      // Cancel only work already queued when this stop request is accepted.
-      // A repeated request must not cancel messages submitted afterward.
-      if (!run.cancelRequestedAt) {
-        let queued = tx.nextQueuedTurn(input.sessionId);
-        while (queued) {
-          tx.cancelTurn(queued.turnId, queued.version);
-          tx.appendEvent({
-            workItemId: run.workItemId,
-            sessionId: input.sessionId,
-            type: "TURN_CANCELLED",
-            actor: "user",
-            target: queued.turnId,
-            payload: { queue_position: queued.queuePosition },
-          });
-          queued = tx.nextQueuedTurn(input.sessionId);
-        }
-      }
       if (run.status === "queued" || run.status === "waiting") {
         const finished = this.finishRunInTransaction(tx, {
           sessionId: input.sessionId,

@@ -43,33 +43,34 @@ function submit(
 }
 
 describe("SessionCoordinator submit", () => {
-  it("keeps post-stop input until the running task has acknowledged cancellation", () => {
+  it("keeps queued turns after stop and dispatches them once cancellation is acknowledged", () => {
     const { store, coordinator } = setup();
     const first = submit(coordinator, "running", "running");
     store.withSessionTransaction(tx => tx.updateRun(first.run!.id, { status: "running" }));
     const old = submit(coordinator, "old", "old");
     coordinator.requestRunCancellation({ sessionId: "sess_1", runId: first.run!.id,
       expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version, idempotencyKey: "stop" });
+    expect(store.withSessionTransaction(tx => tx.getTurn(old.turn.turnId))?.status).toBe("queued");
     const fresh = submit(coordinator, "fresh", "fresh");
     expect(fresh.acceptance).toBe("queued");
     coordinator.requestRunCancellation({ sessionId: "sess_1", runId: first.run!.id,
       expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version, idempotencyKey: "stop-again" });
     const finished = coordinator.finishRun({ sessionId: "sess_1", runId: first.run!.id, status: "cancelled" });
-    expect(finished.dispatched?.turn.turnId).toBe(fresh.turn.turnId);
-    expect(store.withSessionTransaction(tx => tx.getTurn(old.turn.turnId))?.status).toBe("cancelled");
+    expect(finished.dispatched?.turn.turnId).toBe(old.turn.turnId);
     expect(finished.runtime.queueState).toBe("ready");
     store.close();
   });
-  it("user stop cancels old queued turns and accepts a fresh message without resume", () => {
+  it("user stop cancels only the running run and dispatches the queued turn automatically without resume", () => {
     const { store, coordinator } = setup();
     const first = submit(coordinator, "first", "first");
     const old = submit(coordinator, "old", "old");
     const stopped = coordinator.requestRunCancellation({ sessionId: "sess_1", runId: first.run!.id,
       expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version, idempotencyKey: "stop" });
+    expect(stopped.disposition).toBe("cancelled");
     expect(stopped.runtime.queueState).toBe("ready");
-    expect(store.withSessionTransaction(tx => tx.getTurn(old.turn.turnId))?.status).toBe("cancelled");
+    expect(store.withSessionTransaction(tx => tx.getTurn(old.turn.turnId))?.status).toBe("dispatched");
     const fresh = submit(coordinator, "fresh", "fresh");
-    expect(fresh.acceptance).toBe("dispatched");
+    expect(fresh.acceptance).toBe("queued");
     store.close();
   });
   it("dispatches the first Turn and queues the second", () => {
