@@ -839,6 +839,25 @@ export class RunExecutor {
       this.store.getRun(run.id)?.replaySafety ?? "safe";
     let droppedOccupiedResume = false;
     let renewFromEventAfter = 0;
+    type ThoughtDelta = Extract<AgentEvent, { type: "thought_delta" }>;
+    let pendingThought: ThoughtDelta | null = null;
+    let pendingThoughtKey: string | null = null;
+    const thoughtKey = (event: ThoughtDelta): string =>
+      `${event.blockId ?? event.messageId ?? ""}:${event.type}`;
+    const persistCoalescedThought = (): void => {
+      if (!pendingThought) return;
+      const event = pendingThought;
+      pendingThought = null;
+      pendingThoughtKey = null;
+      this.appendRunEvent(run, {
+        workItemId: workItem.id,
+        runId: run.id,
+        type: "AGENT_EVENT",
+        actor: "adapter",
+        target: event.type,
+        payload: step ? { event, step_id: step.id } : { event },
+      });
+    };
     const persistAgentEvent = (event: AgentEvent): void => {
       this.throwIfCancellationRequested(run.id);
       // provider lease 丢失后，persist 入口直接拒绝写入（不依赖 runner 尊重 abort）。
@@ -910,6 +929,28 @@ export class RunExecutor {
         replaySafety = nextReplaySafety;
         this.updateReplaySafety(run, replaySafety);
       }
+      // thought_delta 只直播、不逐段写 domain_events。Pi 思考流会在主线程
+      // 打出成百上千笔同步事务；思考块结束（下一个非 thought 事件或 Run 收尾）
+      // 再落一条合并后的 AGENT_EVENT，供时间线和重连回放。
+      if (event.type === "thought_delta") {
+        const key = thoughtKey(event);
+        if (pendingThought && pendingThoughtKey !== key) {
+          persistCoalescedThought();
+        }
+        if (!pendingThought) {
+          pendingThought = { ...event };
+          pendingThoughtKey = key;
+        } else {
+          pendingThought = {
+            ...pendingThought,
+            text: pendingThought.text + event.text,
+          };
+        }
+        this.options.onEvent?.(run, event);
+        this.throwIfCancellationRequested(run.id);
+        return;
+      }
+      persistCoalescedThought();
       this.appendRunEvent(run, {
         workItemId: workItem.id,
         runId: run.id,
@@ -970,6 +1011,7 @@ export class RunExecutor {
         const asynchronousError = this.activeAsyncErrors.get(run.id);
         if (asynchronousError) throw asynchronousError;
         aggregator.close();
+        persistCoalescedThought();
         this.store.finishRunAttempt(attempt.attemptId, {
           providerError: null,
           sideEffectBoundary: replaySafety,
@@ -978,6 +1020,7 @@ export class RunExecutor {
       } catch (error) {
         try {
           aggregator.close();
+          persistCoalescedThought();
         } catch (flushError) {
           error = flushError;
         }

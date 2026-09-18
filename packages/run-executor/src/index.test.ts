@@ -172,6 +172,96 @@ describe("RunExecutor", () => {
     store.close();
   });
 
+  it("coalesces thought_delta into one AGENT_EVENT at the next semantic boundary", async () => {
+    const { store, item, run } = setup();
+    const observed: AgentEvent[] = [];
+    const source = "界".repeat(2_000);
+    const executor = new RunExecutor(
+      store,
+      new FakeRunner([
+        {
+          type: "thought_delta",
+          blockId: "thought",
+          text: source,
+        },
+        {
+          type: "tool_start",
+          toolCallId: "tool_1",
+          name: "rg",
+          input: {},
+        },
+        { type: "done", exitCode: 0 },
+      ]),
+      {
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: item.conversationId,
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+        onEvent: (_currentRun, event) => {
+          observed.push(event);
+        },
+      },
+    );
+
+    await executor.execute(run.id);
+
+    const agentEvents = store
+      .listEvents(item.id)
+      .filter((event) => event.type === "AGENT_EVENT")
+      .map((event) => event.payload.event as AgentEvent);
+    expect(agentEvents).toEqual([
+      { type: "thought_delta", blockId: "thought", text: source },
+      { type: "tool_start", toolCallId: "tool_1", name: "rg", input: {} },
+      { type: "done", exitCode: 0 },
+    ]);
+    expect(observed.filter((event) => event.type === "thought_delta").length)
+      .toBeGreaterThan(1);
+    expect(
+      observed
+        .filter((event) => event.type === "thought_delta")
+        .map((event) => ("text" in event ? event.text : ""))
+        .join(""),
+    ).toBe(source);
+    store.close();
+  });
+
+  it("flushes a trailing thought_delta when the Run ends without another event", async () => {
+    const { store, item, run } = setup();
+    const executor = new RunExecutor(
+      store,
+      new FakeRunner([
+        { type: "thought_delta", blockId: "thought", text: "检查" },
+      ]),
+      {
+        resolveRequest: () => ({
+          runId: run.id,
+          sessionKey: {
+            chatId: item.conversationId,
+            backendId: "pi",
+            cwd: "/tmp/project",
+          },
+          prompt: "调查",
+        }),
+      },
+    );
+
+    await executor.execute(run.id);
+
+    const agentEvents = store
+      .listEvents(item.id)
+      .filter((event) => event.type === "AGENT_EVENT")
+      .map((event) => event.payload.event as AgentEvent);
+    expect(agentEvents).toEqual([
+      { type: "thought_delta", blockId: "thought", text: "检查" },
+    ]);
+    store.close();
+  });
+
   it("claims and finishes a Session-bound Run through the Coordinator", async () => {
     const store = new SqliteEventStore(":memory:");
     const coordinator = new SessionCoordinator(store, {
