@@ -16,3 +16,11 @@ chat-bindings.json
 sessions.json
 workspaces.json
 logs/
+
+# Local tool output / scratch (never commit)
+.claude/settings.local.json
+.playwright-cli/
+.superpowers/
+output/
+test-results/
+apps/web/vite.config.ts.timestamp-*.mjs
