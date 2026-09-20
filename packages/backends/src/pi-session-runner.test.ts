@@ -424,6 +424,11 @@ describe("Pi session runner", () => {
     ) as { text: string; options?: { images?: unknown[] } };
 
     expect(payload.options?.images).toHaveLength(1);
+    expect(payload.options?.images?.[0]).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: "iVBORw==",
+    });
     expect(payload.text).toContain(filePath);
     expect(payload.text).toContain("data.xlsx");
     expect(payload.text).not.toContain(imgPath);

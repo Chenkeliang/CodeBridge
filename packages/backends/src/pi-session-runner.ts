@@ -587,14 +587,12 @@ async function buildPrompt(ctx: RunContext): Promise<{
   const { images, files } = partitionAttachments(ctx.attachments);
   const text = ctx.prompt + fileAttachmentPromptSuffix(files);
   if (!images.length) return { text };
+  // Pi 的 ImageContent 把 mimeType/data 放在顶层，不是 Anthropic 的 source 嵌套结构。
   const imageBlocks = await Promise.all(
     images.map(async (attachment) => ({
       type: "image",
-      source: {
-        type: "base64",
-        mediaType: attachment.mimeType ?? "image/png",
-        data: await fs.readFile(attachment.path, "base64"),
-      },
+      mimeType: attachment.mimeType ?? "image/png",
+      data: await fs.readFile(attachment.path, "base64"),
     })),
   );
   return { text, options: { images: imageBlocks } };
