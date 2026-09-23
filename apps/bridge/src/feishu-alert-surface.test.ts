@@ -12,7 +12,7 @@ afterEach(() => { roots.splice(0).forEach((root) => fs.rmSync(root, { recursive:
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "alert-surface-")); roots.push(root);
   const config = defaultConfig();
-  config.feishu.alertMonitor = { pollIntervalMs: 30_000, dedupWindowMs: 1_800_000, maxConcurrent: 1,
+  config.feishu.alertMonitor = { pollIntervalMs: 30_000, lookbackMs: 600_000, dedupWindowMs: 1_800_000, maxConcurrent: 1,
     groups: [{ chatId: "oc_alerts", senderAppIds: ["cli_alarm"], ownerOpenId: "ou_owner" }] };
   let monitor: FeishuAlertMonitor;
   let now = 1_000_000;
