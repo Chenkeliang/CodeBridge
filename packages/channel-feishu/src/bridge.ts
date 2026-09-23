@@ -78,7 +78,7 @@ export interface FeishuBridgeOptions {
   sessionIngress?: ChannelSessionIngress;
   onDeploymentMessage?: (message: FeishuMessage) => Promise<string | undefined>;
   isMaintenance?: () => boolean;
-  prepareAlertReply?: (message: FeishuMessage, topicId: string | undefined) => FeishuAlertReply | undefined;
+  prepareAlertReply?: (message: FeishuMessage, topicId: string | undefined) => FeishuAlertReply | undefined | Promise<FeishuAlertReply | undefined>;
   isAlertMessage?: (chatId: string, messageId: string) => boolean;
   isAlertChat?: (chatId: string) => boolean;
 }
@@ -497,8 +497,8 @@ export class FeishuBridge {
 
     const policy = this.config.feishu.policy;
     let topicId = this.resolveTopicId(msg);
-    const alertReply = this.options.prepareAlertReply?.(msg, topicId);
-    if (alertReply && !alertReply.allowed) return;
+    const alertReply = await this.options.prepareAlertReply?.(msg, topicId);
+    if (alertReply && (!alertReply.allowed || alertReply.handled)) return;
     if (alertReply) {
       topicId = alertReply.topicId;
       msg = { ...msg, threadId: topicId };
@@ -1274,6 +1274,12 @@ export class FeishuBridge {
       replyTo: rootId, replyInThread: true,
       mentions: [{ key: owner.ref, openId: ownerOpenId, name: owner.name, isBot: false }],
     });
+  }
+
+  async cancelAlertInvestigation(chatId: string, rootId: string): Promise<void> {
+    if (!this.sessionIngress) return;
+    const context = await this.sessionIngress.getSlotCommandContext(this.buildFullSlot(chatId, rootId));
+    if (context.sessionId && context.activeRunId) await this.sessionIngress.cancelRun(context.sessionId, context.activeRunId);
   }
 
   async isAlertActive(chatId: string, rootId: string): Promise<boolean> {

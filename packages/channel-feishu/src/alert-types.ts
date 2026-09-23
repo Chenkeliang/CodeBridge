@@ -17,9 +17,10 @@ export interface FeishuAlertPage {
 
 export interface FeishuAlertReply {
   allowed: boolean;
+  handled?: boolean;
   topicId: string;
   instructions: string;
 }
 
-export const FEISHU_ALERT_STATUSES = ["investigating", "waiting", "resolved", "no_action", "blocked"] as const;
+export const FEISHU_ALERT_STATUSES = ["investigating", "waiting", "resolved", "no_action", "blocked", "dismissed"] as const;
 export type FeishuAlertStatus = typeof FEISHU_ALERT_STATUSES[number];
