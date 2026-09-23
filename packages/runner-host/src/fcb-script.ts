@@ -7,7 +7,7 @@ import path from "node:path";
  */
 const FCB_SCRIPT = `#!/usr/bin/env node
 // fcb — 在 CodeBridge Agent 任务里把文件/消息发回当前聊天
-// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]
+// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb alert status <状态> <证据或待办> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -74,10 +74,12 @@ async function main() {
       ref: rest[0],
       text: rest.slice(1).join(" "),
     });
+  } else if (cmd === "alert" && rest[0] === "status" && rest[1] && rest.length > 2) {
+    await post("/outbound/alert-status", {runId, status: rest[1], summary: rest.slice(2).join(" ")});
   } else if (cmd === "flow") {
     fail("Flow 功能已停用");
   } else {
-    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]");
+    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb alert status <状态> <证据或待办> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]");
   }
 }
 

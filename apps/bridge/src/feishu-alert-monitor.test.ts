@@ -42,7 +42,7 @@ describe("FeishuAlertMonitor", () => {
     expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
     expect(f.transport.investigateAlert).toHaveBeenCalledWith(f.message(), "ou_owner", ALERT_INVESTIGATION_INSTRUCTIONS);
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("只授权只读排查");
-    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("必须使用 fcb mention");
+    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("fcb alert status waiting");
   });
 
   it("does not resubmit a message after restart or overlap", async () => {

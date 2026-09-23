@@ -20,3 +20,6 @@ export interface FeishuAlertReply {
   topicId: string;
   instructions: string;
 }
+
+export const FEISHU_ALERT_STATUSES = ["investigating", "waiting", "resolved", "no_action", "blocked"] as const;
+export type FeishuAlertStatus = typeof FEISHU_ALERT_STATUSES[number];

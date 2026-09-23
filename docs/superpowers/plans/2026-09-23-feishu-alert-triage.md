@@ -68,3 +68,27 @@ Surface Matrix 增量：飞书 read path 的扫描起点改变；entry/write/eve
 GitNexus 刷新首次出现原生 Napi::Error；影响调用仍返回 readGroup → poll，ConfigSchema 另以 ConfigStore 源码补查；不把失败的刷新记作成功。
 
 AT-5 验证：core、channel-feishu、bridge 构建通过；告警合同、活跃飞书表面及配置/类型测试共 37 项通过。迟到 5 分钟的场景先失败、修正后通过；同一消息跨重启不重复，停机 2 小时的补读通过。GitNexus 第二次刷新成功，未将首次 Napi 错误当作通过。生产轮询间隔此前已配置为 60000ms，新增回看参数缺省 600000ms；功能代码仍未部署。
+
+
+## AT-6：原卡片 Reaction、SKILL 与五条试运行
+
+用户确认原生表情：OnIt（在做了）、OneSecond（等待本人）、DONE（已恢复）、CrossMark（无需操作）、Sigh（受阻）。直接操作原告警的 messageReaction，替换时只删除当前 app 的已管理状态表情。
+
+后端保存业务状态和各原卡片已投影的表情，按案件串行投递，失败可重试。`fcb alert status` 的目标来自活动 Run 的持久化 Delivery；publisher 无此路由权限。waiting/blocked 统一由后端原生 @ 本人，避免指令要求 Agent 额外 mention 造成双通知。Run 结束不自动等同业务恢复，无结果时受阻提醒。
+
+配置可暂停全量采集；runbookPath 每次新告警和本人回复重读。个人 SKILL 只写入 ~/.agents/skills，镜像使用 symlink。全量启用前保持 enabled=false。本次五条现场试运行读取、业务只读诊断、表情切换及通知均限定在冻结样本；没有执行业务写。
+
+| Surface | entry | read path | write path | event consumption | error handling | recovery | terminal feedback | implemented / reachable / closed-loop / planned |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 飞书 | 候选自动采集＋五条人工发起试运行 | 真实 history、Reaction list、只读业务证据 | 五条原卡片 OnIt→2 CrossMark/3 OneSecond；3 原话题原生 @ 已回读 | 连续采集未启用；正常回复仍由线上旧版本处理 | Reaction 失败不抑制可送达的本人通知 | 状态/投递记录持久化、幂等回读、保留试运行 owner 映射 | 现场结果可见；自动全链路仍未上线 | 是 / 五条真实输出已验证，自动入口未上线 / 手工试运行输出闭环，后台全链路否 / AT-4 发布后验收 |
+| Agent | fcb alert status→活动 Run→后端状态 | 每次注入新读 SKILL，矩阵由 Agent 读取 | 只报告业务状态；操作仍逐次本人批准 | 原会话事件 | 无业务结论不标成功 | 同案串行投影与通知去重 | CLI 与适配器合同/表面测试；真实 Agent 自动入口未运行 | 是 / 本地完整调用链测试 / 后台实跑未验证 / AT-4 |
+| Web | 原会话入口，无新增审批替代 | 原投影 | 无新增 | 原 SSE | 原机制 | 原机制 | 原终态 | 无新 UI / 未新增真实验收 / 未验证 / AT-4 观察 |
+| Telegram | 无新增入口 | 无新增 | 新状态路由拒绝 Telegram 来源 | 无新增 | 拒绝不支持来源 | 无新增 | 无新增 | 否 / 否 / 否 / 本期不接入 |
+
+五条试运行结果：2 条逆向实收等级和入账核对后无需操作；3 条合单当前售后查询成功但缺货未发货，等待本人补货/待货决策。原始消息、只读证据、Reaction 回执、@ 回执和 SKILL 五例回放保存在本机私有试运行目录，不纳入 Git。基于证据的 SKILL 回放 30/30 断言通过，不等同真实后台 Agent/全链路验收。
+
+SKILL 格式校验通过。全局 ~/.agents/skills-check.sh 仍报告原有 ~/.claude/skills/synced 为真实目录；新增技能自己的镜像已补齐。该既有冲突未被隐藏或删除，不能声称全局检查 OK。GitNexus 刷新又遇 Napi::Error，使用已执行 impact 与源码补查；最终提交前再复核。
+
+AT-6 最终本地验证：`pnpm build` 通过；`pnpm lint` 0 errors、8 个既有 Web warnings；飞书通道、告警监控/状态、出站 API、Channel ingress、配置类型和实际生成 fcb 命令的相关回归共 31 文件/286 项通过。新 SKILL 用 skill-creator 的 quick_validate.py 验证通过（临时隔离环境补齐 PyYAML）；全局 skills-check 仍因原有 synced 目录不符合镜像规则而失败。GitNexus 最终重试刷新成功。
+
+五条试运行的负责人、状态、原生表情投递和已通知标记已持久化，collectionStarted=false，enabled=false；没有启动全量采集。首次启用全量会从启用时刻开始，仍保留这五条旧话题的归属与状态。真实现场测试没有触发后台自动 Agent Run，也没有执行用户业务写操作；这些边界不能以本地合同测试替代。
