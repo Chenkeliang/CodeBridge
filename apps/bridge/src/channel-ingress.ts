@@ -1,13 +1,6 @@
-import { Hono } from "hono";
 import type {
   ChannelCommandContext,
-  ChannelConsumableFlow,
   ChannelDeliveryRow,
-  ChannelFlowInput,
-  ChannelFlowBatchDraft,
-  ChannelFlowBatchSnapshot,
-  ChannelFlowReviewSummary,
-  ChannelManageableFlow,
   ChannelRuntimeApproval,
   ChannelSessionEvent,
   ChannelSessionIngress,
@@ -16,6 +9,7 @@ import type {
   ChannelSubmitReceipt,
 } from "@codebridge/core";
 import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
+import { Hono } from "hono";
 
 function toChannelSessionEvent(input: unknown): ChannelSessionEvent {
   const event = parseSessionEventWire(input);
@@ -43,13 +37,9 @@ function requireSessionEventContentType(
 
 export function createChannelIngressApi(
   sessionApp: Hono,
-  flowApp: Hono,
-  flowBatchApp?: Hono,
 ): Hono {
   const app = new Hono();
   app.route("/", sessionApp);
-  app.route("/", flowApp);
-  if (flowBatchApp) app.route("/", flowBatchApp);
   return app;
 }
 
@@ -83,9 +73,6 @@ export function createChannelSessionIngress(
   const submit = async (
     message: ChannelSessionMessage,
   ): Promise<ChannelSubmitReceipt> => {
-    if ((message.flowId === undefined) !== (message.flowDefinitionRevision === undefined)) {
-      throw new Error("flow_invocation_incomplete");
-    }
     if (
       (message.replyToMessageId === undefined)
       !== (message.showThinking === undefined)
@@ -108,10 +95,7 @@ export function createChannelSessionIngress(
           agent_id: message.agentId,
           cwd: message.cwd,
           model: message.model,
-          ...(message.flowId !== undefined ? { flow_id: message.flowId } : {}),
-          ...(message.flowDefinitionRevision !== undefined
-            ? { definition_revision: message.flowDefinitionRevision }
-            : {}),
+
           ...(message.inputs !== undefined ? { inputs: message.inputs } : {}),
           ...(message.actorRef !== undefined ? { actor_ref: message.actorRef } : {}),
           generation: message.generation,
@@ -146,107 +130,6 @@ export function createChannelSessionIngress(
       queueState: result.queue_state,
       eventSequence: result.event_sequence,
     };
-  };
-
-  const listConsumableFlows = async (): Promise<ChannelConsumableFlow[]> => {
-    const response = await app.request("/v1/flows?view=consume", {
-      headers: auth,
-    });
-    if (!response.ok) {
-      throw new Error(
-        `list consumable Flows failed (${response.status}): ${await response.text()}`,
-      );
-    }
-    const body = await response.json() as {
-      flows: Array<{
-        flow_id: string;
-        name: string | null;
-        definition_revision: string;
-        inputs?: ChannelFlowInput[];
-        steps?: Array<{
-          id: string;
-          purpose?: string | null;
-          mode?: string | null;
-          approval?: "none" | "required";
-        }>;
-      }>;
-    };
-    return body.flows.map((flow) => ({
-      flowId: flow.flow_id,
-      name: flow.name ?? flow.flow_id,
-      definitionRevision: flow.definition_revision,
-      inputs: flow.inputs ?? [],
-      steps: (flow.steps ?? []).map((step) => ({
-        id: step.id,
-        purpose: step.purpose ?? null,
-        mode: step.mode ?? null,
-        approval: step.approval ?? "none",
-      })),
-    }));
-  };
-
-  const listManageableFlows = async (): Promise<ChannelManageableFlow[]> => {
-    const response = await app.request("/v1/flows?view=manage", { headers: auth });
-    if (!response.ok) throw new Error(`list manageable Flows failed (${response.status}): ${await response.text()}`);
-    const body = await response.json() as { flows: Array<Record<string, unknown>> };
-    return body.flows.map(toChannelManageableFlow);
-  };
-
-  const getFlowReviewSummary = async (flowId: string): Promise<ChannelFlowReviewSummary> => {
-    const response = await app.request(`/v1/flows/${encodeURIComponent(flowId)}/review-context`, { headers: auth });
-    if (!response.ok) throw new Error(`read Flow review failed (${response.status}): ${await response.text()}`);
-    const body = await response.json() as {
-      flow: Record<string, unknown>;
-      diff: { name_changed?: boolean; description_changed?: boolean; inputs?: { added?: string[]; removed?: string[]; changed?: string[] }; steps?: { added?: string[]; removed?: string[]; changed?: string[]; reordered?: boolean } };
-      provenance?: { source_run_id?: string; source_session_id?: string } | null;
-      evidence?: unknown[];
-    };
-    const changedFields = [
-      body.diff.name_changed ? "name" : null,
-      body.diff.description_changed ? "description" : null,
-      ...(body.diff.inputs?.added ?? []).map((id) => `input +${id}`),
-      ...(body.diff.inputs?.removed ?? []).map((id) => `input -${id}`),
-      ...(body.diff.inputs?.changed ?? []).map((id) => `input ~${id}`),
-      ...(body.diff.steps?.added ?? []).map((id) => `step +${id}`),
-      ...(body.diff.steps?.removed ?? []).map((id) => `step -${id}`),
-      ...(body.diff.steps?.changed ?? []).map((id) => `step ~${id}`),
-      body.diff.steps?.reordered ? "steps reordered" : null,
-    ].filter((value): value is string => Boolean(value));
-    const flow = toChannelManageableFlow(body.flow);
-    return {
-      flow,
-      changedFields,
-      provenance: body.provenance?.source_run_id && body.provenance.source_session_id
-        ? { sourceRunId: body.provenance.source_run_id, sourceSessionId: body.provenance.source_session_id }
-        : null,
-      evidenceCount: body.evidence?.length ?? 0,
-      validationIssues: Array.isArray(body.flow.validation_issues)
-        ? body.flow.validation_issues.filter((value): value is string => typeof value === "string")
-        : [],
-    };
-  };
-
-  const updateCandidateSummary = async (
-    flowId: string,
-    patch: { name?: string; description?: string },
-  ): Promise<ChannelManageableFlow> => {
-    const response = await app.request(`/v1/flows/${encodeURIComponent(flowId)}/summary`, {
-      method: "PATCH",
-      headers: { ...auth, "content-type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    if (!response.ok) throw new Error(`update Candidate summary failed (${response.status}): ${await response.text()}`);
-    return toChannelManageableFlow(await response.json() as Record<string, unknown>);
-  };
-
-  const rejectCandidate = async (flowId: string): Promise<ChannelManageableFlow> => {
-    const response = await app.request(`/v1/flows/${encodeURIComponent(flowId)}/review`, {
-      method: "POST",
-      headers: { ...auth, "content-type": "application/json" },
-      body: JSON.stringify({ decision: "reject" }),
-    });
-    if (!response.ok) throw new Error(`reject Candidate failed (${response.status}): ${await response.text()}`);
-    return toChannelManageableFlow(await response.json() as Record<string, unknown>);
   };
 
   const listRuntimeApprovals = async (
@@ -308,88 +191,6 @@ export function createChannelSessionIngress(
       targetResource: null,
       expiresAt: null,
     };
-  };
-
-  const getFlowBatchDraft = async (
-    draftId: string,
-  ): Promise<ChannelFlowBatchDraft> => {
-    const response = await app.request(
-      `/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}`,
-      { headers: auth },
-    );
-    if (!response.ok) {
-      throw new Error(`read Flow batch draft failed (${response.status}): ${await response.text()}`);
-    }
-    return toChannelFlowBatchDraft(await response.json() as Record<string, unknown>);
-  };
-
-  const confirmFlowBatchDraft = async (
-    draftId: string,
-    revision: number,
-    idempotencyKey: string,
-  ): Promise<ChannelFlowBatchSnapshot> => {
-    const response = await app.request(
-      `/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}/confirm`,
-      {
-        method: "POST",
-        headers: {
-          ...auth,
-          "content-type": "application/json",
-          "idempotency-key": idempotencyKey,
-        },
-        body: JSON.stringify({
-          draft_revision: revision,
-          created_by: "channel",
-        }),
-      },
-    );
-    if (!response.ok) {
-      throw new Error(`confirm Flow batch failed (${response.status}): ${await response.text()}`);
-    }
-    return toChannelFlowBatchSnapshot(await response.json() as Record<string, unknown>);
-  };
-
-  const getFlowBatch = async (
-    batchId: string,
-  ): Promise<ChannelFlowBatchSnapshot> => {
-    const response = await app.request(
-      `/v1/flow-batches/${encodeURIComponent(batchId)}`,
-      { headers: auth },
-    );
-    if (!response.ok) {
-      throw new Error(`read Flow batch failed (${response.status}): ${await response.text()}`);
-    }
-    return toChannelFlowBatchSnapshot(await response.json() as Record<string, unknown>);
-  };
-
-  const cancelFlowBatch = async (
-    batchId: string,
-  ): Promise<ChannelFlowBatchSnapshot> => {
-    const response = await app.request(
-      `/v1/flow-batches/${encodeURIComponent(batchId)}/cancel`,
-      { method: "POST", headers: auth },
-    );
-    if (!response.ok) {
-      throw new Error(`cancel Flow batch failed (${response.status}): ${await response.text()}`);
-    }
-    return toChannelFlowBatchSnapshot(await response.json() as Record<string, unknown>);
-  };
-
-  const retryFailedFlowBatch = async (
-    batchId: string,
-    idempotencyKey: string,
-  ): Promise<ChannelFlowBatchSnapshot> => {
-    const response = await app.request(
-      `/v1/flow-batches/${encodeURIComponent(batchId)}/retry-failed`,
-      {
-        method: "POST",
-        headers: { ...auth, "idempotency-key": idempotencyKey },
-      },
-    );
-    if (!response.ok) {
-      throw new Error(`retry Flow batch failed (${response.status}): ${await response.text()}`);
-    }
-    return toChannelFlowBatchSnapshot(await response.json() as Record<string, unknown>);
   };
 
   const events = async function* (
@@ -720,18 +521,8 @@ export function createChannelSessionIngress(
 
   return {
     submit,
-    listConsumableFlows,
-    listManageableFlows,
-    getFlowReviewSummary,
-    updateCandidateSummary,
-    rejectCandidate,
     listRuntimeApprovals,
     resolveRuntimeApproval,
-    getFlowBatchDraft,
-    confirmFlowBatchDraft,
-    getFlowBatch,
-    cancelFlowBatch,
-    retryFailedFlowBatch,
     events,
     replayEvents,
     listDeliveries,
@@ -767,70 +558,6 @@ function toChannelRuntimeApproval(input: {
     environment: input.environment ?? null,
     targetResource: input.target_resource ?? null,
     expiresAt: input.expires_at ?? null,
-  };
-}
-
-function toChannelFlowBatchDraft(
-  input: Record<string, unknown>,
-): ChannelFlowBatchDraft {
-  const items = Array.isArray(input.items) ? input.items : [];
-  const blocking = items.filter((item) =>
-    item && typeof item === "object" && Array.isArray((item as Record<string, unknown>).issues)
-      && ((item as Record<string, unknown>).issues as unknown[]).some((issue) =>
-        issue && typeof issue === "object"
-          && (issue as Record<string, unknown>).blocking === true
-      )
-  ).length;
-  return {
-    draftId: String(input.draft_id ?? ""),
-    sessionId: String(input.session_id ?? ""),
-    flowId: String(input.flow_id ?? ""),
-    definitionRevision: String(input.definition_revision ?? ""),
-    status: input.status as ChannelFlowBatchDraft["status"],
-    revision: Number(input.revision ?? 0),
-    total: items.length,
-    blocking,
-  };
-}
-
-function toChannelFlowBatchSnapshot(
-  input: Record<string, unknown>,
-): ChannelFlowBatchSnapshot {
-  const counts = input.counts && typeof input.counts === "object"
-    ? input.counts as Record<string, unknown>
-    : {};
-  return {
-    batchId: String(input.batch_id ?? ""),
-    draftId: String(input.draft_id ?? ""),
-    sessionId: String(input.session_id ?? ""),
-    flowId: String(input.flow_id ?? ""),
-    definitionRevision: String(input.definition_revision ?? ""),
-    status: input.status as ChannelFlowBatchSnapshot["status"],
-    counts: {
-      total: Number(counts.total ?? 0),
-      queued: Number(counts.queued ?? 0),
-      running: Number(counts.running ?? 0),
-      waiting: Number(counts.waiting ?? 0),
-      succeeded: Number(counts.succeeded ?? 0),
-      failed: Number(counts.failed ?? 0),
-      cancelled: Number(counts.cancelled ?? 0),
-    },
-  };
-}
-
-function toChannelManageableFlow(input: Record<string, unknown>): ChannelManageableFlow {
-  return {
-    flowId: String(input.flow_id ?? ""),
-    name: typeof input.name === "string" ? input.name : String(input.flow_id ?? ""),
-    description: typeof input.description === "string" ? input.description : null,
-    definitionRevision: String(input.definition_revision ?? ""),
-    kind: input.kind === "guide" || input.kind === "runbook" || input.kind === "ephemeral"
-      ? input.kind
-      : "guide",
-    status: input.status === "draft" || input.status === "candidate" || input.status === "published" || input.status === "deprecated"
-      ? input.status
-      : "draft",
-    reviewStatus: typeof input.review_status === "string" ? input.review_status : null,
   };
 }
 

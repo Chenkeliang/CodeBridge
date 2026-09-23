@@ -1,4 +1,5 @@
-import fs from "node:fs/promises";
+import type { AgentAvailableCommand, AgentEvent, BackendConfigOption, RunContext } from "@codebridge/core";
+import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -8,22 +9,9 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
-import type {
-  AgentAvailableCommand,
-  AgentEvent,
-  BackendConfigOption,
-  RunContext,
-} from "@codebridge/core";
-import type {
-  CliSessionSummary,
-  ProviderSessionHistoryEvent,
-} from "./session-discovery.js";
-import { createPiFlowSaveTool } from "./pi-flow-save-tool.js";
-import {
-  fileAttachmentPromptSuffix,
-  partitionAttachments,
-} from "./attachment-prompt.js";
+import fs from "node:fs/promises";
+import { fileAttachmentPromptSuffix, partitionAttachments } from "./attachment-prompt.js";
+import type { CliSessionSummary, ProviderSessionHistoryEvent } from "./session-discovery.js";
 
 /** The small native-session surface used by the runner and by adapter tests. */
 export interface PiSession {
@@ -533,7 +521,6 @@ export async function createNativePiSession(
       ...(ctx.extraEnv ? [createBashToolDefinition(ctx.cwd, {
         spawnHook: (spawn) => ({ ...spawn, env: { ...spawn.env, ...runEnv } }),
       }) as unknown as NonNullable<CreateAgentSessionOptions["customTools"]>[number]] : []),
-      ...(ctx.flowSaveSourceAvailability ? [createPiFlowSaveTool(ctx.flowSaveSourceAvailability)] : []),
     ],
   });
   return session;

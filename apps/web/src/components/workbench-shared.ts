@@ -3,7 +3,7 @@ import type { AgentSession, ConfigOption } from "@/lib/types";
 
 export type Theme = "paper" | "carbon";
 export type Density = "compact" | "comfortable";
-export type PanelArea = "agents" | "flows" | "skills" | "settings";
+export type PanelArea = "agents" | "skills" | "settings";
 export type MenuView = "actions" | "rename" | "delete";
 
 export const DEFAULT_SELECT_VALUE = "__default__";
@@ -59,7 +59,6 @@ export function formatValue(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value, null, 2);
 }
-
 
 export function messageOf(value: unknown): string {
   return value instanceof Error ? value.message : String(value);

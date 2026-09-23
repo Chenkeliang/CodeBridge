@@ -1,3 +1,5 @@
+> 历史记录：Flow 功能已于 2026-09-23 进入完整移除；本文保留设计/验收审计，不再描述当前可用功能。当前范围见 `docs/plans/2026-09-23-remove-flow.md`。
+
 # Conversational Flow Batch Invocation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

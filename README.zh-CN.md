@@ -110,7 +110,7 @@ telegram:
 
 ### Web Workbench
 
-Bridge 启动后可在本机打开 `http://127.0.0.1:19790/workbench/`。它和飞书、Telegram 共用 WorkItem、Run 和事件流：像普通 Agent 工作台一样直接输入目标，输入框周边的 Agent、模式、Workflow 和工作空间只是可选上下文；没有已发现的定义时交给 Agent 自动判断。页面只绑定本地 Bridge，不把代码或凭据上传到云端。
+Bridge 启动后可在本机打开 `http://127.0.0.1:19790/workbench/`。它和飞书、Telegram 共用 WorkItem、Run 和事件流：像普通 Agent 工作台一样直接输入目标，输入框周边的 Agent、模式和工作空间用于配置当前会话，任务由选定 Agent 处理。页面只绑定本地 Bridge，不把代码或凭据上传到云端。
 
 ## 手机优先的命令
 
@@ -207,7 +207,7 @@ pnpm run build
 pnpm test
 ```
 
-这是一个 pnpm monorepo，包含 `core`、`backends`、`work-items`、`workflow-engine`、`policy`、`run-executor`、`project-catalog`、`runner-host`、`runner-client`、`router`、`channel-feishu`、`channel-telegram` 和 `apps/bridge`。
+这是一个 pnpm monorepo，包含 `core`、`backends`、`work-items`、`policy`、`run-executor`、`project-catalog`、`runner-host`、`runner-client`、`router`、`channel-feishu`、`channel-telegram` 和 `apps/bridge`。
 
 ## License
 

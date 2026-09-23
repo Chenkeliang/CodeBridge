@@ -1,17 +1,18 @@
+import { type AgentEvent, type RunContext } from "@codebridge/core";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { afterEach } from "vitest";
 import {
-  PI_FLOW_SAVE_TOOL_NAME,
-  type AgentEvent,
-  type RunContext,
-} from "@codebridge/core";
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   collectPiSessionHistory,
-  createPiModelRuntime,
   createNativePiSession,
+  createPiModelRuntime,
   forkPiSession,
   listPiCommands,
   listPiConfigOptions,
@@ -226,25 +227,6 @@ describe("Pi event mapping", () => {
 });
 
 describe("Pi session runner", () => {
-  it("passes the Flow save custom tool to createAgentSession with the dispatch snapshot", async () => {
-    const session = new FakePiSession();
-    let options: Record<string, unknown> | undefined;
-
-    await createNativePiSession(context({
-      flowSaveSourceAvailability: { available: true },
-    }), {
-      createAgentSession: async (value) => {
-        options = value as unknown as Record<string, unknown>;
-        return { session } as never;
-      },
-      createModelRuntime: async () => ({}) as never,
-      resolveSessionManager: async () => ({}) as never,
-    });
-
-    const tools = options?.customTools as Array<{ name?: string }> | undefined;
-    expect(tools).toHaveLength(1);
-    expect(tools?.[0]?.name).toBe(PI_FLOW_SAVE_TOOL_NAME);
-  });
 
   it("loads literal provider credentials from Pi models.json", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-pi-runtime-"));
@@ -560,7 +542,6 @@ describe("Pi event error surfacing", () => {
     expect(mapPiEvent({ type: "auto_retry_end", success: true, attempt: 2 })).toEqual([]);
   });
 });
-
 
 it("Pi bash receives isolated Run environment without changing the Runner process", async () => {
   const original = process.env.FCB_RUN_ID;

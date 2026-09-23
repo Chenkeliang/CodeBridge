@@ -1,5 +1,3 @@
-import { runCardJson, type RunCardParts } from "./cardkit-writer.js";
-import { type MarkdownCardStream } from "./durable-markdown-card.js";
 import type {
   AgentEvent,
   ChannelDeliveryRow,
@@ -7,15 +5,10 @@ import type {
   ChannelSessionEvent,
   ChannelSessionIngress,
 } from "@codebridge/core";
-import {
-  createChannelFlowProjector,
-  createChannelStreamProjector,
-  renderChannelFlowFinal,
-  renderChannelFlowLive,
-  type ChannelFlowProjector,
-  type ChannelStreamProjector,
-} from "@codebridge/router";
+import { createChannelStreamProjector, type ChannelStreamProjector } from "@codebridge/router";
+import { runCardJson, type RunCardParts } from "./cardkit-writer.js";
 import { CoalescingCardWriter } from "./coalescing-card-writer.js";
+import { type MarkdownCardStream } from "./durable-markdown-card.js";
 import {
   applyRunSnapshot,
   createFeishuRunStatus,
@@ -34,8 +27,6 @@ import {
 export const FEISHU_LIVE_STATUS_TICK_MS = 15_000;
 export { FEISHU_LIVE_STATUS_QUIET_MS } from "./run-status.js";
 const FEISHU_LIVE_PROGRESS_CHARS = 1200;
-const FEISHU_FLOW_SAVE_REQUEST_NOTICE =
-  "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。";
 
 export function classifyFeishuCardWriteError(
   error: unknown,
@@ -66,38 +57,6 @@ export interface FeishuCardHost {
 
 type CardSnapshot = { content: string; parts: RunCardParts; statusOnly: boolean };
 
-function isStructuredFlowEvent(type: string): boolean {
-  return type === "STEP_STARTED"
-    || type === "STEP_SUCCEEDED"
-    || type === "STEP_FAILED"
-    || type === "STEP_RETRYING"
-    || type === "STEP_SKIPPED"
-    || type === "ARTIFACT_CREATED"
-    || type === "VERIFICATION_FAILED"
-    || type === "RUN_SNAPSHOT"
-    || type === "APPROVAL_REQUESTED"
-    || type === "APPROVAL_GRANTED"
-    || type === "APPROVAL_REJECTED"
-    || type === "FLOW_BATCH_DRAFTED"
-    || type === "FLOW_BATCH_CONFIRMED"
-    || type === "FLOW_BATCH_UPDATED"
-    || type === "FLOW_BATCH_COMPLETED";
-}
-
-function composeFeishuRunBody(
-  agentText: string,
-  flowText: string,
-  flowSaveRequested = false,
-): string {
-  return [
-    agentText || undefined,
-    flowText || undefined,
-    flowSaveRequested ? FEISHU_FLOW_SAVE_REQUEST_NOTICE : undefined,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join("\n\n---\n\n");
-}
-
 function terminalStateForEvent(
   type: ChannelSessionEvent["type"],
 ): Exclude<FeishuRunState, "running"> | undefined {
@@ -118,7 +77,6 @@ function terminalStateForEvent(
 /** 一个 Run 的飞书流式卡片。开卡后由 watcher 喂 AgentEvent，终态时 finalize。 */
 export class FeishuRunCard {
   private readonly projector: ChannelStreamProjector;
-  private readonly flowProjector: ChannelFlowProjector;
   private readonly runStatus: FeishuRunStatus;
   private readonly abortController: AbortController;
   private readonly cardDone: Promise<void>;
@@ -132,7 +90,6 @@ export class FeishuRunCard {
   private streamCardId?: string;
   private queueRender: (statusOnly: boolean) => void = () => {};
   private done = false;
-  private flowSaveRequested = false;
 
   constructor(
     private readonly host: FeishuCardHost,
@@ -145,7 +102,6 @@ export class FeishuRunCard {
       showThinking,
       maxProgressChars: FEISHU_LIVE_PROGRESS_CHARS,
     });
-    this.flowProjector = createChannelFlowProjector();
     this.runStatus = createFeishuRunStatus();
     this.abortController = new AbortController();
     this.cardDone = new Promise<void>((resolve) => { this.cardDoneResolve = resolve; });
@@ -213,29 +169,16 @@ export class FeishuRunCard {
           this.queueRender = (statusOnly: boolean): void => {
             const status = renderFeishuRunStatus(this.runStatus);
             const snapshot = this.projector.snapshot();
-            const flowSnapshot = this.flowProjector.snapshot();
-            const flowText = this.runStatus.state === "running"
-              ? renderChannelFlowLive(flowSnapshot)
-              : renderChannelFlowFinal(flowSnapshot);
             const agentText = this.runStatus.state === "running"
               ? snapshot.liveText
-              : flowText && !snapshot.result.trim()
-                ? ""
-                : snapshot.finalText;
-            const body = composeFeishuRunBody(
-              agentText,
-              flowText,
-              this.flowSaveRequested,
-            );
+              : snapshot.finalText;
+            const body = (agentText);
             this.writer?.enqueue({
               content: status && body ? `${body}\n\n---\n\n${status}` : body || status,
               parts: {
                 answer: this.runStatus.state === "running" ? snapshot.result : agentText,
-                progress: composeFeishuRunBody(
-                  this.runStatus.state === "running"
-                    ? [snapshot.thinking, snapshot.progress].filter(Boolean).join("\n\n") : "",
-                  flowText, this.flowSaveRequested,
-                ),
+                progress: (this.runStatus.state === "running"
+                    ? [snapshot.thinking, snapshot.progress].filter(Boolean).join("\n\n") : ""),
                 status,
                 terminal: this.runStatus.state !== "running",
               },
@@ -278,22 +221,6 @@ export class FeishuRunCard {
     const previous = this.projector.snapshot().liveText;
     const next = this.projector.apply(event);
     this.queueRender(previous === next.liveText);
-  }
-
-  async onDomainEvent(event: ChannelSessionEvent): Promise<void> {
-    await this.ready;
-    if (this.abortController.signal.aborted || !isStructuredFlowEvent(event.type)) return;
-    const previous = renderChannelFlowLive(this.flowProjector.snapshot());
-    const next = this.flowProjector.apply(event);
-    const current = renderChannelFlowLive(next);
-    this.queueRender(previous === current);
-  }
-
-  async onFlowSaveRequested(): Promise<void> {
-    await this.ready;
-    if (this.abortController.signal.aborted || this.flowSaveRequested) return;
-    this.flowSaveRequested = true;
-    this.queueRender(false);
   }
 
   async reconcileRun(
@@ -362,13 +289,11 @@ interface ResumedFeishuCard {
   surfaceMessageId: string;
   surfaceCardId: string;
   projector: ChannelStreamProjector;
-  flowProjector: ChannelFlowProjector;
   runStatus: FeishuRunStatus;
   resultRecovery: "pending" | "confirmed";
   projectionReady: boolean;
   pendingReplayEvents: ChannelSessionEvent[];
   projectedSequences: Set<number>;
-  flowSaveRequested: boolean;
 }
 
 function isTerminalRunSnapshot(
@@ -441,13 +366,11 @@ export class FeishuSessionWatcher {
         showThinking,
         maxProgressChars: FEISHU_LIVE_PROGRESS_CHARS,
       }),
-      flowProjector: createChannelFlowProjector(),
       runStatus,
       resultRecovery: "pending",
       projectionReady: false,
       pendingReplayEvents: [],
       projectedSequences: new Set<number>(),
-      flowSaveRequested: false,
     });
     this.deliveries.set(runId, { turnId, owner });
   }
@@ -625,11 +548,6 @@ export class FeishuSessionWatcher {
       resumed.pendingReplayEvents.push(event);
       return;
     }
-    if (event.type === "FLOW_SAVE_REQUESTED") {
-      resumed.flowSaveRequested = true;
-      resumed.projectedSequences.add(event.sequence);
-      return;
-    }
     if (event.type === "AGENT_EVENT") {
       const agentEvent = event.payload.event as AgentEvent | undefined;
       if (!agentEvent) return;
@@ -640,13 +558,6 @@ export class FeishuSessionWatcher {
       resumed.projector.apply(agentEvent);
       resumed.projectedSequences.add(event.sequence);
       return;
-    }
-    if (isStructuredFlowEvent(event.type)) {
-      resumed.flowProjector.apply(event);
-      if (event.type !== "STEP_FAILED") {
-        resumed.projectedSequences.add(event.sequence);
-        return;
-      }
     }
     if (event.type === "STEP_FAILED" && !this.fatalAgentErrorRuns.has(runId)) {
       resumed.projector.apply({
@@ -754,24 +665,15 @@ export class FeishuSessionWatcher {
   ): object {
     const status = renderFeishuRunStatus(resumed.runStatus);
     const snapshot = resumed.projector.snapshot();
-    const flowSnapshot = resumed.flowProjector.snapshot();
-    const flowText = resumed.runStatus.state === "running"
-      ? renderChannelFlowLive(flowSnapshot)
-      : renderChannelFlowFinal(flowSnapshot);
     const agentText = resumed.runStatus.state === "running"
       ? snapshot.liveText
       : resumed.resultRecovery === "pending"
         ? "⏳ 结果恢复中"
-        : flowText && !snapshot.result.trim()
-          ? ""
-          : snapshot.finalText;
+        : snapshot.finalText;
     return runCardJson({
       answer: resumed.runStatus.state === "running" ? snapshot.result : agentText,
-      progress: composeFeishuRunBody(
-        resumed.runStatus.state === "running"
-          ? [snapshot.thinking, snapshot.progress].filter(Boolean).join("\n\n") : "",
-        flowText, resumed.flowSaveRequested,
-      ),
+      progress: (resumed.runStatus.state === "running"
+          ? [snapshot.thinking, snapshot.progress].filter(Boolean).join("\n\n") : ""),
       status,
       terminal: resumed.runStatus.state !== "running",
     });
@@ -872,29 +774,6 @@ export class FeishuSessionWatcher {
         await card.onAgentEvent(agentEvent);
       }
       return;
-    }
-    if (event.type === "FLOW_SAVE_REQUESTED" && event.runId) {
-      const card = this.cards.get(event.runId);
-      if (card) await card.onFlowSaveRequested();
-      const resumed = this.resumedCards.get(event.runId);
-      if (resumed) {
-        const alreadyProjected = resumed.flowSaveRequested;
-        this.applyRecoveredEvent(event.runId, resumed, event);
-        if (!alreadyProjected && resumed.flowSaveRequested) {
-          await this.writeResumedCard(event.runId, resumed);
-        }
-      }
-      return;
-    }
-    if (isStructuredFlowEvent(event.type) && event.runId) {
-      const card = this.cards.get(event.runId);
-      if (card) await card.onDomainEvent(event);
-      const resumed = this.resumedCards.get(event.runId);
-      if (resumed) {
-        this.applyRecoveredEvent(event.runId, resumed, event);
-        await this.writeResumedCard(event.runId, resumed);
-      }
-      if (event.type !== "STEP_FAILED") return;
     }
     if (event.type === "STEP_FAILED" && event.runId) {
       const message = String(

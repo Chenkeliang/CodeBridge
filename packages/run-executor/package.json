@@ -18,8 +18,7 @@
     "@codebridge/core": "workspace:*",
     "@codebridge/policy": "workspace:*",
     "@codebridge/session-coordinator": "workspace:*",
-    "@codebridge/work-items": "workspace:*",
-    "@codebridge/workflow-engine": "workspace:*"
+    "@codebridge/work-items": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

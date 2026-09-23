@@ -78,156 +78,6 @@ export interface AgentSession {
   updated_at: string;
 }
 
-export interface FlowInputRecord {
-  id: string;
-  type: string;
-  source: string;
-  required: boolean;
-  default?: unknown;
-  description?: string | null;
-}
-
-export interface FlowStepRecord {
-  id: string;
-  capability: string | null;
-  purpose: string | null;
-  depends_on: string[];
-  mode: string | null;
-  approval: "none" | "required";
-  branches: Array<{ when: string; next: string }>;
-  retry: { max_attempts: number; delay_ms: number } | null;
-  success_when: string | null;
-}
-
-export interface FlowRecord {
-  flow_id: string;
-  name: string | null;
-  description: string | null;
-  kind: "ephemeral" | "guide" | "runbook";
-  status: "draft" | "candidate" | "published" | "deprecated";
-  source: string;
-  definition_revision: string;
-  plan_ir_hash: string | null;
-  inputs: FlowInputRecord[];
-  steps: FlowStepRecord[];
-  review_status: string | null;
-  git_revision: string | null;
-  validation_issues: string[];
-  lineage_root_flow_id: string;
-  parent_flow_id: string | null;
-  provenance: FlowProvenance | null;
-  publication_sequence: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface FlowProvenance {
-  source_run_id: string;
-  source_session_id: string;
-  source_flow_id: string;
-  source_definition_revision: string;
-  source_request_id?: string;
-}
-
-export interface FlowSaveRequest {
-  request_id: string;
-  session_id: string;
-  request_turn_id: string;
-  request_run_id: string;
-  source_turn_id: string;
-  source_run_id: string;
-  source_title: string;
-  source: "agent_intent" | "turn_action";
-  user_message: string;
-  intent_summary: string | null;
-  name_hint: string | null;
-  source_imported: boolean;
-  created_at: string;
-}
-
-export interface FlowSaveInboxRequest extends FlowSaveRequest {
-  agent_id: string;
-  session_title: string | null;
-  event_sequence: number;
-}
-
-export interface FlowSaveInboxPage {
-  requests: FlowSaveInboxRequest[];
-  next_cursor: string | null;
-}
-
-export type FlowSaveRequestState =
-  | { state: "requested"; request: FlowSaveRequest }
-  | { state: "dismissed"; request: FlowSaveRequest }
-  | {
-      state: "completed";
-      request: FlowSaveRequest;
-      flow_id: string;
-      definition_revision: string;
-    }
-  | { state: "failed"; request: FlowSaveRequest; code: string };
-
-export interface FlowSaveConfirmResult {
-  state: "completed";
-  request: FlowSaveRequest;
-  flow: FlowRecord;
-}
-
-export interface FlowEvidence {
-  run_id: string;
-  session_id: string | null;
-  status: "succeeded";
-  definition_revision: string;
-  plan_ir_hash: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface FlowSemanticDiff {
-  name_changed: boolean;
-  description_changed: boolean;
-  inputs: { added: string[]; removed: string[]; changed: string[] };
-  steps: { added: string[]; removed: string[]; changed: string[]; reordered: boolean };
-}
-
-export interface FlowHistoryEntry {
-  id: number;
-  flow_id: string;
-  definition_revision: string;
-  action: "created" | "definition_updated" | "review_approved" | "review_rejected" | "deprecated";
-  snapshot: FlowRecord;
-  created_at: string;
-}
-
-export interface FlowReviewContext {
-  flow: FlowRecord;
-  base: FlowRecord | null;
-  diff: FlowSemanticDiff;
-  provenance: FlowProvenance | null;
-  evidence: FlowEvidence[];
-  history: FlowHistoryEntry[];
-}
-
-export interface FlowCapability {
-  id: string;
-  adapter: string;
-  risk: "read_only" | "workspace_write" | "git_write" | "production_write";
-  description: string | null;
-  side_effects: boolean | null;
-}
-
-export interface FlowRecommendation {
-  recommendation_id: string;
-  session_id: string;
-  run_id: string;
-  flow_id: string;
-  definition_revision: string;
-  reason: string;
-  extracted_inputs: Record<string, unknown>;
-  status: "pending" | "dismissed" | "accepted" | "stale";
-  created_at: string;
-}
-
 export interface ConfigOptionValue {
   value: string;
   name?: string;
@@ -442,73 +292,6 @@ export interface TimelineBlockView {
   next_segment_cursor: number | null;
 }
 
-export interface FlowBatchIssue {
-  code: "missing" | "ambiguous" | "invalid_type" | "invalid_value" | "duplicate" | "conflict";
-  field: string | null;
-  message: string;
-  blocking: boolean;
-}
-
-export interface FlowBatchEvidence {
-  source: "user" | "agent_extracted" | "context" | "default";
-  evidence_ref: string;
-  inferred: boolean;
-}
-
-export interface FlowBatchDraftItem {
-  item_id: string;
-  ordinal: number;
-  label: string | null;
-  inputs: Record<string, unknown>;
-  evidence: Record<string, FlowBatchEvidence>;
-  issues: FlowBatchIssue[];
-}
-
-export interface FlowBatchDraft {
-  schema_version: 1;
-  draft_id: string;
-  session_id: string;
-  source_run_id: string;
-  flow_id: string;
-  definition_revision: string;
-  status: "needs_input" | "ready" | "confirmed" | "stale" | "cancelled";
-  revision: number;
-  global_inputs: Record<string, unknown>;
-  items: FlowBatchDraftItem[];
-  source_refs: string[];
-  created_at: string;
-  updated_at: string;
-}
-
-export interface FlowBatchItemSnapshot {
-  item_id: string;
-  ordinal: number;
-  attempt: number;
-  run_id: string;
-  input_hash: string;
-  inputs: Record<string, unknown>;
-  status: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "interrupted";
-  terminal_reason: string | null;
-  supersedes_run_id: string | null;
-}
-
-export interface FlowBatchSnapshot {
-  batch_id: string;
-  draft_id: string;
-  session_id: string;
-  flow_id: string;
-  definition_revision: string;
-  plan_ir_hash: string;
-  concurrency: number;
-  failure_policy: "continue";
-  cancel_requested_at: string | null;
-  status: "queued" | "running" | "succeeded" | "partial_succeeded" | "failed" | "cancelled";
-  counts: Record<FlowBatchItemSnapshot["status"] | "total", number>;
-  items: FlowBatchItemSnapshot[];
-  created_at: string;
-  updated_at: string;
-}
-
 export interface TimelineTurnView {
   timeline_index: number;
   turn_id: string;
@@ -573,15 +356,11 @@ export interface SessionCancelRunResult {
 
 export interface SendMessageInput {
   message: string;
-  flowId?: string | null;
-  definitionRevision?: string;
   model: string | null;
   attachments: MessageAttachmentInput[];
   permissionMode: string | null;
   effort: string | null;
   idempotencyKey: string;
-  inputs?: Record<string, unknown>;
-  dryRun?: boolean;
 }
 
 export interface PiProviderModel {

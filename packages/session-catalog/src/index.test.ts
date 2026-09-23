@@ -60,35 +60,6 @@ describe("session catalog", () => {
     store.close();
   });
 
-  it("binds and unbinds a Flow id and definition revision atomically", () => {
-    const store = new SessionCatalogStore(":memory:");
-    const session = store.createSession({ agentId: "codex" });
-
-    const bound = store.bindFlow(session.id, {
-      flowId: "flow_demo",
-      definitionRevision: "sha256:one",
-    });
-    expect(bound).toMatchObject({
-      flowId: "flow_demo",
-      flowDefinitionRevision: "sha256:one",
-    });
-    expect(store.getSession(session.id)).toMatchObject({
-      flowId: "flow_demo",
-      flowDefinitionRevision: "sha256:one",
-    });
-
-    const unbound = store.unbindFlow(session.id);
-    expect(unbound).toMatchObject({
-      flowId: null,
-      flowDefinitionRevision: null,
-    });
-    expect(store.getSession(session.id)).toMatchObject({
-      flowId: null,
-      flowDefinitionRevision: null,
-    });
-    store.close();
-  });
-
   it("persists a Session permission mode override", () => {
     const store = new SessionCatalogStore(":memory:");
     const session = store.createSession({ agentId: "codex" });

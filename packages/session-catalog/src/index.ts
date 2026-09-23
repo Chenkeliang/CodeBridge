@@ -3,10 +3,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
-import {
-  canonicalWorkspaceKey,
-  type ChannelSlot,
-} from "@codebridge/core";
+import { canonicalWorkspaceKey, type ChannelSlot } from "@codebridge/core";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as
   typeof import("node:sqlite");
@@ -601,39 +598,6 @@ export class SessionCatalogStore {
         id,
       );
     return next;
-  }
-
-  bindFlow(
-    id: string,
-    binding: { flowId: string; definitionRevision: string },
-  ): AgentSession {
-    const now = new Date().toISOString();
-    const result = this.database
-      .prepare(
-        `UPDATE agent_sessions
-         SET flow_id = ?, flow_definition_revision = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(binding.flowId, binding.definitionRevision, now, id);
-    if (Number(result.changes) === 0) {
-      throw new Error(`Session not found: ${id}`);
-    }
-    return this.getSession(id)!;
-  }
-
-  unbindFlow(id: string): AgentSession {
-    const now = new Date().toISOString();
-    const result = this.database
-      .prepare(
-        `UPDATE agent_sessions
-         SET flow_id = NULL, flow_definition_revision = NULL, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(now, id);
-    if (Number(result.changes) === 0) {
-      throw new Error(`Session not found: ${id}`);
-    }
-    return this.getSession(id)!;
   }
 
   deleteSession(id: string): boolean {

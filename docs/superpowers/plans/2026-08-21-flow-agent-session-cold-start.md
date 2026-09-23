@@ -1,3 +1,5 @@
+> 历史记录：Flow 功能已于 2026-09-23 进入完整移除；本文保留设计/验收审计，不再描述当前可用功能。当前范围见 `docs/plans/2026-09-23-remove-flow.md`。
+
 # Agent Session → Flow 冷启动实施计划
 
 **Goal:** 从不同 Agent 的真实成功 Session 生成可追溯 Guide Draft，并由 Web/通道明确确认保存；不把任意 Agent 工具调用伪装成 Candidate Runbook。

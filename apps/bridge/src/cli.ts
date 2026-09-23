@@ -1,9 +1,7 @@
 #!/usr/bin/env node
-import fs from "node:fs";
-import path from "node:path";
-import { hostname } from "node:os";
-import { fileURLToPath } from "node:url";
-import { Command } from "commander";
+import { AgentRegistry, projectSetupState, supportedAgentSetupManifests } from "@codebridge/agent-registry";
+import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
+import { TelegramBridge } from "@codebridge/channel-telegram";
 import {
   ConfigStore,
   DEFAULT_DATA_DIR,
@@ -11,9 +9,7 @@ import {
   defaultConfig,
   resolveDefaultAgentId,
 } from "@codebridge/core";
-import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
-import { TelegramBridge } from "@codebridge/channel-telegram";
-import { FlowBatchStore, SqliteEventStore, type PersistedPlanStep } from "@codebridge/work-items";
+import { McpRuntime, McpServerRegistry, SdkMcpClientFactory } from "@codebridge/mcp-runtime";
 import {
   ApprovalService,
   CapabilityRegistry,
@@ -22,6 +18,19 @@ import {
   registerDemoCapabilities,
   registerEquityCapabilities,
 } from "@codebridge/policy";
+import { ProjectCatalogGitRepository, ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
+import { RunExecutor } from "@codebridge/run-executor";
+import { RunnerClient } from "@codebridge/runner-client";
+import { SessionCatalogStore } from "@codebridge/session-catalog";
+import { SessionCoordinator, SessionLeaseService, SessionRecoveryService, reclaimQueuedRuns } from "@codebridge/session-coordinator";
+import { SqliteEventStore } from "@codebridge/work-items";
+import { Command } from "commander";
+import fs from "node:fs";
+import { hostname } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createChannelIngressApi, createChannelSessionIngress } from "./channel-ingress.js";
+import { createMcpApp } from "./mcp-api.js";
 import {
   DEFAULT_ROUTES,
   OUTBOUND_ROUTES,
@@ -32,49 +41,12 @@ import {
   revokePublisher,
   type OutboundRoute,
 } from "./outbound-publishers.js";
-import { RunnerClient } from "@codebridge/runner-client";
-import { RunExecutor } from "@codebridge/run-executor";
-import {
-  SessionCoordinator,
-  SessionLeaseService,
-  SessionRecoveryService,
-  reclaimQueuedRuns,
-} from "@codebridge/session-coordinator";
-import {
-  ProjectCatalogGitRepository,
-  ProjectCatalogStore,
-  ProjectDiscovery,
-} from "@codebridge/project-catalog";
-import { SessionCatalogStore } from "@codebridge/session-catalog";
-import { FlowCatalogStore } from "@codebridge/flow-catalog";
-import { AgentRegistry } from "@codebridge/agent-registry";
-import { projectSetupState, supportedAgentSetupManifests } from "@codebridge/agent-registry";
-import {
-  McpRuntime,
-  McpServerRegistry,
-  SdkMcpClientFactory,
-} from "@codebridge/mcp-runtime";
 import { createProjectCatalogApp } from "./project-api.js";
-import { createWebFrontendApp } from "./web-frontend.js";
 import { createSessionApp } from "./session-api.js";
-import { createFlowApp } from "./flow-api.js";
-import {
-  createChannelIngressApi,
-  createChannelSessionIngress,
-} from "./channel-ingress.js";
-import { createMcpApp } from "./mcp-api.js";
+import { SessionRuntimeMigration } from "./session-runtime-migration.js";
 import { createSkillApp } from "./skill-api.js";
 import { resolveStartupSurfaces } from "./startup-surfaces.js";
-import { SessionRuntimeMigration } from "./session-runtime-migration.js";
-import { buildFlowRecommendationGuidance } from "./flow-recommendation-guidance.js";
-import { createFlowBatchApp } from "./flow-batch-api.js";
-import { FlowBatchService } from "./flow-batch-service.js";
-import { FlowSaveIntentService } from "./flow-save-intent.js";
-import { FlowSaveInboxService } from "./flow-save-inbox.js";
-import {
-  createFlowSaveToolEventHandler,
-  FlowSaveToolTranslator,
-} from "./flow-save-tool-translator.js";
+import { createWebFrontendApp } from "./web-frontend.js";
 
 import { DeploymentService, mountDeploymentRoutes } from "./deployment.js";
 import { startEventLoopLagMonitor } from "./event-loop-lag.js";
@@ -127,7 +99,6 @@ program
       : undefined;
     const orchestrationPath = path.join(dataDir, "orchestration.sqlite");
     const workItemStore = new SqliteEventStore(orchestrationPath);
-    const flowBatchStore = new FlowBatchStore(orchestrationPath);
     const sessionCatalog = new SessionCatalogStore(
       path.join(dataDir, "sessions.sqlite"),
       {
@@ -157,35 +128,6 @@ program
       }
       throw error;
     }
-    const flowCatalog = new FlowCatalogStore(path.join(dataDir, "flows.sqlite"));
-    const flowSaveIntents = new FlowSaveIntentService({
-      sessions: sessionCatalog,
-      events: workItemStore,
-      catalog: flowCatalog,
-    });
-    const flowSaveInbox = new FlowSaveInboxService({
-      sessions: sessionCatalog,
-      events: workItemStore,
-      warn: (warning) => console.warn(
-        "Flow save inbox warning:",
-        JSON.stringify({
-          code: warning.code,
-          request_id: warning.requestId,
-          session_id: warning.sessionId,
-          event_id: warning.eventId,
-        }),
-      ),
-    });
-    const flowSaveToolTranslator = new FlowSaveToolTranslator({
-      intents: flowSaveIntents,
-    });
-    const handleFlowSaveToolEvent = createFlowSaveToolEventHandler(
-      flowSaveToolTranslator,
-      (message) => console.warn(message),
-    );
-    await flowSaveIntents.reconcilePendingAtStartup().catch((error) => {
-      console.error("Flow save intent reconciliation failed:", error);
-    });
     const approvalService = new ApprovalService(
       workItemStore,
       path.join(dataDir, "approvals.sqlite"),
@@ -263,9 +205,8 @@ program
             }
           }
         }
-        handleFlowSaveToolEvent(run, event);
       },
-      resolveRequest: (workItem, run, step?: PersistedPlanStep) => {
+      resolveRequest: (workItem, run) => {
         const linkedSession = workItem.conversationId.startsWith("conv_")
           ? sessionCatalog.getSession(`sess_${workItem.conversationId.slice("conv_".length)}`)
           : undefined;
@@ -291,26 +232,9 @@ program
             : resolveDefaultAgentId(config);
         const basePrompt =
           typeof latestMessage === "string" ? latestMessage : workItem.title;
-        const recommendationGuidance = !step && !workItem.workflowId
-          ? buildFlowRecommendationGuidance(flowCatalog.list())
-          : "";
         const deploymentGuidance = deployment.guidanceForRun(run.id, workItemStore);
         const guidedPrompt = deploymentGuidance ? `${basePrompt}\n\n${deploymentGuidance}` : basePrompt;
-        const ordinaryPrompt = recommendationGuidance
-          ? `${guidedPrompt}\n\n${recommendationGuidance}`
-          : guidedPrompt;
-        const prompt = step
-          ? [
-              `[Workflow ${workItem.workflowId ?? "临时计划"}${run.workflowRevision ? ` @ ${run.workflowRevision}` : ""}]`,
-              `[执行步骤: ${step.id}]`,
-              `[Capability: ${step.capabilityId ?? "manual"}]`,
-              `[Risk: ${step.risk}]`,
-              step.purpose ? `[Purpose: ${step.purpose}]` : "",
-              basePrompt,
-            ].filter(Boolean).join("\n")
-          : workItem.workflowId
-            ? `[参考 Workflow: ${workItem.workflowId}]\n${basePrompt}`
-            : ordinaryPrompt;
+        const prompt = guidedPrompt;
         return {
           runId: run.id,
           sessionKey: {
@@ -325,22 +249,9 @@ program
           mode: linkedSession?.permissionMode ?? undefined,
           resumeSessionId: run.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
-          flowSaveSourceAvailability: surfaces.web && linkedSession
-            ? flowSaveIntents.previewPreviousSource({
-                sessionId: linkedSession.id,
-                currentRunId: run.id,
-              })
-            : undefined,
         };
       },
     });
-    const flowBatchService = new FlowBatchService({
-      batches: flowBatchStore,
-      workItems: workItemStore,
-      flows: flowCatalog,
-      executor: runExecutor,
-    });
-    await flowBatchService.recover();
     const eventLoopLagMonitor = startEventLoopLagMonitor();
     sessionRecovery.scanExpired();
     sessionRecovery.scanCancellationDeadlines();
@@ -371,12 +282,6 @@ program
         );
       }
       reclaimQueued();
-      void flowBatchService.recover().catch((error) => {
-        console.error(
-          "Flow batch recovery failed:",
-          error instanceof Error ? error.message : String(error),
-        );
-      });
     }, 15_000);
     const cancellationInterval = setInterval(() => {
       try {
@@ -507,7 +412,6 @@ program
         executor: runExecutor,
         runner: runnerClient,
         discovery: projectDiscovery,
-        flows: flowCatalog,
         capabilities: capabilityRegistry,
         approvals: approvalService,
         coordinator: sessionCoordinator,
@@ -515,20 +419,8 @@ program
       },
       config.runner.token,
     );
-    const flowCatalogApp = createFlowApp(flowCatalog, config.runner.token, {
-      sessions: sessionCatalog,
-      events: workItemStore,
-      capabilities: capabilityRegistry,
-      runtime: capabilityRuntime,
-      flowSaveIntents,
-      flowSaveInbox,
-    });
-    const flowBatchApp = createFlowBatchApp(
-      flowBatchService,
-      config.runner.token,
-    );
     const channelSessionIngress = createChannelSessionIngress(
-      createChannelIngressApi(sessionCatalogApp, flowCatalogApp, flowBatchApp),
+      createChannelIngressApi(sessionCatalogApp),
       config.runner.token,
     );
     bridge?.setSessionIngress(channelSessionIngress);
@@ -553,8 +445,6 @@ program
       registry.close();
       projectDiscovery.close();
       sessionCatalog.close();
-      flowCatalog.close();
-      flowBatchStore.close();
       workItemStore.close();
       process.exit(0);
     };
@@ -572,7 +462,7 @@ program
       console.error(`出站发布者配置无效，沿用上一份可用凭据：${error.message}`);
     });
     const apiApp = createBridgeApp(
-        {
+{
           sendOutboundFile: (chatId, rawPath, topicId) =>
             chatId.startsWith("telegram:")
               ? telegram
@@ -598,19 +488,17 @@ program
                 ? bridge.sendOutboundMention(chatId, ref, text, topicId)
                 : Promise.reject(new Error("飞书通道未配置")),
         },
-        config.runner.token,
-        workItemStore,
-        approvalService,
-        runExecutor,
-        projectCatalogApp,
-        webFrontendApp,
-        sessionCatalogApp,
-        flowCatalogApp,
-        flowBatchApp,
-        mcpApp,
-        skillApp,
-        () => publisherStore.current(),
-      );
+config.runner.token,
+workItemStore,
+approvalService,
+runExecutor,
+projectCatalogApp,
+webFrontendApp,
+sessionCatalogApp,
+mcpApp,
+skillApp,
+() => publisherStore.current()
+);
     mountDeploymentRoutes(apiApp, deployment, workItemStore);
     serve({
       fetch: apiApp.fetch,

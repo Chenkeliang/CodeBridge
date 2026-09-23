@@ -1,20 +1,10 @@
+import type { CapabilityRegistry } from "@codebridge/policy";
+import type { RunExecutor } from "@codebridge/run-executor";
+import type { SessionCatalogStore } from "@codebridge/session-catalog";
+import { SessionCommandError, type SessionCoordinator, type SubmitTurnResult } from "@codebridge/session-coordinator";
+import type { FlowActorRef, SqliteEventStore } from "@codebridge/work-items";
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { SessionCatalogStore } from "@codebridge/session-catalog";
-import type { FlowActorRef, SqliteEventStore } from "@codebridge/work-items";
-import {
-  SessionCommandError,
-  type SessionCoordinator,
-  type SubmitTurnResult,
-} from "@codebridge/session-coordinator";
-import type { RunExecutor } from "@codebridge/run-executor";
-import type { FlowCatalogStore, FlowRecord } from "@codebridge/flow-catalog";
-import type { CapabilityRegistry } from "@codebridge/policy";
-import {
-  definitionHash,
-  WorkflowValidationError,
-  type PlanIR,
-} from "@codebridge/workflow-engine";
 import { randomUUID } from "node:crypto";
 import {
   toApiRun,
@@ -23,15 +13,12 @@ import {
   toApiSessionTurn,
   toApiTimeline,
 } from "./session-runtime-types.js";
-import { compileCatalogFlow, instantiateCatalogPlan } from "./flow-compile.js";
-import { resolveFlowInvocation } from "./flow-invocation.js";
 
 export interface SessionRuntimeApiOptions {
   catalog: SessionCatalogStore;
   workItems: SqliteEventStore;
   coordinator?: SessionCoordinator;
   executor?: RunExecutor;
-  flows?: FlowCatalogStore;
   capabilities?: CapabilityRegistry;
   channelOriginToken?: string;
 }
@@ -55,86 +42,15 @@ export function registerSessionRuntimeCommandRoutes(
     }
     const attachments = parseAttachments(body.attachments);
     if (!attachments) return c.json({ error: "invalid_attachments" }, 400);
-    const hasFlowId = Object.hasOwn(body, "flow_id");
-    if (
-      hasFlowId
-      && body.flow_id !== null
-      && (typeof body.flow_id !== "string" || !body.flow_id.trim())
-    ) {
-      return c.json({ error: "invalid_flow_id" }, 400);
-    }
-    if (
-      Object.hasOwn(body, "definition_revision")
-      && (typeof body.definition_revision !== "string" || !body.definition_revision.trim())
-    ) {
-      return c.json({ error: "invalid_definition_revision" }, 400);
-    }
-    const dryRun = body.dry_run === true;
+    const dryRun = false;
     const origin = options.channelOriginToken
       && c.req.header("x-codebridge-channel-origin") === options.channelOriginToken
-      ? "channel"
-      : "web";
-    const resolution = resolveFlowInvocation({
-      origin,
-      hasFlowId,
-      requestedFlowId: hasFlowId
-        ? body.flow_id === null ? null : String(body.flow_id).trim()
-        : undefined,
-      requestedDefinitionRevision: typeof body.definition_revision === "string"
-        ? body.definition_revision.trim()
-        : undefined,
-      binding: session.flowId !== null || session.flowDefinitionRevision !== null
-        ? {
-            flowId: session.flowId,
-            definitionRevision: session.flowDefinitionRevision,
-          }
-        : null,
-      dryRun,
-      getFlow: (flowId) => options.flows?.get(flowId),
-    });
-    if (resolution.kind === "error") {
-      return c.json(resolution.body, resolution.status);
-    }
-    const flow = resolution.kind === "flow" ? resolution.flow : undefined;
-    const flowId = flow?.flowId ?? null;
-    let frozenPlan: PlanIR | null = null;
-    if (flow) {
-      try {
-        frozenPlan = compileCatalogFlow(flow);
-      } catch (error) {
-        if (error instanceof WorkflowValidationError) {
-          return c.json({ error: "invalid_flow", issues: error.issues }, 409);
-        }
-        throw error;
-      }
-      if (definitionHash(frozenPlan) !== flow.planIrHash) {
-        return c.json({ error: "plan_ir_drift", flow_id: flowId }, 409);
-      }
-      frozenPlan = instantiateCatalogPlan(frozenPlan);
-      const provided = inputRecord(body.inputs);
-      const missing = flow.inputs
-        .filter((input) => input.required && input.source === "user")
-        .filter((input) => provided[input.id] === undefined || provided[input.id] === null)
-        .map((input) => ({
-          id: input.id,
-          type: input.type,
-          source: input.source,
-          reason: "required" as const,
-        }));
-      if (missing.length > 0) {
-        return c.json({ error: "missing_inputs", missing }, 409);
-      }
-    }
+      ? "channel" : "web";
     const delivery = parseDelivery(body.delivery);
     if (delivery === null) {
       return c.json({ error: "invalid_delivery" }, 400);
     }
-    const idempotencyNamespace = `session:message:${session.id}`;
-    const idempotencyReplay = Boolean(
-      options.workItems.getIdempotencyResponse(idempotencyNamespace, key),
-    );
     try {
-      const provided = frozenPlan ? inputRecord(body.inputs) : {};
       const result = options.coordinator.submitTurn({
         sessionId: session.id,
         idempotencyKey: key,
@@ -142,7 +58,7 @@ export function registerSessionRuntimeCommandRoutes(
         message: {
           text: body.message,
           attachmentIds: [],
-          flowId,
+          flowId: null,
           model: nullable(body.model, session.model),
           effort: nullable(body.effort, session.effort),
           permissionMode: nullable(
@@ -152,16 +68,8 @@ export function registerSessionRuntimeCommandRoutes(
           actorRef: origin === "web"
             ? { channel: "web", id: "local" }
             : channelActorRef(body.actor_ref),
-          flowInvocationSource: resolution.kind === "flow"
-            ? resolution.source
-            : "none",
-          executionKind: resolution.kind === "flow" ? "flow" : "agent",
-          plan: frozenPlan
-            ? {
-                ...frozenPlan,
-                planIrHash: flow?.planIrHash ?? null,
-              }
-            : null,
+          executionKind: "agent",
+          plan: null,
         },
         workItem: {
           title: body.message.slice(0, 80),
@@ -169,14 +77,10 @@ export function registerSessionRuntimeCommandRoutes(
           conversationId: `conv_${session.id.replace(/^sess_/, "")}`,
           agentId: session.agentId,
           workspaceScope: session.cwd ? [session.cwd] : [],
-          riskLevel: frozenPlan ? maxStepRisk(frozenPlan) : "read_only",
-          identifiers: frozenPlan ? provided : undefined,
+          riskLevel: "read_only",
         },
         delivery,
       });
-      if (resolution.kind === "unbind" && !idempotencyReplay) {
-        options.catalog.unbindFlow(session.id);
-      }
       options.catalog.updateSession(session.id, {
         taskRecordId: result.workItemId,
         model: result.turn.message.model,
@@ -185,20 +89,12 @@ export function registerSessionRuntimeCommandRoutes(
         title: session.title ?? body.message.slice(0, 80),
         status: "active",
       });
-      if (!idempotencyReplay && frozenPlan && flow) {
-        appendParamResolvedEvents(
-          options.workItems,
-          result.workItemId,
-          flow,
-          provided,
-        );
-      }
       if (result.run) {
         await observeExecution(
           options,
           result.run.id,
           dryRun,
-          Boolean(frozenPlan),
+          false,
         );
       }
       return c.json(toSubmitReceipt(options, result), 202);
@@ -651,70 +547,4 @@ async function observeExecution(
     }
     throw error;
   }
-}
-
-function inputRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function appendParamResolvedEvents(
-  workItems: SqliteEventStore,
-  workItemId: string,
-  flow: FlowRecord,
-  provided: Record<string, unknown>,
-): void {
-  const previousByField = new Map<string, unknown>();
-  for (const event of workItems.listEvents(workItemId)) {
-    if (event.type !== "PARAM_RESOLVED") continue;
-    const field = event.payload.field;
-    if (typeof field !== "string") continue;
-    previousByField.set(field, event.payload.final_value);
-  }
-  for (const input of flow.inputs) {
-    const value = provided[input.id];
-    if (value === undefined || value === null) continue;
-    const hadPrevious = previousByField.has(input.id);
-    const candidateValue = hadPrevious
-      ? previousByField.get(input.id) ?? null
-      : input.default ?? null;
-    workItems.appendEvent({
-      workItemId,
-      type: "PARAM_RESOLVED",
-      actor: "user",
-      target: input.id,
-      payload: {
-        flow_id: flow.flowId,
-        flow_revision: flow.planIrHash ?? "",
-        field: input.id,
-        candidate_value: candidateValue,
-        final_value: value,
-        resolution: hadPrevious && value !== candidateValue
-          ? "edited"
-          : "confirmed",
-        source: "user",
-        resolver_version: "v1",
-      },
-    });
-  }
-}
-
-function maxStepRisk(
-  plan: PlanIR,
-): "read_only" | "workspace_write" | "git_write" | "production_write" {
-  const rank: Record<string, number> = {
-    read_only: 0,
-    workspace_write: 1,
-    git_write: 2,
-    production_write: 3,
-  };
-  let best: "read_only" | "workspace_write" | "git_write" | "production_write" =
-    "read_only";
-  for (const step of plan.steps) {
-    if ((rank[step.risk] ?? -1) > rank[best]!) {
-      best = step.risk as typeof best;
-    }
-  }
-  return best;
 }

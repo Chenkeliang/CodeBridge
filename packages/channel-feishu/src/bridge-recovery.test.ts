@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  defaultConfig,
-  type ChannelSessionIngress,
-  type ChannelSessionEvent,
-} from "@codebridge/core";
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { defaultConfig, type ChannelSessionIngress, type ChannelSessionEvent } from "@codebridge/core";
 
 const channel = vi.hoisted(() => ({
   botIdentity: { name: "Test Bot" },
@@ -194,7 +196,7 @@ describe("FeishuBridge interrupted stream recovery", () => {
        channel.rawClient.cardkit.v1.cardElement.update.mock.calls],
     );
     expect(writes).toContain("public result");
-    expect(writes).toContain(
+    expect(writes).not.toContain(
       "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     const finalWrite = JSON.stringify(
@@ -202,7 +204,7 @@ describe("FeishuBridge interrupted stream recovery", () => {
         ?? channel.rawClient.cardkit.v1.card.update.mock.calls.at(-1),
     );
     expect(finalWrite.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
-      .toHaveLength(1);
+      .toBeNull();
     expect(writes).not.toContain("private reasoning");
     expect(writes).not.toContain("SecretTool");
     expect(channel.rawClient.cardkit.v1.card.update).toHaveBeenCalledWith(

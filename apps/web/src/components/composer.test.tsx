@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
+import type { AgentSession, ConfigOption } from "@/lib/types";
 import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentSession, ConfigOption, FlowRecord } from "@/lib/types";
 import { Composer } from "./composer";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -78,24 +78,6 @@ const permissionOption: ConfigOption = {
   ],
 };
 
-const flow: FlowRecord = {
-  flow_id: "flow-1",
-  name: "Review Flow",
-  description: null,
-  kind: "runbook",
-  status: "published",
-  source: "test",
-  definition_revision: "1",
-  plan_ir_hash: null,
-  inputs: [],
-  steps: [],
-  review_status: null,
-  git_revision: null,
-  validation_issues: [],
-  lineage_root_flow_id: "flow-1", parent_flow_id: null, provenance: null, publication_sequence: 1,
-  created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z",
-};
-
 function composerProps(): ComponentProps<typeof Composer> {
   return {
     attachments: [
@@ -114,8 +96,6 @@ function composerProps(): ComponentProps<typeof Composer> {
     workspaceLoading: false,
     disabled: false,
     draft: "检查这次修改",
-    flowId: "",
-    flows: [flow],
     model: "gpt-5",
     modelOption,
     effort: "medium",
@@ -135,7 +115,6 @@ function composerProps(): ComponentProps<typeof Composer> {
     onContextOpen: vi.fn(),
     onDraft: vi.fn(),
     onFiles: vi.fn(),
-    onFlow: vi.fn(),
     onModel: vi.fn(),
     onEffort: vi.fn(),
     onConfigOverride: vi.fn(),
@@ -195,29 +174,6 @@ describe("Composer", () => {
     click(view.host.querySelector('button[aria-label="发送"]'));
     expect(view.props.onSubmit).toHaveBeenCalledOnce();
     expect(view.props.onDraft).toHaveBeenCalledWith("");
-    act(() => view.root.unmount());
-    view.host.remove();
-  });
-
-  it("moves files, Workspace, and Flow into plus while grouping model controls", () => {
-    const view = renderComposer();
-
-    click(view.host.querySelector('button[aria-label="Composer actions"]'));
-    expect(document.body.textContent).toContain("添加文件");
-    expect(document.body.textContent).toContain("插入 Workspace 上下文");
-    expect(document.body.textContent).toContain("添加 Workspace");
-    expect(document.body.querySelector('button[aria-label="Flow"]')).not.toBeNull();
-    click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("添加文件")) ?? null);
-    click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("插入 Workspace 上下文")) ?? null);
-    click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("添加 Workspace")) ?? null);
-    expect(view.props.onFiles).toHaveBeenCalledOnce();
-    expect(view.props.onContextOpen).toHaveBeenCalledWith(true);
-    expect(view.props.onPickDirectory).toHaveBeenCalledOnce();
-
-    click(view.host.querySelector('button[aria-label="Model and reasoning"]'));
-    expect(document.body.textContent).toContain("Model");
-    expect(document.body.textContent).toContain("推理强度");
-    expect(document.body.textContent).toContain("速度");
     act(() => view.root.unmount());
     view.host.remove();
   });
@@ -299,20 +255,27 @@ describe("Composer", () => {
     act(() => view.root.unmount());
     view.host.remove();
   });
+});
 
-  it("shows a bound runbook badge with the plan hash tail", () => {
-    const runbook: FlowRecord = {
-      flow_id: "flow_demo_echo", name: "Demo Echo", kind: "runbook", status: "published",
-      description: null,
-      source: "test", definition_revision: "sha256:def", plan_ir_hash: "sha256:abcdef0123456789",
-      review_status: "approved", git_revision: null, validation_issues: [], inputs: [], steps: [],
-      lineage_root_flow_id: "flow_demo_echo", parent_flow_id: null, provenance: null, publication_sequence: 1,
-      created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z",
-    };
-    const view = renderComposer({ flowId: "flow_demo_echo", flows: [runbook] });
-    expect(view.host.textContent).toContain("runbook");
-    expect(view.host.textContent).toContain("23456789");
+it("keeps files and Workspace in plus while grouping model controls", () => {
+    const view = renderComposer();
+
+    click(view.host.querySelector('button[aria-label="Composer actions"]'));
+    expect(document.body.textContent).toContain("添加文件");
+    expect(document.body.textContent).toContain("插入 Workspace 上下文");
+    expect(document.body.textContent).toContain("添加 Workspace");
+    expect(document.body.querySelector('button[aria-label="Flow"]')).toBeNull();
+    click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("添加文件")) ?? null);
+    click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("插入 Workspace 上下文")) ?? null);
+    click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("添加 Workspace")) ?? null);
+    expect(view.props.onFiles).toHaveBeenCalledOnce();
+    expect(view.props.onContextOpen).toHaveBeenCalledWith(true);
+    expect(view.props.onPickDirectory).toHaveBeenCalledOnce();
+
+    click(view.host.querySelector('button[aria-label="Model and reasoning"]'));
+    expect(document.body.textContent).toContain("Model");
+    expect(document.body.textContent).toContain("推理强度");
+    expect(document.body.textContent).toContain("速度");
     act(() => view.root.unmount());
     view.host.remove();
   });
-});

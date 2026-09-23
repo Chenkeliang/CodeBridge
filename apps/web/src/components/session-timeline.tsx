@@ -1,29 +1,10 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { BookmarkPlus, ChevronDown, LoaderCircle, MoreHorizontal, Workflow, X } from "lucide-react";
-import {
-  LiveElapsed,
-  Markdown,
-  WorkMarkdown,
-} from "@/components/conversation";
+import { ChevronDown, LoaderCircle } from "lucide-react";
+import { LiveElapsed, Markdown, WorkMarkdown } from "@/components/conversation";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  FlowSaveRequestCard,
-  type FlowSaveRequestActionState,
-} from "@/components/flow-save-request-card";
-import {
-  RuntimeApprovalCard,
-  type RuntimeApprovalAction,
-  type RuntimeApprovalStatus,
-} from "@/components/runtime-approval-card";
+import { RuntimeApprovalCard, type RuntimeApprovalAction, type RuntimeApprovalStatus } from "@/components/runtime-approval-card";
 import { formatElapsed } from "@/components/workbench-shared";
-import { revisionTail } from "@/lib/revision-tail";
-import type {
-  FlowRecommendation,
-  TimelineBlockView,
-  TimelineSegmentView,
-  TimelineTurnView,
-} from "@/lib/types";
+import type { TimelineBlockView, TimelineSegmentView, TimelineTurnView } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function SessionTimeline(props: {
@@ -37,19 +18,6 @@ export function SessionTimeline(props: {
   resolvingApprovalId?: string | null;
   approvalStatusOverrides?: Record<string, RuntimeApprovalStatus>;
   onResolveApproval?: (action: RuntimeApprovalAction, approve: boolean) => void;
-  solidifiableFlowIds?: string[];
-  savingCandidateRunId?: string | null;
-  onCreateCandidate?: (runId: string) => void;
-  flowRecommendations?: FlowRecommendation[];
-  onUseFlowRecommendation?: (recommendation: FlowRecommendation) => void;
-  onDismissFlowRecommendation?: (recommendation: FlowRecommendation) => void;
-  onOpenFlowBatch?: (reference: { draftId?: string; batchId?: string }) => void;
-  requestingFlowRunIds?: ReadonlySet<string>;
-  flowSaveActionStates?: Record<string, FlowSaveRequestActionState>;
-  onRequestFlowSave?: (runId: string) => void;
-  onConfirmFlowSave?: (requestId: string) => void;
-  onDismissFlowSave?: (requestId: string) => void;
-  onOpenFlowCandidate?: (flowId: string) => void;
 }) {
   const timelineRoot = useRef<HTMLDivElement | null>(null);
   const seenSegmentIds = useRef<Set<string> | null>(null);
@@ -94,23 +62,12 @@ export function SessionTimeline(props: {
     for (const segmentId of currentSegmentIds) seenSegmentIds.current.add(segmentId);
   }, [props.activeRunId, props.turns]);
 
-  const blockedFlowSaveSourceRunIds = new Set(
-    props.turns.flatMap((turn) => turn.blocks.flatMap((block) => {
-      if (block.kind !== "flow_save_request" || !["pending", "completed"].includes(block.status)) return [];
-      const sourceRunId = stringMetadata(block.metadata, "source_run_id");
-      return sourceRunId ? [sourceRunId] : [];
-    })),
-  );
-
   return <div className="grid gap-6" ref={timelineRoot}>
     {props.hasEarlier && <Button className="mx-auto" data-load-earlier disabled={props.loadingEarlier} onClick={props.onLoadEarlier} size="sm" variant="ghost">
       {props.loadingEarlier ? "正在加载…" : "加载更早对话"}
     </Button>}
     {props.turns.map((turn) => {
       const liveBlockId = liveProcessBlockId(turn, props.activeRunId);
-      const recommendation = props.flowRecommendations?.find((entry) =>
-        entry.run_id === turn.run_id && entry.status === "pending"
-      ) ?? null;
       return <article className="grid gap-4" data-timeline-turn={turn.turn_id} key={turn.turn_id}>
         {groupProcessBlocks(turn.blocks).map((item) => item.kind === "group"
           ? <ProcessBlock
@@ -130,34 +87,9 @@ export function SessionTimeline(props: {
               onResolveApproval={props.onResolveApproval}
               resolvingApprovalId={props.resolvingApprovalId ?? null}
               approvalStatusOverrides={props.approvalStatusOverrides ?? {}}
-              solidifiableFlowIds={props.solidifiableFlowIds ?? []}
-              savingCandidateRunId={props.savingCandidateRunId ?? null}
-              onCreateCandidate={props.onCreateCandidate}
-              onOpenFlowBatch={props.onOpenFlowBatch}
-              flowSaveActionState={flowSaveActionState(item.block, props.flowSaveActionStates)}
-              onConfirmFlowSave={props.onConfirmFlowSave}
-              onDismissFlowSave={props.onDismissFlowSave}
-              onOpenFlowCandidate={props.onOpenFlowCandidate}
               runId={turn.run_id}
             />)}
-        {recommendation && <div className="grid max-w-[780px] gap-3 rounded-lg border border-accent/40 bg-accent-soft px-3.5 py-3 text-xs text-muted">
-          <div>
-            <div className="font-medium text-ink">Agent 建议使用 Flow · {recommendation.flow_id}</div>
-            <div className="mt-1">{recommendation.reason || "当前任务与已发布 Flow 匹配"}</div>
-          </div>
-          <div className="flex gap-2">
-            <Button onClick={() => props.onUseFlowRecommendation?.(recommendation)} size="sm">
-              <Workflow className="size-3.5" />查看并使用
-            </Button>
-            <Button onClick={() => props.onDismissFlowRecommendation?.(recommendation)} size="sm" variant="ghost">
-              <X className="size-3.5" />忽略
-            </Button>
-          </div>
-        </div>}
-        {props.onRequestFlowSave && isEligibleFlowSaveSourceTurn(turn, blockedFlowSaveSourceRunIds) && <TurnActionMenu
-          busy={props.requestingFlowRunIds?.has(turn.run_id) ?? false}
-          onRequest={() => props.onRequestFlowSave?.(turn.run_id)}
-        />}
+
       </article>;
     })}
   </div>;
@@ -173,23 +105,9 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   resolvingApprovalId: string | null;
   approvalStatusOverrides: Record<string, RuntimeApprovalStatus>;
   onResolveApproval?: (action: RuntimeApprovalAction, approve: boolean) => void;
-  solidifiableFlowIds: string[];
-  savingCandidateRunId: string | null;
-  onCreateCandidate?: (runId: string) => void;
-  onOpenFlowBatch?: (reference: { draftId?: string; batchId?: string }) => void;
-  flowSaveActionState: FlowSaveRequestActionState | null;
-  onConfirmFlowSave?: (requestId: string) => void;
-  onDismissFlowSave?: (requestId: string) => void;
-  onOpenFlowCandidate?: (flowId: string) => void;
 }) {
   const { block } = props;
-  if (block.kind === "flow_save_request") return <FlowSaveRequestCard
-    actionState={props.flowSaveActionState}
-    block={block}
-    onConfirm={props.onConfirmFlowSave}
-    onDismiss={props.onDismissFlowSave}
-    onOpenCandidate={props.onOpenFlowCandidate}
-  />;
+  if (block.kind.startsWith("flow_")) return null;
   if (isEmptyProcessBlock(block) && !props.isLive) return null;
   const more = block.next_segment_cursor !== null && !props.isLive && <Button disabled={props.loading} onClick={() => props.onLoadSegments(block.block_id, block.next_segment_cursor!)} size="sm" variant="ghost">
     {props.loading ? "正在加载…" : "加载更多输出"}
@@ -210,18 +128,6 @@ const TimelineBlock = memo(function TimelineBlock(props: {
       {more}
     </div>;
   }
-  if (block.kind === "flow_param" || block.kind === "flow_step" || block.kind === "flow_run" || block.kind === "flow_failure") {
-    return <FlowBlock
-      block={block}
-      onCreateCandidate={props.onCreateCandidate}
-      runId={props.runId}
-      savingCandidateRunId={props.savingCandidateRunId}
-      solidifiableFlowIds={props.solidifiableFlowIds}
-    />;
-  }
-  if (block.kind === "flow_batch") {
-    return <FlowBatchTimelineCard block={block} onOpen={props.onOpenFlowBatch} />;
-  }
   if (block.kind === "approval") {
     const approvalId = typeof block.metadata.approval_id === "string"
       ? block.metadata.approval_id
@@ -241,96 +147,6 @@ const TimelineBlock = memo(function TimelineBlock(props: {
     onLoadSegments={props.onLoadSegments}
   />;
 });
-
-function TurnActionMenu(props: { busy: boolean; onRequest: () => void }) {
-  const [open, setOpen] = useState(false);
-  return <div className="flex w-full max-w-[780px] justify-end" data-turn-actions>
-    <Popover onOpenChange={setOpen} open={open}>
-      <PopoverTrigger asChild>
-        <Button
-          aria-label="Turn 操作"
-          className="size-8 p-0"
-          disabled={props.busy}
-          size="icon"
-          variant="ghost"
-        >{props.busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <MoreHorizontal className="size-4" />}</Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="min-w-36 border-line-strong bg-overlay p-1 shadow-panel"
-        side="bottom"
-      >
-      <button
-        className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-ink hover:bg-surface-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
-        onClick={() => {
-          setOpen(false);
-          props.onRequest();
-        }}
-        type="button"
-      ><BookmarkPlus className="size-3.5 text-control-accent" />存为 Flow</button>
-      </PopoverContent>
-    </Popover>
-  </div>;
-}
-
-function isEligibleFlowSaveSourceTurn(
-  turn: TimelineTurnView,
-  blockedSourceRunIds: ReadonlySet<string>,
-): boolean {
-  if (turn.status !== "succeeded" || blockedSourceRunIds.has(turn.run_id)) return false;
-  if (!turn.blocks.some((block) => block.kind === "assistant")) return false;
-  if (turn.blocks.some((block) => [
-    "flow_param",
-    "flow_step",
-    "flow_run",
-    "flow_failure",
-    "flow_batch",
-  ].includes(block.kind))) return false;
-  return !turn.blocks.some((block) =>
-    block.kind === "flow_save_request"
-    && stringMetadata(block.metadata, "request_run_id") === turn.run_id
-    && stringMetadata(block.metadata, "source_run_id") !== turn.run_id
-  );
-}
-
-function flowSaveActionState(
-  block: TimelineBlockView,
-  states: Record<string, FlowSaveRequestActionState> | undefined,
-): FlowSaveRequestActionState | null {
-  if (block.kind !== "flow_save_request") return null;
-  const requestId = stringMetadata(block.metadata, "request_id");
-  return requestId ? states?.[requestId] ?? null : null;
-}
-
-function stringMetadata(metadata: Record<string, unknown>, key: string): string | null {
-  const value = metadata[key];
-  return typeof value === "string" && value ? value : null;
-}
-
-function FlowBatchTimelineCard({ block, onOpen }: {
-  block: TimelineBlockView;
-  onOpen?: (reference: { draftId?: string; batchId?: string }) => void;
-}) {
-  const draftId = typeof block.metadata.draft_id === "string" ? block.metadata.draft_id : undefined;
-  const batchId = typeof block.metadata.batch_id === "string" ? block.metadata.batch_id : undefined;
-  const counts = block.metadata.counts && typeof block.metadata.counts === "object"
-    ? block.metadata.counts as Record<string, unknown>
-    : {};
-  const total = Number(block.metadata.total ?? counts.total ?? block.metadata.item_count ?? 0);
-  const succeeded = Number(counts.succeeded ?? block.metadata.succeeded ?? 0);
-  const failed = Number(counts.failed ?? block.metadata.failed ?? 0);
-  return <div className="grid max-w-[780px] gap-3 rounded-lg border border-line-strong bg-surface px-3.5 py-3 shadow-card" data-flow-batch-card>
-    <div className="flex items-start justify-between gap-3">
-      <div>
-        <p className="text-xs font-semibold text-ink">Flow 批量调用</p>
-        <p className="mt-1 font-mono text-[11px] text-muted">{batchId ?? draftId ?? "等待建立草稿"}</p>
-      </div>
-      <span className="rounded-md bg-surface-tint px-2 py-1 font-mono text-[11px] text-muted">{block.status}</span>
-    </div>
-    {total > 0 && <p className="font-mono text-xs text-muted">成功 {succeeded} · 失败 {failed} · 共 {total}</p>}
-    <Button className="justify-self-start" disabled={!draftId && !batchId} onClick={() => onOpen?.({ draftId, batchId })} size="sm" variant="outline">查看参数与进度</Button>
-  </div>;
-}
 
 function ProcessBlock(props: {
   blocks: TimelineBlockView[];
@@ -506,104 +322,6 @@ function blockLabel(kind: TimelineBlockView["kind"]): string {
     case "tool": return "工具调用";
     case "approval": return "等待批准";
     case "error": return "错误";
-    case "flow_step": return "流程步骤";
-    case "flow_param": return "参数";
-    case "flow_run": return "Run 快照";
-    case "flow_failure": return "验证失败";
-    case "flow_batch": return "批量 Flow";
-    case "flow_save_request": return "存为 Flow";
+    default: return "历史记录";
   }
-}
-
-function flowStepLabel(status: string): string {
-  switch (status) {
-    case "running": return "执行中";
-    case "passed": return "完成";
-    case "failed": return "失败";
-    case "retrying": return "重试中";
-    case "skipped": return "跳过";
-    default: return "步骤";
-  }
-}
-
-function flowStepDot(status: string): string {
-  switch (status) {
-    case "running": return "bg-control-accent animate-pulse";
-    case "passed": return "bg-success";
-    case "failed": return "bg-danger";
-    case "retrying": return "bg-warning";
-    default: return "bg-faint";
-  }
-}
-
-function FlowBlock({ block, runId, solidifiableFlowIds, savingCandidateRunId, onCreateCandidate }: {
-  block: TimelineBlockView;
-  runId: string;
-  solidifiableFlowIds: string[];
-  savingCandidateRunId: string | null;
-  onCreateCandidate?: (runId: string) => void;
-}) {
-  const meta = block.metadata as Record<string, unknown>;
-  if (block.kind === "flow_step") {
-    const label = flowStepLabel(block.status);
-    const tone = block.status === "failed" ? "text-danger" : block.status === "retrying" ? "text-warning" : block.status === "passed" ? "text-success" : "text-ink-soft";
-    return <div className="grid max-w-[780px] gap-1.5">
-      <p className="flex items-center gap-2 font-mono text-xs">
-        <span className={cn("size-2 rounded-full", flowStepDot(block.status))} />
-        <span className={tone}>{label}</span>
-        <span className="text-muted">{String(meta.capability_id ?? meta.step_id ?? "")}</span>
-        {block.status === "retrying" && meta.error != null && <span className="truncate text-muted">{String(meta.error)}</span>}
-      </p>
-      {block.segments[0]?.content ? <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-surface-tint px-3 py-2 font-mono text-xs text-ink-soft">{block.segments[0].content}</pre> : null}
-    </div>;
-  }
-  if (block.kind === "flow_param") {
-    const resolution = meta.resolution === "edited" ? "edited" : "confirmed";
-    return <div className="flex max-w-[780px] flex-wrap items-center gap-2 font-mono text-xs text-muted">
-      <span className={cn("rounded px-1.5 py-0.5", resolution === "edited" ? "bg-warning-soft text-warning" : "bg-surface-tint text-success")}>{resolution}</span>
-      <span>参数 {String(meta.field)} = {JSON.stringify(meta.final_value)}</span>
-      {meta.candidate_value != null && <span className="text-faint">候选 {JSON.stringify(meta.candidate_value)}</span>}
-    </div>;
-  }
-  if (block.kind === "flow_failure") {
-    const category = String(meta.category ?? "verification");
-    return <div className="grid max-w-[780px] gap-1.5 rounded-lg border border-danger/40 bg-danger-soft p-3.5 text-xs">
-      <p className="flex items-center gap-2 font-semibold text-danger">
-        <X className="size-3.5" />
-        <span>验证失败 · {category}</span>
-        {meta.truncated === true && <span className="rounded bg-surface-tint px-1.5 py-0.5 font-mono text-faint">actual 已截断</span>}
-      </p>
-      <p className="font-mono text-danger/80">步骤 {String(meta.step_id)} · {String(meta.postcondition ?? "")}</p>
-    </div>;
-  }
-  const steps = Array.isArray(meta.steps) ? meta.steps as Array<Record<string, unknown>> : [];
-  const passed = steps.filter((step) => step.verification_status === "passed").length;
-  const flowId = String(meta.flow_id ?? "");
-  const canSolidify = block.status === "succeeded" && solidifiableFlowIds.includes(flowId);
-  return <div className="grid max-w-[780px] gap-2 rounded-lg border border-line bg-surface p-3.5 shadow-card">
-    <p className="flex items-center justify-between gap-2 text-xs">
-      <span className="flex items-center gap-2 font-semibold text-ink"><Workflow className="size-3.5" />Run 快照</span>
-      <span className={cn("font-mono", block.status === "succeeded" ? "text-success" : "text-danger")}>{block.status === "succeeded" ? "成功" : "失败"}</span>
-    </p>
-    <p className="font-mono text-xs text-muted">Flow {flowId} · rev {revisionTail(String(meta.flow_revision ?? ""))}</p>
-    <ol className="grid gap-1">
-      {steps.map((step, index) => (
-        <li className="flex items-center gap-2 font-mono text-xs" key={String(step.step_id ?? index)}>
-          <span className={step.verification_status === "passed" ? "text-success" : "text-danger"}>{step.verification_status === "passed" ? "✓" : "✗"}</span>
-          <span className="text-ink-soft">{String(step.capability_id ?? step.step_id)}</span>
-          {typeof step.output_ref === "string" && <span className="truncate text-faint">{step.output_ref}</span>}
-        </li>
-      ))}
-    </ol>
-    <div className="flex items-center justify-between gap-3">
-      <p className="text-xs text-faint">{passed} / {steps.length} 步通过</p>
-      {canSolidify && <Button
-        className="h-7 text-xs"
-        disabled={savingCandidateRunId === runId}
-        onClick={() => onCreateCandidate?.(runId)}
-        size="sm"
-        variant="outline"
-      >{savingCandidateRunId === runId ? "正在保存…" : "存为 Candidate"}</Button>}
-    </div>
-  </div>;
 }
