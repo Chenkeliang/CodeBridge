@@ -7,6 +7,7 @@ import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
+  setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string): Promise<void>;
   sendOutboundFile(
     chatId: string,
     rawPath: string,
@@ -157,6 +158,23 @@ export function createOutboundApp(
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
     await next();
+  });
+
+  app.post("/outbound/alert-status", async (c) => {
+    // This route is deliberately absent from publisher routes: only an active Run can set a status.
+    const target = resolvedTargets.get(c.req.raw);
+    if (!options.workItemStore || !target?.topicId || !target.chatId.startsWith("oc_")) {
+      return c.json({ error: "alert_status_requires_feishu_run" }, 400);
+    }
+    const body = await c.req.json().catch(() => null) as { status?: unknown; summary?: unknown } | null;
+    if (typeof body?.status !== "string" || typeof body.summary !== "string") return c.json({ error: "status and summary required" }, 400);
+    try {
+      if (!bridge.setOutboundAlertStatus) throw new Error("alert_status_unavailable");
+      await bridge.setOutboundAlertStatus(target.chatId, target.topicId, body.status, body.summary);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
   });
 
   app.post("/outbound/file", async (c) => {

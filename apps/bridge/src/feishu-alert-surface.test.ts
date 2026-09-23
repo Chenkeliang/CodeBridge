@@ -5,6 +5,8 @@ import path from "node:path";
 import { defaultConfig, type ChannelSessionIngress } from "@codebridge/core";
 import { FeishuBridge, type FeishuMessage } from "../../../packages/channel-feishu/src/bridge.js";
 import { FeishuAlertMonitor } from "./feishu-alert-monitor.js";
+import { createOutboundApp } from "./outbound-api.js";
+import type { SqliteEventStore } from "@codebridge/work-items";
 import type { FeishuCardHost } from "../../../packages/channel-feishu/src/session-watcher.js";
 
 const roots: string[] = [];
@@ -30,8 +32,19 @@ function fixture() {
   const reply = vi.fn(async () => ({ code: 0, data: { message_id: "om_card" } }));
   const list = vi.fn(async () => ({ code: 0, data: { items: [message], has_more: false } }));
   const get = vi.fn(async () => ({ code: 0, data: { items: [message] } }));
+  let reactions: Array<{ reaction_id: string; operator: { operator_id: string; operator_type: "app" }; reaction_type: { emoji_type: string } }> = [];
+  const reactionCreate = vi.fn(async (request: { data: { reaction_type: { emoji_type: string } } }) => {
+    const item = { reaction_id: `r${reactions.length}`, operator: { operator_id: config.feishu.appId, operator_type: "app" as const }, reaction_type: request.data.reaction_type };
+    reactions.push(item); return { code: 0, data: item };
+  });
+  const reactionDelete = vi.fn(async (request: { path: { reaction_id: string } }) => {
+    reactions = reactions.filter((item) => item.reaction_id !== request.path.reaction_id); return { code: 0 };
+  });
   const channel = { send, rawClient: {
-    im: { v1: { message: { list, reply, get } } },
+    im: { v1: { message: { list, reply, get }, messageReaction: {
+      list: vi.fn(async () => ({ code: 0, data: { items: reactions, has_more: false, page_token: "" } })),
+      create: reactionCreate, delete: reactionDelete,
+    } } },
     cardkit: { v1: { card: { create: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })),
       idConvert: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })) } } },
   } };
@@ -47,7 +60,7 @@ function fixture() {
   internal.ensureSessionWatcher = () => watcher;
   monitor = new FeishuAlertMonitor({ statePath: path.join(root, "alerts.json"), config: () => config.feishu.alertMonitor,
     transport: bridge, now: () => now, log: vi.fn() });
-  return { root, config, bridge, monitor, internal, submit, watcher, send, reply, list, get, message, advance: () => { now += 1000; } };
+  return { root, config, bridge, monitor, internal, submit, watcher, send, reply, list, get, reactionCreate, reactionDelete, message, advance: () => { now += 1000; } };
 }
 
 describe("alert polling through the active Feishu adapter", () => {
@@ -100,6 +113,25 @@ describe("alert polling through the active Feishu adapter", () => {
     await f.internal.dispatchInboundMessage({ messageId: "om_alarm_event", chatId: "oc_alerts", chatType: "group",
       senderId: "cli_alarm", content: "alert", mentionedBot: true, raw: { sender: { sender_type: "app" } } });
     expect(f.submit).not.toHaveBeenCalled();
+  });
+
+  it("projects a run-bound status through the monitor and real adapter onto the original card and owner mention", async () => {
+    const f = fixture();
+    f.config.feishu.alertMonitor!.statusReactions = { investigating: "OnIt", waiting: "OneSecond", resolved: "DONE", no_action: "CrossMark", blocked: "Sigh" };
+    await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    expect(f.reactionCreate).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: { reaction_type: { emoji_type: "OnIt" } } }));
+    const store = { getRun: () => ({ id: "run-1", status: "running", turnId: "turn-1" }),
+      listDeliveries: (channel: string) => channel === "feishu" ? [{ runId: "run-1", turnId: "turn-1", conversationId: "oc_alerts|om_alert" }] : [] } as unknown as SqliteEventStore;
+    const app = createOutboundApp({ sendOutboundFile: vi.fn(), sendOutboundMarkdown: vi.fn(), sendOutboundMention: vi.fn(),
+      setOutboundAlertStatus: (chat, topic, status, summary) => f.monitor.setStatus(chat, topic, status, summary) }, "test-token", { workItemStore: store });
+    const response = await app.request("/outbound/alert-status", { method: "POST", headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+      body: JSON.stringify({ runId: "run-1", status: "waiting", summary: "请确认补货计划", chatId: "oc_wrong", topicId: "wrong" }) });
+    expect(response.status).toBe(200);
+    expect(f.reactionCreate).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: { reaction_type: { emoji_type: "OneSecond" } } }));
+    expect(f.reactionDelete).toHaveBeenCalledWith({ path: { message_id: "om_alert", reaction_id: "r0" } });
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "请确认补货计划" }, expect.objectContaining({ replyTo: "om_alert", replyInThread: true,
+      mentions: [expect.objectContaining({ openId: "ou_owner" })] }));
   });
 
   it("rejects a failed Feishu API response instead of treating it as an empty successful scan", async () => {

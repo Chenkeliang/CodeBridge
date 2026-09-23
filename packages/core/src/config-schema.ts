@@ -142,14 +142,20 @@ export const ConfigSchema = z.object({
     appSecret: z.string().min(1),
     policy: FeishuPolicySchema.optional(),
     alertMonitor: z.object({
+      enabled: z.boolean().optional(),
       pollIntervalMs: z.number().int().min(5_000).max(300_000).default(30_000),
       lookbackMs: z.number().int().min(1_000).max(86_400_000).default(600_000),
       dedupWindowMs: z.number().int().min(1_000).max(86_400_000).default(1_800_000),
       maxConcurrent: z.number().int().min(1).max(10).default(2),
+      statusReactions: z.object({
+        investigating: z.string().min(1), waiting: z.string().min(1), resolved: z.string().min(1),
+        no_action: z.string().min(1), blocked: z.string().min(1),
+      }).refine((mapping) => new Set(Object.values(mapping)).size === 5, "Alert statuses need distinct reactions").optional(),
       groups: z.array(z.object({
         chatId: z.string().regex(/^oc_/),
         senderAppIds: z.array(z.string().min(1)).min(1),
         ownerOpenId: z.string().regex(/^ou_/),
+        runbookPath: z.string().min(1).optional(),
       })).min(1).refine((groups) => new Set(groups.map((group) => group.chatId)).size === groups.length, "Duplicate alert group"),
     }).optional(),
   }),

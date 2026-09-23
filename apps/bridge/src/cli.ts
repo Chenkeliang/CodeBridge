@@ -476,7 +476,10 @@ program
       console.error(`出站发布者配置无效，沿用上一份可用凭据：${error.message}`);
     });
     const apiApp = createBridgeApp(
-{
+        {
+          setOutboundAlertStatus: (chatId, topicId, status, summary) => alertMonitor
+            ? alertMonitor.setStatus(chatId, topicId, status, summary)
+            : Promise.reject(new Error("告警监控未配置")),
           sendOutboundFile: (chatId, rawPath, topicId) =>
             chatId.startsWith("telegram:")
               ? telegram

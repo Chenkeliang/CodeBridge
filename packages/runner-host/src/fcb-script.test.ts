@@ -127,3 +127,26 @@ it("fcb send sends Run identity and absolute path, never a guessed chat", async 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+
+it("fcb alert status sends the current Run and a structured state without a caller-selected target", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-alert-")); tmpDirs.push(dataDir);
+  const bin = await writeFcbScript(dataDir);
+  let received: { path?: string; body?: unknown } = {};
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      received = { path: request.url, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
+      response.writeHead(200, { "content-type": "application/json" }); response.end('{"ok":true}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("missing address");
+  try {
+    await executeFile(path.join(bin, "fcb"), ["alert", "status", "waiting", "请确认补货计划"], {
+      env: { ...process.env, FCB_API: `http://127.0.0.1:${address.port}`, FCB_TOKEN: "test", FCB_RUN_ID: "run_current", FCB_CHAT_ID: "oc_untrusted" },
+    });
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+  expect(received).toEqual({ path: "/outbound/alert-status", body: { runId: "run_current", status: "waiting", summary: "请确认补货计划" } });
+});
