@@ -89,7 +89,7 @@ backends:
   claude:
     type: claude-code
     acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"]
+    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.81.0"]
     claudePermissionMode: bypassPermissions
   codex:
     type: codex
@@ -100,3 +100,14 @@ backends:
 会话绑定持久化：`~/.codebridge/chat-bindings.json`（按 `chatId|topicId`）。
 
 不建议在 yaml 固定 model/effort，否则会覆盖 adapter 随版本更新的默认值。slash 设置的会话覆盖立即生效；`/model default`、`/effort default` 可恢复实时默认。
+
+### Claude 模型列表的交互范围
+
+| Surface | 入口与读取 | 设置与持久化 | 错误、恢复与反馈 | 状态 |
+| --- | --- | --- | --- | --- |
+| Web | 会话模型配置接口；不使用 `/model` 命令 | 会话配置接口 | 沿用 Web 会话反馈 | 本次版本更新不涉及 |
+| Agent | 无独立 `/model` 入口 | 使用已解析的会话模型 | 运行结果反馈 | 本次版本更新不涉及 |
+| 飞书 | `/model` 经 Bridge → Runner 实时读取 ACP `configOptions` | `/model <名称>` 写入会话绑定 | 读取失败显示错误；`/model default` 清除覆盖，下一轮生效 | 代码可达；发布后需在窗口验收 |
+| Telegram | `/model` 经 Bridge → Runner 实时读取 ACP `configOptions` | `/model <名称>` 写入会话绑定 | 读取失败显示错误；`/model default` 清除覆盖，下一轮生效 | 代码可达；未做实际通道验收 |
+
+列表由适配器与当前账号共同决定。更新默认版本时，还要检查 `~/.codebridge/config.yaml` 是否单独固定了旧版 `acpArgs`；该配置优先于源码默认值。

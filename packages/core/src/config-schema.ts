@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /** Single source of truth for the npm ACP adapter package versions used as spawn defaults. */
-export const ACP_CLAUDE_AGENT_ACP_VERSION = "0.78.0";
+export const ACP_CLAUDE_AGENT_ACP_VERSION = "0.81.0";
 export const ACP_CODEX_ACP_VERSION = "1.12.0";
 
 export const PolicyScenarioSchema = z.object({

@@ -168,7 +168,7 @@ Read [SECURITY.md](SECURITY.md) before exposing anything beyond localhost.
 | Backend | ACP command |
 |---------|-------------|
 | Cursor | `cursor-agent acp` |
-| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.78.0` |
+| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@0.81.0` |
 | Codex | `npx -y @agentclientprotocol/codex-acp@1.12.0` |
 
 Resume semantics depend on the adapter: Claude/Codex use `session/resume`; Cursor uses `session/load`.
