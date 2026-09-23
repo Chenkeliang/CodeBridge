@@ -10,6 +10,7 @@ import {
   resolveDefaultAgentId,
 } from "@codebridge/core";
 import { McpRuntime, McpServerRegistry, SdkMcpClientFactory } from "@codebridge/mcp-runtime";
+import { FeishuAlertMonitor } from "./feishu-alert-monitor.js";
 import {
   ApprovalService,
   CapabilityRegistry,
@@ -81,11 +82,15 @@ program
       feishuConnected: () => bridge?.isConnected ?? false,
       activeRuns: () => workItemStore.listRunsByStatus(["running"]).length,
     });
+    let alertMonitor: FeishuAlertMonitor | undefined;
     const bridge: FeishuBridge | undefined = surfaces.feishu
       ? new FeishuBridge({
           config,
           dataDir,
           onDeploymentMessage: (message) => deployment.handleFeishuMessage(message),
+          prepareAlertReply: (message, topicId) => alertMonitor?.prepareReply(message, topicId),
+          isAlertMessage: (chatId, messageId) => alertMonitor?.isAlertMessage(chatId, messageId) ?? false,
+          isAlertChat: (chatId) => store.get().feishu.alertMonitor?.groups.some((group) => group.chatId === chatId) ?? false,
           isMaintenance: () => deployment.isMaintenance(),
           onLog: (m) => console.log(m),
         })
@@ -425,6 +430,13 @@ program
     );
     bridge?.setSessionIngress(channelSessionIngress);
     telegram?.setSessionIngress(channelSessionIngress);
+    if (bridge) alertMonitor = new FeishuAlertMonitor({
+      statePath: path.join(dataDir, "feishu-alert-monitor.json"),
+      config: () => store.get().feishu.alertMonitor,
+      transport: bridge,
+      isMaintenance: () => deployment.isMaintenance(),
+      log: (message) => console.log(message),
+    });
 
     store.onChange((c) => {
       bridge?.updateConfig(c);
@@ -432,6 +444,7 @@ program
     });
 
     const shutdown = async () => {
+      await alertMonitor?.stop();
       await bridge?.disconnect();
       await telegram?.disconnect();
       approvalService.close();
@@ -452,6 +465,7 @@ program
     process.on("SIGTERM", shutdown);
 
     await bridge?.connect();
+    alertMonitor?.start();
     if (telegram) await telegram.connect();
 
     const apiPort = config.bridge?.apiPort ?? 19790;

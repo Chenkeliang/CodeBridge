@@ -4,3 +4,5 @@ export type {
   FeishuMention,
   FeishuMessage,
 } from "./bridge.js";
+
+export type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply } from "./alert-types.js";

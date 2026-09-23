@@ -21,6 +21,7 @@ export interface MarkdownCardStream {
 export function durableMarkdownCard(
   channel: LarkChannel,
   update: (cardId: string, card: object, replyTo?: string) => Promise<void>,
+  isAlertMessage?: (chatId: string, messageId: string) => boolean,
 ): MarkdownCardStream {
   return {
     async stream(_chatId, input, options) {
@@ -38,6 +39,7 @@ export function durableMarkdownCard(
         path: { message_id: options.replyTo },
         data: {
           msg_type: "interactive",
+          ...(isAlertMessage?.(_chatId, options.replyTo) ? { reply_in_thread: true } : {}),
           content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
           uuid: createHash("sha256").update(`run-card:${options.replyTo}`).digest("hex").slice(0, 32),
         },
