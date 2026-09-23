@@ -14,4 +14,13 @@ describe("CardKit HTTP timeouts", () => {
     await http.get("https://open.feishu.cn/open-apis/im/v1/files/file", {timeout: 120_000});
     expect(request).toHaveBeenLastCalledWith(expect.objectContaining({timeout: 120_000}));
   });
+  it("bounds history polling so a stalled read can retry instead of holding the monitor forever", async () => {
+    const request = vi.fn(async (_opts: unknown) => ({code: 0}));
+    const http = feishuHttpClient({request} as unknown as HttpInstance);
+    await http.get("https://open.feishu.cn/open-apis/im/v1/messages", {timeout: 0});
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({method: "GET", timeout: 15_000}));
+    await http.get("https://open.feishu.cn/open-apis/im/v1/messages", {timeout: 500});
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({timeout: 500}));
+  });
+
 });

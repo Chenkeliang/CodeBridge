@@ -141,6 +141,16 @@ export const ConfigSchema = z.object({
     appId: z.string().min(1),
     appSecret: z.string().min(1),
     policy: FeishuPolicySchema.optional(),
+    alertMonitor: z.object({
+      pollIntervalMs: z.number().int().min(5_000).max(300_000).default(30_000),
+      dedupWindowMs: z.number().int().min(1_000).max(86_400_000).default(1_800_000),
+      maxConcurrent: z.number().int().min(1).max(10).default(2),
+      groups: z.array(z.object({
+        chatId: z.string().regex(/^oc_/),
+        senderAppIds: z.array(z.string().min(1)).min(1),
+        ownerOpenId: z.string().regex(/^ou_/),
+      })).min(1).refine((groups) => new Set(groups.map((group) => group.chatId)).size === groups.length, "Duplicate alert group"),
+    }).optional(),
   }),
   telegram: z
     .object({
