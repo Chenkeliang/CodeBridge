@@ -57,11 +57,11 @@ describe("FeishuAlertMonitor", () => {
     f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [f.message()] }); await f.monitor.tick();
     const monitor = new FeishuAlertMonitor(f.options);
     const reply = { messageId: "om_answer", chatId: "oc_alerts", chatType: "group" as const, senderId: "ou_other", content: "/approve" };
-    expect(monitor.prepareReply(reply, "om_alert")?.allowed).toBe(false);
-    const accepted = monitor.prepareReply({ ...reply, senderId: "ou_owner" }, "om_alert");
+    expect((await monitor.prepareReply(reply, "om_alert"))?.allowed).toBe(false);
+    const accepted = await monitor.prepareReply({ ...reply, senderId: "ou_owner" }, "om_alert");
     expect(accepted?.allowed).toBe(true); expect(accepted?.instructions).toContain("本次明确授权");
     expect(new FeishuAlertMonitor(f.options).isAlertMessage("oc_alerts", "om_answer")).toBe(true);
-    expect(monitor.prepareReply({ ...reply, chatId: "oc_other" }, "om_alert")).toBeUndefined();
+    expect(await monitor.prepareReply({ ...reply, chatId: "oc_other" }, "om_alert")).toBeUndefined();
   });
 
   it("retries a failed submit with the original message and persisted pending incident", async () => {
@@ -164,8 +164,8 @@ describe("FeishuAlertMonitor", () => {
     await f.monitor.tick();
     const reply = { messageId: "om_answer", chatId: "oc_alerts", chatType: "group" as const,
       senderId: "ou_other", content: "/approve", rootId: "om_duplicate", threadId: "omt_native" };
-    expect(f.monitor.prepareReply(reply, "omt_native")?.allowed).toBe(false);
-    expect(f.monitor.prepareReply({ ...reply, senderId: "ou_owner" }, "omt_native")?.topicId).toBe("om_alert");
+    expect((await f.monitor.prepareReply(reply, "omt_native"))?.allowed).toBe(false);
+    expect((await f.monitor.prepareReply({ ...reply, senderId: "ou_owner" }, "omt_native"))?.topicId).toBe("om_alert");
   });
 
   it("honors disable while a history request is in flight", async () => {

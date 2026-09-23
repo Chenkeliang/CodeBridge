@@ -134,6 +134,16 @@ describe("alert polling through the active Feishu adapter", () => {
       mentions: [expect.objectContaining({ openId: "ou_owner" })] }));
   });
 
+  it("handles the owner's no-action reply by marking the original card DONE without starting another Agent turn", async () => {
+    const f = fixture();
+    f.config.feishu.alertMonitor!.statusReactions = { investigating: "OnIt", waiting: "OneSecond", resolved: "DONE", no_action: "CrossMark", blocked: "Sigh" };
+    await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    await f.internal.handleMessage({ messageId: "om_owner_done", chatId: "oc_alerts", chatType: "group", senderId: "ou_owner", threadId: "omt_native", rootId: "om_alert", content: "无需处理" });
+    expect(f.submit).toHaveBeenCalledTimes(1);
+    expect(f.reactionCreate).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: { reaction_type: { emoji_type: "DONE" } } }));
+    expect(f.send).not.toHaveBeenCalled();
+  });
+
   it("rejects a failed Feishu API response instead of treating it as an empty successful scan", async () => {
     const f = fixture(); f.list.mockResolvedValueOnce({ code: 99991672, data: undefined } as never);
     await expect(f.bridge.readAlertMessages("oc_alerts", 1000, 1001)).rejects.toThrow("99991672");

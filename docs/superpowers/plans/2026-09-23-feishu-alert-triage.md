@@ -92,3 +92,16 @@ SKILL 格式校验通过。全局 ~/.agents/skills-check.sh 仍报告原有 ~/.c
 AT-6 最终本地验证：`pnpm build` 通过；`pnpm lint` 0 errors、8 个既有 Web warnings；飞书通道、告警监控/状态、出站 API、Channel ingress、配置类型和实际生成 fcb 命令的相关回归共 31 文件/286 项通过。新 SKILL 用 skill-creator 的 quick_validate.py 验证通过（临时隔离环境补齐 PyYAML）；全局 skills-check 仍因原有 synced 目录不符合镜像规则而失败。GitNexus 最终重试刷新成功。
 
 五条试运行的负责人、状态、原生表情投递和已通知标记已持久化，collectionStarted=false，enabled=false；没有启动全量采集。首次启用全量会从启用时刻开始，仍保留这五条旧话题的归属与状态。真实现场测试没有触发后台自动 Agent Run，也没有执行用户业务写操作；这些边界不能以本地合同测试替代。
+
+
+## AT-7：SKILL 快速分类、本人结案和重复卡完整标记
+
+用户补充：不是每条都查代码/流程/日志；SKILL与已确认历史优先，通知类可快速结束，不确定@本人。本人明确无需处理用 DONE。不同消息 ID 的同案重复卡按回复同步终态。
+
+新增 dismissed 内部结案原因，区别于 resolved。只由验证身份后的明确入站文字触发；状态 API 不接受 Agent 伪造本人结案。先持久化终态保护、同步全案卡片，再请求停止原排查；迟到 Agent 报告不能覆盖 DONE。明确重新排查才重开。卡片入队即有 investigating，正文不可读单独 waiting。重复指纹忽略有限的展示时间/次数/trace 行，保留业务身份；新卡继承同案状态。注入最多3条同类型历史及其业务上下文，防止别单事实被当成本单事实。
+
+Surface Matrix 增量：飞书 entry 增加本人文字结案，write=原卡DONE且不启动额外Agent；read/event/recovery沿用既有身份、持久化、投递重试；Agent 无法以状态命令伪造 dismissed；Web/Telegram 无新增入口。代码 implemented；活跃适配器模拟测试；生产 reachable/closed-loop 仍待 AT-4。直接点击 DONE 的输入语义和跨不同单号归并是待用户选择项，未宣称实现。
+
+新增回归先复现三处旧缺口：本人结案未被接管、排队卡未标记、后续重复卡未继承终态；修正后验证。另验证非本人/否定句/条件句不触发结案，空卡不被吞掉或合并。全局技能检查仍有既有 synced 目录冲突，未伪报通过。
+
+AT-7 验证记录：完整构建通过，lint 0 errors / 8 个既有 warnings，31 文件/292 项相关回归通过；末次补充提交中结案竞态保护和逐卡投递失败隔离后，再构建 bridge 并复核告警合同、状态与活跃飞书入口。新增场景明确验证 owner 结案不再启动 Agent、重复卡 DONE、不被迟到结果回退、排队卡 OnIt、空正文逐卡 waiting、不同业务对象不误合并。未对线上试运行卡片作新的结案操作，也未开启全量。

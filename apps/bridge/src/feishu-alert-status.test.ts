@@ -20,7 +20,7 @@ async function fixture(duplicates = false, runbook = false) {
   const transport = {
     readAlertMessages: vi.fn(async () => ({ messages: duplicates ? [message, { ...message, messageId: "om_duplicate" }] : [message], hasMore: false })),
     investigateAlert: vi.fn(async () => {}), isAlertActive: vi.fn(async () => false),
-    setAlertMessageReaction: vi.fn(async () => "reaction"), notifyAlertOwner: vi.fn(async () => {}),
+    setAlertMessageReaction: vi.fn(async () => "reaction"), notifyAlertOwner: vi.fn(async () => {}), cancelAlertInvestigation: vi.fn(async () => {}),
   };
   const options = { config: () => config, statePath: path.join(root, "state.json"), transport, now: () => now, log: vi.fn() };
   const monitor = new FeishuAlertMonitor(options);
@@ -38,7 +38,7 @@ describe("alert status and runbook", () => {
     expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", "ou_owner", "请确认补货计划");
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "请确认补货计划");
     expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(1);
-    f.monitor.prepareReply({ messageId: "om_reply", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "继续查" }, "om_root");
+    await f.monitor.prepareReply({ messageId: "om_reply", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "继续查" }, "om_root");
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "请确认补货计划");
     expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(2);
   });
@@ -60,7 +60,7 @@ describe("alert status and runbook", () => {
     const f = await fixture(false, true);
     expect(f.transport.investigateAlert).toHaveBeenCalledWith(f.message, "ou_owner", expect.stringContaining("Runbook v1"));
     fs.writeFileSync(f.runbookPath, "# Runbook v2\nUpdated alarm matrix rules.");
-    const reply = f.monitor.prepareReply({ messageId: "om_reply", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "继续" }, "om_root");
+    const reply = await f.monitor.prepareReply({ messageId: "om_reply", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "继续" }, "om_root");
     expect(reply?.instructions).toContain("Runbook v2");
   });
   it("rejects cross-conversation or invalid states", async () => {
@@ -80,7 +80,87 @@ describe("alert status and runbook", () => {
     const saved = JSON.parse(fs.readFileSync(f.options.statePath, "utf8"));
     expect(saved.oc_alert.activatedAt).toBe(1_061_000);
     expect(saved.oc_alert.incidents.om_root).toBeDefined();
-    expect(resumed.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "批准" }, "om_root")?.allowed).toBe(false);
+    expect((await resumed.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "批准" }, "om_root"))?.allowed).toBe(false);
+  });
+
+  it("closes every duplicate card as owner-dismissed and ignores late Agent status reports", async () => {
+    const f = await fixture(true);
+    const response = await f.monitor.prepareReply({ messageId: "om_owner_close", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", rootId: "om_duplicate", content: "无需处理" }, "omt_native");
+    expect(response).toMatchObject({ allowed: true, handled: true, topicId: "om_root" });
+    for (const id of ["om_root", "om_duplicate"]) expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith(id, "DONE", expect.any(Array));
+    await f.monitor.setStatus("oc_alert", "om_root", "waiting", "late result");
+    const state = JSON.parse(fs.readFileSync(f.options.statePath, "utf8"));
+    expect(state.oc_alert.incidents.om_root.status).toBe("dismissed");
+    expect(state.oc_alert.incidents.om_root.dismissal.messageId).toBe("om_owner_close");
+    expect(f.transport.cancelAlertInvestigation).toHaveBeenCalledWith("oc_alert", "om_root");
+    expect(f.transport.notifyAlertOwner).not.toHaveBeenCalled();
+  });
+
+  it("does not accept an Agent's or another person's claimed dismissal", async () => {
+    const f = await fixture();
+    await expect(f.monitor.setStatus("oc_alert", "om_root", "dismissed", "owner said no action")).rejects.toThrow();
+    expect(await f.monitor.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "无需处理" }, "om_root")).toMatchObject({ allowed: false });
+    for (const content of ["如果无需处理就结束", "不是无需处理，继续查", "他说无需处理"]) {
+      const reply = await f.monitor.prepareReply({ messageId: "om_context", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content }, "om_root");
+      expect(reply?.handled).not.toBe(true);
+    }
+  });
+
+  it("gives queued cards an intermediate reaction even when the investigation limit is reached", async () => {
+    const f = await fixture(); f.config.maxConcurrent = 1; f.transport.isAlertActive.mockResolvedValue(true);
+    f.transport.readAlertMessages.mockResolvedValueOnce({ hasMore: false, messages: [
+      { ...f.message, messageId: "om_queued_1", content: "new failure one" },
+      { ...f.message, messageId: "om_queued_2", content: "new failure two" },
+    ] });
+    f.advance(); await f.monitor.tick();
+    expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
+    for (const id of ["om_queued_1", "om_queued_2"]) expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith(id, "OnIt", expect.any(Array));
+  });
+
+  it("keeps future duplicates closed after restart while preserving distinct business entities", async () => {
+    const f = await fixture();
+    await f.monitor.prepareReply({ messageId: "om_close", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "不用处理" }, "om_root");
+    for (let i = 0; i < 31; i++) f.advance();
+    f.transport.readAlertMessages.mockResolvedValueOnce({ hasMore: false, messages: [
+      { ...f.message, messageId: "om_late_duplicate", createdAt: f.options.now(), content: "failure\n告警时间: 2026-09-23 20:01:00" },
+      { ...f.message, messageId: "om_other_order", createdAt: f.options.now(), content: "failure\n订单: NEW123" },
+    ] });
+    await new FeishuAlertMonitor(f.options).tick();
+    expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_late_duplicate", "DONE", expect.any(Array));
+    expect(f.transport.investigateAlert).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks unreadable cards individually as waiting instead of silently dropping or merging them", async () => {
+    const f = await fixture();
+    f.transport.readAlertMessages.mockResolvedValueOnce({ hasMore: false, messages: [
+      { ...f.message, messageId: "om_blank_1", content: "" }, { ...f.message, messageId: "om_blank_2", content: "" },
+    ] });
+    f.advance(); await f.monitor.tick();
+    for (const id of ["om_blank_1", "om_blank_2"]) expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith(id, "OneSecond", expect.any(Array));
+    const state = JSON.parse(fs.readFileSync(f.options.statePath, "utf8"));
+    expect(state.oc_alert.incidents.om_blank_1.status).toBe("waiting");
+    expect(state.oc_alert.incidents.om_blank_2.status).toBe("waiting");
+    expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reactivate an incident dismissed while the Agent submit was in flight", async () => {
+    const f = await fixture(); f.transport.isAlertActive.mockResolvedValue(true);
+    f.transport.readAlertMessages.mockResolvedValueOnce({ hasMore: false, messages: [{ ...f.message, messageId: "om_inflight", content: "new issue" }] });
+    f.transport.investigateAlert.mockImplementationOnce(async () => {
+      await f.monitor.prepareReply({ messageId: "om_close_inflight", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "无需处理" }, "om_inflight");
+    });
+    f.advance(); await f.monitor.tick();
+    const incident = JSON.parse(fs.readFileSync(f.options.statePath, "utf8")).oc_alert.incidents.om_inflight;
+    expect(incident.status).toBe("dismissed"); expect(incident.active).toBe(false);
+    expect(f.transport.cancelAlertInvestigation).toHaveBeenLastCalledWith("oc_alert", "om_inflight");
+  });
+
+  it("continues marking other duplicate cards when one card's reaction fails", async () => {
+    const f = await fixture(true); f.transport.setAlertMessageReaction.mockRejectedValueOnce(new Error("card unavailable"));
+    await expect(f.monitor.setStatus("oc_alert", "om_root", "no_action", "已确认是通知")).rejects.toThrow("card unavailable");
+    expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_duplicate", "CrossMark", expect.any(Array));
+    const incident = JSON.parse(fs.readFileSync(f.options.statePath, "utf8")).oc_alert.incidents.om_root;
+    expect(incident.reactionApplied.om_duplicate).toBe("CrossMark");
   });
 
   it("leaves collection paused while pilot validation is in progress", async () => {
