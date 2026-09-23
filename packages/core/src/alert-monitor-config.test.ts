@@ -10,7 +10,7 @@ describe("alert monitor configuration", () => {
     const parsed = ConfigSchema.parse({ ...config, feishu: { ...config.feishu, alertMonitor: {
       groups: [{ chatId: "oc_group", senderAppIds: ["cli_bot"], ownerOpenId: "ou_owner" }],
     } } });
-    expect(parsed.feishu.alertMonitor).toMatchObject({ pollIntervalMs: 30_000, dedupWindowMs: 1_800_000, maxConcurrent: 2 });
+    expect(parsed.feishu.alertMonitor).toMatchObject({ pollIntervalMs: 30_000, lookbackMs: 600_000, dedupWindowMs: 1_800_000, maxConcurrent: 2 });
   });
   it("rejects missing notification ownership and duplicate groups", () => {
     const config = defaultConfig();

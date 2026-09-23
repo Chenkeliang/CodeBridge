@@ -10,7 +10,7 @@ afterEach(() => { roots.splice(0).forEach((root) => fs.rmSync(root, { recursive:
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "alert-monitor-")); roots.push(root);
   let now = 1_000_000;
-  const config = { pollIntervalMs: 30_000, dedupWindowMs: 1_800_000, maxConcurrent: 2,
+  const config = { pollIntervalMs: 30_000, lookbackMs: 600_000, dedupWindowMs: 1_800_000, maxConcurrent: 2,
     groups: [{ chatId: "oc_alerts", ownerOpenId: "ou_owner", senderAppIds: ["cli_alarm"] }] };
   const transport = { readAlertMessages: vi.fn().mockResolvedValue({ messages: [], hasMore: false }),
     investigateAlert: vi.fn().mockResolvedValue(undefined), isAlertActive: vi.fn().mockResolvedValue(false) };
@@ -108,6 +108,34 @@ describe("FeishuAlertMonitor", () => {
     const delayed = { ...f.message("om_delayed"), createdAt: 1_000_900 };
     f.advance(); f.transport.readAlertMessages.mockResolvedValue({ messages: [delayed], hasMore: false });
     await f.monitor.tick(); expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("backfills an alert that becomes visible five minutes late without rerunning an already-seen alert", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance(60_000);
+    const first = { ...f.message("om_first", "first failure"), createdAt: 1_001_000 };
+    const late = { ...f.message("om_late", "late failure"), createdAt: 1_002_000 };
+    let showLate = false;
+    f.transport.readAlertMessages.mockImplementation(async (_chat, start, end) => ({
+      hasMore: false,
+      messages: (showLate ? [first, late] : [first]).filter((message) => message.createdAt >= start * 1000 && message.createdAt <= end * 1000),
+    }));
+    await f.monitor.tick();
+    f.advance(5 * 60_000); showLate = true; await f.monitor.tick();
+    expect(f.transport.investigateAlert).toHaveBeenCalledTimes(2);
+    expect(f.transport.investigateAlert).toHaveBeenLastCalledWith(late, "ou_owner", ALERT_INVESTIGATION_INSTRUCTIONS);
+    f.advance(60_000); await new FeishuAlertMonitor(f.options).tick();
+    expect(f.transport.investigateAlert).toHaveBeenCalledTimes(2);
+  });
+
+  it("catches up a two-hour outage from the saved checkpoint instead of limiting reads to the last ten minutes", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance(60_000); await f.monitor.tick();
+    const offlineAlert = { ...f.message("om_offline"), createdAt: 1_100_000 };
+    f.advance(2 * 60 * 60_000);
+    f.transport.readAlertMessages.mockImplementation(async (_chat, start, end) => ({
+      hasMore: false, messages: offlineAlert.createdAt >= start * 1000 && offlineAlert.createdAt <= end * 1000 ? [offlineAlert] : [],
+    }));
+    await new FeishuAlertMonitor(f.options).tick();
+    expect(f.transport.investigateAlert).toHaveBeenCalledWith(offlineAlert, "ou_owner", ALERT_INVESTIGATION_INSTRUCTIONS);
   });
 
   it("limits active investigations and dispatches pending work once a slot is free", async () => {

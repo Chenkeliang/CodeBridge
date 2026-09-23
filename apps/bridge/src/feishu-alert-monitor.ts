@@ -138,7 +138,10 @@ export class FeishuAlertMonitor {
       return;
     }
     const initial = this.store.read()[target.chatId]!;
-    const start = initial.scan?.start ?? Math.max(0, Math.floor(initial.cursor / 1000) - 1);
+    const lookbackMs = this.options.config()?.lookbackMs ?? 600_000;
+    // Reconcile recently scanned time as history indexing may expose messages late.
+    // Base this on the checkpoint (not now), so an outage still catches up in full.
+    const start = initial.scan?.start ?? Math.floor(Math.max(initial.activatedAt, initial.cursor - lookbackMs) / 1000);
     const end = initial.scan?.end ?? Math.floor(now / 1000);
     let pageToken = initial.scan?.pageToken;
     // Persist the bounded scan token: many messages may share one timestamp across pages.

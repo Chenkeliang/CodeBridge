@@ -143,6 +143,7 @@ export const ConfigSchema = z.object({
     policy: FeishuPolicySchema.optional(),
     alertMonitor: z.object({
       pollIntervalMs: z.number().int().min(5_000).max(300_000).default(30_000),
+      lookbackMs: z.number().int().min(1_000).max(86_400_000).default(600_000),
       dedupWindowMs: z.number().int().min(1_000).max(86_400_000).default(1_800_000),
       maxConcurrent: z.number().int().min(1).max(10).default(2),
       groups: z.array(z.object({
