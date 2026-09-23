@@ -50,9 +50,6 @@ importers:
       '@codebridge/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@codebridge/flow-catalog':
-        specifier: workspace:*
-        version: link:../../packages/flow-catalog
       '@codebridge/mcp-runtime':
         specifier: workspace:*
         version: link:../../packages/mcp-runtime
@@ -80,9 +77,6 @@ importers:
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../../packages/work-items
-      '@codebridge/workflow-engine':
-        specifier: workspace:*
-        version: link:../../packages/workflow-engine
       '@hono/node-server':
         specifier: ^1.19.14
         version: 1.19.14(hono@4.12.27)
@@ -286,18 +280,6 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/flow-catalog:
-    devDependencies:
-      '@types/node':
-        specifier: ^22.10.0
-        version: 22.20.0
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.8
-        version: 2.1.9(@types/node@22.20.0)(jsdom@30.0.1)(lightningcss@1.33.0)
-
   packages/mcp-runtime:
     dependencies:
       '@codebridge/policy':
@@ -382,9 +364,6 @@ importers:
       '@codebridge/work-items':
         specifier: workspace:*
         version: link:../work-items
-      '@codebridge/workflow-engine':
-        specifier: workspace:*
-        version: link:../workflow-engine
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -474,19 +453,6 @@ importers:
       '@codebridge/core':
         specifier: workspace:*
         version: link:../core
-    devDependencies:
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.8
-        version: 2.1.9(@types/node@22.20.0)(jsdom@30.0.1)(lightningcss@1.33.0)
-
-  packages/workflow-engine:
-    dependencies:
-      yaml:
-        specifier: ^2.6.1
-        version: 2.9.0
     devDependencies:
       typescript:
         specifier: ^5.7.2

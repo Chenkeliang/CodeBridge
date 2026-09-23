@@ -1,56 +1,49 @@
-import crypto from "node:crypto";
-import { execFile } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import {
   AcpSessionPool,
-  BackendRegistry,
   AgentSetupService,
+  BackendRegistry,
+  closePiSession,
+  deleteAcpSession,
+  deletePiSession,
+  forkPiSession,
+  listAcpConfigOptions,
+  listAcpSessions,
+  listCodexSkillCommands,
+  listPiCommands,
+  listPiConfigOptions,
+  listPiSessions,
+  loadAcpSessionHistory,
+  loadClaudeSessionHistory,
+  loadCodexSessionHistory,
+  loadPiSessionHistory,
+  PI_PROVIDER_PRESETS,
+  readPiProviders,
+  runAcpSession,
+  runPiSession,
   SKILL_AGENT_IDS,
   SkillControlPlane,
-  type SkillAgentId,
-  type SkillCatalogSnapshot,
-  type SkillMutationPlan,
-  type SkillMutationResult,
+  testProviderConnection,
+  validateProviders,
+  writePiProviders,
   type AgentAuthProbe,
   type AgentSetupInstallResult,
   type AgentSetupRecord,
-  deleteAcpSession,
-  loadAcpSessionHistory,
-  listAcpConfigOptions,
-  listAcpSessions,
-  runAcpSession,
-  closePiSession,
-  deletePiSession,
-  forkPiSession,
-  listPiConfigOptions,
-  listPiCommands,
-  listPiSessions,
-  listCodexSkillCommands,
-  loadCodexSessionHistory,
-  loadPiSessionHistory,
-  loadClaudeSessionHistory,
-  runPiSession,
-  PI_PROVIDER_PRESETS,
-  readPiProviders,
-  testProviderConnection,
-  writePiProviders,
-  validateProviders,
+  type CliSessionSummary,
   type PiProvidersFile,
   type PiRunHandleRef,
   type PiSession,
   type PiSessionLifecycleResult,
-  type CliSessionSummary,
   type ProviderSessionHistoryEvent,
+  type SkillAgentId,
+  type SkillCatalogSnapshot,
+  type SkillMutationPlan,
+  type SkillMutationResult,
 } from "@codebridge/backends";
-import { supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import type {
-  AgentEvent,
-  AgentAvailableCommand,
   AcpPermissionPolicy,
+  AgentAvailableCommand,
+  AgentEvent,
   AppConfig,
   BackendConfigOption,
   BackendProfile,
@@ -60,14 +53,18 @@ import type {
 } from "@codebridge/core";
 import { DEFAULT_DATA_DIR, VERSION } from "@codebridge/core";
 import { Hono } from "hono";
-import {
-  cleanupAttachments,
-  materializeAttachments,
-} from "./materialize-attachments.js";
-import { writeFcbScript } from "./fcb-script.js";
+import { execFile } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { inspectForeignCodexSessionOwners } from "./codex-session-ownership.js";
+import { createDeploymentMcpServerConfig } from "./deployment-mcp-server.js";
+import { writeFcbScript } from "./fcb-script.js";
+import { cleanupAttachments, materializeAttachments } from "./materialize-attachments.js";
 import { SessionLeaseStore, type SessionLease } from "./session-lease.js";
-import { createFlowSaveMcpServerConfig } from "./flow-save-mcp-server.js";
 
 /** doctor 的认证探测：BackendProfile.type → AgentSetupService 的 agentId 命名空间 */
 const AGENT_ID_BY_BACKEND_TYPE: Partial<Record<BackendProfile["type"], string>> = {
@@ -96,7 +93,7 @@ export interface RunnerHostOptions {
   /** Test/embedding hook for Codex app-server Skill discovery. */
   codexSkillLister?: (cwd: string) => Promise<AgentAvailableCommand[]>;
   /** Absolute built entrypoint for the Bridge-owned read-only MCP server. */
-  flowSaveMcpServerPath?: string;
+  deploymentMcpServerPath?: string;
   /** Test/embedding hook; production owns local Skill filesystem projection here. */
   skillControlPlane?: Pick<
     SkillControlPlane,
@@ -238,13 +235,13 @@ export class RunnerHost {
     Array<{ requestId: string; resolve: (approve: boolean) => void }>
   >();
 
-  private readonly flowSaveMcpServerPath: string;
+  private readonly deploymentMcpServerPath: string;
 
   constructor(private readonly options: RunnerHostOptions) {
     this.maxConcurrent = options.maxConcurrentRuns ?? 4;
     this.dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
-    this.flowSaveMcpServerPath = options.flowSaveMcpServerPath
-      ?? fileURLToPath(new URL("./flow-save-mcp-server.js", import.meta.url));
+    this.deploymentMcpServerPath = options.deploymentMcpServerPath
+      ?? fileURLToPath(new URL("./deployment-mcp-server.js", import.meta.url));
     this.skillControlPlane = options.skillControlPlane ?? new SkillControlPlane({
       dataDir: this.dataDir,
     });
@@ -916,10 +913,8 @@ export class RunnerHost {
         mode: request.mode,
         claudePermissionMode: request.claudePermissionMode,
         acpConfig: request.acpConfig,
-        flowSaveSourceAvailability: request.flowSaveSourceAvailability,
-        mcpServers: [createFlowSaveMcpServerConfig(
-          this.flowSaveMcpServerPath,
-          request.flowSaveSourceAvailability,
+        mcpServers: [createDeploymentMcpServerConfig(
+          this.deploymentMcpServerPath,
           {
             api: `http://127.0.0.1:${this.options.config.bridge?.apiPort ?? 19790}`,
             token: this.options.token,

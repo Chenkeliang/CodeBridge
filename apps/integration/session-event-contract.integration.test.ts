@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig } from "../../packages/core/src/index.js";
 import {
-  SessionCatalogStore,
-  type AgentProfile,
-} from "../../packages/session-catalog/src/index.js";
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { defaultConfig } from "../../packages/core/src/index.js";
+import { SessionCatalogStore, type AgentProfile } from "../../packages/session-catalog/src/index.js";
 import { SessionCoordinator } from "../../packages/session-coordinator/src/index.js";
 import { SqliteEventStore } from "../../packages/work-items/src/index.js";
 
@@ -258,11 +262,11 @@ describe("Session event wire contract integration", () => {
       const writes = JSON.stringify([feishu.rawClient.cardkit.v1.card.update.mock.calls, feishu.rawClient.cardkit.v1.cardElement.update.mock.calls, feishu.rawClient.cardkit.v1.card.settings.mock.calls]);
       expect(writes).toContain("真实持久化的最终答案");
       expect(writes).toContain("✅ **已完成**");
-      expect(writes).toContain(
+      expect(writes).not.toContain(
         "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
       );
       expect(writes.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
-        .toHaveLength(1);
+        .toBeNull();
       expect(writes).not.toContain("结果恢复中");
       expect(writes).not.toContain("本次无输出");
     } finally {

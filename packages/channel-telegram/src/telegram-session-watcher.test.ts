@@ -1,12 +1,6 @@
+import type { ChannelSessionEvent, ChannelSessionIngress } from "@codebridge/core";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ChannelSessionEvent,
-  ChannelSessionIngress,
-} from "@codebridge/core";
-import {
-  TelegramSessionWatcher,
-  type PendingTurn,
-} from "./telegram-session-watcher.js";
+import { TelegramSessionWatcher, type PendingTurn } from "./telegram-session-watcher.js";
 
 function makeApi() {
   return {
@@ -81,25 +75,6 @@ function agentEvent(
     target: null,
     resultRef: null,
     payload: { event },
-  };
-}
-
-function flowEvent(
-  sequence: number,
-  type: string,
-  target: string | null,
-  payload: Record<string, unknown> = {},
-  resultRef: string | null = null,
-): ChannelSessionEvent {
-  return {
-    type,
-    sequence,
-    runId: "run_1",
-    executionKind: "flow",
-    occurredAt: `2026-08-21T10:00:${String(sequence).padStart(2, "0")}.000Z`,
-    target,
-    resultRef,
-    payload,
   };
 }
 
@@ -275,167 +250,6 @@ describe("TelegramSessionWatcher", () => {
     w.abort();
   });
 
-  it("renders an idempotent Flow lifecycle into the same pending message", async () => {
-    const api = makeApi();
-    const ingress = makeIngress();
-    const artifact = flowEvent(6, "ARTIFACT_CREATED", "artifact_1", {
-      artifact_id: "artifact_1",
-      step_id: "deploy",
-      name: "deploy.output.json",
-    }, "artifact://artifact_1");
-    ingress.events = blockingEvents([
-      flowEvent(1, "STEP_STARTED", "deploy", { capability_id: "deploy.production" }),
-      flowEvent(2, "STEP_STARTED", "deploy", { capability_id: "deploy.production" }),
-      flowEvent(3, "APPROVAL_REQUESTED", "deploy.production", {
-        approval_id: "approval_1",
-        step_id: "deploy",
-      }),
-      flowEvent(4, "APPROVAL_GRANTED", "deploy.production", {
-        approval_id: "approval_1",
-        step_id: "deploy",
-      }),
-      flowEvent(5, "STEP_SUCCEEDED", "deploy"),
-      artifact,
-      { ...artifact, sequence: 7 },
-      flowEvent(8, "FLOW_BATCH_DRAFTED", "batch_draft_1", {
-        draft_id: "batch_draft_1", flow_id: "flow_deploy",
-        definition_revision: "sha256:revision", status: "ready", total: 3, blocking: 0,
-      }),
-      flowEvent(9, "RUN_SNAPSHOT", "run_1", {
-        flow_id: "flow_deploy",
-        flow_revision: "sha256:revision",
-        outcome: "succeeded",
-        steps: [{
-          step_id: "deploy",
-          capability_id: "deploy.production",
-          output_ref: "artifact://artifact_1",
-          verification_status: "passed",
-        }],
-      }),
-      terminalEvent(10),
-    ]);
-
-    const w = watcher(ingress, api);
-    w.resumeRun(
-      "run_1",
-      "8",
-      "turn_1",
-      "telegram:old:run_1",
-      false,
-      "telegram:42",
-      undefined,
-    );
-    w.start(0);
-
-    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
-
-    expect(api.editMessage.mock.calls.length).toBeGreaterThan(1);
-    expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
-    expect(api.editMessage.mock.calls.some((call) => {
-      const content = String(call[2]);
-      return content.includes("/flow approve") && content.includes("Web Workbench");
-    })).toBe(true);
-    const finalText = String(api.editMessage.mock.calls.at(-1)?.[2]);
-    expect(finalText).toContain("Flow 结果 · 成功");
-    expect(finalText).toContain("Flow 批量草稿 · ready");
-    expect(finalText.match(/deploy\.output\.json/g)).toHaveLength(1);
-    expect(api.sendMessage).not.toHaveBeenCalled();
-    w.abort();
-  });
-
-  it("keeps one Flow save request notice on the pending message through terminal delivery", async () => {
-    const api = makeApi();
-    const ingress = makeIngress();
-    const requested = flowSaveRequestedEvent(5);
-    let releasePostTerminal!: () => void;
-    let markPostTerminalProcessed!: () => void;
-    const postTerminalGate = new Promise<void>((resolve) => {
-      releasePostTerminal = resolve;
-    });
-    const postTerminalProcessed = new Promise<void>((resolve) => {
-      markPostTerminalProcessed = resolve;
-    });
-    ingress.events = vi.fn(async function* (
-      _sessionId: string,
-      opts: { signal: AbortSignal },
-    ) {
-      yield agentEvent(4, { type: "text_delta", text: "answer" });
-      yield requested;
-      yield requested;
-      yield terminalEvent(6);
-      await postTerminalGate;
-      yield { ...requested, type: "FLOW_SAVE_DISMISSED", sequence: 7 };
-      yield { ...requested, type: "FLOW_CANDIDATE_CREATED", sequence: 8 };
-      markPostTerminalProcessed();
-      await new Promise<void>((resolve) =>
-        opts.signal.addEventListener("abort", () => resolve()),
-      );
-    });
-
-    const w = watcher(ingress, api);
-    await w.openRun("run_1", turn());
-    w.start(0);
-
-    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
-    const editsAtTerminal = api.editMessage.mock.calls.length;
-    releasePostTerminal();
-    await postTerminalProcessed;
-
-    const finalText = String(api.editMessage.mock.calls.at(-1)?.[2]);
-    expect(finalText).toContain("answer");
-    expect(finalText.match(
-      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
-    )).toHaveLength(1);
-    expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
-    expect(api.editMessage).toHaveBeenCalledTimes(editsAtTerminal);
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.sendMessage).toHaveBeenCalledWith(
-      "telegram:42",
-      "⏳ Agent 正在处理…",
-      undefined,
-    );
-    expect(ingress.events).toHaveBeenCalledTimes(1);
-    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
-    expect(ingress.requestFlowSave).not.toHaveBeenCalled();
-    expect(ingress.confirmFlowSave).not.toHaveBeenCalled();
-    expect(ingress.dismissFlowSave).not.toHaveBeenCalled();
-    w.abort();
-  });
-
-  it("pins the complete Flow save notice to the original pending message for a long reply", async () => {
-    const api = makeApi();
-    const ingress = makeIngress();
-    const longReply = "A".repeat(4_097);
-    ingress.events = blockingEvents([
-      agentEvent(4, { type: "text_delta", text: longReply }),
-      flowSaveRequestedEvent(5),
-      terminalEvent(6),
-    ]);
-
-    const w = watcher(ingress, api);
-    await w.openRun("run_1", turn());
-    w.start(0);
-
-    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
-
-    const pendingText = String(api.editMessage.mock.calls.at(-1)?.[2]);
-    expect(pendingText).toContain(
-      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
-    );
-    expect(pendingText.length).toBeLessThanOrEqual(4_096);
-    const overflowMessages = api.sendMessage.mock.calls.slice(1);
-    expect(overflowMessages).toHaveLength(1);
-    expect(overflowMessages[0]?.[1]).not.toContain("已记录“存为 Flow”请求");
-    expect([
-      pendingText.replace(
-        /\n\n---\n\n已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。$/,
-        "",
-      ),
-      ...overflowMessages.map((call) => String(call[1])),
-    ].join("")).toBe(longReply);
-    w.abort();
-  });
-
   it("keeps the existing long-reply chunk order when there is no Save Intent", async () => {
     const api = makeApi();
     const ingress = makeIngress();
@@ -478,12 +292,12 @@ describe("TelegramSessionWatcher", () => {
     const fallbackMessages = api.sendMessage.mock.calls.slice(1)
       .map((call) => String(call[1]));
     expect(fallbackMessages).toHaveLength(2);
-    expect(fallbackMessages[0]).toContain(
+    expect(fallbackMessages[0]).not.toContain(
       "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     expect(fallbackMessages.join("").match(
       /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
-    )).toHaveLength(1);
+    )).toBeNull();
     expect(fallbackMessages).not.toContain(
       "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
@@ -538,82 +352,11 @@ describe("TelegramSessionWatcher", () => {
     releaseForeign();
     await matchingProcessed;
 
-    expect(String(api.editMessage.mock.calls.at(-1)?.[2])).toContain(
+    expect(String(api.editMessage.mock.calls.at(-1)?.[2])).not.toContain(
       "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
     );
     expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
     expect(api.sendMessage).not.toHaveBeenCalled();
-    w.abort();
-  });
-
-  it("keeps final delivery successful after a transient live edit failure", async () => {
-    const api = makeApi();
-    const ingress = makeIngress();
-    const logs: string[] = [];
-    let edits = 0;
-    api.editMessage = vi.fn(async () => {
-      edits += 1;
-      if (edits === 1) throw new Error("live edit boom");
-      return { message_id: 8 };
-    });
-    ingress.events = blockingEvents([
-      flowEvent(1, "STEP_STARTED", "deploy", { capability_id: "deploy.production" }),
-      flowEvent(2, "RUN_SNAPSHOT", "run_1", {
-        flow_id: "flow_deploy",
-        flow_revision: "sha256:revision",
-        outcome: "succeeded",
-        steps: [{
-          step_id: "deploy",
-          capability_id: "deploy.production",
-          verification_status: "passed",
-        }],
-      }),
-      terminalEvent(3),
-    ]);
-
-    const w = watcher(ingress, api, (message) => logs.push(message));
-    w.resumeRun("run_1", "8", "turn_1", "telegram:old:run_1", false, "telegram:42", undefined);
-    w.start(0);
-
-    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
-
-    expect(logs.some((message) => message.includes("实时消息更新失败"))).toBe(true);
-    expect(api.editMessage.mock.calls.at(-1)?.[2]).toContain("Flow 结果 · 成功");
-    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
-    w.abort();
-  });
-
-  it("renders a rejected approval before a cancelled Flow terminal", async () => {
-    const api = makeApi();
-    const ingress = makeIngress();
-    ingress.events = blockingEvents([
-      flowEvent(1, "APPROVAL_REQUESTED", "deploy.production", {
-        approval_id: "approval_1",
-        step_id: "deploy",
-      }),
-      flowEvent(2, "APPROVAL_REJECTED", "deploy.production", {
-        approval_id: "approval_1",
-        step_id: "deploy",
-      }),
-      flowEvent(3, "RUN_SNAPSHOT", "run_1", {
-        flow_id: "flow_deploy",
-        flow_revision: "sha256:revision",
-        outcome: "failed",
-        steps: [],
-      }),
-      terminalEvent(4, "RUN_CANCELLED"),
-    ]);
-
-    const w = watcher(ingress, api);
-    w.resumeRun("run_1", "8", "turn_1", "telegram:old:run_1", false, "telegram:42", undefined);
-    w.start(0);
-
-    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
-
-    expect(api.editMessage.mock.calls.some((call) =>
-      String(call[2]).includes("Flow 步骤审批已拒绝")
-    )).toBe(true);
-    expect(api.editMessage.mock.calls.at(-1)?.[2]).toContain("Flow 结果 · 失败");
     w.abort();
   });
 

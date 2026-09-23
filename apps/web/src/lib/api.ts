@@ -1,5 +1,5 @@
-import { parseSseFrames } from "./sse";
 import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
+import { parseSseFrames } from "./sse";
 import type {
   AgentCommand,
   AgentListResponse,
@@ -7,21 +7,12 @@ import type {
   AgentSession,
   ApprovalRecord,
   ConfigOption,
-  FlowCapability,
-  FlowBatchDraft,
-  FlowBatchSnapshot,
-  FlowRecommendation,
-  FlowRecord,
-  FlowReviewContext,
-  FlowSaveInboxPage,
-  FlowSaveConfirmResult,
-  FlowSaveRequestState,
-  MessageAttachmentInput,
   PiProvider,
   PiProviderPreset,
   ProviderHistoryImportResult,
   ProviderHistoryPreview,
   RunRecord,
+  SendMessageInput,
   SessionCancelRunResult,
   SessionCompositeSnapshot,
   SessionEvent,
@@ -30,7 +21,6 @@ import type {
   SessionSnapshot,
   SessionTimelinePage,
   SessionTurnView,
-  SendMessageInput,
   SkillAssignmentInput,
   SkillCatalogSnapshot,
   SkillMutationKind,
@@ -125,42 +115,14 @@ async function importSessions(input: { cwd?: string; agentId?: string } = {}): P
   });
 }
 
-function sendMessage(id: string, message: string, flowId: string | null, model: string | null, attachments: MessageAttachmentInput[], permissionMode: string | null, effort: string | null): Promise<SessionMessageReceipt>;
-function sendMessage(id: string, input: SendMessageInput): Promise<SessionMessageReceipt>;
-function sendMessage(
-  id: string,
-  messageOrInput: string | SendMessageInput,
-  flowId?: string | null,
-  model?: string | null,
-  attachments: MessageAttachmentInput[] = [],
-  permissionMode?: string | null,
-  effort?: string | null,
-): Promise<SessionMessageReceipt> {
-  const input: SendMessageInput = typeof messageOrInput === "string"
-    ? {
-      message: messageOrInput,
-      flowId: flowId ?? null,
-      model: model ?? null,
-      attachments,
-      permissionMode: permissionMode ?? null,
-      effort: effort ?? null,
-      idempotencyKey: "",
-    }
-    : messageOrInput;
-
+function sendMessage(id: string, input: SendMessageInput): Promise<SessionMessageReceipt> {
   const headers = input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : undefined;
   const body = {
     message: input.message,
-    ...(Object.hasOwn(input, "flowId") ? { flow_id: input.flowId } : {}),
-    ...(Object.hasOwn(input, "definitionRevision")
-      ? { definition_revision: input.definitionRevision }
-      : {}),
     model: input.model,
     permission_mode: input.permissionMode,
     effort: input.effort,
     attachments: input.attachments,
-    inputs: input.inputs,
-    dry_run: input.dryRun === true,
   };
   return request<SessionMessageReceipt>(`/v1/sessions/${encodeURIComponent(id)}/messages`, {
     method: "POST",
@@ -255,13 +217,6 @@ async function submission(id: string, key: string): Promise<SessionMessageReceip
   return request<SessionMessageReceipt>(`/v1/sessions/${encodeURIComponent(id)}/submissions/${encodeURIComponent(key)}`);
 }
 
-async function startRun(id: string, flowId: string | null, model: string | null, permissionMode: string | null = null, effort: string | null = null): Promise<RunRecord> {
-  return request<RunRecord>(`/v1/sessions/${encodeURIComponent(id)}/runs`, {
-    method: "POST",
-    body: JSON.stringify({ flow_id: flowId, model, permission_mode: permissionMode, effort }),
-  });
-}
-
 export const api = {
   skills: () => request<SkillCatalogSnapshot>("/v1/skills"),
   pickSkillSource: () => request<SkillCatalogSnapshot | { cancelled: true }>(
@@ -291,8 +246,6 @@ export const api = {
       method: "POST",
     }),
   agents: () => request<AgentListResponse>("/v1/agents"),
-  fetchFlow: (flowId: string) =>
-    request<FlowRecord>("/v1/flows/" + encodeURIComponent(flowId)),
   detectAgent: (agentId: string) =>
     request<AgentProfile>(`/v1/agents/${encodeURIComponent(agentId)}/detect`, {
       method: "POST",
@@ -338,151 +291,6 @@ export const api = {
   updateSession: (id: string, update: Record<string, unknown>) =>
     request<AgentSession>(`/v1/sessions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(update) }),
   deleteSession: (id: string) => request<void>(`/v1/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  flows: async (view: "manage" | "consume") =>
-    (await request<{ flows: FlowRecord[] }>(`/v1/flows?view=${view}`)).flows,
-  flowCapabilities: async () =>
-    (await request<{ capabilities: FlowCapability[] }>("/v1/capabilities")).capabilities,
-  flowRecommendations: async (sessionId: string) =>
-    (await request<{ recommendations: FlowRecommendation[] }>(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-recommendations`,
-    )).recommendations,
-  dismissFlowRecommendation: (sessionId: string, runId: string, flowId: string) =>
-    request<{ status: "dismissed" }>(
-      `/v1/flows/recommendations/${encodeURIComponent(runId)}/dismiss`,
-      {
-        method: "POST",
-        body: JSON.stringify({ session_id: sessionId, flow_id: flowId }),
-      },
-    ),
-  createGuide: (flow: Pick<FlowRecord, "name" | "description" | "steps">) =>
-    request<FlowRecord>("/v1/flows/guides", {
-      method: "POST",
-      body: JSON.stringify({ flow }),
-    }),
-  saveGuideDraft: (flow: FlowRecord) =>
-    request<FlowRecord>(`/v1/flows/${encodeURIComponent(flow.flow_id)}/guide`, {
-      method: "PUT",
-      body: JSON.stringify({
-        flow: { name: flow.name, description: flow.description, steps: flow.steps },
-      }),
-    }),
-  flowReviewContext: (flowId: string) =>
-    request<FlowReviewContext>(`/v1/flows/${encodeURIComponent(flowId)}/review-context`),
-  pendingFlowSaveRequests: (input: {
-    limit?: number;
-    cursor?: string | null;
-    signal?: AbortSignal;
-  } = {}) => {
-    const params = new URLSearchParams({
-      state: "pending",
-      limit: String(input.limit ?? 50),
-    });
-    if (input.cursor) params.set("cursor", input.cursor);
-    return request<FlowSaveInboxPage>(`/v1/flow-save-requests?${params}`, {
-      signal: input.signal,
-    });
-  },
-  requestFlowSave: (sessionId: string, sourceRunId: string, key: string) =>
-    request<Extract<FlowSaveRequestState, { state: "requested" }>>(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/flow-save-requests`,
-      {
-        method: "POST",
-        headers: { "Idempotency-Key": key },
-        body: JSON.stringify({ source_run_id: sourceRunId, source: "turn_action" }),
-      },
-    ),
-  confirmFlowSave: (requestId: string, key: string) =>
-    request<FlowSaveConfirmResult>(
-      `/v1/flow-save-requests/${encodeURIComponent(requestId)}/confirm`,
-      { method: "POST", headers: { "Idempotency-Key": key } },
-    ),
-  dismissFlowSave: (requestId: string, key: string) =>
-    request<Extract<FlowSaveRequestState, { state: "dismissed" }>>(
-      `/v1/flow-save-requests/${encodeURIComponent(requestId)}/dismiss`,
-      { method: "POST", headers: { "Idempotency-Key": key } },
-    ),
-  createCandidate: (sessionId: string, runId: string) =>
-    request<FlowRecord>("/v1/flows/candidates", {
-      method: "POST",
-      body: JSON.stringify({ session_id: sessionId, run_id: runId }),
-    }),
-  saveCandidate: (sessionId: string, flow: FlowRecord) =>
-    request<FlowRecord>("/v1/flows/candidates", {
-      method: "POST",
-      body: JSON.stringify({
-        session_id: sessionId,
-        flow: {
-          ...(flow.flow_id ? { flow_id: flow.flow_id } : {}),
-          ...(flow.parent_flow_id ? { parent_flow_id: flow.parent_flow_id } : {}),
-          name: flow.name,
-          description: flow.description,
-          kind: flow.kind,
-          inputs: flow.inputs,
-          steps: flow.steps,
-        },
-      }),
-    }),
-  reviewFlow: (flowId: string, decision: "approve" | "reject", gitRevision?: string) =>
-    request<FlowRecord>(`/v1/flows/${encodeURIComponent(flowId)}/review`, {
-      method: "POST",
-      body: JSON.stringify({
-        decision,
-        ...(decision === "approve" ? { git_revision: gitRevision ?? "" } : {}),
-      }),
-    }),
-  deprecateFlow: (flowId: string) =>
-    request<FlowRecord>(`/v1/flows/${encodeURIComponent(flowId)}/deprecate`, {
-      method: "POST",
-      body: "{}",
-    }),
-  applyFlow: (sessionId: string, flowId: string) =>
-    request<{
-      flow_id: string;
-      definition_revision: string;
-    }>(`/v1/flows/${encodeURIComponent(flowId)}/apply`, {
-      method: "POST",
-      body: JSON.stringify({ session_id: sessionId }),
-    }),
-  unbindFlow: (sessionId: string) =>
-    request<AgentSession>(`/v1/sessions/${encodeURIComponent(sessionId)}/flow`, {
-      method: "DELETE",
-    }),
-  flowBatchDraft: (draftId: string) =>
-    request<FlowBatchDraft>(`/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}`),
-  updateFlowBatchDraft: (draft: Pick<FlowBatchDraft, "draft_id" | "revision" | "global_inputs" | "items" | "source_refs">) =>
-    request<FlowBatchDraft>(`/v1/flow-invocation-drafts/${encodeURIComponent(draft.draft_id)}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        draft_revision: draft.revision,
-        global_inputs: draft.global_inputs,
-        items: draft.items,
-        source_refs: draft.source_refs,
-      }),
-    }),
-  confirmFlowBatchDraft: (draftId: string, revision: number, key: string, concurrency?: number) =>
-    request<FlowBatchSnapshot>(`/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}/confirm`, {
-      method: "POST",
-      headers: { "Idempotency-Key": key },
-      body: JSON.stringify({ draft_revision: revision, ...(concurrency ? { concurrency } : {}) }),
-    }),
-  cancelFlowBatchDraft: (draftId: string) =>
-    request<FlowBatchDraft>(`/v1/flow-invocation-drafts/${encodeURIComponent(draftId)}/cancel`, {
-      method: "POST",
-      body: "{}",
-    }),
-  flowBatch: (batchId: string) =>
-    request<FlowBatchSnapshot>(`/v1/flow-batches/${encodeURIComponent(batchId)}`),
-  cancelFlowBatch: (batchId: string) =>
-    request<FlowBatchSnapshot>(`/v1/flow-batches/${encodeURIComponent(batchId)}/cancel`, {
-      method: "POST",
-      body: "{}",
-    }),
-  retryFailedFlowBatch: (batchId: string, key: string) =>
-    request<FlowBatchSnapshot>(`/v1/flow-batches/${encodeURIComponent(batchId)}/retry-failed`, {
-      method: "POST",
-      headers: { "Idempotency-Key": key },
-      body: "{}",
-    }),
   configOptions: async (id: string) =>
     (await request<{ options?: ConfigOption[] }>(`/v1/sessions/${encodeURIComponent(id)}/config-options`)).options ?? [],
   providers: async () =>
@@ -506,7 +314,6 @@ export const api = {
   runs: async (id: string) =>
     (await request<{ runs: RunRecord[] }>(`/v1/sessions/${encodeURIComponent(id)}/runs`)).runs,
   cancelRun,
-  startRun,
   events,
   approvals: async (runId: string) =>
     (await request<{ approvals: ApprovalRecord[] }>(`/v1/runs/${encodeURIComponent(runId)}/approvals`)).approvals,

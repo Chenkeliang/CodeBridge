@@ -1,20 +1,31 @@
-import { useState, type ReactNode } from "react";
-import { ChevronDown, FolderOpen, Gauge, Paperclip, Plus, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { DEFAULT_SELECT_VALUE, defaultModelLabel } from "@/components/workbench-shared";
-import type { ConfigOption, FlowRecord } from "@/lib/types";
-import { speedValueLabel } from "@/lib/workbench-logic";
+import type { ConfigOption } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { speedValueLabel } from "@/lib/workbench-logic";
+import {
+  ChevronDown,
+  FolderOpen,
+  Gauge,
+  Paperclip,
+  Plus,
+} from "lucide-react";
+import { useState, type ReactNode } from "react";
 
-export function ComposerActions({ flowId, flows, hasWorkspace, onFiles, onFlow, onPickDirectory, onWorkspaceContext }: {
-  flowId: string;
-  flows: FlowRecord[];
+export function ComposerActions({ hasWorkspace, onFiles, onPickDirectory, onWorkspaceContext }: {
+
   hasWorkspace: boolean;
   onFiles: () => void;
-  onFlow: (value: string) => void;
+
   onPickDirectory: () => void;
   onWorkspaceContext: () => void;
 }) {
@@ -28,18 +39,7 @@ export function ComposerActions({ flowId, flows, hasWorkspace, onFiles, onFlow, 
       <ActionButton icon={<Paperclip className="size-3.5" />} label="添加文件" onClick={onFiles} />
       <ActionButton disabled={!hasWorkspace} icon={<FolderOpen className="size-3.5" />} label="插入 Workspace 上下文" onClick={onWorkspaceContext} />
       <ActionButton icon={<Plus className="size-3.5" />} label="添加 Workspace" onClick={onPickDirectory} />
-      {flows.length > 0 && <div className="mt-1 border-t border-line pt-1">
-        <Select onValueChange={(value) => onFlow(value === DEFAULT_SELECT_VALUE ? "" : value)} value={flowId || DEFAULT_SELECT_VALUE}>
-          <SelectTrigger aria-label="Flow" className="h-8 w-full justify-start gap-2 border-0 bg-transparent px-2 py-0 text-xs shadow-none focus-visible:ring-0">
-            <Workflow className="size-3.5" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="border-line-strong text-ink-soft shadow-panel" surface="frosted">
-            <SelectItem className="data-[highlighted]:bg-surface-soft" value={DEFAULT_SELECT_VALUE}>Flow · 自动</SelectItem>
-            {flows.map((flow) => <SelectItem className="data-[highlighted]:bg-surface-soft" key={flow.flow_id} value={flow.flow_id}>{flow.name || flow.flow_id}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>}
+
     </PopoverContent>
   </Popover>;
 }

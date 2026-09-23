@@ -1,8 +1,14 @@
+import { defaultConfig, type AgentEvent, type ChannelSessionIngress } from "@codebridge/core";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig, type AgentEvent, type ChannelSessionIngress } from "@codebridge/core";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { TelegramBridge } from "./telegram-bridge.js";
 
 const tmpDirs: string[] = [];
@@ -49,121 +55,6 @@ describe("TelegramBridge inbound commands", () => {
       "sess_pi",
       "telegram:42",
     );
-  });
-
-  it("lists and invokes a Flow without forwarding /flow commands to Agent", async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-flow-"));
-    tmpDirs.push(dataDir);
-    const config = defaultConfig();
-    config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
-    const sendMessage = vi.fn().mockResolvedValue({ message_id: 8 });
-    const editMessage = vi.fn().mockResolvedValue({ message_id: 8 });
-    const submit = vi.fn().mockResolvedValue({
-      sessionId: "sess_flow",
-      turnId: "turn_flow",
-      runId: null,
-      acceptance: "queued",
-      queueState: "ready",
-      eventSequence: 3,
-    });
-    const bridge = new TelegramBridge({
-      config,
-      dataDir,
-      api: { sendMessage, editMessage } as never,
-      sessionIngress: {
-        listConsumableFlows: vi.fn().mockResolvedValue([{
-          flowId: "flow_order",
-          name: "订单排查",
-          definitionRevision: "sha256:one",
-          inputs: [{ id: "oid", type: "integer", source: "user", required: true }],
-          steps: [{ id: "lookup", purpose: "查订单", mode: "read_only", approval: "none" }],
-        }]),
-        listManageableFlows: vi.fn().mockResolvedValue([{
-          flowId: "flow_candidate", name: "订单排查候选", description: null,
-          definitionRevision: "sha256:candidate", kind: "runbook", status: "candidate", reviewStatus: "pending",
-        }]),
-        submit,
-        getSlotCommandContext: vi.fn().mockResolvedValue({
-          sessionId: null,
-          activeRunId: null,
-          providerSessionId: null,
-        }),
-        listRuntimeApprovals: vi.fn().mockResolvedValue([]),
-        resolveRuntimeApproval: vi.fn(),
-        getFlowBatchDraft: vi.fn().mockResolvedValue({
-          draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
-          definitionRevision: "sha256:one", status: "ready", revision: 1, total: 2, blocking: 0,
-        }),
-        confirmFlowBatchDraft: vi.fn().mockResolvedValue({
-          batchId: "batch_1", draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
-          definitionRevision: "sha256:one", status: "running",
-          counts: { total: 2, queued: 1, running: 1, waiting: 0, succeeded: 0, failed: 0, cancelled: 0 },
-        }),
-        getFlowBatch: vi.fn().mockResolvedValue({
-          batchId: "batch_1", draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
-          definitionRevision: "sha256:one", status: "succeeded",
-          counts: { total: 2, queued: 0, running: 0, waiting: 0, succeeded: 2, failed: 0, cancelled: 0 },
-        }),
-        events: async function* () {
-          await new Promise(() => {});
-        },
-        claimDelivery: vi.fn(),
-        ackDelivery: vi.fn(),
-        completeDelivery: vi.fn(),
-        listDeliveries: vi.fn().mockResolvedValue([]),
-      } as unknown as ChannelSessionIngress,
-    });
-    const update = (updateId: number, text: string) => ({
-      update_id: updateId,
-      message: {
-        message_id: updateId,
-        chat: { id: 42, type: "private" as const },
-        from: { id: 99 },
-        text,
-      },
-    });
-
-    await bridge.handleUpdate(update(0, "/flow manage"));
-    await bridge.handleUpdate(update(1, "/flow"));
-    await bridge.handleUpdate(update(2, "/flow 1"));
-    await bridge.handleUpdate(update(3, "/flow set oid=1644460"));
-    await bridge.handleUpdate(update(4, "/flow run"));
-    await bridge.handleUpdate(update(5, "/flow confirm"));
-    await bridge.handleUpdate(update(6, "/flow batch confirm batch_draft_1"));
-    await vi.waitFor(() => expect(editMessage).toHaveBeenCalledWith(
-      "telegram:42",
-      8,
-      expect.stringContaining("状态：succeeded"),
-    ));
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      "telegram:42",
-      expect.stringContaining("订单排查"),
-      undefined,
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "telegram:42",
-      expect.stringContaining("已开始批量执行 2 项"),
-      undefined,
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "telegram:42",
-      expect.stringContaining("runbook/candidate"),
-      undefined,
-    );
-    expect(submit).toHaveBeenCalledTimes(1);
-    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
-      channel: "telegram",
-      conversationId: "telegram:42|",
-      message: "运行 Flow：订单排查",
-      flowId: "flow_order",
-      flowDefinitionRevision: "sha256:one",
-      inputs: { oid: 1644460 },
-      actorRef: { channel: "telegram", id: "99" },
-      idempotencyKey: expect.stringMatching(/^flow:/),
-      replyToMessageId: expect.any(String),
-      showThinking: true,
-    }));
   });
 
   it("registers native commands before polling", async () => {
@@ -651,7 +542,7 @@ describe("TelegramBridge inbound commands", () => {
     const terminalText = String(editMessage.mock.calls.at(-1)?.[2]);
     expect(terminalText.match(
       /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
-    )).toHaveLength(1);
+    )).toBeNull();
     expect(editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
     expect(sendMessage).not.toHaveBeenCalled();
     expect(completeDelivery).toHaveBeenCalledTimes(1);

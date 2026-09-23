@@ -1,88 +1,62 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, X } from "lucide-react";
 import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { CommandPalette } from "@/components/command-palette";
 import { Composer } from "@/components/composer";
 import { LoadingConversation } from "@/components/conversation";
-import type {
-  RuntimeApprovalAction,
-  RuntimeApprovalStatus,
-} from "@/components/runtime-approval-card";
-import { SessionQueue } from "@/components/session-queue";
-import { SessionTimeline } from "@/components/session-timeline";
-import type { FlowSaveRequestActionState } from "@/components/flow-save-request-card";
-import { FlowDetail } from "@/components/flow-detail";
-import { FlowControlPanel } from "@/components/flow-control-panel";
-import { FlowBatchPanel } from "@/components/flow-batch-panel";
-import { FlowSaveInboxDetail } from "@/components/flow-save-inbox-detail";
+import { PixelMark } from "@/components/pixel-mark";
 import {
-  ProviderHistoryImportCard,
   providerHistoryErrorPresentation,
+  ProviderHistoryImportCard,
   type ProviderHistoryImportState,
 } from "@/components/provider-history-import-card";
+import type { RuntimeApprovalAction, RuntimeApprovalStatus } from "@/components/runtime-approval-card";
+import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
+import { SessionQueue } from "@/components/session-queue";
+import { SessionTimeline } from "@/components/session-timeline";
 import { SettingsPage } from "@/components/settings-page";
 import { SkillControlPlanePage } from "@/components/skill-control-plane";
-import { PixelMark } from "@/components/pixel-mark";
-import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
-import { api, ApiError } from "@/lib/api";
+import {
+  messageOf,
+  statusLabel,
+  type Density,
+  type MenuView,
+  type PanelArea,
+  type Theme,
+} from "@/components/workbench-shared";
+import { api } from "@/lib/api";
 import { SessionConnection } from "@/lib/session-connection";
 import { sessionViewStore, useSessionView } from "@/lib/session-store";
 import { submitSessionMessage } from "@/lib/submit-session-message";
-import { defaultsFromFlow, flowRunMessage } from "@/lib/flow-run-submit";
-import { latestCandidateForSession } from "@/lib/flow-navigation";
-import {
-  canStartFlowSaveAction,
-  flowSaveCommandId,
-  reconcileFlowSaveCommands,
-  reconcileFlowSaveInboxCommands,
-  type FlowSaveCommandRecord,
-} from "@/lib/flow-save-command-state";
-import {
-  FlowSaveInboxState,
-  type FlowSaveInboxRefreshKind,
-} from "@/lib/flow-save-inbox-state";
 import type {
   AgentCommand,
   AgentProfile,
   AgentSession,
   ConfigOption,
-  FlowRecord,
-  FlowCapability,
-  FlowBatchDraft,
-  FlowBatchSnapshot,
-  FlowRecommendation,
-  FlowReviewContext,
-  FlowSaveInboxRequest,
   MessageAttachmentInput,
   ProviderHistoryPreview,
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, composerTrigger, isModelOption, isPermissionOption, isSpeedOption, isThoughtLevelOption, orderSessions, restoreSessionSelection, selectInitialAgent, serializeConfigOverride, workspacePaths } from "@/lib/workbench-logic";
-import { messageOf, statusLabel, type Density, type MenuView, type PanelArea, type Theme } from "@/components/workbench-shared";
-
-type FlowRevisionMismatch = {
-  source: "binding" | "request";
-  flow_id: string;
-  expected_definition_revision: string;
-  current_definition_revision: string;
-};
-
-function canonicalFlowSaveSequence(sessionId: string): number {
-  const snapshot = sessionViewStore.get(sessionId)?.snapshot;
-  if (!snapshot) return 0;
-  let sequence = snapshot.runtime.last_event_sequence;
-  for (const block of snapshot.timeline.turns.flatMap((turn) => turn.blocks)) {
-    if (block.kind !== "flow_save_request") continue;
-    const blockSessionId = block.metadata.session_id;
-    if (typeof blockSessionId === "string" && blockSessionId !== sessionId) continue;
-    const eventSequence = block.metadata.event_sequence;
-    if (typeof eventSequence === "number" && Number.isFinite(eventSequence)) {
-      sequence = Math.max(sequence, eventSequence);
-    }
-  }
-  return sequence;
-}
+import {
+  applyComposerSuggestion,
+  composerTrigger,
+  isModelOption,
+  isPermissionOption,
+  isSpeedOption,
+  isThoughtLevelOption,
+  orderSessions,
+  restoreSessionSelection,
+  selectInitialAgent,
+  serializeConfigOverride,
+  workspacePaths,
+} from "@/lib/workbench-logic";
+import { ChevronDown, X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 export function Workbench() {
   const [theme, setTheme] = useState<Theme>(() => readTheme());
@@ -91,8 +65,6 @@ export function Workbench() {
   const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
   const [effectiveDefaultAgentId, setEffectiveDefaultAgentId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
-  const [flows, setFlows] = useState<FlowRecord[]>([]);
-  const [consumableFlows, setConsumableFlows] = useState<FlowRecord[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
@@ -102,40 +74,13 @@ export function Workbench() {
   const [effort, setEffort] = useState("");
   const [configOverrides, setConfigOverrides] = useState<Record<string, string | boolean>>({});
   const [permissionMode, setPermissionMode] = useState("");
-  const [pendingFlowId, setPendingFlowId] = useState("");
-  const [detailFlow, setDetailFlow] = useState<FlowRecord | null>(null);
-  const [flowCapabilities, setFlowCapabilities] = useState<FlowCapability[]>([]);
-  const [flowReviewContext, setFlowReviewContext] = useState<FlowReviewContext | null>(null);
-  const [flowControlBusy, setFlowControlBusy] = useState(false);
-  const [flowControlError, setFlowControlError] = useState<string | null>(null);
-  const [savingCandidateRunId, setSavingCandidateRunId] = useState<string | null>(null);
-  const [flowRecommendations, setFlowRecommendations] = useState<FlowRecommendation[]>([]);
-  const [flowMismatch, setFlowMismatch] = useState<FlowRevisionMismatch | null>(null);
-  const [flowBatchDraft, setFlowBatchDraft] = useState<FlowBatchDraft | null>(null);
-  const [flowBatch, setFlowBatch] = useState<FlowBatchSnapshot | null>(null);
-  const [flowBatchBusy, setFlowBatchBusy] = useState(false);
-  const [flowBatchError, setFlowBatchError] = useState<string | null>(null);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
   const [approvalStatusOverrides, setApprovalStatusOverrides] = useState<Record<string, RuntimeApprovalStatus>>({});
-  const [paramValues, setParamValues] = useState<Record<string, unknown>>({});
-  const [missingInputs, setMissingInputs] = useState<Array<{
-    id: string; type: string; source: string; reason: string;
-  }>>([]);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
   const [sending, setSending] = useState(false);
   const pendingSubmissionKey = useRef<string | null>(null);
-  const flowSaveCommands = useRef(new Map<string, FlowSaveCommandRecord>());
-  const [requestingFlowRunIds, setRequestingFlowRunIds] = useState<Set<string>>(() => new Set());
-  const [flowSaveActionStates, setFlowSaveActionStates] = useState<Record<string, FlowSaveRequestActionState>>({});
-  const flowSaveInboxState = useRef(new FlowSaveInboxState({ pollIntervalMs: 15_000 }));
-  const [flowSaveInbox, setFlowSaveInbox] = useState(() => flowSaveInboxState.current.snapshot());
-  const previousFlowSaveInboxRequests = useRef<FlowSaveInboxRequest[]>([]);
-  const selectedPendingFlowSaveRequestRef = useRef<string | null>(null);
-  const [selectedPendingFlowSaveRequestId, setSelectedPendingFlowSaveRequestIdState] = useState<string | null>(null);
-  const flowSaveInboxTimer = useRef<number | null>(null);
-  const refreshFlowSaveInboxRef = useRef<(kind: FlowSaveInboxRefreshKind) => Promise<void>>(async () => {});
   const [providerHistory, setProviderHistory] = useState<ProviderHistoryImportState>({ kind: "idle" });
   const providerHistoryRequestVersion = useRef(0);
   const pendingHistoryImportKey = useRef<{ sessionId: string; key: string } | null>(null);
@@ -158,7 +103,6 @@ export function Workbench() {
   const [workspaceListing, setWorkspaceListing] = useState<WorkspaceListing | null>(null);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
-  const guideImportInput = useRef<HTMLInputElement | null>(null);
   const deepLinkHandled = useRef(false);
   const conversationViewport = useRef<HTMLElement | null>(null);
   const selectedAgentRef = useRef<string | null>(null);
@@ -168,20 +112,8 @@ export function Workbench() {
     openSession: api.openSession,
   }), []);
   const sessionView = useSessionView(selectedSessionId);
-  const activeFlowBatchId = flowBatch?.batch_id ?? null;
-  const activeFlowBatchStatus = flowBatch?.status ?? null;
-  const recommendationRunKey = sessionView?.snapshot.timeline.turns
-    .map((turn) => `${turn.run_id}:${turn.status}`)
-    .join("|") ?? "";
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
-  const selectedPendingFlowSaveRequest = flowSaveInbox.requests.find(
-    (request) => request.request_id === selectedPendingFlowSaveRequestId,
-  ) ?? null;
-  const selectedPendingFlowSaveAgentName = selectedPendingFlowSaveRequest
-    ? agents.find((agent) => agent.agent_id === selectedPendingFlowSaveRequest.agent_id)?.display_name
-      ?? selectedPendingFlowSaveRequest.agent_id
-    : null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
   const selectedAgentSetup = selectedAgent?.setup ?? null;
   const selectedAgentManifest = selectedAgent?.setup_manifest ?? null;
@@ -205,7 +137,6 @@ export function Workbench() {
   const thoughtLevelOption = useMemo(() => configOptions.find(isThoughtLevelOption), [configOptions]);
   const speedOption = useMemo(() => configOptions.find(isSpeedOption), [configOptions]);
   const permissionOption = useMemo(() => configOptions.find(isPermissionOption), [configOptions]);
-  const pendingFlow = consumableFlows.find((flow) => flow.flow_id === pendingFlowId) ?? null;
   const waitingRuntimeApprovals = useMemo(() =>
     sessionView?.snapshot.timeline.turns.flatMap((turn) =>
       turn.blocks.flatMap((block) => {
@@ -218,78 +149,10 @@ export function Workbench() {
       }),
     ) ?? [],
   [sessionView?.snapshot.timeline.turns]);
-  const detailCandidateFlowId = detailFlow?.status === "candidate" ? detailFlow.flow_id : null;
-  const detailEvidenceKey = useMemo(() => {
-    if (!detailCandidateFlowId) return "";
-    return sessionView?.snapshot.timeline.turns.flatMap((turn) =>
-      turn.blocks
-        .filter((block) => block.kind === "flow_run" && block.status === "succeeded")
-        .filter((block) => block.metadata.flow_id === detailCandidateFlowId)
-        .map(() => turn.run_id),
-    ).join(":") ?? "";
-  }, [detailCandidateFlowId, sessionView?.snapshot.timeline.turns]);
   const notify = useCallback((message: string, kind: "info" | "error" = "info") => {
     setNotice({ text: message, kind });
     window.setTimeout(() => setNotice((current) => current?.text === message ? null : current), 4000);
   }, []);
-
-  const selectPendingFlowSaveRequest = useCallback((requestId: string | null) => {
-    selectedPendingFlowSaveRequestRef.current = requestId;
-    setSelectedPendingFlowSaveRequestIdState(requestId);
-  }, []);
-
-  const syncFlowSaveInbox = useCallback(() => {
-    setFlowSaveInbox(flowSaveInboxState.current.snapshot());
-  }, []);
-
-  const scheduleFlowSaveInboxPoll = useCallback(() => {
-    if (flowSaveInboxTimer.current !== null) {
-      window.clearTimeout(flowSaveInboxTimer.current);
-    }
-    const nextPollAt = flowSaveInboxState.current.snapshot().nextPollAt;
-    const delay = Math.max(0, (nextPollAt ?? Date.now() + 15_000) - Date.now());
-    flowSaveInboxTimer.current = window.setTimeout(() => {
-      flowSaveInboxTimer.current = null;
-      void refreshFlowSaveInboxRef.current("periodic");
-    }, delay);
-  }, []);
-
-  const refreshFlowSaveInbox = useCallback(async (
-    kind: FlowSaveInboxRefreshKind = "immediate",
-  ): Promise<void> => {
-    if (kind === "immediate" && flowSaveInboxTimer.current !== null) {
-      window.clearTimeout(flowSaveInboxTimer.current);
-      flowSaveInboxTimer.current = null;
-    }
-    const token = flowSaveInboxState.current.begin(kind, Date.now());
-    if (!token) return;
-    syncFlowSaveInbox();
-
-    const pages = [];
-    const seenCursors = new Set<string>();
-    let cursor: string | null = null;
-    let settled: boolean;
-    try {
-      do {
-        const page = await api.pendingFlowSaveRequests({
-          limit: 100,
-          cursor,
-          signal: token.signal,
-        });
-        pages.push(page);
-        cursor = page.next_cursor;
-        if (cursor && seenCursors.has(cursor)) throw new Error("flow_save_inbox_cursor_cycle");
-        if (cursor) seenCursors.add(cursor);
-      } while (cursor);
-      settled = flowSaveInboxState.current.succeed(token, pages, Date.now());
-    } catch (caught) {
-      settled = flowSaveInboxState.current.fail(token, caught, Date.now());
-    }
-    if (!settled) return;
-    syncFlowSaveInbox();
-    scheduleFlowSaveInboxPoll();
-  }, [scheduleFlowSaveInboxPoll, syncFlowSaveInbox]);
-  refreshFlowSaveInboxRef.current = refreshFlowSaveInbox;
 
   const previewProviderHistory = useCallback(async (sessionId: string): Promise<void> => {
     const requestVersion = ++providerHistoryRequestVersion.current;
@@ -322,21 +185,15 @@ export function Workbench() {
     if (!silent) setError(null);
     try {
       if (importProvider) await api.importSessions();
-      const [agentList, nextSessions, nextFlows, nextConsumableFlows, nextFlowCapabilities] = await Promise.all([
+      const [agentList, nextSessions] = await Promise.all([
         api.agents(),
         api.sessions(false, true),
-        api.flows("manage"),
-        api.flows("consume"),
-        api.flowCapabilities(),
       ]);
       const nextAgents = agentList.agents;
       setAgents(nextAgents);
       setDefaultAgentId(agentList.default_agent_id);
       setEffectiveDefaultAgentId(agentList.effective_default_agent_id);
       setSessions(nextSessions);
-      setFlows(nextFlows);
-      setConsumableFlows(nextConsumableFlows);
-      setFlowCapabilities(nextFlowCapabilities);
       const nextAgentId = selectedAgentRef.current && nextAgents.some((agent) => agent.agent_id === selectedAgentRef.current)
         ? selectedAgentRef.current
         : selectInitialAgent(nextAgents, agentList.effective_default_agent_id);
@@ -358,57 +215,10 @@ export function Workbench() {
 
   useEffect(() => { void reload(false).then(() => void reload(true, true)); }, [reload]);
 
-  useEffect(() => {
-    void refreshFlowSaveInbox("immediate");
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") void refreshFlowSaveInbox("immediate");
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      if (flowSaveInboxTimer.current !== null) {
-        window.clearTimeout(flowSaveInboxTimer.current);
-        flowSaveInboxTimer.current = null;
-      }
-      flowSaveInboxState.current.cancel();
-    };
-  }, [refreshFlowSaveInbox]);
-
-  useEffect(() => {
-    if (area === "flows") void refreshFlowSaveInbox("immediate");
-  }, [area, refreshFlowSaveInbox]);
-
-  useEffect(() => {
-    const reconciliation = reconcileFlowSaveInboxCommands({
-      previousRequests: previousFlowSaveInboxRequests.current,
-      currentRequests: flowSaveInbox.requests,
-      commands: flowSaveCommands.current,
-    });
-    previousFlowSaveInboxRequests.current = flowSaveInbox.requests;
-    for (const commandId of reconciliation.commandIds) {
-      flowSaveCommands.current.delete(commandId);
-    }
-    if (reconciliation.actionRequestIds.size > 0) {
-      setFlowSaveActionStates((current) => {
-        const next = { ...current };
-        for (const requestId of reconciliation.actionRequestIds) delete next[requestId];
-        return next;
-      });
-    }
-    if (
-      selectedPendingFlowSaveRequestRef.current
-      && !flowSaveInbox.requests.some(
-        (request) => request.request_id === selectedPendingFlowSaveRequestRef.current,
-      )
-    ) {
-      selectPendingFlowSaveRequest(flowSaveInbox.requests[0]?.request_id ?? null);
-    }
-  }, [flowSaveInbox.requests, selectPendingFlowSaveRequest]);
-
   useEffect(() => { selectedAgentRef.current = selectedAgentId; }, [selectedAgentId]);
   useEffect(() => {
     selectedSessionRef.current = selectedSessionId;
-    setRequestingFlowRunIds(new Set());
+
     providerHistoryRequestVersion.current += 1;
     pendingHistoryImportKey.current = null;
     activeHistoryImportRequest.current = null;
@@ -417,34 +227,11 @@ export function Workbench() {
   }, [selectedSessionId]);
 
   useEffect(() => {
-    if (!selectedSessionId || !sessionView) return;
-    const turns = sessionView.snapshot.timeline.turns;
-    const canonicalRunIds = new Set(turns.map((turn) => turn.run_id));
-    const reconciliation = reconcileFlowSaveCommands({
-      sessionId: selectedSessionId,
-      commands: flowSaveCommands.current,
-      blocks: turns.flatMap((turn) => turn.blocks),
-      canonicalRunIds,
-    });
-    for (const commandId of reconciliation.commandIds) {
-      flowSaveCommands.current.delete(commandId);
-    }
-    if (reconciliation.actionRequestIds.size > 0) {
-      setFlowSaveActionStates((current) => {
-        const next = { ...current };
-        for (const requestId of reconciliation.actionRequestIds) delete next[requestId];
-        return next;
-      });
-    }
-  }, [selectedSessionId, sessionView]);
-
-  useEffect(() => {
     if (loading || deepLinkHandled.current) return;
     const params = new URLSearchParams(window.location.search);
-    const flowId = params.get("flow");
-    const batchId = params.get("batch");
+    if (params.has("flow") || params.has("batch")) notify("Flow 功能已停用", "error");
     const sessionId = params.get("session");
-    if (!flowId && !batchId && !sessionId) return;
+    if (!sessionId) return;
     deepLinkHandled.current = true;
     queueMicrotask(() => {
       if (sessionId) {
@@ -456,24 +243,8 @@ export function Workbench() {
         setSelectedAgentId(session.agent_id);
         setSelectedSessionId(session.session_id);
       }
-      if (flowId) {
-        setArea("flows");
-        void openFlow(flowId);
-      }
-      if (batchId) void openFlowBatch({ batchId });
     });
   }, [loading, notify, sessions]);
-
-  useEffect(() => {
-    if (!detailCandidateFlowId || !detailEvidenceKey) return;
-    let active = true;
-    void api.flowReviewContext(detailCandidateFlowId).then((context) => {
-      if (!active) return;
-      setFlowReviewContext(context);
-      setDetailFlow(context.flow);
-    }).catch(() => {});
-    return () => { active = false; };
-  }, [detailCandidateFlowId, detailEvidenceKey]);
 
   useEffect(() => {
     let active = true;
@@ -502,22 +273,6 @@ export function Workbench() {
   }, [selectedSessionId, waitingRuntimeApprovals]);
 
   useEffect(() => {
-    if (!activeFlowBatchId || !activeFlowBatchStatus || !["queued", "running"].includes(activeFlowBatchStatus)) return;
-    let active = true;
-    const timer = window.setInterval(() => {
-      void api.flowBatch(activeFlowBatchId).then((snapshot) => {
-        if (active) setFlowBatch(snapshot);
-      }).catch((caught) => {
-        if (active) setFlowBatchError(messageOf(caught));
-      });
-    }, 1500);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [activeFlowBatchId, activeFlowBatchStatus]);
-
-  useEffect(() => {
     window.localStorage.setItem("codebridge:web-theme", theme);
     // The boot script in index.html primes <html data-theme> before first paint;
     // it must follow runtime switches too or <body>/scrollbars keep the old theme.
@@ -533,7 +288,7 @@ export function Workbench() {
       setEffort("");
       setConfigOverrides({});
       setPermissionMode("");
-      setPendingFlowId("");
+
       setLoadingSession(false);
       setWorkspaceListing(null);
       return;
@@ -568,7 +323,7 @@ export function Workbench() {
         setEffort(session.effort ?? "");
         setConfigOverrides(session.config_overrides ?? {});
         setPermissionMode(session.permission_mode ?? "");
-        setPendingFlowId("");
+
         setLoadingSession(false);
         if (session.provider_session_id) void previewProviderHistory(sessionId);
         await sessionConnection.open(sessionId);
@@ -583,23 +338,6 @@ export function Workbench() {
       sessionConnection.close();
     };
   }, [previewProviderHistory, selectedSessionId, sessionConnection]);
-
-  useEffect(() => {
-    let active = true;
-    if (!selectedSessionId) {
-      queueMicrotask(() => {
-        if (active) setFlowRecommendations([]);
-      });
-      return () => { active = false; };
-    }
-    const sessionId = selectedSessionId;
-    void api.flowRecommendations(sessionId).then((recommendations) => {
-      if (active) setFlowRecommendations(recommendations);
-    }).catch(() => {
-      if (active) setFlowRecommendations([]);
-    });
-    return () => { active = false; };
-  }, [recommendationRunKey, selectedSessionId]);
 
   const [stuckToBottom, setStuckToBottom] = useState(true);
   const sessionSwitch = useRef(true);
@@ -703,21 +441,7 @@ export function Workbench() {
     setSelectedSessionId(nextSessionId);
   }
 
-  function enterArea(nextArea: PanelArea): void {
-    if (nextArea !== "flows") {
-      setArea(nextArea);
-      return;
-    }
-    const expectedSessionId = selectedSessionRef.current;
-    setArea("flows");
-    selectPendingFlowSaveRequest(null);
-    setDetailFlow(null);
-    setFlowReviewContext(null);
-    setFlowControlError(null);
-    setMissingInputs([]);
-    const related = latestCandidateForSession(flows, expectedSessionId);
-    if (related) void openFlow(related.flow_id, expectedSessionId);
-  }
+  function enterArea(nextArea: PanelArea): void { setArea(nextArea); }
 
   function selectSession(session: AgentSession) {
     selectedAgentRef.current = session.agent_id;
@@ -863,567 +587,6 @@ export function Workbench() {
     }
   }
 
-  async function openFlow(id: string, expectedSessionId?: string | null) {
-    if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return;
-    setMissingInputs([]);
-    setFlowControlError(null);
-    try {
-      const context = await api.flowReviewContext(id);
-      if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return;
-      setFlowReviewContext(context);
-      setDetailFlow(context.flow);
-      setParamValues(defaultsFromFlow(context.flow));
-      setArea("flows");
-    } catch (caught) {
-      if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return;
-      setError(messageOf(caught));
-    }
-  }
-
-  async function refreshFlowCatalog(
-    flowId?: string,
-    expectedSessionId?: string | null,
-  ): Promise<FlowReviewContext | null> {
-    const [nextFlows, nextConsumableFlows] = await Promise.all([
-      api.flows("manage"),
-      api.flows("consume"),
-    ]);
-    setFlows(nextFlows);
-    setConsumableFlows(nextConsumableFlows);
-    if (!flowId) return null;
-    if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return null;
-    const context = await api.flowReviewContext(flowId);
-    if (expectedSessionId !== undefined && selectedSessionRef.current !== expectedSessionId) return null;
-    setFlowReviewContext(context);
-    setDetailFlow(context.flow);
-    setParamValues((current) => ({ ...defaultsFromFlow(context.flow), ...current }));
-    return context;
-  }
-
-  async function createCandidateFromRun(runId: string): Promise<void> {
-    const sessionId = selectedSessionRef.current;
-    if (!sessionId || savingCandidateRunId) return;
-    setSavingCandidateRunId(runId);
-    setFlowControlError(null);
-    try {
-      const candidate = await api.createCandidate(sessionId, runId);
-      await refreshFlowCatalog(candidate.flow_id, sessionId);
-      if (selectedSessionRef.current !== sessionId) return;
-      notify(`已生成 Candidate · ${candidate.name || candidate.flow_id}`);
-    } catch (caught) {
-      if (selectedSessionRef.current !== sessionId) return;
-      notify(messageOf(caught), "error");
-    } finally {
-      setSavingCandidateRunId(null);
-    }
-  }
-
-  async function requestFlowSaveFromTurn(sourceRunId: string): Promise<void> {
-    const sessionId = selectedSessionRef.current;
-    if (!sessionId || requestingFlowRunIds.has(sourceRunId)) return;
-    const commandId = flowSaveCommandId(sessionId, "request", sourceRunId);
-    const command = flowSaveCommands.current.get(commandId) ?? {
-      key: crypto.randomUUID(),
-      startedAfterSequence: canonicalFlowSaveSequence(sessionId),
-    };
-    const key = command.key;
-    flowSaveCommands.current.set(commandId, command);
-    setRequestingFlowRunIds((current) => new Set(current).add(sourceRunId));
-    try {
-      await api.requestFlowSave(sessionId, sourceRunId, key);
-    } catch (caught) {
-      if (selectedSessionRef.current !== sessionId) return;
-      if (caught instanceof ApiError) {
-        flowSaveCommands.current.delete(commandId);
-        notify(messageOf(caught), "error");
-        await sessionConnection.refresh(sessionId).catch(() => {});
-      } else {
-        notify("保存请求结果未知；再次选择“存为 Flow”会安全重试同一请求。", "error");
-      }
-      return;
-    } finally {
-      if (selectedSessionRef.current === sessionId) {
-        setRequestingFlowRunIds((current) => {
-          const next = new Set(current);
-          next.delete(sourceRunId);
-          return next;
-        });
-      }
-    }
-    if (selectedSessionRef.current !== sessionId) return;
-    flowSaveCommands.current.delete(commandId);
-    try {
-      await sessionConnection.refresh(sessionId);
-    } catch {
-      if (selectedSessionRef.current === sessionId) {
-        notify("保存请求已记录，但 Timeline 刷新失败，请刷新页面。", "error");
-      }
-    }
-  }
-
-  async function confirmFlowSaveRequest(sessionId: string, requestId: string): Promise<void> {
-    const actionState = flowSaveActionStates[requestId];
-    if (!canStartFlowSaveAction(actionState, "confirm")) return;
-    const inboxRequest = flowSaveInbox.requests.find((request) =>
-      request.session_id === sessionId && request.request_id === requestId
-    );
-    const commandId = flowSaveCommandId(sessionId, "confirm", requestId);
-    const command = flowSaveCommands.current.get(commandId) ?? {
-      key: crypto.randomUUID(),
-      startedAfterSequence: inboxRequest?.event_sequence ?? canonicalFlowSaveSequence(sessionId),
-    };
-    const key = command.key;
-    flowSaveCommands.current.set(commandId, command);
-    setFlowSaveActionStates((current) => ({
-      ...current,
-      [requestId]: { phase: "confirm", error: null, retry: null },
-    }));
-    let result;
-    try {
-      result = await api.confirmFlowSave(requestId, key);
-    } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.status === 503) {
-          setFlowSaveActionStates((current) => ({
-            ...current,
-            [requestId]: {
-              phase: null,
-              error: "Flow Catalog 暂不可用，请重试生成。",
-              retry: "confirm",
-            },
-          }));
-          return;
-        }
-        flowSaveCommands.current.delete(commandId);
-        await refreshFlowSaveInbox("immediate");
-        if (selectedSessionRef.current === sessionId) {
-          await sessionConnection.refresh(sessionId).catch(() => {});
-        }
-        setFlowSaveActionStates((current) => {
-          const next = { ...current };
-          delete next[requestId];
-          return next;
-        });
-        if (
-          selectedPendingFlowSaveRequestRef.current === requestId
-          || (selectedPendingFlowSaveRequestRef.current === null && selectedSessionRef.current === sessionId)
-        ) notify(messageOf(caught), "error");
-        return;
-      }
-      setFlowSaveActionStates((current) => ({
-        ...current,
-        [requestId]: {
-          phase: null,
-          error: "生成结果未知，请使用同一次确认重试。",
-          retry: "confirm",
-        },
-      }));
-      return;
-    }
-    const candidateDetailExpectedSessionId = selectedPendingFlowSaveRequestRef.current === null
-      && selectedSessionRef.current === sessionId
-      ? sessionId
-      : undefined;
-    const shouldOpenCandidate = selectedPendingFlowSaveRequestRef.current === requestId
-      || candidateDetailExpectedSessionId !== undefined;
-    flowSaveCommands.current.delete(commandId);
-    setFlowSaveActionStates((current) => {
-      const next = { ...current };
-      delete next[requestId];
-      return next;
-    });
-    await refreshFlowSaveInbox("immediate");
-    if (selectedSessionRef.current === sessionId) try {
-      await sessionConnection.refresh(sessionId);
-    } catch {
-      if (shouldOpenCandidate && selectedSessionRef.current === sessionId) {
-        notify("Candidate 已生成，但 Timeline 刷新失败，请刷新页面。", "error");
-      }
-    }
-    const opened = await refreshFlowCatalog(
-      shouldOpenCandidate ? result.flow.flow_id : undefined,
-      candidateDetailExpectedSessionId,
-    ).catch((caught) => {
-      if (!shouldOpenCandidate) return null;
-      if (
-        candidateDetailExpectedSessionId !== undefined
-        && selectedSessionRef.current !== candidateDetailExpectedSessionId
-      ) return null;
-      notify(`Candidate 已生成，但详情打开失败：${messageOf(caught)}`, "error");
-      return null;
-    });
-    if (opened && shouldOpenCandidate) {
-      selectPendingFlowSaveRequest(null);
-      setArea("flows");
-      notify(`已生成 Candidate · ${result.flow.name || result.flow.flow_id}`);
-    }
-  }
-
-  async function dismissFlowSaveRequest(sessionId: string, requestId: string): Promise<void> {
-    const actionState = flowSaveActionStates[requestId];
-    if (!canStartFlowSaveAction(actionState, "dismiss")) return;
-    const inboxRequest = flowSaveInbox.requests.find((request) =>
-      request.session_id === sessionId && request.request_id === requestId
-    );
-    const commandId = flowSaveCommandId(sessionId, "dismiss", requestId);
-    const command = flowSaveCommands.current.get(commandId) ?? {
-      key: crypto.randomUUID(),
-      startedAfterSequence: inboxRequest?.event_sequence ?? canonicalFlowSaveSequence(sessionId),
-    };
-    const key = command.key;
-    flowSaveCommands.current.set(commandId, command);
-    setFlowSaveActionStates((current) => ({
-      ...current,
-      [requestId]: { phase: "dismiss", error: null, retry: null },
-    }));
-    try {
-      await api.dismissFlowSave(requestId, key);
-    } catch (caught) {
-      if (caught instanceof ApiError) {
-        flowSaveCommands.current.delete(commandId);
-        await refreshFlowSaveInbox("immediate");
-        if (selectedSessionRef.current === sessionId) {
-          await sessionConnection.refresh(sessionId).catch(() => {});
-        }
-        setFlowSaveActionStates((current) => {
-          const next = { ...current };
-          delete next[requestId];
-          return next;
-        });
-        if (
-          selectedPendingFlowSaveRequestRef.current === requestId
-          || (selectedPendingFlowSaveRequestRef.current === null && selectedSessionRef.current === sessionId)
-        ) notify(messageOf(caught), "error");
-        return;
-      }
-      setFlowSaveActionStates((current) => ({
-        ...current,
-        [requestId]: {
-          phase: null,
-          error: "忽略结果未知，请再次点击“忽略”安全重试。",
-          retry: "dismiss",
-        },
-      }));
-      return;
-    }
-    flowSaveCommands.current.delete(commandId);
-    setFlowSaveActionStates((current) => {
-      const next = { ...current };
-      delete next[requestId];
-      return next;
-    });
-    await refreshFlowSaveInbox("immediate");
-    if (selectedSessionRef.current === sessionId) try {
-      await sessionConnection.refresh(sessionId);
-    } catch {
-      if (selectedSessionRef.current === sessionId) {
-        notify("已忽略请求，但 Timeline 刷新失败，请刷新页面。", "error");
-      }
-    }
-  }
-
-  async function locateFlowSaveSource(request: FlowSaveInboxRequest): Promise<void> {
-    const targetSession = sessions.find((session) =>
-      session.session_id === request.session_id && session.agent_id === request.agent_id
-    );
-    if (!targetSession) {
-      notify("来源 Session 已不存在或不可访问。", "error");
-      return;
-    }
-    try {
-      const snapshot = await api.openSession(request.session_id);
-      sessionViewStore.hydrate(snapshot);
-    } catch (caught) {
-      notify(`无法读取来源 Session：${messageOf(caught)}`, "error");
-      return;
-    }
-
-    selectPendingFlowSaveRequest(null);
-    setArea("agents");
-    selectSession(targetSession);
-    const selector = `[data-flow-save-request-id="${CSS.escape(request.request_id)}"]`;
-    let card: HTMLElement | null = null;
-    for (let attempt = 0; attempt < 10 && !card; attempt += 1) {
-      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-      card = document.querySelector<HTMLElement>(selector);
-    }
-    if (!card) {
-      notify("来源请求卡已不存在，未定位到其他内容。", "error");
-      return;
-    }
-    card.scrollIntoView({ block: "center", behavior: "smooth" });
-    card.focus({ preventScroll: true });
-  }
-
-  async function openFlowRecommendation(recommendation: FlowRecommendation): Promise<void> {
-    try {
-      const context = await api.flowReviewContext(recommendation.flow_id);
-      if (context.flow.definition_revision !== recommendation.definition_revision) {
-        notify("该 Flow 版本已变化，请重新确认最新版本", "error");
-        return;
-      }
-      setFlowReviewContext(context);
-      setDetailFlow(context.flow);
-      setParamValues({
-        ...defaultsFromFlow(context.flow),
-        ...recommendation.extracted_inputs,
-      });
-      setMissingInputs([]);
-      notify("已打开建议 Flow；请核对参数后明确运行");
-    } catch (caught) {
-      notify(messageOf(caught), "error");
-    }
-  }
-
-  async function dismissFlowRecommendation(recommendation: FlowRecommendation): Promise<void> {
-    if (!selectedSessionId) return;
-    try {
-      await api.dismissFlowRecommendation(
-        selectedSessionId,
-        recommendation.run_id,
-        recommendation.flow_id,
-      );
-      setFlowRecommendations((current) => current.map((entry) =>
-        entry.recommendation_id === recommendation.recommendation_id
-          ? { ...entry, status: "dismissed" }
-          : entry
-      ));
-    } catch (caught) {
-      notify(messageOf(caught), "error");
-    }
-  }
-
-  async function saveCandidate(flow: FlowRecord): Promise<void> {
-    if (!selectedSessionId || flowControlBusy) {
-      if (!selectedSessionId) setFlowControlError("请选择来源 Session 后再保存 Candidate");
-      return;
-    }
-    setFlowControlBusy(true);
-    setFlowControlError(null);
-    try {
-      const saved = await api.saveCandidate(selectedSessionId, flow);
-      await refreshFlowCatalog(saved.flow_id);
-      notify("Candidate 已保存；revision 已由服务端重新计算");
-    } catch (caught) {
-      setFlowControlError(messageOf(caught));
-    } finally {
-      setFlowControlBusy(false);
-    }
-  }
-
-  async function createGuideDraft(): Promise<void> {
-    if (flowControlBusy) return;
-    setFlowControlBusy(true);
-    setFlowControlError(null);
-    try {
-      const created = await api.createGuide({
-        name: "未命名 Guide",
-        description: "",
-        steps: [{
-          id: "step_1", capability: null, purpose: "请描述这个人工步骤", depends_on: [],
-          mode: "manual", approval: "none", branches: [], retry: null, success_when: null,
-        }],
-      });
-      await refreshFlowCatalog(created.flow_id);
-      notify("Guide 草稿已创建；请整理名称和人工步骤");
-    } catch (caught) {
-      setFlowControlError(messageOf(caught));
-    } finally {
-      setFlowControlBusy(false);
-    }
-  }
-
-  async function importGuideDraft(file: File): Promise<void> {
-    if (flowControlBusy) return;
-    setFlowControlBusy(true);
-    setFlowControlError(null);
-    try {
-      const parsed = JSON.parse(await file.text()) as Record<string, unknown>;
-      const source = parsed.flow && typeof parsed.flow === "object" && !Array.isArray(parsed.flow)
-        ? parsed.flow as Record<string, unknown>
-        : parsed;
-      const created = await api.createGuide(source as unknown as Pick<FlowRecord, "name" | "description" | "steps">);
-      await refreshFlowCatalog(created.flow_id);
-      notify("Guide JSON 已导入；revision 已由服务端重新计算");
-    } catch (caught) {
-      setFlowControlError(messageOf(caught));
-      notify(messageOf(caught), "error");
-    } finally {
-      setFlowControlBusy(false);
-    }
-  }
-
-  async function saveGuideDraft(flow: FlowRecord): Promise<void> {
-    if (flowControlBusy) return;
-    setFlowControlBusy(true);
-    setFlowControlError(null);
-    try {
-      const saved = await api.saveGuideDraft(flow);
-      await refreshFlowCatalog(saved.flow_id);
-      notify("Guide 草稿已保存；revision 已由服务端重新计算");
-    } catch (caught) {
-      setFlowControlError(messageOf(caught));
-    } finally {
-      setFlowControlBusy(false);
-    }
-  }
-
-  async function reviewDefinition(decision: "approve" | "reject", gitRevision?: string): Promise<void> {
-    if (!detailFlow || flowControlBusy) return;
-    setFlowControlBusy(true);
-    setFlowControlError(null);
-    try {
-      const reviewed = await api.reviewFlow(detailFlow.flow_id, decision, gitRevision);
-      await refreshFlowCatalog(reviewed.flow_id);
-      notify(decision === "approve" ? "Flow 已批准并发布" : "Candidate 已打回");
-    } catch (caught) {
-      setFlowControlError(messageOf(caught));
-    } finally {
-      setFlowControlBusy(false);
-    }
-  }
-
-  async function deprecateDefinition(): Promise<void> {
-    if (!detailFlow || flowControlBusy) return;
-    setFlowControlBusy(true);
-    setFlowControlError(null);
-    try {
-      const deprecated = await api.deprecateFlow(detailFlow.flow_id);
-      await refreshFlowCatalog(deprecated.flow_id);
-      notify("Flow 已废弃，历史证据仍保留");
-    } catch (caught) {
-      setFlowControlError(messageOf(caught));
-    } finally {
-      setFlowControlBusy(false);
-    }
-  }
-
-  function captureFlowMismatch(error: {
-    code: string;
-    body: Record<string, unknown> | null;
-  }): boolean {
-    const body = error.body;
-    if (
-      error.code !== "flow_revision_mismatch"
-      || body?.source !== "binding"
-      || typeof body.flow_id !== "string"
-      || typeof body.expected_definition_revision !== "string"
-      || typeof body.current_definition_revision !== "string"
-    ) {
-      return false;
-    }
-    setFlowMismatch({
-      source: "binding",
-      flow_id: body.flow_id,
-      expected_definition_revision: body.expected_definition_revision,
-      current_definition_revision: body.current_definition_revision,
-    });
-    return true;
-  }
-
-  async function bindFlowToSession(flow: FlowRecord) {
-    const sessionId = selectedSessionId ?? (await ensureSession());
-    if (!sessionId) {
-      setError("请选择一个可用的 Agent");
-      return;
-    }
-    try {
-      const binding = await api.applyFlow(sessionId, flow.flow_id);
-      setSessions((current) => current.map((session) => session.session_id === sessionId
-        ? {
-            ...session,
-            flow_id: binding.flow_id,
-            flow_definition_revision: binding.definition_revision,
-          }
-        : session));
-      setFlowMismatch(null);
-      notify(`已绑定 ${flow.name || flow.flow_id}`);
-    } catch (caught) {
-      setError(messageOf(caught));
-    }
-  }
-
-  async function unbindSelectedFlow() {
-    if (!selectedSessionId) return;
-    try {
-      const updated = await api.unbindFlow(selectedSessionId);
-      setSessions((current) => current.map((session) => session.session_id === updated.session_id ? updated : session));
-      setFlowMismatch(null);
-      notify("已解绑 Flow");
-    } catch (caught) {
-      setError(messageOf(caught));
-    }
-  }
-
-  async function rebindLatestFlow() {
-    if (!selectedSessionId || !flowMismatch) return;
-    try {
-      const latest = await api.fetchFlow(flowMismatch.flow_id);
-      if (latest.definition_revision !== flowMismatch.current_definition_revision) {
-        setError("Flow 已再次更新，请重新查看最新版本");
-        return;
-      }
-      setDetailFlow(latest);
-      setParamValues(defaultsFromFlow(latest));
-      await bindFlowToSession(latest);
-    } catch (caught) {
-      setError(messageOf(caught));
-    }
-  }
-
-  async function ensureSession(): Promise<string | null> {
-    if (selectedSessionId) return selectedSessionId;
-    if (!selectedAgent || selectedAgent.status !== "healthy") return null;
-    return (await createSession(selectedAgent.agent_id))?.session_id ?? null;
-  }
-
-  async function runFlow(flow: FlowRecord, values: Record<string, unknown>, dryRun: boolean) {
-    if (sending) return;
-    setParamValues(values);
-    setMissingInputs([]);
-    setSending(true);
-    setError(null);
-    const message = flowRunMessage(draft, flow);
-    const idempotencyKey = crypto.randomUUID();
-    const sessionId = selectedSessionId ?? (await ensureSession());
-    if (!sessionId) {
-      setError("请选择一个可用的 Agent");
-      setSending(false);
-      return;
-    }
-    const result = await submitSessionMessage({
-      send: api.sendMessage,
-      lookup: api.submission,
-      sessionId,
-      idempotencyKey,
-      input: {
-        message,
-        flowId: flow.flow_id,
-        definitionRevision: flow.definition_revision,
-        model: model || null,
-        attachments,
-        permissionMode: permissionMode || null,
-        effort: effort || null,
-        inputs: values,
-        dryRun,
-      },
-    });
-    if (result.kind === "rejected" && result.error.code === "missing_inputs" && Array.isArray(result.error.body?.missing)) {
-      setMissingInputs(result.error.body.missing as Array<{ id: string; type: string; source: string; reason: string }>);
-      setSending(false);
-      return;
-    }
-    if (result.kind === "rejected" || result.kind === "unknown") {
-      if (result.kind !== "rejected" || !captureFlowMismatch(result.error)) {
-        setError(messageOf(result.kind === "rejected" ? result.error : result.idempotencyKey));
-      }
-      setSending(false);
-      return;
-    }
-    await sessionConnection.refresh(sessionId).catch(() => {});
-    setSending(false);
-  }
-
   async function submit() {
     const message = draft.trim();
     if (!message || sending) return;
@@ -1460,17 +623,10 @@ export function Workbench() {
       idempotencyKey,
       input: {
         message,
-        ...(pendingFlow
-          ? {
-              flowId: pendingFlow.flow_id,
-              definitionRevision: pendingFlow.definition_revision,
-            }
-          : {}),
         model: model || null,
         attachments: pendingAttachments,
         permissionMode: permissionMode || null,
         effort: effort || null,
-        inputs: pendingFlow ? paramValues : undefined,
       },
     });
     if (result.kind === "unknown") {
@@ -1484,12 +640,12 @@ export function Workbench() {
       pendingSubmissionKey.current = null;
       setDraft(message);
       setAttachments(pendingAttachments);
-      if (!captureFlowMismatch(result.error)) setError(messageOf(result.error));
+      setError(messageOf(result.error));
       setSending(false);
       return;
     }
     pendingSubmissionKey.current = null;
-    setPendingFlowId("");
+
     try {
       if (
         result.receipt.acceptance === "queued"
@@ -1719,153 +875,6 @@ export function Workbench() {
     }
   }
 
-  async function openFlowBatch(reference: { draftId?: string; batchId?: string }) {
-    setFlowBatchBusy(true);
-    setFlowBatchError(null);
-    try {
-      if (reference.batchId) {
-        const snapshot = await api.flowBatch(reference.batchId);
-        setFlowBatch(snapshot);
-        setFlowBatchDraft(null);
-        const url = new URL(window.location.href);
-        url.searchParams.set("batch", snapshot.batch_id);
-        if (snapshot.session_id) url.searchParams.set("session", snapshot.session_id);
-        window.history.replaceState(null, "", url);
-      } else if (reference.draftId) {
-        const nextDraft = await api.flowBatchDraft(reference.draftId);
-        setFlowBatchDraft(nextDraft);
-        setFlowBatch(null);
-      }
-    } catch (caught) {
-      setFlowBatchError(messageOf(caught));
-    } finally {
-      setFlowBatchBusy(false);
-    }
-  }
-
-  function closeFlowBatch() {
-    setFlowBatchDraft(null);
-    setFlowBatch(null);
-    setFlowBatchError(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete("batch");
-    window.history.replaceState(null, "", url);
-  }
-
-  async function saveFlowBatchDraft(next: FlowBatchDraft) {
-    setFlowBatchBusy(true);
-    setFlowBatchError(null);
-    try {
-      setFlowBatchDraft(await api.updateFlowBatchDraft(next));
-      notify("批量参数已重新校验并保存");
-    } catch (caught) {
-      setFlowBatchError(messageOf(caught));
-    } finally {
-      setFlowBatchBusy(false);
-    }
-  }
-
-  async function confirmFlowBatch(concurrency: number) {
-    if (!flowBatchDraft) return;
-    setFlowBatchBusy(true);
-    setFlowBatchError(null);
-    try {
-      const snapshot = await api.confirmFlowBatchDraft(
-        flowBatchDraft.draft_id,
-        flowBatchDraft.revision,
-        crypto.randomUUID(),
-        concurrency,
-      );
-      setFlowBatchDraft(null);
-      setFlowBatch(snapshot);
-      notify(`已交给 Runtime 执行 ${snapshot.counts.total} 项`);
-    } catch (caught) {
-      setFlowBatchError(messageOf(caught));
-    } finally {
-      setFlowBatchBusy(false);
-    }
-  }
-
-  async function cancelFlowBatchDraft() {
-    if (!flowBatchDraft) return;
-    setFlowBatchBusy(true);
-    try {
-      setFlowBatchDraft(await api.cancelFlowBatchDraft(flowBatchDraft.draft_id));
-    } catch (caught) {
-      setFlowBatchError(messageOf(caught));
-    } finally {
-      setFlowBatchBusy(false);
-    }
-  }
-
-  async function cancelFlowBatch() {
-    if (!flowBatch) return;
-    setFlowBatchBusy(true);
-    try {
-      setFlowBatch(await api.cancelFlowBatch(flowBatch.batch_id));
-    } catch (caught) {
-      setFlowBatchError(messageOf(caught));
-    } finally {
-      setFlowBatchBusy(false);
-    }
-  }
-
-  async function retryFailedFlowBatch() {
-    if (!flowBatch) return;
-    setFlowBatchBusy(true);
-    try {
-      setFlowBatch(await api.retryFailedFlowBatch(flowBatch.batch_id, crypto.randomUUID()));
-    } catch (caught) {
-      setFlowBatchError(messageOf(caught));
-    } finally {
-      setFlowBatchBusy(false);
-    }
-  }
-
-  const flowBatchSurface = flowBatchDraft || flowBatch ? <FlowBatchPanel
-    batch={flowBatch}
-    busy={flowBatchBusy}
-    draft={flowBatchDraft}
-    error={flowBatchError}
-    key={flowBatchDraft ? `${flowBatchDraft.draft_id}:${flowBatchDraft.revision}` : flowBatch?.batch_id}
-    onCancelBatch={() => { void cancelFlowBatch(); }}
-    onCancelDraft={() => { void cancelFlowBatchDraft(); }}
-    onClose={closeFlowBatch}
-    onConfirm={(concurrency) => { void confirmFlowBatch(concurrency); }}
-    onOpenRun={(runId) => {
-      void navigator.clipboard?.writeText(runId);
-      notify(`Run ${runId} 已复制，可在运行日志中定位`);
-    }}
-    onRetryFailed={() => { void retryFailedFlowBatch(); }}
-    onSave={(next) => { void saveFlowBatchDraft(next); }}
-  /> : null;
-
-  const flowDetailSurface = detailFlow ? <div className="mb-4"><FlowDetail
-    flow={detailFlow}
-    management={flowReviewContext?.flow.flow_id === detailFlow.flow_id ? <FlowControlPanel
-      busy={flowControlBusy}
-      capabilities={flowCapabilities}
-      context={flowReviewContext}
-      error={flowControlError}
-      key={`${flowReviewContext.flow.flow_id}:${flowReviewContext.flow.definition_revision}:${flowReviewContext.flow.status}`}
-      onDeprecate={() => { void deprecateDefinition(); }}
-      onReview={(decision, gitRevision) => { void reviewDefinition(decision, gitRevision); }}
-      onSave={(flow) => { void (flow.kind === "guide" ? saveGuideDraft(flow) : saveCandidate(flow)); }}
-    /> : undefined}
-    missing={missingInputs}
-    onBind={(flow) => { void bindFlowToSession(flow); }}
-    onClose={() => { setDetailFlow(null); setFlowReviewContext(null); setFlowControlError(null); setMissingInputs([]); }}
-    onSubmit={(values, dryRun) => { void runFlow(detailFlow, values, dryRun); }}
-    onValues={(values) => {
-      setParamValues(values);
-      setMissingInputs((current) => current.filter((entry) => {
-        const value = values[entry.id];
-        return value === undefined || value === null || value === "";
-      }));
-    }}
-    values={paramValues}
-  /></div> : null;
-
   const selectedProviderHistory = providerHistory.kind !== "idle"
     && providerHistory.sessionId === selectedSessionId
     ? providerHistory
@@ -1884,11 +893,10 @@ export function Workbench() {
     && ["available", "importing", "error", "imported"].includes(selectedProviderHistory.kind);
 
   return (
-    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && (area === "agents" || area === "flows") ? "grid-cols-[60px_minmax(0,1fr)] md:grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
+    <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && area === "agents" ? "grid-cols-[60px_minmax(0,1fr)] md:grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
       <AgentRail
         agents={agents}
         area={area}
-        pendingFlowSaveCount={flowSaveInbox.requests.length}
         selectedAgentId={selectedAgentId}
         theme={theme}
         onAgent={selectAgent}
@@ -1896,33 +904,20 @@ export function Workbench() {
         onTheme={toggleTheme}
       />
 
-      {panelOpen && (area === "agents" || area === "flows") && <div className="hidden min-h-0 min-w-0 md:contents"><SessionPanel
+      {panelOpen && area === "agents" && <div className="hidden min-h-0 min-w-0 md:contents"><SessionPanel
         agent={selectedAgent}
         agents={agents}
         activeSessionCount={activeSessionCount}
         area={area}
         archivedSessionCount={archivedSessionCount}
-        flows={flows}
-        flowId={detailFlow?.flow_id ?? ""}
         loading={loading}
-        pendingFlowSaveRequests={flowSaveInbox.requests}
         query={query}
         sessions={agentSessions}
         selectedSessionId={selectedSessionId}
-        selectedPendingFlowSaveRequestId={selectedPendingFlowSaveRequestId}
         onCreate={() => selectedAgent && void createSession(selectedAgent.agent_id)}
-        onCreateGuide={() => { void createGuideDraft(); }}
-        onImportGuide={() => guideImportInput.current?.click()}
-        onFlow={(id) => { selectPendingFlowSaveRequest(null); void openFlow(id); }}
-        onPendingFlowSaveRequest={(request) => {
-          selectPendingFlowSaveRequest(request.request_id);
-          setDetailFlow(null);
-          setFlowReviewContext(null);
-        }}
         onQuery={setQuery}
         onRefresh={() => {
           void reload(true);
-          if (area === "flows") void refreshFlowSaveInbox("immediate");
         }}
         onSession={selectSession}
         onUpdateSession={(session, update) => applySessionUpdate(session.session_id, update)}
@@ -1930,18 +925,6 @@ export function Workbench() {
         onToggleArchived={() => setShowArchived((current) => !current)}
         showArchived={showArchived}
       /></div>}
-
-      <input
-        accept="application/json,.json"
-        className="hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) void importGuideDraft(file);
-          event.currentTarget.value = "";
-        }}
-        ref={guideImportInput}
-        type="file"
-      />
 
       <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", "bg-canvas text-ink")}>
         {pixelWipe > 0 && <PixelWipe key={pixelWipe} seed={pixelWipe} />}
@@ -1962,12 +945,6 @@ export function Workbench() {
         />}
 
         {error && <div className={cn("mx-8 mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span><button aria-label="关闭错误" onClick={() => setError(null)} type="button"><X className="size-3.5" /></button></div>}
-        {flowMismatch && <div className={cn("mx-8 mt-4 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-warning-soft", "text-warning", "border-line-strong")} role="alert">
-          <span className="min-w-0 flex-1">Flow 已更新，请确认后重新绑定</span>
-          <button className="rounded border border-line px-2 py-1" onClick={() => void openFlow(flowMismatch.flow_id)} type="button">查看最新版本</button>
-          <button className="rounded border border-line px-2 py-1" onClick={() => void rebindLatestFlow()} type="button">重新绑定</button>
-          <button className="rounded border border-line px-2 py-1" onClick={() => void unbindSelectedFlow()} type="button">解绑</button>
-        </div>}
 
         {area === "skills" ? (
           <SkillControlPlanePage onNotify={notify} />
@@ -1991,27 +968,6 @@ export function Workbench() {
               onReading={setReading}
             />
           </section>
-        ) : area === "flows" ? (
-          selectedPendingFlowSaveRequest && selectedPendingFlowSaveAgentName ? (
-            <section aria-label="Flow 待生成详情" className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-7">
-              <FlowSaveInboxDetail
-                actionState={flowSaveActionStates[selectedPendingFlowSaveRequest.request_id] ?? null}
-                agentName={selectedPendingFlowSaveAgentName}
-                onConfirm={(requestId) => { void confirmFlowSaveRequest(selectedPendingFlowSaveRequest.session_id, requestId); }}
-                onDismiss={(requestId) => { void dismissFlowSaveRequest(selectedPendingFlowSaveRequest.session_id, requestId); }}
-                onOpenSourceSession={() => { void locateFlowSaveSource(selectedPendingFlowSaveRequest); }}
-                request={selectedPendingFlowSaveRequest}
-              />
-            </section>
-          ) : detailFlow ? (
-            <section aria-label="Flow 管理" className="min-h-0 flex-1 overflow-y-auto px-8 py-7">
-              <div className="mx-auto w-full max-w-[880px]">{flowDetailSurface}</div>
-            </section>
-          ) : (
-            <section aria-label="Flow 选择" className="flex min-h-0 flex-1 items-center justify-center px-8 text-center">
-              <p className="text-xs text-muted">从左侧选择 Flow 或待生成请求</p>
-            </section>
-          )
         ) : !selectedSession ? selectedAgentNeedsSetup || selectedAgentUnavailable ? (
           <div className="flex min-h-0 flex-1 items-center justify-center px-8 pb-20">
             <div className="w-full max-w-[760px]">
@@ -2071,8 +1027,6 @@ export function Workbench() {
                 workspaceLoading={false}
                 disabled={!selectedAgent || selectedAgent.status !== "healthy"}
                 draft={draft}
-                flowId={pendingFlowId}
-                flows={consumableFlows}
                 model={model}
                 modelOption={modelOption}
                 effort={effort}
@@ -2091,7 +1045,6 @@ export function Workbench() {
                 onContextOpen={toggleContext}
                 onDraft={handleDraftChange}
                 onFiles={() => fileInput.current?.click()}
-                onFlow={setPendingFlowId}
                 onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
                 onEffort={setSessionEffort}
                 onConfigOverride={setSessionConfigOverride}
@@ -2108,11 +1061,7 @@ export function Workbench() {
           <div className="flex min-h-0 flex-1 flex-col">
             <section aria-label="Session conversation" className="min-h-0 flex-1 overflow-y-auto px-8 pt-7" onScroll={handleConversationScroll} ref={conversationViewport}>
               <div className="mx-auto w-full max-w-[880px] pb-7">
-                {selectedSession.flow_id && <div className="mb-3 flex items-center gap-2 rounded-md border border-line bg-surface-soft px-3 py-2 text-xs text-muted">
-                  <span className="min-w-0 flex-1 truncate">已绑定 Flow · {selectedSession.flow_id}</span>
-                  <button className="text-ink hover:opacity-80" onClick={() => void unbindSelectedFlow()} type="button">解绑</button>
-                </div>}
-                {flowBatchSurface}
+
                 {!loadingSession && showProviderHistoryAboveTimeline && <div className="mb-5">{providerHistorySurface}</div>}
                 {loadingSession ? <LoadingConversation /> : sessionView && hasTimeline ? (
                   <SessionTimeline
@@ -2124,23 +1073,8 @@ export function Workbench() {
                     loadingEarlier={loadingEarlier}
                     onLoadEarlier={() => void loadEarlierTimeline()}
                     onLoadSegments={(blockId, after) => void loadBlockSegments(blockId, after)}
-                    requestingFlowRunIds={requestingFlowRunIds}
-                    flowSaveActionStates={flowSaveActionStates}
-                    onRequestFlowSave={(runId) => { void requestFlowSaveFromTurn(runId); }}
-                     onConfirmFlowSave={(requestId) => { if (selectedSessionId) void confirmFlowSaveRequest(selectedSessionId, requestId); }}
-                     onDismissFlowSave={(requestId) => { if (selectedSessionId) void dismissFlowSaveRequest(selectedSessionId, requestId); }}
-                    onOpenFlowCandidate={(flowId) => { void openFlow(flowId, selectedSessionId); }}
-                    onCreateCandidate={(runId) => { void createCandidateFromRun(runId); }}
-                    flowRecommendations={flowRecommendations}
-                    onUseFlowRecommendation={(recommendation) => { void openFlowRecommendation(recommendation); }}
-                    onDismissFlowRecommendation={(recommendation) => { void dismissFlowRecommendation(recommendation); }}
-                    onOpenFlowBatch={(reference) => { void openFlowBatch(reference); }}
                     onResolveApproval={(action, approve) => void resolveRuntimeApproval(action, approve)}
                     resolvingApprovalId={resolvingApprovalId}
-                    savingCandidateRunId={savingCandidateRunId}
-                    solidifiableFlowIds={flows
-                      .filter((flow) => flow.kind === "runbook" && flow.status === "published")
-                      .map((flow) => flow.flow_id)}
                     turns={sessionView.snapshot.timeline.turns}
                   />
                 ) : providerHistorySurface ? <div className="flex min-h-[42vh] items-center justify-center">
@@ -2172,8 +1106,6 @@ export function Workbench() {
                   workspaceLoading={workspaceLoading}
                   disabled={false}
                   draft={draft}
-                  flowId={pendingFlowId}
-                  flows={consumableFlows}
                   model={model}
                   modelOption={modelOption}
                   effort={effort}
@@ -2192,7 +1124,6 @@ export function Workbench() {
                   onContextOpen={toggleContext}
                   onDraft={handleDraftChange}
                   onFiles={() => fileInput.current?.click()}
-                  onFlow={setPendingFlowId}
                   onModel={(value) => { setModel(value); void updateSession({ model: value || null }); }}
                   onEffort={setSessionEffort}
                   onConfigOverride={setSessionConfigOverride}
@@ -2225,7 +1156,6 @@ export function Workbench() {
   );
 }
 
-
 /** Pixel-dissolve wipe shown briefly when switching agents: a grid of cells
  *  fading in with pseudo-random delays, then out — opacity only. */
 function PixelWipe({ seed }: { seed: number }) {
@@ -2247,7 +1177,6 @@ function readTheme(): Theme {
   if (stored === "paper" || stored === "carbon") return stored;
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "carbon" : "paper";
 }
-
 
 function readAttachment(file: File): Promise<MessageAttachmentInput> {
   return new Promise((resolve, reject) => {

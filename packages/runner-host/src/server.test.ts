@@ -1,16 +1,17 @@
+import type { PiSession } from "@codebridge/backends";
+import { defaultConfig, type AgentEvent, type RunContext, type RunRequest } from "@codebridge/core";
+import { RunnerClient } from "@codebridge/runner-client";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  defaultConfig,
-  type AgentEvent,
-  type RunContext,
-  type RunRequest,
-} from "@codebridge/core";
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { createRunnerApp, RunnerHost } from "./server.js";
-import { RunnerClient } from "@codebridge/runner-client";
-import type { PiSession } from "@codebridge/backends";
 
 const tmpDirs: string[] = [];
 
@@ -562,23 +563,6 @@ describe("RunnerHost cwd validation", () => {
     expect(open).toHaveBeenCalledWith(path.resolve(target));
     host.shutdown();
   });
-
-  it("keeps the candidate path when macOS denies directory access", async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
-    tmpDirs.push(dataDir);
-    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
-    const denied = Object.assign(new Error("operation not permitted"), {
-      code: "EPERM",
-    });
-    vi.spyOn(fs.promises, "opendir").mockRejectedValueOnce(denied);
-
-    await expect(host.authorizeDirectory("/Users/tester/Desktop")).resolves.toEqual({
-      ok: false,
-      path: "/Users/tester/Desktop",
-      error: expect.stringContaining("尚未获得目录访问权限"),
-    });
-    host.shutdown();
-  });
 });
 
 describe("RunnerHost steering", () => {
@@ -984,98 +968,6 @@ describe("RunnerHost session lifecycle", () => {
 });
 
 describe("RunnerHost Pi SDK backend", () => {
-  it("configures deployment MCP without exposing Flow save when no confirmation snapshot exists", async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-no-flow-save-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-no-flow-save-"));
-    tmpDirs.push(dataDir, cwd);
-    const config = defaultConfig();
-    config.backends.pi = { type: "pi-sdk" };
-    let captured: RunContext | undefined;
-    const host = new RunnerHost({
-      token: "token",
-      config,
-      dataDir,
-      piSessionFactory: async (ctx) => {
-        captured = ctx;
-        return {
-          sessionId: "pi-no-flow-save",
-          subscribe(listener) {
-            listener({
-              type: "message_update",
-              assistantMessageEvent: { type: "text_delta", delta: "ready" },
-            });
-            return () => {};
-          },
-          async prompt() {},
-          async steer() {},
-          async abort() {},
-          dispose() {},
-        };
-      },
-    });
-
-    await collect(host.executeRun({
-      runId: "pi-no-flow-save-run",
-      sessionKey: { chatId: "chat", backendId: "pi", cwd },
-      prompt: "把刚才的流程存为 Flow",
-    }));
-
-    expect(captured?.flowSaveSourceAvailability).toBeUndefined();
-    expect(captured?.mcpServers).toHaveLength(1);
-    expect(captured?.mcpServers?.[0]?.env).toEqual({ FCB_API: "http://127.0.0.1:19790", FCB_TOKEN: "token", FCB_RUN_ID: "pi-no-flow-save-run" });
-    host.shutdown();
-  });
-
-  it("copies the read-only Flow save availability snapshot into RunContext", async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-flow-save-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-workspace-pi-flow-save-"));
-    tmpDirs.push(dataDir, cwd);
-    const config = defaultConfig();
-    config.backends.pi = { type: "pi-sdk" };
-    let captured: RunContext | undefined;
-    const host = new RunnerHost({
-      token: "token",
-      config,
-      dataDir,
-      flowSaveMcpServerPath: "/absolute/flow-save-mcp-server.js",
-      piSessionFactory: async (ctx) => {
-        captured = ctx;
-        return {
-          sessionId: "pi-flow-save",
-          subscribe(listener) {
-            listener({
-              type: "message_update",
-              assistantMessageEvent: { type: "text_delta", delta: "ready" },
-            });
-            return () => {};
-          },
-          async prompt() {},
-          async steer() {},
-          async abort() {},
-          dispose() {},
-        };
-      },
-    });
-
-    await collect(host.executeRun({
-      runId: "pi-flow-save-run",
-      sessionKey: { chatId: "chat", backendId: "pi", cwd },
-      prompt: "store the previous flow",
-      flowSaveSourceAvailability: { available: true },
-    }));
-
-    expect(captured?.flowSaveSourceAvailability).toEqual({ available: true });
-    expect(captured?.mcpServers).toEqual([{
-      name: "codebridge-internal",
-      command: process.execPath,
-      args: ["/absolute/flow-save-mcp-server.js"],
-      env: {
-        CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY: "true",
-        FCB_API: "http://127.0.0.1:19790", FCB_TOKEN: "token", FCB_RUN_ID: "pi-flow-save-run",
-      },
-    }]);
-    host.shutdown();
-  });
 
   it("forks a Pi provider session into a target directory", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-pi-fork-"));
@@ -1161,3 +1053,20 @@ describe("RunnerHost Pi SDK backend", () => {
     host.shutdown();
   });
 });
+
+it("keeps the candidate path when macOS denies directory access", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir });
+    const denied = Object.assign(new Error("operation not permitted"), {
+      code: "EPERM",
+    });
+    vi.spyOn(fs.promises, "opendir").mockRejectedValueOnce(denied);
+
+    await expect(host.authorizeDirectory("/Users/tester/Desktop")).resolves.toEqual({
+      ok: false,
+      path: "/Users/tester/Desktop",
+      error: expect.stringContaining("尚未获得目录访问权限"),
+    });
+    host.shutdown();
+  });

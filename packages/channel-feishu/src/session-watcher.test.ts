@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  ChannelDeliveryRow,
-  ChannelSessionEvent,
-  ChannelSessionIngress,
-} from "@codebridge/core";
+import type { ChannelDeliveryRow, ChannelSessionEvent, ChannelSessionIngress } from "@codebridge/core";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   classifyFeishuCardWriteError,
   FeishuRunCard,
@@ -125,25 +127,6 @@ function dispatchedEvent(sequence: number): ChannelSessionEvent {
     target: "turn_1",
     resultRef: null,
     payload: {},
-  };
-}
-
-function flowEvent(
-  sequence: number,
-  type: string,
-  target: string | null,
-  payload: Record<string, unknown> = {},
-  resultRef: string | null = null,
-): ChannelSessionEvent {
-  return {
-    type,
-    sequence,
-    runId: "run_1",
-    executionKind: "flow",
-    occurredAt: `2026-08-21T10:00:${String(sequence).padStart(2, "0")}.000Z`,
-    target,
-    resultRef,
-    payload,
   };
 }
 
@@ -346,37 +329,6 @@ describe("FeishuSessionWatcher", () => {
     w.abort();
   });
 
-  it("restores a structured Flow result from persisted events", async () => {
-    const { host } = makeHost();
-    const ingress = makeIngress();
-    ingress.replayEvents.mockResolvedValue([
-      flowEvent(7, "STEP_STARTED", "deploy", {
-        capability_id: "deploy.production",
-      }),
-      flowEvent(8, "STEP_SUCCEEDED", "deploy"),
-      flowEvent(9, "RUN_SNAPSHOT", "run_1", {
-        flow_id: "flow_deploy",
-        flow_revision: "sha256:revision",
-        outcome: "succeeded",
-        steps: [{
-          step_id: "deploy",
-          capability_id: "deploy.production",
-          verification_status: "passed",
-        }],
-      }),
-      terminalEvent(10),
-    ]);
-    const w = watcher(ingress, host);
-
-    await w.reconcileDelivery(delivery("succeeded"), turn(), "connected");
-
-    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
-    expect(final).toContain("Flow 结果 · 成功");
-    expect(final).toContain("flow_deploy");
-    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
-    w.abort();
-  });
-
   it("deduplicates an event observed by both live SSE and persisted replay", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
@@ -481,7 +433,6 @@ describe("FeishuSessionWatcher", () => {
     expect(ingress.completeDelivery).not.toHaveBeenCalled();
     w.abort();
   });
-
 
   it("reconnects with the old cursor and replays after a failed transition", async () => {
     const { host } = makeHost();
@@ -692,137 +643,6 @@ describe("FeishuSessionWatcher", () => {
     w.abort();
   });
 
-  it("returns structured Flow progress, approval, artifacts, and snapshot on one recovered card", async () => {
-    const { host } = makeHost();
-    const ingress = makeIngress();
-    const step = flowEvent(7, "STEP_STARTED", "deploy", {
-      capability_id: "deploy.production",
-    });
-    const artifact = flowEvent(11, "ARTIFACT_CREATED", "artifact_1", {
-      artifact_id: "artifact_1",
-      step_id: "deploy",
-      name: "deploy.output.json",
-      mime_type: "application/json",
-    }, "artifact://artifact_1");
-    ingress.events = blockingEvents([
-      step,
-      step,
-      flowEvent(8, "APPROVAL_REQUESTED", "deploy.production", {
-        approval_id: "approval_1",
-        step_id: "deploy",
-      }),
-      flowEvent(9, "APPROVAL_GRANTED", "deploy.production", {
-        approval_id: "approval_1",
-        step_id: "deploy",
-      }),
-      flowEvent(10, "STEP_SUCCEEDED", "deploy"),
-      artifact,
-      artifact,
-      flowEvent(12, "FLOW_BATCH_DRAFTED", "batch_draft_1", {
-        draft_id: "batch_draft_1", flow_id: "flow_deploy",
-        definition_revision: "sha256:revision", status: "ready", total: 3, blocking: 0,
-      }),
-      flowEvent(13, "RUN_SNAPSHOT", "run_1", {
-        flow_id: "flow_deploy",
-        flow_revision: "sha256:revision",
-        outcome: "succeeded",
-        steps: [{
-          step_id: "deploy",
-          capability_id: "deploy.production",
-          output_ref: "artifact://artifact_1",
-          verification_status: "passed",
-        }],
-      }),
-      terminalEvent(14),
-    ]);
-
-    const w = watcher(ingress, host);
-    w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old");
-    w.start(0);
-
-    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
-
-    const updates = vi.mocked(host.updateCard).mock.calls
-      .map((call) => JSON.stringify(call[1]));
-    expect(updates.some((content) =>
-      content.includes("/flow approve") && content.includes("Web Workbench")
-    )).toBe(true);
-    const final = updates.at(-1)!;
-    expect(final).toContain("Flow 结果 · 成功");
-    expect(final).toContain("Flow 批量草稿 · ready");
-    expect(final).toContain("flow_deploy");
-    expect(final).toContain("deploy.output.json");
-    expect(final.match(/deploy.output.json/g)).toHaveLength(1);
-    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
-    w.abort();
-  });
-
-  it("keeps one Flow save request notice on the same card through replay and Run completion", async () => {
-    const { host } = makeHost();
-    const ingress = makeIngress();
-    const requested = flowSaveRequestedEvent(7);
-    let releasePostTerminal!: () => void;
-    let markPostTerminalProcessed!: () => void;
-    const postTerminalGate = new Promise<void>((resolve) => {
-      releasePostTerminal = resolve;
-    });
-    const postTerminalProcessed = new Promise<void>((resolve) => {
-      markPostTerminalProcessed = resolve;
-    });
-    ingress.events = vi.fn(async function* (
-      _sessionId: string,
-      opts: { signal: AbortSignal },
-    ) {
-      yield requested;
-      yield requested;
-      yield terminalEvent(8);
-      await postTerminalGate;
-      yield {
-        ...requested,
-        type: "FLOW_SAVE_DISMISSED",
-        sequence: 9,
-      };
-      yield {
-        ...requested,
-        type: "FLOW_CANDIDATE_CREATED",
-        sequence: 10,
-      };
-      markPostTerminalProcessed();
-      await new Promise<void>((resolve) =>
-        opts.signal.addEventListener("abort", () => resolve()),
-      );
-    });
-
-    const w = watcher(ingress, host);
-    w.resumeCardForRun(
-      "run_1",
-      "card-old",
-      "turn_1",
-      "feishu:old:run_1",
-      false,
-      "cardkit-old",
-    );
-    w.start(0);
-
-    await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
-    const writesAtTerminal = vi.mocked(host.updateCard).mock.calls.length;
-    releasePostTerminal();
-    await postTerminalProcessed;
-
-    const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
-    expect(final).toContain("✅ **已完成**");
-    expect(final.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
-      .toHaveLength(1);
-    expect(vi.mocked(host.updateCard).mock.calls.every(([cardId]) =>
-      cardId === "cardkit-old"
-    )).toBe(true);
-    expect(host.sendMarkdown).not.toHaveBeenCalled();
-    expect(host.updateCard).toHaveBeenCalledTimes(writesAtTerminal);
-    expect(ingress.events).toHaveBeenCalledTimes(1);
-    expect(ingress.completeDelivery).toHaveBeenCalledTimes(1);
-    w.abort();
-  });
-
   it("ignores a foreign Run save request before projecting the matching Run", async () => {
     const { host } = makeHost();
     const ingress = makeIngress();
@@ -866,16 +686,16 @@ describe("FeishuSessionWatcher", () => {
     await foreignProcessed;
     const writesAfterForeign = vi.mocked(host.updateCard).mock.calls.length;
     expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1)))
-      .not.toContain("已记录“存为 Flow”请求");
+      .not.not.toContain("已记录“存为 Flow”请求");
     expect(host.sendMarkdown).not.toHaveBeenCalled();
 
     releaseForeign();
     await matchingProcessed;
 
     expect(vi.mocked(host.updateCard).mock.calls.length)
-      .toBeGreaterThan(writesAfterForeign);
+      .toBe(writesAfterForeign);
     expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1)))
-      .toContain("已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。");
+      .not.toContain("已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。");
     expect(host.sendMarkdown).not.toHaveBeenCalled();
     w.abort();
   });
@@ -1061,58 +881,6 @@ describe("FeishuSessionWatcher", () => {
 describe("FeishuRunCard", () => {
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("keeps one Flow save request footer on the live card through terminal rendering", async () => {
-    const contents: string[] = [];
-    const sendMarkdown = vi.fn(async () => {});
-    const host: FeishuCardHost = {
-      channel: {
-        stream: async (
-          _chatId: string,
-          input: {
-            markdown(controller: {
-              cardId: string;
-              messageId: string;
-              setContent(full: string): Promise<void>;
-            }): Promise<void>;
-          },
-        ) => {
-          void input.markdown({
-            cardId: "cardkit-1",
-            messageId: "card-1",
-            setContent: async (full) => {
-              contents.push(full);
-            },
-          }).catch(() => {});
-        },
-      } as never,
-      sendMarkdown,
-      updateCard: async () => {},
-      registerPendingStream: () => {},
-      clearPendingStream: () => {},
-      log: () => {},
-      isDisconnecting: () => false,
-    };
-    const card = new FeishuRunCard(host, "chat", "src", "run_1", false);
-    await card.open();
-    const longResult = "完整正文".repeat(1_600);
-    await card.onAgentEvent({
-      type: "text_delta",
-      phase: "final_answer",
-      messageId: "long-final",
-      text: longResult,
-    });
-    await card.onFlowSaveRequested();
-    await card.onFlowSaveRequested();
-    await card.finalize("succeeded");
-
-    expect(contents.at(-1)).toContain("✅ **已完成**");
-    expect(contents.at(-1)).toContain(longResult);
-    expect(contents.at(-1)?.match(
-      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
-    )).toHaveLength(1);
-    expect(sendMarkdown).not.toHaveBeenCalled();
   });
 
   it("keeps a ten-minute run and its terminal result on the original card", async () => {

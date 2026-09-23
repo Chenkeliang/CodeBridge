@@ -1,7 +1,7 @@
 #!/usr/bin/env node
+import { ConfigStore } from "@codebridge/core";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ConfigStore } from "@codebridge/core";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -31,8 +31,8 @@ async function main() {
     config,
     maxConcurrentRuns: config.runnerHost?.maxConcurrentRuns,
     dataDir: path.dirname(store.path),
-    flowSaveMcpServerPath: fileURLToPath(
-      new URL("./flow-save-mcp-server.js", import.meta.url),
+    deploymentMcpServerPath: fileURLToPath(
+      new URL("./deployment-mcp-server.js", import.meta.url),
     ),
   });
 

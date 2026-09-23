@@ -1,13 +1,19 @@
-import { useState } from "react";
 import { CommandPalette } from "@/components/command-palette";
 import { Composer } from "@/components/composer";
 import { LoadingConversation, ProjectionItem } from "@/components/conversation";
 import { AgentRail, SessionHeader, SessionPanel } from "@/components/session-chrome";
 import { SkillControlPlanePage } from "@/components/skill-control-plane";
-import type { ConversationProjection } from "@/lib/events";
-import type { AgentCommand, AgentProfile, AgentSession, ApprovalRecord, ConfigOption, FlowRecord } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import type { Density, MenuView, PanelArea, Theme } from "@/components/workbench-shared";
+import type { ConversationProjection } from "@/lib/events";
+import type {
+  AgentCommand,
+  AgentProfile,
+  AgentSession,
+  ApprovalRecord,
+  ConfigOption,
+} from "@/lib/types";
+import { cn } from "@/lib/utils";
+import { useState } from "react";
 
 /**
  * Design preview rendered with the real workbench components fed by mock
@@ -51,11 +57,6 @@ const sessions: AgentSession[] = [
   mockSession("s2", "codex", "Provider 历史合并 Review", "idle", 47),
   mockSession("s3", "codex", "工作台交互走查", "idle", 132),
   mockSession("s4", "codex", null, "closed", 60 * 26),
-];
-
-const flows: FlowRecord[] = [
-  { flow_id: "f1", name: "仓库巡检", description: null, kind: "runbook", status: "published", source: "catalog", definition_revision: "3", plan_ir_hash: null, inputs: [], steps: [], review_status: null, git_revision: null, validation_issues: [], lineage_root_flow_id: "f1", parent_flow_id: null, provenance: null, publication_sequence: 1, created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z" },
-  { flow_id: "f2", name: "发布验证", description: null, kind: "guide", status: "draft", source: "catalog", definition_revision: "1", plan_ir_hash: null, inputs: [], steps: [], review_status: null, git_revision: null, validation_issues: [], lineage_root_flow_id: "f2", parent_flow_id: null, provenance: null, publication_sequence: 0, created_at: "2026-08-21T00:00:00.000Z", updated_at: "2026-08-21T00:00:00.000Z" },
 ];
 
 const commands: AgentCommand[] = [
@@ -190,8 +191,6 @@ const stateShowcase: Array<{ title: string; node: React.ReactNode }> = [
   { title: "已解决的审批", node: <ProjectionItem approvals={[{ ...approvals[0]!, status: "granted" }]} cwd={null} item={{ kind: "approval", requestId: "ap1", title: "允许写入文件", runId: "r1" }} onApproval={async () => undefined} /> },
 ];
 
-
-
 export function DesignPreview() {
   const [theme, setTheme] = useState<Theme>("paper");
   const [density] = useState<Density>("compact");
@@ -205,7 +204,6 @@ export function DesignPreview() {
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [permissionMode, setPermissionMode] = useState("");
-  const [flowId, setFlowId] = useState("");
   const [configOverrides, setConfigOverrides] = useState<Record<string, string | boolean>>({});
   const noop = () => undefined;
   const noopAsync = async () => undefined;
@@ -214,7 +212,7 @@ export function DesignPreview() {
   const session = sessions.find((candidate) => candidate.session_id === activeSession) ?? null;
   const agentSessions = sessions.filter((candidate) => candidate.agent_id === activeAgent);
 
-  return <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && (area === "agents" || area === "flows") ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
+  return <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && area === "agents" ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
     <AgentRail
       agents={agents}
       area={area}
@@ -224,13 +222,12 @@ export function DesignPreview() {
       onArea={setArea}
       onTheme={() => setTheme((current) => current === "paper" ? "carbon" : "paper")}
     />
-    {panelOpen && (area === "agents" || area === "flows") && <SessionPanel
+    {panelOpen && area === "agents" && <SessionPanel
       agent={agent}
       activeSessionCount={agentSessions.length}
       archivedSessionCount={0}
       area={area}
-      flows={flows}
-      flowId={flowId}
+
       loading={false}
       query=""
       sessions={area === "agents" ? agentSessions : []}
@@ -238,7 +235,7 @@ export function DesignPreview() {
       showArchived={false}
       onCreate={noop}
       onDeleteSession={noopAsync}
-      onFlow={setFlowId}
+
       onQuery={noop}
       onRefresh={noop}
       onSession={(value) => setActiveSession(value.session_id)}
@@ -246,7 +243,7 @@ export function DesignPreview() {
       onUpdateSession={noopAsync}
     />}
     <main className={cn("relative flex min-h-0 min-w-0 flex-col overflow-hidden", "bg-canvas text-ink")}>
-      {(area === "agents" || area === "flows") && <SessionHeader
+      {area === "agents" && <SessionHeader
         agent={agent}
         menuOpen={false}
         menuView={"actions" as MenuView}
@@ -283,8 +280,7 @@ export function DesignPreview() {
             disabled={false}
             draft={draft}
             effort={effort}
-            flowId={flowId}
-            flows={flows}
+
             model={model}
             modelOption={modelOption}
             permissionMode={permissionMode}
@@ -305,7 +301,7 @@ export function DesignPreview() {
             onDraft={setDraft}
             onEffort={setEffort}
             onFiles={noop}
-            onFlow={setFlowId}
+
             onModel={setModel}
             onPermissionMode={setPermissionMode}
             onPickDirectory={noop}

@@ -2,6 +2,32 @@ import { expect, type Page, test } from "@playwright/test";
 
 type MockSession = ReturnType<typeof session>;
 
+test("retired Flow has no navigation, save actions, or background API requests", async ({ page }) => {
+  const value = session("sess_retired", "普通会话仍可读取");
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    if (/\/v1\/.*(?:flows|flow-save|flow-batches|flow-invocation|flow-recommendations|flow-proposals)/.test(request.url())) requests.push(request.url());
+  });
+  await installWorkbenchRoutes(page, [value], () => true);
+  await page.goto("/workbench/");
+  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Flows/ })).toHaveCount(0);
+  await expect(page.getByText("存为 Flow", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "消息" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
+  expect(requests).toEqual([]);
+});
+
+test("old Flow links report retirement while keeping the selected Session usable", async ({ page }) => {
+  const value = session("sess_retired_link", "历史会话");
+  await installWorkbenchRoutes(page, [value], () => true);
+  await page.goto("/workbench/?flow=legacy&session=sess_retired_link");
+  await expect(page.getByText("Flow 功能已停用", { exact: true })).toBeVisible();
+  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "消息" })).toBeVisible();
+});
+
 function session(id: string, title: string): {
   session_id: string;
   agent_id: string;

@@ -1,56 +1,39 @@
-import { CardKitWriter } from "./cardkit-writer.js";
-import fs from "node:fs";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import {
-  createLarkChannel,
-  LoggerLevel,
-  type LarkChannel,
-  type ResourceDescriptor,
-} from "@larksuiteoapi/node-sdk";
-import {
+  formatMentionGuidance,
   JsonMapStore,
   MentionRegistry,
-  formatMentionGuidance,
   resolveRequireMention,
   type AgentEvent,
   type AppConfig,
-  type ChannelFlowBatchSnapshot,
   type ChannelSessionEvent,
   type ChannelSessionIngress,
   type ChannelSlot,
   type RunAttachment,
 } from "@codebridge/core";
 import {
-  RunOrchestrator,
   BOT_MENU_EVENT_KEYS,
-  ChannelFlowController,
   checkAccess,
   createChannelStreamProjector,
-  formatChannelFlowBatchSnapshot,
   formatWelcomeMessage,
   handleSlashCommand,
-  isTerminalChannelFlowBatch,
+  RunOrchestrator,
 } from "@codebridge/router";
-import { registerFeishuExtraEvents } from "./feishu-extra-events.js";
+import { createLarkChannel, LoggerLevel, type LarkChannel, type ResourceDescriptor } from "@larksuiteoapi/node-sdk";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { CardKitWriter } from "./cardkit-writer.js";
 import { ChainTopicTracker } from "./chain-topics.js";
-import {
-  FeishuSessionWatcher,
-  FEISHU_LIVE_STATUS_TICK_MS,
-  type FeishuCardHost,
-} from "./session-watcher.js";
-import {
-  downloadInboundAttachments,
-  resolveInboundPrompt,
-} from "./feishu-inbound-media.js";
-import { resolveOutboundFile } from "./feishu-outbound-file.js";
-import { buildInboundPromptPrefix } from "./feishu-inbound-context.js";
-import { extractMessageText } from "./feishu-quoted-message.js";
-import {
-  shouldAcceptGroupMessage,
-  topicActiveForMessage,
-} from "./feishu-mention-gate.js";
 import { CoalescingCardWriter } from "./coalescing-card-writer.js";
+import { FeishuDeliveryReconciler } from "./delivery-reconciler.js";
+import { durableMarkdownCard } from "./durable-markdown-card.js";
+import { registerFeishuExtraEvents } from "./feishu-extra-events.js";
+import { feishuHttpClient } from "./feishu-http.js";
+import { buildInboundPromptPrefix } from "./feishu-inbound-context.js";
+import { downloadInboundAttachments, resolveInboundPrompt } from "./feishu-inbound-media.js";
+import { shouldAcceptGroupMessage, topicActiveForMessage } from "./feishu-mention-gate.js";
+import { resolveOutboundFile } from "./feishu-outbound-file.js";
+import { extractMessageText } from "./feishu-quoted-message.js";
 import {
   createFeishuRunStatus,
   finishFeishuRunStatus,
@@ -58,9 +41,7 @@ import {
   renderFeishuRunStatus,
   type FeishuConnectionState,
 } from "./run-status.js";
-import { FeishuDeliveryReconciler } from "./delivery-reconciler.js";
-import { durableMarkdownCard } from "./durable-markdown-card.js";
-import { feishuHttpClient } from "./feishu-http.js";
+import { FEISHU_LIVE_STATUS_TICK_MS, FeishuSessionWatcher, type FeishuCardHost } from "./session-watcher.js";
 
 export interface FeishuMessage {
   messageId: string;
@@ -115,13 +96,6 @@ interface PendingFeishuStream {
   chatId: string;
   sourceMessageId: string;
   startedAt: string;
-}
-
-interface ChannelFlowSubmission {
-  flowId: string;
-  definitionRevision: string;
-  inputs: Record<string, unknown>;
-  idempotencyKey: string;
 }
 
 function rawFeishuMessageContent(raw: unknown): string | undefined {
@@ -197,18 +171,6 @@ export function chunkMarkdown(text: string, maxLen: number): string[] {
   return chunks;
 }
 
-function waitForBatchPoll(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, 1_000);
-    timer.unref?.();
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
-}
-
 /** Mention refs are a convenience cache; a corrupt file must not crash bridge startup. */
 function createMentionRegistry(filePath: string): MentionRegistry {
   try {
@@ -242,7 +204,6 @@ export class FeishuBridge {
   private readonly activeAborts = new Set<AbortController>();
   /** 每 Session 一个持久事件订阅，单订阅路由 Turn/Run/Delivery */
   private readonly sessionWatchers = new Map<string, FeishuSessionWatcher>();
-  private readonly flowController = new ChannelFlowController();
   private readonly instanceId = randomUUID();
   private readonly deliveryReconciler: FeishuDeliveryReconciler;
   private inboundWebSocketState: FeishuConnectionState = "unavailable";
@@ -563,61 +524,6 @@ export class FeishuBridge {
     const deploymentReply = await this.options.onDeploymentMessage?.(msg);
     if (deploymentReply !== undefined) {
       await this.sendMarkdown(msg.chatId, deploymentReply, msg.messageId);
-      return;
-    }
-
-    const flowCommand = this.sessionIngress
-      ? await this.flowController.handle({
-          scopeKey: `feishu|${this.chatKey(msg.chatId, topicId)}|${msg.senderId}`,
-          text: msg.content,
-          listFlows: () => this.sessionIngress!.listConsumableFlows(),
-          getSessionId: async () => {
-            const context = await this.sessionIngress!.getSlotCommandContext(this.buildFullSlot(msg.chatId, topicId));
-            return context.sessionId;
-          },
-          listManageableFlows: this.sessionIngress.listManageableFlows,
-          getFlowReviewSummary: this.sessionIngress.getFlowReviewSummary,
-          updateCandidateSummary: this.sessionIngress.updateCandidateSummary,
-          rejectCandidate: this.sessionIngress.rejectCandidate,
-          getFlowBatchDraft: this.sessionIngress.getFlowBatchDraft,
-          confirmFlowBatchDraft: this.sessionIngress.confirmFlowBatchDraft,
-          getFlowBatch: this.sessionIngress.getFlowBatch,
-          cancelFlowBatch: this.sessionIngress.cancelFlowBatch,
-          retryFailedFlowBatch: this.sessionIngress.retryFailedFlowBatch,
-          getActiveRunId: async () => {
-            const context = await this.sessionIngress!.getSlotCommandContext(
-              this.buildFullSlot(msg.chatId, topicId),
-            );
-            return context.activeRunId;
-          },
-          listApprovals: (runId) =>
-            this.sessionIngress!.listRuntimeApprovals?.(runId) ?? Promise.resolve([]),
-          resolveApproval: (runId, approvalId, decision) => {
-            const resolve = this.sessionIngress!.resolveRuntimeApproval;
-            if (!resolve) throw new Error("Runtime 审批入口未就绪");
-            return resolve(runId, approvalId, decision);
-          },
-        })
-      : null;
-    if (flowCommand?.type === "reply") {
-      await this.sendMarkdown(msg.chatId, flowCommand.text, msg.messageId);
-      if (flowCommand.batch) {
-        this.monitorFlowBatch(flowCommand.batch, msg.chatId, msg.messageId);
-      }
-      return;
-    }
-    if (flowCommand?.type === "invoke") {
-      await this.submitAndStream(
-        msg,
-        `运行 Flow：${flowCommand.flow.name}`,
-        topicId,
-        {
-          flowId: flowCommand.flow.flowId,
-          definitionRevision: flowCommand.flow.definitionRevision,
-          inputs: flowCommand.inputs,
-          idempotencyKey: flowCommand.idempotencyKey,
-        },
-      );
       return;
     }
 
@@ -1028,7 +934,6 @@ export class FeishuBridge {
     msg: FeishuMessage,
     prompt: string,
     topicId: string | undefined,
-    flow?: ChannelFlowSubmission,
   ): Promise<void> {
     if (this.options.isMaintenance?.()) {
       await this.sendMarkdown(msg.chatId, "正在安全发布，当前任务会先完成；新任务暂不接收，请发布完成后重发。可以发送“发布状态”或“取消这次发布”。", msg.messageId);
@@ -1049,15 +954,8 @@ export class FeishuBridge {
       generation: slot.generation,
       message: prompt,
       model: binding.model,
-      ...(flow
-        ? {
-            flowId: flow.flowId,
-            flowDefinitionRevision: flow.definitionRevision,
-            inputs: flow.inputs,
-          }
-        : {}),
       attachments: msg.attachments,
-      idempotencyKey: flow?.idempotencyKey ?? msg.messageId,
+      idempotencyKey: msg.messageId,
       replyToMessageId: msg.messageId,
       showThinking,
       actorRef: { channel: "feishu", id: msg.senderId },
@@ -1307,62 +1205,6 @@ export class FeishuBridge {
   ): Promise<void> {
     if (!this.channel) return;
     await this.channel.send(chatId, { markdown }, { replyTo });
-  }
-
-  private monitorFlowBatch(
-    initial: ChannelFlowBatchSnapshot,
-    chatId: string,
-    replyTo: string,
-  ): void {
-    const channel = this.channel;
-    const getBatch = this.sessionIngress?.getFlowBatch;
-    if (!channel || !getBatch || isTerminalChannelFlowBatch(initial)) return;
-    const abortController = new AbortController();
-    this.activeAborts.add(abortController);
-    void channel.stream(
-      chatId,
-      {
-        markdown: async (stream) => {
-          this.pendingStreams.update((all) => ({
-            ...all,
-            [stream.messageId]: {
-              chatId,
-              sourceMessageId: replyTo,
-              startedAt: new Date().toISOString(),
-            },
-          }));
-          try {
-            let snapshot = initial;
-            let lastContent = "";
-            while (!abortController.signal.aborted) {
-              snapshot = await getBatch(initial.batchId);
-              const content = formatChannelFlowBatchSnapshot(snapshot);
-              if (content !== lastContent) {
-                await stream.setContent(content);
-                lastContent = content;
-              }
-              if (isTerminalChannelFlowBatch(snapshot)) return;
-              await waitForBatchPoll(abortController.signal);
-            }
-          } finally {
-            this.pendingStreams.update((all) => {
-              const next = { ...all };
-              delete next[stream.messageId];
-              return next;
-            });
-          }
-        },
-      },
-      { replyTo },
-    ).catch((error) => {
-      if (!abortController.signal.aborted) {
-        this.options.onLog?.(
-          `飞书 Flow 批量状态卡失败: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }).finally(() => {
-      this.activeAborts.delete(abortController);
-    });
   }
 
   /**

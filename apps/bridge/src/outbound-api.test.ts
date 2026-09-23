@@ -5,12 +5,7 @@ import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { SqliteEventStore } from "@codebridge/work-items";
 import type { OutboundPublisher, OutboundRoute } from "./outbound-publishers.js";
-import {
-  resolveOutboundTarget,
-  createBridgeApp,
-  createOutboundApp,
-  type OutboundBridge,
-} from "./outbound-api.js";
+import { resolveOutboundTarget, createBridgeApp, createOutboundApp, type OutboundBridge } from "./outbound-api.js";
 import { createWebFrontendApp } from "./web-frontend.js";
 
 const TOKEN = "test-token-12345";
@@ -151,19 +146,17 @@ describe("createOutboundApp", () => {
     const { bridge } = makeApp();
     const skillApp = new Hono().get("/v1/skills", (c) => c.json({ skills: [] }));
     const app = createBridgeApp(
-      bridge,
-      TOKEN,
-      store,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      skillApp,
-    );
+bridge,
+TOKEN,
+store,
+undefined,
+undefined,
+undefined,
+undefined,
+undefined,
+undefined,
+skillApp
+);
 
     const response = await app.request("/v1/skills", {
       headers: { authorization: `Bearer ${TOKEN}` },
@@ -227,7 +220,6 @@ describe("createOutboundApp", () => {
   });
 });
 
-
 describe("Run-bound outbound routing", () => {
   function storeFor(conversationId = "oc_source|om_topic", channel = "feishu") {
     return {
@@ -279,7 +271,6 @@ describe("Run-bound outbound routing", () => {
   });
 });
 
-
 describe("Publisher-token outbound routing", () => {
   const PUBLISHER = {
     label: "stock-daily-trade",
@@ -296,11 +287,18 @@ describe("Publisher-token outbound routing", () => {
       listDeliveries: () => [],
     } as unknown as SqliteEventStore;
     const app = createBridgeApp(
-      bridge, TOKEN, store,
-      undefined, undefined, undefined, undefined, undefined,
-      undefined, undefined, undefined, undefined,
-      () => publishers,
-    );
+bridge,
+TOKEN,
+store,
+undefined,
+undefined,
+undefined,
+undefined,
+undefined,
+undefined,
+undefined,
+() => publishers
+);
     return { app, calls };
   }
 
@@ -342,11 +340,18 @@ describe("Publisher-token outbound routing", () => {
     const { bridge, calls } = makeApp();
     const store = { getRun: () => undefined, listDeliveries: () => [] } as unknown as SqliteEventStore;
     const app = createBridgeApp(
-      bridge, TOKEN, store,
-      undefined, undefined, undefined, undefined, undefined,
-      undefined, undefined, undefined, undefined,
-      () => live,
-    );
+bridge,
+TOKEN,
+store,
+undefined,
+undefined,
+undefined,
+undefined,
+undefined,
+undefined,
+undefined,
+() => live
+);
     expect((await app.request(post("/outbound/markdown", { markdown: "hi" }, PUBLISHER.token))).status).toBe(401);
     live = [PUBLISHER];
     expect((await app.request(post("/outbound/markdown", { markdown: "hi" }, PUBLISHER.token))).status).toBe(200);

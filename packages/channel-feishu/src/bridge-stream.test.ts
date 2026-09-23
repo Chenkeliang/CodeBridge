@@ -1,13 +1,16 @@
-import os from "node:os";
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, type AgentEvent, type ChannelSessionIngress } from "@codebridge/core";
-import { FeishuBridge, type FeishuMessage } from "./bridge.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
-  FEISHU_LIVE_STATUS_QUIET_MS,
-  FEISHU_LIVE_STATUS_TICK_MS,
-} from "./session-watcher.js";
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { FeishuBridge, type FeishuMessage } from "./bridge.js";
+import { FEISHU_LIVE_STATUS_QUIET_MS, FEISHU_LIVE_STATUS_TICK_MS } from "./session-watcher.js";
 
 type StreamController = {
   readonly messageId: string;
@@ -180,125 +183,6 @@ async function renderAgentRun(
 }
 
 describe("FeishuBridge streaming", () => {
-  it("lists and invokes a Flow without forwarding /flow commands to Agent", async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-feishu-flow-"));
-    const submit = vi.fn().mockResolvedValue({
-      sessionId: "sess_flow",
-      turnId: "turn_flow",
-      runId: null,
-      acceptance: "queued",
-      queueState: "ready",
-      eventSequence: 3,
-    });
-    const ingress = {
-      listConsumableFlows: vi.fn().mockResolvedValue([{
-        flowId: "flow_order",
-        name: "订单排查",
-        definitionRevision: "sha256:one",
-        inputs: [{ id: "oid", type: "integer", source: "user", required: true }],
-        steps: [{ id: "lookup", purpose: "查订单", mode: "read_only", approval: "none" }],
-      }]),
-      listManageableFlows: vi.fn().mockResolvedValue([{
-        flowId: "flow_candidate", name: "订单排查候选", description: null,
-        definitionRevision: "sha256:candidate", kind: "runbook", status: "candidate", reviewStatus: "pending",
-      }]),
-      submit,
-      getSlotCommandContext: vi.fn().mockResolvedValue({
-        sessionId: null,
-        activeRunId: null,
-        providerSessionId: null,
-      }),
-      listRuntimeApprovals: vi.fn().mockResolvedValue([]),
-      resolveRuntimeApproval: vi.fn(),
-      getFlowBatchDraft: vi.fn().mockResolvedValue({
-        draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
-        definitionRevision: "sha256:one", status: "ready", revision: 1, total: 2, blocking: 0,
-      }),
-      confirmFlowBatchDraft: vi.fn().mockResolvedValue({
-        batchId: "batch_1", draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
-        definitionRevision: "sha256:one", status: "running",
-        counts: { total: 2, queued: 1, running: 1, waiting: 0, succeeded: 0, failed: 0, cancelled: 0 },
-      }),
-      getFlowBatch: vi.fn().mockResolvedValue({
-        batchId: "batch_1", draftId: "batch_draft_1", sessionId: "sess_flow", flowId: "flow_order",
-        definitionRevision: "sha256:one", status: "succeeded",
-        counts: { total: 2, queued: 0, running: 0, waiting: 0, succeeded: 2, failed: 0, cancelled: 0 },
-      }),
-      events: async function* () {
-        await new Promise(() => {});
-      },
-      claimDelivery: vi.fn(),
-      ackDelivery: vi.fn(),
-      completeDelivery: vi.fn(),
-      listDeliveries: vi.fn().mockResolvedValue([]),
-    } as unknown as ChannelSessionIngress;
-    const bridge = new FeishuBridge({
-      config: defaultConfig(),
-      dataDir,
-      sessionIngress: ingress,
-    }) as unknown as MentionTestableBridge & {
-      channel: {
-        send(
-          chatId: string,
-          input: { markdown: string },
-          options: unknown,
-        ): Promise<void>;
-        stream(
-          chatId: string,
-          input: StreamInput,
-          options: { replyTo: string },
-        ): Promise<void>;
-      };
-    };
-    const replies: string[] = [];
-    const batchCards: string[] = [];
-    bridge.channel = {
-      async send(_chatId, input) {
-        replies.push(input.markdown);
-      },
-      async stream(_chatId, input) {
-        await input.markdown({
-          messageId: "batch-card-1",
-          async append() {},
-          async setContent(full) { batchCards.push(full); },
-        });
-      },
-    };
-    const message = (messageId: string, content: string): FeishuMessage => ({
-      messageId,
-      chatId: "chat-flow",
-      chatType: "p2p",
-      senderId: "user-flow",
-      content,
-    });
-
-    await bridge.handleMessage(message("m0", "/flow manage"));
-    await bridge.handleMessage(message("m1", "/flow"));
-    await bridge.handleMessage(message("m2", "/flow 1"));
-    await bridge.handleMessage(message("m3", "/flow set oid=1644460"));
-    await bridge.handleMessage(message("m4", "/flow run"));
-    await bridge.handleMessage(message("m5", "/flow confirm"));
-    await bridge.handleMessage(message("m6", "/flow batch confirm batch_draft_1"));
-    await vi.waitFor(() => expect(batchCards.join("\n")).toContain("状态：succeeded"));
-
-    expect(replies.join("\n")).toContain("订单排查");
-    expect(replies.join("\n")).toContain("runbook/candidate");
-    expect(replies.join("\n")).toContain("已开始批量执行 2 项");
-    expect(batchCards.join("\n")).toContain("成功 2 · 运行 0 · 失败 0 · 共 2");
-    expect(submit).toHaveBeenCalledTimes(1);
-    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
-      channel: "feishu",
-      conversationId: "chat-flow|",
-      message: "运行 Flow：订单排查",
-      flowId: "flow_order",
-      flowDefinitionRevision: "sha256:one",
-      inputs: { oid: 1644460 },
-      replyToMessageId: "m5",
-      actorRef: { channel: "feishu", id: "user-flow" },
-      idempotencyKey: expect.stringMatching(/^flow:/),
-    }));
-    fs.rmSync(dataDir, { recursive: true, force: true });
-  });
 
   afterEach(() => {
     vi.useRealTimers();

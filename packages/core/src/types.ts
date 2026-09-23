@@ -31,7 +31,6 @@ export interface RunRequest {
   claudePermissionMode?: ClaudePermissionMode;
   additionalDirectories?: string[];
   acpConfig?: Record<string, string | boolean>;
-  flowSaveSourceAvailability?: import("./flow-save-tool.js").FlowSaveSourceAvailability;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -150,52 +149,6 @@ export type AgentEvent =
       effectiveName?: string;
     };
 
-export interface ChannelFlowInput {
-  id: string;
-  type: "string" | "integer" | "enum" | "directory" | "secret_ref";
-  source: "user" | "context" | "agent" | "step_output" | "default";
-  required?: boolean;
-  pattern?: string;
-  values?: string[];
-  default?: string;
-  confirmation?: { when: string };
-  from?: string;
-  scope?: "authorized_folders";
-}
-
-export interface ChannelFlowStep {
-  id: string;
-  purpose: string | null;
-  mode: string | null;
-  approval: "none" | "required";
-}
-
-export interface ChannelConsumableFlow {
-  flowId: string;
-  name: string;
-  definitionRevision: string;
-  inputs: ChannelFlowInput[];
-  steps: ChannelFlowStep[];
-}
-
-export interface ChannelManageableFlow {
-  flowId: string;
-  name: string;
-  description: string | null;
-  definitionRevision: string;
-  kind: "guide" | "runbook" | "ephemeral";
-  status: "draft" | "candidate" | "published" | "deprecated";
-  reviewStatus: string | null;
-}
-
-export interface ChannelFlowReviewSummary {
-  flow: ChannelManageableFlow;
-  changedFields: string[];
-  provenance: { sourceRunId: string; sourceSessionId: string } | null;
-  evidenceCount: number;
-  validationIssues: string[];
-}
-
 export interface ChannelRuntimeApproval {
   id: string;
   runId: string;
@@ -205,35 +158,6 @@ export interface ChannelRuntimeApproval {
   environment: string | null;
   targetResource: string | null;
   expiresAt: string | null;
-}
-
-export interface ChannelFlowBatchDraft {
-  draftId: string;
-  sessionId: string;
-  flowId: string;
-  definitionRevision: string;
-  status: "needs_input" | "ready" | "confirmed" | "stale" | "cancelled";
-  revision: number;
-  total: number;
-  blocking: number;
-}
-
-export interface ChannelFlowBatchSnapshot {
-  batchId: string;
-  draftId: string;
-  sessionId: string;
-  flowId: string;
-  definitionRevision: string;
-  status: "queued" | "running" | "succeeded" | "partial_succeeded" | "failed" | "cancelled";
-  counts: {
-    total: number;
-    queued: number;
-    running: number;
-    waiting: number;
-    succeeded: number;
-    failed: number;
-    cancelled: number;
-  };
 }
 
 export interface ChannelSessionMessage {
@@ -348,29 +272,12 @@ export interface ChannelDeliveryRow {
 
 export interface ChannelSessionIngress {
   submit(message: ChannelSessionMessage): Promise<ChannelSubmitReceipt>;
-  listConsumableFlows(): Promise<ChannelConsumableFlow[]>;
-  listManageableFlows?(): Promise<ChannelManageableFlow[]>;
-  getFlowReviewSummary?(flowId: string): Promise<ChannelFlowReviewSummary>;
-  updateCandidateSummary?(flowId: string, patch: { name?: string; description?: string }): Promise<ChannelManageableFlow>;
-  rejectCandidate?(flowId: string): Promise<ChannelManageableFlow>;
   listRuntimeApprovals?(runId: string): Promise<ChannelRuntimeApproval[]>;
   resolveRuntimeApproval?(
     runId: string,
     approvalId: string,
     decision: "approve" | "reject",
   ): Promise<ChannelRuntimeApproval>;
-  getFlowBatchDraft?(draftId: string): Promise<ChannelFlowBatchDraft>;
-  confirmFlowBatchDraft?(
-    draftId: string,
-    revision: number,
-    idempotencyKey: string,
-  ): Promise<ChannelFlowBatchSnapshot>;
-  getFlowBatch?(batchId: string): Promise<ChannelFlowBatchSnapshot>;
-  cancelFlowBatch?(batchId: string): Promise<ChannelFlowBatchSnapshot>;
-  retryFailedFlowBatch?(
-    batchId: string,
-    idempotencyKey: string,
-  ): Promise<ChannelFlowBatchSnapshot>;
   events(
     sessionId: string,
     opts: { afterSequence: number; signal: AbortSignal },
@@ -426,8 +333,7 @@ export interface RunContext {
   claudePermissionMode?: ClaudePermissionMode;
   additionalDirectories?: string[];
   acpConfig?: Record<string, string | boolean>;
-  flowSaveSourceAvailability?: import("./flow-save-tool.js").FlowSaveSourceAvailability;
-  mcpServers?: import("./flow-save-tool.js").StdioMcpServerConfig[];
+  mcpServers?: import("./mcp-types.js").StdioMcpServerConfig[];
   /** 注入 Agent 子进程的额外环境变量（如 FCB_* 出站 API 凭据） */
   extraEnv?: Record<string, string>;
 }

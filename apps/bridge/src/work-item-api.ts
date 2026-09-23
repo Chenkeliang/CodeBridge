@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { Hono } from "hono";
+import type { ApprovalService } from "@codebridge/policy";
+import type { RunExecutor } from "@codebridge/run-executor";
 import {
   SqliteEventStore,
   type DomainEvent,
@@ -7,8 +7,9 @@ import {
   type WorkItem,
   type WorkItemMode,
 } from "@codebridge/work-items";
-import type { ApprovalService } from "@codebridge/policy";
-import type { RunExecutor } from "@codebridge/run-executor";
+import { Hono } from "hono";
+import { randomUUID } from "node:crypto";
+import { rejectRetiredFlowRequests } from "./retired-features.js";
 
 const WORK_ITEM_MODES: readonly WorkItemMode[] = [
   "auto",
@@ -35,6 +36,8 @@ export function createWorkItemApp(
     }
     await next();
   });
+
+  rejectRetiredFlowRequests(app);
 
   app.post("/v1/work-items", async (c) => {
     const idempotencyKey = c.req.header("idempotency-key");
@@ -129,7 +132,7 @@ export function createWorkItemApp(
       !body ||
       typeof body.mode !== "string" ||
       !WORK_ITEM_MODES.includes(body.mode as WorkItemMode) ||
-      (body.execution_kind !== "agent" && body.execution_kind !== "flow")
+      body.execution_kind !== "agent"
     ) {
       return errorResponse(c, 400, "invalid_run", "mode 与 execution_kind 必须有效");
     }

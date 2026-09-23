@@ -1,6 +1,3 @@
-import { execSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import {
   resolveDefaultAgentId,
   type AppConfig,
@@ -8,22 +5,12 @@ import {
   type ChannelCommandContext,
 } from "@codebridge/core";
 import type { CliSessionSummary } from "@codebridge/runner-client";
-import {
-  type CommandHelpFormat,
-  formatCompactCommandHelp,
-  formatFullCommandHelp,
-} from "./command-help.js";
-import {
-  formatDynamicModelHelp,
-  formatDynamicOptionHelp,
-  matchBackendConfigValue,
-} from "./model-effort.js";
-import {
-  compactProjectPath,
-  formatSessionListFooter,
-  formatSessionListHeader,
-  formatSessionLine,
-} from "./session-list-format.js";
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { formatCompactCommandHelp, formatFullCommandHelp, type CommandHelpFormat } from "./command-help.js";
+import { formatDynamicModelHelp, formatDynamicOptionHelp, matchBackendConfigValue } from "./model-effort.js";
+import { compactProjectPath, formatSessionLine, formatSessionListFooter, formatSessionListHeader } from "./session-list-format.js";
 import type { SessionRouter } from "./session-router.js";
 
 export interface SlashContext {
@@ -112,7 +99,7 @@ export async function handleSlashCommand(
     case "/flow":
       return {
         type: "reply",
-        text: "Flow 消费入口当前不可用，请确认 Bridge Runtime 已连接。",
+        text: "Flow 功能已停用。",
       };
 
     case "/help":

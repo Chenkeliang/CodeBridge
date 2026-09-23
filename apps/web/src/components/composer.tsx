@@ -1,24 +1,26 @@
-import { useState } from "react";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, LoaderCircle, Send, Square, Workflow } from "lucide-react";
 import { ComposerAttachments } from "@/components/composer-attachments";
 import { ComposerActions, ModelControls, PermissionControl } from "@/components/composer-controls";
-import {
-  MarkdownComposer,
-  type ComposerPickerKey,
-  type ComposerTrigger,
-} from "@/components/markdown-composer/markdown-composer";
+import { MarkdownComposer, type ComposerPickerKey, type ComposerTrigger } from "@/components/markdown-composer/markdown-composer";
 import { Button } from "@/components/ui/button";
 import type {
   AgentCommand,
   AgentSession,
   ConfigOption,
-  FlowRecord,
   MessageAttachmentInput,
   WorkspaceListing,
 } from "@/lib/types";
-import { applyComposerSuggestion, composerTrigger, filterCommands, workspacePaths } from "@/lib/workbench-logic";
-import { revisionTail } from "@/lib/revision-tail";
 import { cn } from "@/lib/utils";
+import { applyComposerSuggestion, composerTrigger, filterCommands, workspacePaths } from "@/lib/workbench-logic";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  FolderOpen,
+  LoaderCircle,
+  Send,
+  Square,
+} from "lucide-react";
+import { useState } from "react";
 
 type ComposerProps = {
   attachments: MessageAttachmentInput[];
@@ -28,8 +30,7 @@ type ComposerProps = {
   workspaceLoading: boolean;
   disabled: boolean;
   draft: string;
-  flowId: string;
-  flows: FlowRecord[];
+
   model: string;
   modelOption?: ConfigOption;
   effort: string;
@@ -48,7 +49,7 @@ type ComposerProps = {
   onContextOpen: (open: boolean) => void;
   onDraft: (value: string) => void;
   onFiles: () => void;
-  onFlow: (value: string) => void;
+
   onModel: (value: string) => void;
   onEffort: (value: string) => void;
   onConfigOverride: (option: ConfigOption, value: string) => void;
@@ -60,45 +61,7 @@ type ComposerProps = {
   running: boolean;
 };
 
-export function Composer({
-  attachments,
-  commands,
-  contextOpen,
-  workspaceListing,
-  workspaceLoading,
-  disabled,
-  draft,
-  flowId,
-  flows,
-  model,
-  modelOption,
-  effort,
-  thoughtLevelOption,
-  configOverrides,
-  speedOption,
-  permissionMode,
-  permissionOption,
-  sending,
-  session,
-  commandOpen,
-  running,
-  onAddFiles,
-  onCommandOpen,
-  onContext,
-  onContextNavigate,
-  onContextOpen,
-  onDraft,
-  onFiles,
-  onFlow,
-  onModel,
-  onEffort,
-  onConfigOverride,
-  onPermissionMode,
-  onPickDirectory,
-  onRemoveAttachment,
-  onSubmit,
-  onStop,
-}: ComposerProps) {
+export function Composer({ attachments, commands, contextOpen, workspaceListing, workspaceLoading, disabled, draft, model, modelOption, effort, thoughtLevelOption, configOverrides, speedOption, permissionMode, permissionOption, sending, session, commandOpen, running, onAddFiles, onCommandOpen, onContext, onContextNavigate, onContextOpen, onDraft, onFiles, onModel, onEffort, onConfigOverride, onPermissionMode, onPickDirectory, onRemoveAttachment, onSubmit, onStop }: ComposerProps) {
   const trigger = composerTrigger(draft);
   const commandQuery = trigger?.kind === "command" ? trigger.query : "";
   const visibleCommands = filterCommands(commands, commandQuery);
@@ -107,7 +70,6 @@ export function Composer({
     (entry) => !contextQuery || `${entry.name} ${entry.path}`.toLowerCase().includes(contextQuery),
   );
   const hasWorkspace = workspacePaths(session).length > 0;
-  const boundFlow = flows.find((flow) => flow.flow_id === flowId);
   const commandSelectionKey = `${commandOpen}:${commandQuery}`;
   const contextSelectionKey = `${contextOpen}:${contextQuery}:${workspaceListing?.path ?? ""}`;
   const [commandSelection, setCommandSelection] = useState({ key: commandSelectionKey, index: 0 });
@@ -223,14 +185,7 @@ export function Composer({
     data-composer-running={running || undefined}
   >
     <ComposerAttachments attachments={attachments} onRemove={onRemoveAttachment} />
-    {boundFlow && (
-      <div className="flex items-center gap-2 border-b border-line px-3 py-1.5 font-mono text-xs text-muted">
-        <Workflow className="size-3.5" />
-        <span>{boundFlow.name || boundFlow.flow_id}</span>
-        <span className="text-faint">{boundFlow.kind}</span>
-        {boundFlow.plan_ir_hash && <span className="text-faint">{revisionTail(boundFlow.plan_ir_hash)}</span>}
-      </div>
-    )}
+
     <MarkdownComposer
       disabled={disabled || sending}
       key={`composer-editor-${sweepKey}`}
@@ -245,11 +200,10 @@ export function Composer({
     <div className="flex items-end justify-between gap-3 px-3 pb-2.5">
       <div className="flex items-center gap-1">
         <ComposerActions
-          flowId={flowId}
-          flows={flows}
+
           hasWorkspace={hasWorkspace}
           onFiles={onFiles}
-          onFlow={onFlow}
+
           onPickDirectory={onPickDirectory}
           onWorkspaceContext={openWorkspaceContext}
         />

@@ -41,8 +41,6 @@ export function createBridgeApp(
   projectCatalogApp?: Hono,
   webWorkbenchApp?: Hono,
   sessionCatalogApp?: Hono,
-  flowCatalogApp?: Hono,
-  flowBatchApp?: Hono,
   mcpApp?: Hono,
   skillApp?: Hono,
   publishers?: () => OutboundPublisher[],
@@ -54,8 +52,6 @@ export function createBridgeApp(
   });
   app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
   if (sessionCatalogApp) app.route("/", sessionCatalogApp);
-  if (flowCatalogApp) app.route("/", flowCatalogApp);
-  if (flowBatchApp) app.route("/", flowBatchApp);
   if (mcpApp) app.route("/", mcpApp);
   if (skillApp) app.route("/", skillApp);
   if (projectCatalogApp) app.route("/", projectCatalogApp);
