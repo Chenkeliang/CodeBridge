@@ -317,7 +317,10 @@ export class FeishuBridge {
 
     this.channel.on("reaction", (reaction) => {
       const handler = this.options.onAlertReaction;
+      const rawEvent = (reaction.raw as { event?: { operator_type?: string }; operator_type?: string } | undefined);
+      const operatorType = rawEvent?.event?.operator_type ?? rawEvent?.operator_type;
       if (handler) void handler({ messageId: reaction.messageId, operatorOpenId: reaction.operator.openId,
+        ...(typeof operatorType === "string" ? { operatorType } : {}),
         emojiType: reaction.emojiType, action: reaction.action, actionTime: reaction.actionTime,
       }).catch((error) => this.options.onLog?.(`告警表情事件处理失败，将回查：${error instanceof Error ? error.message : String(error)}`));
     });
@@ -513,6 +516,9 @@ export class FeishuBridge {
     const policy = this.config.feishu.policy;
     let topicId = this.resolveTopicId(msg);
     const alertReply = await this.options.prepareAlertReply?.(msg, topicId);
+    if (alertReply && !alertReply.allowed && alertReply.notice) {
+      await this.sendMarkdown(msg.chatId, alertReply.notice, msg.messageId);
+    }
     if (alertReply && (!alertReply.allowed || alertReply.handled)) return;
     if (alertReply) {
       topicId = alertReply.topicId;

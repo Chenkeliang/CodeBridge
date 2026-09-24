@@ -50,7 +50,7 @@ export async function findHumanDoneReaction(
       const rawTime = Number(item.action_time);
       const actionTime = Number.isFinite(rawTime) && rawTime > 0 ? rawTime : undefined;
       if (after !== undefined && (actionTime === undefined || actionTime <= after)) continue;
-      return { messageId, operatorOpenId: item.operator.operator_id, emojiType: "DONE", action: "added", actionTime };
+      return { messageId, operatorOpenId: item.operator.operator_id, operatorType: "user", emojiType: "DONE", action: "added", actionTime };
     }
     pageToken = result.data.has_more ? result.data.page_token : undefined;
     if (result.data.has_more && !pageToken) throw new Error("Incomplete reaction pagination");
