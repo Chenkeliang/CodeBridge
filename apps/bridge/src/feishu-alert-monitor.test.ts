@@ -89,6 +89,25 @@ describe("FeishuAlertMonitor", () => {
     expect(await f.monitor.prepareReply({ messageId: "om_late", chatId: "oc_alerts", chatType: "group", senderId: "ou_other", content: "还在吗" }, "om_alert")).toBeUndefined();
   });
 
+  it("never purges incidents that are still active or waiting, however old", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [f.message("om_active"), f.message("om_waiting", "other\nerr")] });
+    f.transport.isAlertActive.mockResolvedValue(true); await f.monitor.tick();
+    f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [] });
+    f.advance(30 * 86_400_000); await f.monitor.tick();
+    const state = JSON.parse(fs.readFileSync(f.statePath, "utf8")).oc_alerts.incidents;
+    expect(Object.keys(state).sort()).toEqual(["om_active", "om_waiting"]);
+  });
+
+  it("ignores DONE reactions whose operator is not a user", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [f.message()] }); await f.monitor.tick();
+    await f.monitor.prepareReaction({ messageId: "om_alert", operatorOpenId: "ou_bot_like", operatorType: "app", emojiType: "DONE", action: "added", actionTime: f.options.now() });
+    expect(JSON.parse(fs.readFileSync(f.statePath, "utf8")).oc_alerts.incidents.om_alert.dismissal).toBeUndefined();
+    await f.monitor.prepareReaction({ messageId: "om_alert", operatorOpenId: "ou_member", operatorType: "user", emojiType: "DONE", action: "added", actionTime: f.options.now() });
+    expect(JSON.parse(fs.readFileSync(f.statePath, "utf8")).oc_alerts.incidents.om_alert.dismissal).toMatchObject({ ownerOpenId: "ou_member" });
+  });
+
   it("retries a failed submit with the original message and persisted pending incident", async () => {
     const f = fixture(); await f.monitor.tick(); f.advance(); const message = f.message();
     f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [message] });
@@ -189,7 +208,7 @@ describe("FeishuAlertMonitor", () => {
     await f.monitor.tick();
     const reply = { messageId: "om_answer", chatId: "oc_alerts", chatType: "group" as const,
       senderId: "ou_other", content: "/approve", rootId: "om_duplicate", threadId: "omt_native" };
-    expect(await f.monitor.prepareReply(reply, "omt_native")).toMatchObject({ allowed: true, topicId: "om_alert", instructions: expect.stringContaining("群成员（非审批人）") });
+    expect(await f.monitor.prepareReply(reply, "omt_native")).toMatchObject({ allowed: false, topicId: "om_alert", notice: expect.stringContaining("只认审批人") });
     expect((await f.monitor.prepareReply({ ...reply, senderId: "ou_owner" }, "omt_native"))?.topicId).toBe("om_alert");
   });
 

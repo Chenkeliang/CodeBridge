@@ -25,8 +25,10 @@ it("routes the active SDK reaction listener with the original card and real owne
   try {
     await bridge.connect();
     expect(handlers.has("reaction")).toBe(true);
-    handlers.get("reaction")!({ messageId: "om_b", operator: { openId: "ou_owner" }, emojiType: "DONE", action: "added", actionTime: 12345 });
-    await vi.waitFor(() => expect(onAlertReaction).toHaveBeenCalledWith({ messageId: "om_b", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added", actionTime: 12345 }));
+    handlers.get("reaction")!({ messageId: "om_b", operator: { openId: "ou_owner" }, emojiType: "DONE", action: "added", actionTime: 12345, raw: { event: { operator_type: "user" } } });
+    await vi.waitFor(() => expect(onAlertReaction).toHaveBeenCalledWith({ messageId: "om_b", operatorOpenId: "ou_owner", operatorType: "user", emojiType: "DONE", action: "added", actionTime: 12345 }));
+    handlers.get("reaction")!({ messageId: "om_c", operator: { openId: "ou_owner" }, emojiType: "DONE", action: "added" });
+    await vi.waitFor(() => expect(onAlertReaction).toHaveBeenCalledWith({ messageId: "om_c", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added", actionTime: undefined }));
   } finally {
     await bridge.disconnect(); spy.mockRestore(); fs.rmSync(root, { recursive: true, force: true });
   }

@@ -110,6 +110,29 @@ describe("alert polling through the active Feishu adapter", () => {
       message: expect.stringContaining("群成员（非审批人）") }));
   });
 
+  it("refuses a non-approver's permission command with a thread notice instead of resolving it", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    for (const content of ["/approve", "/a", "/deny"]) await f.internal.handleMessage({
+      messageId: "om_other_cmd", chatId: "oc_alerts", chatType: "group", senderId: "ou_other", threadId: "omt_native",
+      rootId: "om_alert", content, mentionedBot: true,
+    });
+    expect(f.submit).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledTimes(3);
+    expect(f.send).toHaveBeenLastCalledWith("oc_alerts", { markdown: expect.stringContaining("只认审批人") }, { replyTo: "om_other_cmd" });
+  });
+
+  it("mentions every configured approver when the Agent asks for a decision", async () => {
+    const f = fixture();
+    f.config.feishu.alertMonitor!.groups[0] = { chatId: "oc_alerts", senderAppIds: ["cli_alarm"], approverOpenIds: ["ou_owner", "ou_second"] };
+    f.config.feishu.alertMonitor!.statusReactions = { investigating: "OnIt", waiting: "OneSecond", resolved: "DONE", no_action: "CrossMark", blocked: "Sigh" };
+    await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    await f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "请确认是否重试 TT123");
+    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "请确认是否重试 TT123" }, expect.objectContaining({
+      replyTo: "om_alert", replyInThread: true,
+      mentions: [expect.objectContaining({ openId: "ou_owner" }), expect.objectContaining({ openId: "ou_second" })],
+    }));
+  });
+
   it("does not feed a watched bot's event into the normal chat path, but keeps other bots that address it", async () => {
     const f = fixture();
     await f.internal.dispatchInboundMessage({ messageId: "om_alarm_event", chatId: "oc_alerts", chatType: "group",
