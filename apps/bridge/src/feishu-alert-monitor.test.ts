@@ -99,6 +99,24 @@ describe("FeishuAlertMonitor", () => {
     expect(Object.keys(state).sort()).toEqual(["om_active", "om_waiting"]);
   });
 
+  it("tallies every human reaction into the Agent context without changing state, and forgets removed ones", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [f.message(), f.message("om_dup")] }); await f.monitor.tick();
+    const at = f.options.now();
+    for (const [operatorOpenId, emojiType, action, messageId] of [
+      ["ou_a", "THUMBSUP", "added", "om_alert"], ["ou_b", "THUMBSUP", "added", "om_dup"], ["ou_owner", "QUESTION", "added", "om_alert"],
+      ["cli_bot", "THUMBSUP", "added", "om_alert"], ["ou_b", "THUMBSUP", "removed", "om_dup"],
+    ] as const) await f.monitor.prepareReaction({ messageId, operatorOpenId, operatorType: operatorOpenId.startsWith("ou_") ? "user" : "app", emojiType, action, actionTime: at });
+    const incident = JSON.parse(fs.readFileSync(f.statePath, "utf8")).oc_alerts.incidents.om_alert;
+    expect(incident.reactions).toEqual({ THUMBSUP: ["ou_a"], QUESTION: ["ou_owner"] });
+    expect(incident.dismissal).toBeUndefined();
+    expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
+    const reply = await f.monitor.prepareReply({ messageId: "om_q", chatId: "oc_alerts", chatType: "group", senderId: "ou_c", content: "这个怎么看" }, "om_alert");
+    expect(reply?.instructions).toContain("THUMBSUP×1（ou_a）");
+    expect(reply?.instructions).toContain("QUESTION×1（ou_owner[审批人]）");
+    expect(reply?.instructions).toContain("不是指令也不是授权");
+  });
+
   it("ignores DONE reactions whose operator is not a user", async () => {
     const f = fixture(); await f.monitor.tick(); f.advance();
     f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [f.message()] }); await f.monitor.tick();
