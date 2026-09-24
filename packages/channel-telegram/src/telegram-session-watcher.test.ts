@@ -18,9 +18,6 @@ function makeIngress() {
     ackDelivery: vi.fn(async () => true),
     completeDelivery: vi.fn(async () => true),
     listDeliveries: vi.fn(async () => []),
-    requestFlowSave: vi.fn(),
-    confirmFlowSave: vi.fn(),
-    dismissFlowSave: vi.fn(),
   };
 }
 
@@ -78,13 +75,13 @@ function agentEvent(
   };
 }
 
-function flowSaveRequestedEvent(
+function legacyUnknownEvent(
   sequence: number,
   runId = "run_1",
 ): ChannelSessionEvent {
   const requestId = runId === "run_1" ? "fsr_1" : `fsr_${runId}`;
   return {
-    type: "FLOW_SAVE_REQUESTED",
+    type: "LEGACY_UNKNOWN_EVENT",
     sequence,
     runId,
     executionKind: "agent",
@@ -279,7 +276,7 @@ describe("TelegramSessionWatcher", () => {
     const ingress = makeIngress();
     ingress.events = blockingEvents([
       agentEvent(4, { type: "text_delta", text: "A".repeat(4_097) }),
-      flowSaveRequestedEvent(5),
+      legacyUnknownEvent(5),
       terminalEvent(6),
     ]);
 
@@ -292,15 +289,6 @@ describe("TelegramSessionWatcher", () => {
     const fallbackMessages = api.sendMessage.mock.calls.slice(1)
       .map((call) => String(call[1]));
     expect(fallbackMessages).toHaveLength(2);
-    expect(fallbackMessages[0]).not.toContain(
-      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
-    );
-    expect(fallbackMessages.join("").match(
-      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
-    )).toBeNull();
-    expect(fallbackMessages).not.toContain(
-      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
-    );
     w.abort();
   });
 
@@ -323,10 +311,10 @@ describe("TelegramSessionWatcher", () => {
       _sessionId: string,
       opts: { signal: AbortSignal },
     ) {
-      yield flowSaveRequestedEvent(5, "run_2");
+      yield legacyUnknownEvent(5, "run_2");
       markForeignProcessed();
       await foreignGate;
-      yield flowSaveRequestedEvent(6, "run_1");
+      yield legacyUnknownEvent(6, "run_1");
       markMatchingProcessed();
       await new Promise<void>((resolve) =>
         opts.signal.addEventListener("abort", () => resolve()),
@@ -352,9 +340,6 @@ describe("TelegramSessionWatcher", () => {
     releaseForeign();
     await matchingProcessed;
 
-    expect(String(api.editMessage.mock.calls.at(-1)?.[2])).not.toContain(
-      "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
-    );
     expect(api.editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
     expect(api.sendMessage).not.toHaveBeenCalled();
     w.abort();

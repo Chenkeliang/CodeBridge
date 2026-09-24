@@ -52,7 +52,7 @@ export interface SessionRuntime {
   updatedAt: string;
 }
 
-export type FlowActorRef = {
+export type ChannelActorRef = {
   channel: "web" | "feishu" | "telegram";
   id: string;
 };
@@ -60,12 +60,10 @@ export type FlowActorRef = {
 export interface SessionTurnMessage {
   text: string;
   attachmentIds: string[];
-  flowId: string | null;
   model: string | null;
   effort: string | null;
   permissionMode: string | null;
-  actorRef?: FlowActorRef;
-  flowInvocationSource?: "none" | "request" | "binding";
+  actorRef?: ChannelActorRef;
   executionKind: ExecutionKind;
   plan: {
     planId: string;
@@ -762,7 +760,6 @@ export function createSqliteSessionRuntimeTransaction(
           message: turn.message.text,
           attachment_ids: turn.message.attachmentIds,
           actor_ref: turn.message.actorRef ?? null,
-          flow_invocation_source: turn.message.flowInvocationSource ?? "none",
         },
       });
       transaction.appendEvent({
@@ -1570,7 +1567,6 @@ export function importProviderHistory(
       message: {
         text: message ?? "",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,

@@ -27,8 +27,8 @@ describe("openActiveSession", () => {
   const internalMcp = {
     name: "codebridge-internal",
     command: process.execPath,
-    args: ["/absolute/flow-save-mcp-server.js"],
-    env: [{ name: "CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY", value: "true" }],
+    args: ["/absolute/sample-mcp-server.js"],
+    env: [{ name: "CODEBRIDGE_SAMPLE_FLAG", value: "true" }],
   };
 
   it("starts a new ActiveSession when no resume id", async () => {

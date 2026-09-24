@@ -77,23 +77,12 @@ export function projectSessionEvent(
     case "TURN_CANCELLED":
       assertQueuedTurnHasNoTimeline(database, String(event.target));
       break;
-    // Historical retired-feature events advance the cursor without creating controls.
+    // Agent-emitted step events advance the cursor without creating controls.
     case "STEP_STARTED":
     case "STEP_RETRYING":
     case "STEP_SUCCEEDED":
     case "STEP_FAILED":
     case "STEP_SKIPPED":
-    case "PARAM_RESOLVED":
-    case "RUN_SNAPSHOT":
-    case "VERIFICATION_FAILED":
-    case "FLOW_BATCH_DRAFTED":
-    case "FLOW_BATCH_CONFIRMED":
-    case "FLOW_BATCH_UPDATED":
-    case "FLOW_BATCH_COMPLETED":
-    case "FLOW_SAVE_REQUESTED":
-    case "FLOW_SAVE_DISMISSED":
-    case "FLOW_CANDIDATE_CREATED":
-    case "FLOW_SAVE_FAILED":
       break;
     // 已知但有意不进时间线的类型：显式 no-op（cursor 正常前进）。
     case "WORK_ITEM_CREATED":
@@ -102,9 +91,6 @@ export function projectSessionEvent(
     case "PLAN_VALIDATED":
     case "RUN_CANCEL_REQUESTED":
     case "BRANCH_SELECTED":
-    case "FLOW_PROPOSED":
-    case "FLOW_SELECTED":
-    case "FLOW_SAVED_AS_CANDIDATE":
     case "PROJECT_CANDIDATE_FOUND":
     case "ARTIFACT_CREATED":
     case "VERIFICATION_COMPLETED":
@@ -114,8 +100,6 @@ export function projectSessionEvent(
     case "SESSION_HISTORY_HYDRATED":
     case "PLAN_PROPOSED":
     case "DISCOVERY_STARTED":
-    case "FLOW_RECOMMENDED":
-    case "FLOW_REJECTED":
       break;
     default:
       // R2：未知事件不得静默跳过——抛错后 cursor 停在旧 sequence，

@@ -2,7 +2,7 @@ import type { CapabilityRegistry } from "@codebridge/policy";
 import type { RunExecutor } from "@codebridge/run-executor";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SessionCommandError, type SessionCoordinator, type SubmitTurnResult } from "@codebridge/session-coordinator";
-import type { FlowActorRef, SqliteEventStore } from "@codebridge/work-items";
+import type { ChannelActorRef, SqliteEventStore } from "@codebridge/work-items";
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { randomUUID } from "node:crypto";
@@ -58,7 +58,6 @@ export function registerSessionRuntimeCommandRoutes(
         message: {
           text: body.message,
           attachmentIds: [],
-          flowId: null,
           model: nullable(body.model, session.model),
           effort: nullable(body.effort, session.effort),
           permissionMode: nullable(
@@ -383,7 +382,7 @@ function nullable(value: unknown, fallback: string | null): string | null {
       : null;
 }
 
-function channelActorRef(value: unknown): FlowActorRef | undefined {
+function channelActorRef(value: unknown): ChannelActorRef | undefined {
   if (!value || typeof value !== "object") return undefined;
   const actor = value as Record<string, unknown>;
   if (

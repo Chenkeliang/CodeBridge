@@ -205,9 +205,6 @@ describe("workbench API client", () => {
     const init = fetch.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(init?.method).toBe("POST");
     expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("message_1");
-    const body = JSON.parse(String(init?.body));
-    expect(body).not.toHaveProperty("flow_id");
-    expect(body).not.toHaveProperty("definition_revision");
   });
 
   it("uses POST for Provider Session discovery", async () => {

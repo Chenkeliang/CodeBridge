@@ -31,10 +31,6 @@ describe("writeFcbScript", () => {
     expect(content).toContain('cmd === "mention"');
     expect(content).toContain('post("/outbound/mention"');
     expect(content).toContain("FCB_RUN_ID");
-    expect(content).not.toContain('rest[0] === "suggest"');
-    expect(content).not.toContain('post("/v1/flows/recommendations"');
-    expect(content).not.toContain('rest[0] === "batch"');
-    expect(content).not.toContain('post("/v1/flow-invocation-drafts"');
 
     const stat = await fs.stat(file);
     expect(stat.mode & 0o111).not.toBe(0);

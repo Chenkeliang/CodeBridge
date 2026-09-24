@@ -107,7 +107,6 @@ const TimelineBlock = memo(function TimelineBlock(props: {
   onResolveApproval?: (action: RuntimeApprovalAction, approve: boolean) => void;
 }) {
   const { block } = props;
-  if (block.kind.startsWith("flow_")) return null;
   if (isEmptyProcessBlock(block) && !props.isLive) return null;
   const more = block.next_segment_cursor !== null && !props.isLive && <Button disabled={props.loading} onClick={() => props.onLoadSegments(block.block_id, block.next_segment_cursor!)} size="sm" variant="ghost">
     {props.loading ? "正在加载…" : "加载更多输出"}

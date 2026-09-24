@@ -115,10 +115,10 @@ function wireEvent(
   };
 }
 
-function flowSaveEvent(
+function targetedEvent(
   sessionId: string,
   sequence: number,
-  type: "FLOW_SAVE_REQUESTED" | "FLOW_SAVE_DISMISSED" | "FLOW_CANDIDATE_CREATED" | "FLOW_SAVE_FAILED",
+  type: string,
   payload: Record<string, unknown>,
 ): SessionEvent {
   return {
@@ -137,12 +137,12 @@ function activeTail(view: SessionView): string {
 
 describe("SessionViewStore", () => {
 
-  it("requests a refresh instead of projecting a Save Intent onto the wrong Turn", () => {
+  it("requests a refresh instead of projecting an unknown targeted event onto the wrong Turn", () => {
     const store = new SessionViewStore({ schedule: (flush) => flush() });
     store.hydrate(snapshot("sess_1", 10));
 
     expect(store.receive("sess_1", {
-      ...flowSaveEvent("sess_1", 11, "FLOW_SAVE_REQUESTED", {
+      ...targetedEvent("sess_1", 11, "LEGACY_UNKNOWN_EVENT", {
         request_id: "fsr_old",
         request_turn_id: "turn_old",
         source_run_id: "run_source",

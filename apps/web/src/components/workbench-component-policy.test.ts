@@ -310,7 +310,6 @@ describe("Workbench component policy", () => {
     expect(editor).toContain("onPickerKey");
     expect(controls).toContain("添加文件");
     expect(controls).toContain("Workspace");
-    expect(controls).not.toContain("Flow");
     expect(controls).toContain("<ReasoningLevelControl");
     expect(controls).toContain("<SpeedControl");
   });

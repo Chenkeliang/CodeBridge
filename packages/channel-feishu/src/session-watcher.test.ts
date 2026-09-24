@@ -150,13 +150,13 @@ function terminalEvent(
   };
 }
 
-function flowSaveRequestedEvent(
+function legacyUnknownEvent(
   sequence: number,
   runId = "run_1",
 ): ChannelSessionEvent {
   const requestId = runId === "run_1" ? "fsr_1" : `fsr_${runId}`;
   return {
-    type: "FLOW_SAVE_REQUESTED",
+    type: "LEGACY_UNKNOWN_EVENT",
     sequence,
     runId,
     executionKind: "agent",
@@ -662,10 +662,10 @@ describe("FeishuSessionWatcher", () => {
       _sessionId: string,
       opts: { signal: AbortSignal },
     ) {
-      yield flowSaveRequestedEvent(7, "run_2");
+      yield legacyUnknownEvent(7, "run_2");
       markForeignProcessed();
       await foreignGate;
-      yield flowSaveRequestedEvent(8, "run_1");
+      yield legacyUnknownEvent(8, "run_1");
       markMatchingProcessed();
       await new Promise<void>((resolve) =>
         opts.signal.addEventListener("abort", () => resolve()),
@@ -685,8 +685,6 @@ describe("FeishuSessionWatcher", () => {
 
     await foreignProcessed;
     const writesAfterForeign = vi.mocked(host.updateCard).mock.calls.length;
-    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1)))
-      .not.not.toContain("已记录“存为 Flow”请求");
     expect(host.sendMarkdown).not.toHaveBeenCalled();
 
     releaseForeign();
@@ -694,8 +692,6 @@ describe("FeishuSessionWatcher", () => {
 
     expect(vi.mocked(host.updateCard).mock.calls.length)
       .toBe(writesAfterForeign);
-    expect(JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1)))
-      .not.toContain("已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。");
     expect(host.sendMarkdown).not.toHaveBeenCalled();
     w.abort();
   });

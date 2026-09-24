@@ -8,9 +8,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * 真实领域示例：权益余额查询（只读）。演示「维护一个真实 Flow」需要
- * 一个 registry+runtime 都注册的 adapter；发布门槛（publishIssues）要求
- * 每步 capability 有定义、有可执行 adapter、非 forwardToAgent。
+ * 真实领域示例：权益余额查询（只读）。演示一个 registry+runtime 都注册的
+ * adapter：capability 有定义、有可执行 adapter、非 forwardToAgent。
  */
 export function registerEquityCapabilities(
   registry: CapabilityRegistry,

@@ -262,7 +262,6 @@ it("keeps files and Workspace in plus while grouping model controls", () => {
     expect(document.body.textContent).toContain("添加文件");
     expect(document.body.textContent).toContain("插入 Workspace 上下文");
     expect(document.body.textContent).toContain("添加 Workspace");
-    expect(document.body.querySelector('button[aria-label="Flow"]')).toBeNull();
     click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("添加文件")) ?? null);
     click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("插入 Workspace 上下文")) ?? null);
     click([...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("添加 Workspace")) ?? null);

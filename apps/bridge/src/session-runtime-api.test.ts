@@ -51,14 +51,7 @@ function setup(overrides: {
   return { app, catalog, workItems, coordinator, session };
 }
 
-function setupRuntimeLoop(overrides: {
-  exposeFlowSaveAvailability?: boolean;
-  flowSaveAvailability?: { available: true } | {
-    available: false;
-    code: "no_extractable_previous_run";
-    message: string;
-  };
-} = {}) {
+function setupRuntimeLoop() {
   const catalog = new SessionCatalogStore(":memory:");
   const workItems = new SqliteEventStore(":memory:");
   const coordinator = new SessionCoordinator(workItems, {
@@ -72,13 +65,6 @@ function setupRuntimeLoop(overrides: {
   const runtime = new CapabilityRuntime();
   registerDemoCapabilities(registry, runtime);
   const runner = new FakeRunner([{ type: "done", exitCode: 0 }]);
-  const previewPreviousSource = vi.fn().mockReturnValue(
-    overrides.flowSaveAvailability ?? {
-      available: false,
-      code: "no_extractable_previous_run",
-      message: "找不到可提取的上一次成功任务，请在目标回复的菜单中选择‘存为 Flow’。",
-    },
-  );
   const executor = new RunExecutor(workItems, runner, {
     policy: new PolicyEngine(registry),
     capabilities: runtime,
@@ -86,21 +72,10 @@ function setupRuntimeLoop(overrides: {
     sessionLeaseService: new SessionLeaseService(workItems),
     executorOwner: "test:bridge",
     resolveRequest: (workItem, run) => {
-      const linkedSessionId = workItem.conversationId.startsWith("conv_")
-        ? `sess_${workItem.conversationId.slice("conv_".length)}`
-        : undefined;
       return {
         runId: run.id,
         sessionKey: { chatId: workItem.conversationId, backendId: "pi", cwd: "/workspace" },
         prompt: "unused",
-        ...(linkedSessionId && overrides.exposeFlowSaveAvailability !== false
-          ? {
-              flowSaveSourceAvailability: previewPreviousSource({
-                sessionId: linkedSessionId,
-                currentRunId: run.id,
-              }),
-            }
-          : {}),
       };
     },
   });
@@ -128,7 +103,6 @@ function setupRuntimeLoop(overrides: {
     session,
     runner,
     registry,
-    previewPreviousSource,
   };
 }
 
@@ -156,7 +130,6 @@ describe("Session runtime command API", () => {
       message: {
         text: "检查项目",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,
@@ -238,7 +211,6 @@ describe("Session runtime command API", () => {
       message: {
         text: "失败任务",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,

@@ -103,7 +103,6 @@ async function createFixture(idempotencyKey: string) {
     message: {
       text: "生成最终结果",
       attachmentIds: [],
-      flowId: null,
       executionKind: "agent",
       model: null,
       effort: null,
@@ -213,7 +212,7 @@ describe("Session event wire contract integration", () => {
     workItems.appendEvent({
       workItemId: submitted.workItemId,
       runId: run.id,
-      type: "FLOW_SAVE_REQUESTED",
+      type: "ARTIFACT_CREATED",
       actor: "agent",
       target: "fsr_contract",
       resultRef: null,
@@ -254,7 +253,7 @@ describe("Session event wire contract integration", () => {
         }),
         expect.objectContaining({ type: "RUN_SUCCEEDED", runId: run.id }),
         expect.objectContaining({
-          type: "FLOW_SAVE_REQUESTED",
+          type: "ARTIFACT_CREATED",
           runId: run.id,
           target: "fsr_contract",
         }),
@@ -262,11 +261,6 @@ describe("Session event wire contract integration", () => {
       const writes = JSON.stringify([feishu.rawClient.cardkit.v1.card.update.mock.calls, feishu.rawClient.cardkit.v1.cardElement.update.mock.calls, feishu.rawClient.cardkit.v1.card.settings.mock.calls]);
       expect(writes).toContain("真实持久化的最终答案");
       expect(writes).toContain("✅ **已完成**");
-      expect(writes).not.toContain(
-        "已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。",
-      );
-      expect(writes.match(/已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g))
-        .toBeNull();
       expect(writes).not.toContain("结果恢复中");
       expect(writes).not.toContain("本次无输出");
     } finally {

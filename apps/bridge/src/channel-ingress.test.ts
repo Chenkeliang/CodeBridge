@@ -46,8 +46,6 @@ describe("channel session ingress", () => {
         reply_to_message_id: "msg_1",
         show_thinking: false,
       });
-      expect(body).not.toHaveProperty("flow_id");
-      expect(body).not.toHaveProperty("definition_revision");
       return c.json({
         session_id: "sess_1",
         turn_id: "turn_1",

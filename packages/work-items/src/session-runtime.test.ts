@@ -114,7 +114,6 @@ describe("Session runtime schema", () => {
       const turn = tx.insertTurn("sess_1", {
         text: "检查",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,
@@ -156,7 +155,6 @@ describe("Session runtime schema", () => {
       const turn = tx.insertTurn("sess_1", {
         text: "检查",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,
@@ -214,7 +212,6 @@ describe("Session runtime schema", () => {
       const first = tx.insertTurn("sess_1", {
         text: "run",
         attachmentIds: [],
-        flowId: "flow_demo",
         executionKind: "flow",
         model: null,
         effort: null,
@@ -236,7 +233,6 @@ describe("Session runtime schema", () => {
       tx.insertTurn("sess_1", {
         text: "again",
         attachmentIds: [],
-        flowId: "flow_demo",
         executionKind: "flow",
         model: null,
         effort: null,
