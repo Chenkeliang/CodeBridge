@@ -52,6 +52,10 @@ export interface FeishuAlertTransport {
   cancelAlertInvestigation?(chatId: string, rootId: string): Promise<void>;
   setAlertMessageReaction?(messageId: string, emojiType: string, managed: string[]): Promise<string>;
   notifyAlertOwner?(chatId: string, rootId: string, approverOpenIds: string[], text: string): Promise<void>;
+  /** Plain reply in the alert thread, no mentions. */
+  postAlertThreadNotice?(chatId: string, rootId: string, text: string): Promise<void>;
+  /** Display name of a chat member; undefined when unknown. */
+  alertMemberName?(chatId: string, openId: string): Promise<string | undefined>;
 }
 
 export const ALERT_INVESTIGATION_INSTRUCTIONS = [
@@ -453,6 +457,7 @@ export class FeishuAlertMonitor {
   }
 
   private async dismissIncident(incident: Incident, message: FeishuMessage, via: "message" | "reaction" = "message"): Promise<void> {
+    const alreadyDismissed = Boolean(this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.dismissal);
     this.updateIncident(incident.alert, (item) => {
       item.dismissal = { ownerOpenId: message.senderId, messageId: message.messageId, reason: message.content, at: (this.options.now ?? Date.now)(), via };
       item.submitted = true; item.active = false;
@@ -464,6 +469,20 @@ export class FeishuAlertMonitor {
       .catch((error) => this.options.log(`结案已记录，表情待重试：${error instanceof Error ? error.message : String(error)}`));
     await this.options.transport.cancelAlertInvestigation?.(incident.alert.chatId, incident.alert.messageId)
       .catch((error) => this.options.log(`停止已结案排查待确认：${error instanceof Error ? error.message : String(error)}`));
+    if (!alreadyDismissed) await this.postDismissalReceipt(incident, message.senderId, via)
+      .catch((error) => this.options.log(`结案回执发送失败：${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  private async postDismissalReceipt(incident: Incident, closerOpenId: string, via: "message" | "reaction"): Promise<void> {
+    const transport = this.options.transport;
+    if (!transport.postAlertThreadNotice) return;
+    const { chatId, messageId } = incident.alert;
+    // Display names are user-controlled; strip markup so a name can't inject <at> mentions or formatting.
+    const name = (await transport.alertMemberName?.(chatId, closerOpenId).catch(() => undefined))
+      ?.replace(/[<>*_`~#|[\]()\\]/gu, "").trim().slice(0, 32);
+    const who = name || (incidentApprovers(incident).includes(closerOpenId) ? "审批人" : "群成员");
+    const how = via === "reaction" ? "点 DONE" : "回复无需处理";
+    await transport.postAlertThreadNotice(chatId, messageId, `已结案：由 ${who} ${how}确认。仅表示人工确认无需处理，不代表故障已修复；需要时回复“重新排查”。`);
   }
 
   private runbookInstructions(runbookPath: string | undefined): string {

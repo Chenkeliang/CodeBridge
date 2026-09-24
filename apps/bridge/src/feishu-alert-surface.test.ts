@@ -45,7 +45,7 @@ function fixture() {
     im: { v1: { message: { list, reply, get }, messageReaction: {
       list: vi.fn(async () => ({ code: 0, data: { items: reactions, has_more: false, page_token: "" } })),
       create: reactionCreate, delete: reactionDelete,
-    } } },
+    }, chatMembers: { get: vi.fn(async () => ({ code: 0, data: { items: [{ member_id: "ou_owner", name: "陈科良" }], has_more: false } })) } } },
     cardkit: { v1: { card: { create: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })),
       idConvert: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })) } } },
   } };
@@ -177,7 +177,8 @@ describe("alert polling through the active Feishu adapter", () => {
     await f.internal.handleMessage({ messageId: "om_owner_done", chatId: "oc_alerts", chatType: "group", senderId: "ou_owner", threadId: "omt_native", rootId: "om_alert", content: "无需处理" });
     expect(f.submit).toHaveBeenCalledTimes(1);
     expect(f.reactionCreate).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: { reaction_type: { emoji_type: "DONE" } } }));
-    expect(f.send).not.toHaveBeenCalled();
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: expect.stringContaining("已结案：由 陈科良 回复无需处理确认") }, { replyTo: "om_alert", replyInThread: true });
   });
 
   it("resolves a reaction on the bot's reply to the alert thread through the real adapter", async () => {
