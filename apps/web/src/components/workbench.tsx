@@ -229,7 +229,6 @@ export function Workbench() {
   useEffect(() => {
     if (loading || deepLinkHandled.current) return;
     const params = new URLSearchParams(window.location.search);
-    if (params.has("flow") || params.has("batch")) notify("Flow 功能已停用", "error");
     const sessionId = params.get("session");
     if (!sessionId) return;
     deepLinkHandled.current = true;

@@ -73,8 +73,6 @@ export interface AgentSession {
   agentId: string;
   providerSessionId: string | null;
   taskRecordId: string | null;
-  flowId: string | null;
-  flowDefinitionRevision: string | null;
   model: string | null;
   effort: string | null;
   configOverrides: SessionConfigOverrides;
@@ -305,8 +303,6 @@ export class SessionCatalogStore {
       agentId: input.agentId,
       providerSessionId: input.providerSessionId ?? null,
       taskRecordId: input.taskRecordId ?? null,
-      flowId: null,
-      flowDefinitionRevision: null,
       model: input.model ?? null,
       effort: input.effort ?? null,
       configOverrides: { ...(input.configOverrides ?? {}) },
@@ -324,9 +320,9 @@ export class SessionCatalogStore {
     this.database
       .prepare(
         `INSERT INTO agent_sessions (
-          id, schema_version, agent_id, provider_session_id, task_record_id, flow_id, flow_definition_revision, model, effort, config_overrides, permission_mode, folder_id, cwd,
+          id, schema_version, agent_id, provider_session_id, task_record_id, model, effort, config_overrides, permission_mode, folder_id, cwd,
           additional_directories, title, status, pinned_at, archived_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -334,8 +330,6 @@ export class SessionCatalogStore {
         session.agentId,
         session.providerSessionId,
         session.taskRecordId,
-        session.flowId,
-        session.flowDefinitionRevision,
         session.model,
         session.effort,
         JSON.stringify(session.configOverrides),
@@ -617,12 +611,6 @@ function toSession(row: SqliteRow): AgentSession {
     agentId: String(row.agent_id),
     providerSessionId: row.provider_session_id === null ? null : String(row.provider_session_id),
     taskRecordId: row.task_record_id === null ? null : String(row.task_record_id),
-    flowId: row.flow_id === null ? null : String(row.flow_id),
-    flowDefinitionRevision:
-      row.flow_definition_revision === null ||
-      row.flow_definition_revision === undefined
-        ? null
-        : String(row.flow_definition_revision),
     model: row.model === null || row.model === undefined ? null : String(row.model),
     effort: row.effort === null || row.effort === undefined ? null : String(row.effort),
     configOverrides: JSON.parse(String(row.config_overrides ?? "{}")) as SessionConfigOverrides,

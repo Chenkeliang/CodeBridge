@@ -1,13 +1,13 @@
 # Orchestration 接口规范
 
-状态：Session-first API 目标合同。当前 Bridge 已有 WorkItem/Run API；Session、Agent Registry、Folder 和 Flow Catalog API 按本规范逐步补齐，旧 WorkItem 路径作为内部执行记录和兼容入口保留。
+状态：Session-first API 目标合同。当前 Bridge 已有 WorkItem/Run API；Session、Agent Registry 和 Folder API 按本规范逐步补齐，旧 WorkItem 路径作为内部执行记录和兼容入口保留。
 
 ## 1. 协议选择
 
 | 场景 | 协议 |
 |---|---|
 | Web、外部飞书/Telegram CLI 或 WebSocket 网关查询、发送消息 | HTTP JSON API |
-| Session、Run、Flow 和审批的实时更新 | SSE Event Stream |
+| Session、Run 和审批的实时更新 | SSE Event Stream |
 | Runner 连接和任务执行 | 现有 Runner Protocol |
 | Cursor、Claude Code、Codex 等 ACP Agent | ACP Adapter |
 | Pi Agent | Node SDK Adapter；需要时再提供 ACP Adapter |
@@ -19,7 +19,7 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 
 外部渠道把稳定的渠道会话标识提交到
 `POST /v1/channels/{channel}/conversations/{conversation_id}/messages`。服务端持久化
-`channel + conversation_id → Session` 绑定，然后复用同一套 Message、Run、Flow、Approval
+`channel + conversation_id → Session` 绑定，然后复用同一套 Message、Run、Approval
 和 SSE 事件合同。仓库中已有的内置 Feishu/Telegram Router 路径继续作为兼容适配器运行，迁移时只替换入口，不改变 Runner 和 Agent 合同。
 
 ## 2. 资源接口
@@ -33,7 +33,7 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `GET` | `/v1/sessions` | 按 Agent、Folder、状态查询 Session |
 | `POST` | `/v1/sessions` | 创建一个固定绑定 Agent 的 Session |
 | `POST` | `/v1/sessions/import` | 显式发现并导入 Provider Session 元数据 |
-| `GET` | `/v1/sessions/{session_id}` | 获取 Session、目录、最近 Flow 和状态 |
+| `GET` | `/v1/sessions/{session_id}` | 获取 Session、目录和状态 |
 | `POST` | `/v1/sessions/{session_id}/provider-history/preview` | 只读预览可导入的 Provider 历史 |
 | `POST` | `/v1/sessions/{session_id}/provider-history/import` | 确认并幂等导入 Provider 历史 |
 | `POST` | `/v1/sessions/{session_id}/directories` | 授权并添加 Session 的附加目录 |
@@ -50,11 +50,6 @@ Bridge 服务端持有 Runner 凭据；终端用户通过 Web、飞书或 Telegr
 | `POST` | `/v1/sessions/{session_id}/close` | 关闭 Session |
 | `DELETE` | `/v1/sessions/{session_id}` | 删除 Session 元数据和可删除的本地历史 |
 | `GET` | `/v1/sessions/{session_id}/events` | 读取或以 `live=true` 持续订阅 Session 和 Run 事件 |
-| `GET` | `/v1/flows` | 查询 Flow/Workflow Catalog |
-| `GET` | `/v1/flows/{flow_id}` | 获取 Flow 内容和版本 |
-| `POST` | `/v1/flows/{flow_id}/apply` | 将 Flow 绑定到当前 Session 的下一次 Run |
-| `POST` | `/v1/flows/candidates` | 保存当前 Session 生成的 Flow Candidate |
-| `POST` | `/v1/flows/{flow_id}/review` | 通过 Review 决定 Candidate 是否发布，并记录 Git revision |
 | `POST` | `/v1/discovery/tasks` | 创建异步项目或目录发现任务 |
 | `GET` | `/v1/projects/candidates` | 查询待确认的项目候选 |
 | `POST` | `/v1/projects/candidates/{candidate_id}/accept` | 接受候选并登记正式项目 |
@@ -92,7 +87,7 @@ Session 相关的 `GET` 接口都是纯读取：不会触发 Provider 历史导�
 
 ## 3. 创建 Session
 
-创建 Session 时 Agent 是唯一的必要运行时身份；目录、模型和 Flow 都可以省略：
+创建 Session 时 Agent 是唯一的必要运行时身份；目录和模型都可以省略：
 
 ```json
 {
@@ -111,7 +106,6 @@ Session 相关的 `GET` 接口都是纯读取：不会触发 Provider 历史导�
   "agent_id": "<agent-id>",
   "provider_session_id": "<opaque-provider-id>",
   "folder_id": null,
-  "flow_id": null,
   "status": "idle"
 }
 ```
@@ -122,38 +116,9 @@ Session 相关的 `GET` 接口都是纯读取：不会触发 Provider 历史导�
 
 消息附件使用 `{name, mime_type, data_base64}` 输入。Bridge 将内容持久化为带 hash 的 `attachment_<id>` 引用，事件只保存 `attachment_ids`，Run Runtime 再按引用组装 Runner 已支持的 Attachment；单文件上限 10 MB，单条消息总上限 25 MB。
 
-## 4. Flow 绑定和动态生成
-
-Run 请求中的 Flow 可以为空：
-
-```json
-{
-  "message": "<natural-language-goal>",
-  "flow_id": null,
-  "mode": "auto"
-}
-```
-
-为空时，Agent 为当前 Session 生成 `ephemeral` Flow/Plan，并通过事件流返回 `FLOW_PROPOSED`。用户可以继续修改、确认执行，或选择保存为 Candidate。
-
-选择已有 Flow 时，服务端在 Run 创建时固定其 `definition_revision`；后续 Flow Catalog 更新不影响已经创建的 Run。
-
-Runbook Step 可以声明有界重试：
-
-```yaml
-retry:
-  max_attempts: 3
-  delay_ms: 1000
-```
-
-该策略只对 Adapter 明确标记为 `retryable` 的错误生效；每次尝试写入 `STEP_RETRYING` 事件，
-不会把未知错误或未确认副作用自动重放。
-
-`mode` 是运行提示，不是安全授权。安全权限由 Capability Policy 和 Approval 合同决定。
-
 ## 5. 幂等与恢复
 
-创建 Session、发送消息、创建 Run、应用 Flow 和接受项目候选都支持 `Idempotency-Key`。Key 与操作作用域一起持久化在 SQLite；重复请求返回第一次结果，不会重复创建 Run 或写入副作用事件。Git Catalog 提案使用调用方提供的唯一分支名作为冲突边界，已存在分支返回冲突，不会覆盖。
+创建 Session、发送消息、创建 Run 和接受项目候选都支持 `Idempotency-Key`。Key 与操作作用域一起持久化在 SQLite；重复请求返回第一次结果，不会重复创建 Run 或写入副作用事件。Git Catalog 提案使用调用方提供的唯一分支名作为冲突边界，已存在分支返回冲突，不会覆盖。
 
 队列取消与恢复需要 `Idempotency-Key` + `If-Match`；Run 取消返回 200/202，但持久化状态只会落到 `cancelled` 或 `interrupted`，`interrupting` 只是响应态。
 
@@ -170,7 +135,7 @@ retry:
 
 - JSON 字段使用 `snake_case`，ID 使用带类型前缀的不透明字符串。
 - 所有时间使用带时区的 RFC 3339；服务端同时保存单调递增的 Event Sequence。
-- Agent Profile、Flow 和 Capability 返回定义版本或内容摘要。
+- Agent Profile 和 Capability 返回定义版本或内容摘要。
 - 生产凭据、Backend 私有 Session 和审批令牌不得进入 Event Payload 或 Artifact。
 - 不同 Agent 的 Session 通过明确的 Session ID、Folder、Artifact 或用户消息关联；服务端不隐式改变当前 Session 的 Agent。
 
@@ -212,4 +177,4 @@ session_id + run_id + step_id + capability_id
 - `schema_version` 的 Major 变化允许破坏兼容，必须提供显式迁移。
 - 同一 Major 内只能新增可选字段或新的枚举处理分支。
 - 消费方遇到未知 Event Type 时应保存并忽略其投影，不应让整个流失效。
-- Session、Flow、Run、TaskRecord 和 Event 的稳定合同分别位于 `schemas/orchestration/`；现有 WorkItem Schema 在兼容期内继续有效。
+- Session、Run、TaskRecord 和 Event 的稳定合同分别位于 `schemas/orchestration/`；现有 WorkItem Schema 在兼容期内继续有效。

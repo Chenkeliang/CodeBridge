@@ -96,12 +96,6 @@ export async function handleSlashCommand(
   const lower = cmd!.toLowerCase();
 
   switch (lower) {
-    case "/flow":
-      return {
-        type: "reply",
-        text: "Flow 功能已停用。",
-      };
-
     case "/help":
       return {
         type: "reply",

@@ -57,7 +57,6 @@ type ErrorPayload = {
   issues?: string[];
   missing?: Array<{ id: string; type: string; source: string; reason: string }>;
   source?: "binding" | "request";
-  flow_id?: string;
   expected_definition_revision?: string;
   current_definition_revision?: string;
   requires_confirmation?: boolean;

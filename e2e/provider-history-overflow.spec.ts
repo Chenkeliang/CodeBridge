@@ -2,39 +2,11 @@ import { expect, type Page, test } from "@playwright/test";
 
 type MockSession = ReturnType<typeof session>;
 
-test("retired Flow has no navigation, save actions, or background API requests", async ({ page }) => {
-  const value = session("sess_retired", "普通会话仍可读取");
-  const requests: string[] = [];
-  page.on("request", (request) => {
-    if (/\/v1\/.*(?:flows|flow-save|flow-batches|flow-invocation|flow-recommendations|flow-proposals)/.test(request.url())) requests.push(request.url());
-  });
-  await installWorkbenchRoutes(page, [value], () => true);
-  await page.goto("/workbench/");
-  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Flows/ })).toHaveCount(0);
-  await expect(page.getByText("存为 Flow", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("textbox", { name: "消息" })).toBeVisible();
-  await page.reload();
-  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
-  expect(requests).toEqual([]);
-});
-
-test("old Flow links report retirement while keeping the selected Session usable", async ({ page }) => {
-  const value = session("sess_retired_link", "历史会话");
-  await installWorkbenchRoutes(page, [value], () => true);
-  await page.goto("/workbench/?flow=legacy&session=sess_retired_link");
-  await expect(page.getByText("Flow 功能已停用", { exact: true })).toBeVisible();
-  await expect(page.getByText("已恢复的历史消息")).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "消息" })).toBeVisible();
-});
-
 function session(id: string, title: string): {
   session_id: string;
   agent_id: string;
   provider_session_id: string;
   task_record_id: null;
-  flow_id: null;
-  flow_definition_revision: null;
   model: null;
   effort: null;
   config_overrides: Record<string, never>;
@@ -53,8 +25,6 @@ function session(id: string, title: string): {
     agent_id: "codex",
     provider_session_id: `provider-${id}`,
     task_record_id: null,
-    flow_id: null,
-    flow_definition_revision: null,
     model: null,
     effort: null,
     config_overrides: {},
@@ -165,7 +135,6 @@ function hostileSnapshot(value: MockSession) {
 }
 
 async function installWorkbenchRoutes(page: Page, sessions: MockSession[], isImported: (id: string) => boolean) {
-  let deprecatedFlowProposalRequests = 0;
   await page.addInitScript((sessionId) => {
     (globalThis as typeof globalThis & { process?: { env: Record<string, string> } }).process = { env: {} };
     localStorage.setItem("codebridge:last-session:codex", sessionId);
@@ -210,11 +179,6 @@ async function installWorkbenchRoutes(page: Page, sessions: MockSession[], isImp
     contentType: "application/json",
     body: JSON.stringify({ sessions, archived_sessions: [] }),
   }));
-  await page.route("**/v1/flows?*", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({ flows: [] }),
-  }));
   await page.route("**/v1/capabilities", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
@@ -237,47 +201,13 @@ async function installWorkbenchRoutes(page: Page, sessions: MockSession[], isImp
       contentType: "application/json",
       body: JSON.stringify({ commands: [] }),
     }));
-    await page.route(`**/v1/sessions/${value.session_id}/flow-proposals`, async (route) => {
-      deprecatedFlowProposalRequests += 1;
-      await route.fulfill({
-        status: 410,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "flow_proposals_deprecated" }),
-      });
-    });
-    await page.route(`**/v1/sessions/${value.session_id}/flow-recommendations`, (route) => route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ recommendations: [] }),
-    }));
     await page.route(`**/v1/sessions/${value.session_id}/events*`, (route) => route.fulfill({
       status: 200,
       contentType: "text/event-stream",
       body: ": keep-alive\n\n",
     }));
   }
-  return { deprecatedFlowProposalRequests: () => deprecatedFlowProposalRequests };
 }
-
-test("workbench never requests the deprecated Flow proposals endpoint", async ({ page }) => {
-  const value = session("sess_a", "Session A");
-  const probe = await installWorkbenchRoutes(page, [value], () => false);
-  await page.route("**/v1/sessions/sess_a/provider-history/preview", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      providerSessionId: value.provider_session_id,
-      importedPosition: 0,
-      providerPosition: 0,
-      importableEvents: 0,
-      nextDigest: "sha256:empty",
-    }),
-  }));
-
-  await page.goto("/workbench/");
-  await expect(page.getByText("Provider 历史已同步")).toBeVisible();
-  expect(probe.deprecatedFlowProposalRequests()).toBe(0);
-});
 
 test("history Preview ignores a late response from the previous Session", async ({ page }) => {
   const sessionA = session("sess_a", "Session A");

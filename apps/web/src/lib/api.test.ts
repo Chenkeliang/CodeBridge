@@ -24,8 +24,6 @@ function session(sessionId: string): AgentSession {
     agent_id: "codex",
     provider_session_id: null,
     task_record_id: null,
-    flow_id: null,
-    flow_definition_revision: null,
     model: null,
     effort: null,
     config_overrides: undefined,
@@ -248,33 +246,6 @@ describe("workbench API client", () => {
     }).catch((caught) => caught) as ApiError;
     expect(error.code).toBe("missing_inputs");
     expect(error.body).toMatchObject({ missing: [{ id: "text" }] });
-  });
-
-  it("preserves the structured revision mismatch error body", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      code: "flow_revision_mismatch",
-      source: "binding",
-      flow_id: "flow_demo",
-      expected_definition_revision: "sha256:old",
-      current_definition_revision: "sha256:new",
-      requires_confirmation: true,
-    }), { status: 409, headers: { "content-type": "application/json" } })));
-    const error = await api.sendMessage("sess_1", {
-      message: "run",
-      model: null,
-      attachments: [],
-      permissionMode: null,
-      effort: null,
-      idempotencyKey: "revision-mismatch",
-    }).catch((caught) => caught) as ApiError;
-    expect(error.code).toBe("flow_revision_mismatch");
-    expect(error.body).toMatchObject({
-      source: "binding",
-      flow_id: "flow_demo",
-      expected_definition_revision: "sha256:old",
-      current_definition_revision: "sha256:new",
-      requires_confirmation: true,
-    });
   });
 
   it("previews Provider history without a key and imports with the caller key", async () => {

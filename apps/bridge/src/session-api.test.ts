@@ -725,11 +725,9 @@ describe("session API", () => {
     const session = (await create.json()) as {
       session_id: string;
       agent_id: string;
-      flow_definition_revision: string | null;
       model: string | null;
     };
     expect(session.agent_id).toBe("pi");
-    expect(session.flow_definition_revision).toBeNull();
     expect(session.model).toBe("pi-model");
 
     const message = await app.request(`/v1/sessions/${session.session_id}/messages`, {
@@ -747,8 +745,6 @@ describe("session API", () => {
     expect(await current.json()).toMatchObject({
       session: {
         task_record_id: accepted.task_record_id,
-        flow_id: null,
-        flow_definition_revision: null,
       },
     });
     expect(workItems.listEvents(accepted.task_record_id).map((event) => event.type)).toContain("MESSAGE_RECEIVED");
