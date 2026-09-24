@@ -41,7 +41,8 @@ describe("FeishuAlertMonitor", () => {
     await f.monitor.tick();
     expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
     expect(f.transport.investigateAlert).toHaveBeenCalledWith(f.message(), ["ou_owner"], ALERT_INVESTIGATION_INSTRUCTIONS);
-    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("只授权只读排查");
+    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("未记录流程级授权或条件不满足时，不自行执行写操作");
+    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("幂等性");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("fcb alert status waiting");
   });
 
@@ -59,9 +60,9 @@ describe("FeishuAlertMonitor", () => {
     const monitor = new FeishuAlertMonitor(f.options);
     const reply = { messageId: "om_answer", chatId: "oc_alerts", chatType: "group" as const, senderId: "ou_other", content: "这单昨天也报过，是仓库盘点" };
     const member = await monitor.prepareReply(reply, "om_alert");
-    expect(member?.allowed).toBe(true); expect(member?.instructions).toContain("群成员（非审批人）"); expect(member?.instructions).toContain("不构成任何写操作授权");
+    expect(member?.allowed).toBe(true); expect(member?.instructions).toContain("群成员（非审批人）"); expect(member?.instructions).toContain("不构成新的写操作授权");
     const accepted = await monitor.prepareReply({ ...reply, messageId: "om_owner", senderId: "ou_owner" }, "om_alert");
-    expect(accepted?.allowed).toBe(true); expect(accepted?.instructions).toContain("审批人（已核实身份）"); expect(accepted?.instructions).toContain("本次明确授权");
+    expect(accepted?.allowed).toBe(true); expect(accepted?.instructions).toContain("审批人（已核实身份）"); expect(accepted?.instructions).toContain("本次回复可授予具体动作权限");
     expect(new FeishuAlertMonitor(f.options).isAlertMessage("oc_alerts", "om_answer")).toBe(true);
     expect(await monitor.prepareReply({ ...reply, chatId: "oc_other" }, "om_alert")).toBeUndefined();
   });

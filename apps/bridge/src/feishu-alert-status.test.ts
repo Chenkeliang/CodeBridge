@@ -82,7 +82,7 @@ describe("alert status and runbook", () => {
     const saved = JSON.parse(fs.readFileSync(f.options.statePath, "utf8"));
     expect(saved.oc_alert.activatedAt).toBe(1_061_000);
     expect(saved.oc_alert.incidents.om_root).toBeDefined();
-    expect(await resumed.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "批准" }, "om_root")).toMatchObject({ allowed: true, instructions: expect.stringContaining("不构成任何写操作授权") });
+    expect(await resumed.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "批准" }, "om_root")).toMatchObject({ allowed: true, instructions: expect.stringContaining("不构成新的写操作授权") });
   });
 
   it("closes every duplicate card as owner-dismissed and ignores late Agent status reports", async () => {
