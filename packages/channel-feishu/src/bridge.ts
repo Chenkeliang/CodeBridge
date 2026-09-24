@@ -1297,6 +1297,27 @@ export class FeishuBridge {
     });
   }
 
+  async postAlertThreadNotice(chatId: string, rootId: string, text: string): Promise<void> {
+    if (!this.channel) throw new Error("飞书通道未连接");
+    await this.channel.send(chatId, { markdown: text }, { replyTo: rootId, replyInThread: true });
+  }
+
+  async alertMemberName(chatId: string, openId: string): Promise<string | undefined> {
+    if (!this.channel) throw new Error("飞书通道未连接");
+    let pageToken: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const response = await this.channel.rawClient.im.v1.chatMembers.get({
+        path: { chat_id: chatId }, params: { member_id_type: "open_id", page_size: 100, ...(pageToken ? { page_token: pageToken } : {}) },
+      });
+      if (response.code !== undefined && response.code !== 0) throw new Error(`Chat member lookup failed (${response.code}): ${response.msg}`);
+      const name = response.data?.items?.find((item) => item.member_id === openId)?.name;
+      if (name) return name;
+      if (!response.data?.has_more || !response.data.page_token) return undefined;
+      pageToken = response.data.page_token;
+    }
+    return undefined;
+  }
+
   async resolveAlertThreadRoot(messageId: string): Promise<{ chatId: string; rootId: string } | undefined> {
     if (!this.channel) throw new Error("飞书通道未连接");
     const response = await this.channel.rawClient.im.v1.message.get({ path: { message_id: messageId } });

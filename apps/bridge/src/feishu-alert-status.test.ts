@@ -23,6 +23,7 @@ async function fixture(duplicates = false, runbook = false) {
     readAlertMessages: vi.fn(async () => ({ messages: duplicates ? [message, { ...message, messageId: "om_duplicate" }] : [message], hasMore: false })),
     investigateAlert: vi.fn(async () => {}), isAlertActive: vi.fn(async () => false),
     setAlertMessageReaction: vi.fn(async () => "reaction"), notifyAlertOwner: vi.fn(async () => {}), cancelAlertInvestigation: vi.fn(async () => {}),
+    postAlertThreadNotice: vi.fn(async () => {}), alertMemberName: vi.fn(async (): Promise<string | undefined> => "张三"),
   };
   const options = { config: () => config, statePath: path.join(root, "state.json"), transport, now: () => now, log: vi.fn() };
   const monitor = new FeishuAlertMonitor(options);
@@ -181,6 +182,42 @@ describe("alert status and runbook", () => {
     expect(incident.dismissal).toMatchObject({ ownerOpenId: "ou_other", messageId: "om_duplicate", via: "reaction" });
     for (const id of ["om_root", "om_duplicate"]) expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith(id, "DONE", expect.any(Array));
     expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("posts one thread receipt per dismissal naming who closed it and how", async () => {
+    const f = await fixture(true);
+    await f.monitor.prepareReaction({ messageId: "om_duplicate", operatorOpenId: "ou_other", emojiType: "DONE", action: "added", actionTime: f.options.now() });
+    expect(f.transport.alertMemberName).toHaveBeenCalledWith("oc_alert", "ou_other");
+    expect(f.transport.postAlertThreadNotice).toHaveBeenCalledTimes(1);
+    expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_root", expect.stringContaining("已结案：由 张三 点 DONE确认"));
+    expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_root", expect.stringContaining("不代表故障已修复"));
+    // A second close on an already-closed case records nothing new in the thread.
+    await f.monitor.prepareReply({ messageId: "om_again", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "无需处理" }, "om_root");
+    expect(f.transport.postAlertThreadNotice).toHaveBeenCalledTimes(1);
+    // Reopened and closed again: a new receipt; name lookup failure falls back to the role.
+    f.advance();
+    await f.monitor.prepareReply({ messageId: "om_reopen", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "重新排查" }, "om_root");
+    f.transport.alertMemberName.mockRejectedValueOnce(new Error("no scope"));
+    await f.monitor.prepareReply({ messageId: "om_close2", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "无需处理" }, "om_root");
+    expect(f.transport.postAlertThreadNotice).toHaveBeenCalledTimes(2);
+    expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_root", expect.stringContaining("已结案：由 审批人 回复无需处理确认"));
+  });
+
+  it("strips markup from the closer's display name so it cannot inject mentions", async () => {
+    const f = await fixture();
+    f.transport.alertMemberName.mockResolvedValueOnce('<at user_id="ou_victim">x</at>**李四**');
+    await f.monitor.prepareReply({ messageId: "om_close", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "无需处理" }, "om_root");
+    const text = (f.transport.postAlertThreadNotice.mock.calls[0] as unknown as [string, string, string])[2];
+    expect(text).not.toMatch(/[<>*]/u); expect(text).toContain("李四");
+  });
+
+  it("keeps the dismissal when the thread receipt fails", async () => {
+    const f = await fixture();
+    f.transport.postAlertThreadNotice.mockRejectedValueOnce(new Error("send failed"));
+    expect(await f.monitor.prepareReply({ messageId: "om_close", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "无需处理" }, "om_root")).toMatchObject({ handled: true });
+    expect(JSON.parse(fs.readFileSync(f.options.statePath, "utf8")).oc_alert.incidents.om_root.status).toBe("dismissed");
+    expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_root", "DONE", expect.any(Array));
+    expect(f.options.log).toHaveBeenCalledWith(expect.stringContaining("结案回执发送失败"));
   });
 
   it("recovers a missed owner DONE while collection is paused and keeps old reactions from reclosing an explicitly reopened case", async () => {
