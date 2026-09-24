@@ -45,6 +45,8 @@ describe("FeishuAlertMonitor", () => {
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("幂等性");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("fcb alert status waiting");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("**需要你**");
+    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("必须先自己只读查清原因");
+    expect(ALERT_INVESTIGATION_INSTRUCTIONS).not.toContain("拿不准先用 waiting");
   });
 
   it("does not resubmit a message after restart or overlap", async () => {
