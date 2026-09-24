@@ -148,9 +148,6 @@ export class RunExecutor {
       if (!claimed) return this.store.getRun(runId)!;
     }
 
-    if (initial.executionKind === "flow" || initial.planId) {
-      return this.interrupt(initial, "flow_retired");
-    }
     if (workItem.riskLevel === "production_write") {
       this.throwIfCancellationRequested(runId);
       if (!this.options.approvals) {

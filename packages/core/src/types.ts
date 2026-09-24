@@ -167,8 +167,6 @@ export interface ChannelSessionMessage {
   agentId?: string;
   cwd?: string;
   model?: string;
-  flowId?: string;
-  flowDefinitionRevision?: string;
   inputs?: Record<string, unknown>;
   actorRef?: { channel: "feishu" | "telegram"; id: string };
   attachments?: RunAttachment[];

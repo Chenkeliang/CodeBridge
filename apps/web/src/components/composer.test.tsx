@@ -17,8 +17,6 @@ const session: AgentSession = {
   agent_id: "codex",
   provider_session_id: null,
   task_record_id: null,
-  flow_id: null,
-  flow_definition_revision: null,
   model: "gpt-5",
   effort: "medium",
   permission_mode: "ask",

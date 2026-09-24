@@ -3,7 +3,7 @@ info:
   title: CodeBridge Orchestration API
   version: 1.0.0-draft
   description: |
-    Session-first API for Agent sessions, folders, flows, runs, approvals and discovery.
+    Session-first API for Agent sessions, folders, runs, approvals and discovery.
     TaskRecord/WorkItem routes remain available as an internal compatibility surface.
   x-codebridge-status: session-first-target
 servers:
@@ -189,7 +189,6 @@ paths:
               properties:
                 message: { type: string, minLength: 1 }
                 agent_id: { type: string }
-                flow_id: { type: [string, 'null'] }
                 model: { type: [string, 'null'] }
                 cwd: { type: [string, 'null'] }
                 title: { type: [string, 'null'] }
@@ -526,110 +525,6 @@ paths:
                 $ref: '#/components/schemas/AgentSession'
         '409':
           $ref: '#/components/responses/Conflict'
-  /v1/flows:
-    get:
-      operationId: listFlows
-      summary: List Flow and Workflow definitions
-      responses:
-        '200':
-          description: Flow Catalog
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [flows]
-                properties:
-                  flows:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Flow'
-  /v1/flows/{flow_id}:
-    parameters:
-      - $ref: '#/components/parameters/FlowId'
-    get:
-      operationId: getFlow
-      summary: Get a Flow definition and revision
-      responses:
-        '200':
-          description: Flow definition
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Flow'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /v1/flows/{flow_id}/review:
-    parameters:
-      - $ref: '#/components/parameters/FlowId'
-    post:
-      operationId: reviewFlow
-      summary: Approve or reject a Workflow Candidate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [decision]
-              properties:
-                decision:
-                  type: string
-                  enum: [approve, reject]
-                git_revision:
-                  type: [string, 'null']
-                  description: Required for approval; points to the reviewed Git definition.
-      responses:
-        '200':
-          description: Updated Flow review state
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Flow'
-        '409':
-          $ref: '#/components/responses/Conflict'
-  /v1/flows/{flow_id}/apply:
-    parameters:
-      - $ref: '#/components/parameters/FlowId'
-    post:
-      operationId: applyFlow
-      summary: Apply a Flow to the next Run of a Session
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [session_id]
-              properties:
-                session_id: { type: string }
-      responses:
-        '200':
-          description: Flow binding recorded
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Acknowledgement'
-  /v1/flows/candidates:
-    post:
-      operationId: saveFlowCandidate
-      summary: Save a Session-generated Flow as a Candidate
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/FlowCandidateRequest'
-      responses:
-        '201':
-          description: Flow Candidate saved
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Flow'
   /v1/work-items:
     get:
       operationId: listWorkItems
@@ -1214,12 +1109,6 @@ components:
       required: true
       schema:
         type: string
-    FlowId:
-      in: path
-      name: flow_id
-      required: true
-      schema:
-        type: string
     WorkItemId:
       in: path
       name: work_item_id
@@ -1317,16 +1206,14 @@ components:
         definition_revision: { type: [string, 'null'] }
     AgentSession:
       type: object
-      required: [session_id, agent_id, provider_session_id, folder_id, flow_id, status]
+      required: [session_id, agent_id, provider_session_id, folder_id, status]
       properties:
         session_id: { type: string }
         agent_id: { type: string }
         provider_session_id: { type: string }
         task_record_id: { type: [string, 'null'] }
         folder_id: { type: [string, 'null'] }
-        flow_id: { type: [string, 'null'] }
         model: { type: [string, 'null'] }
-        flow_revision: { type: [string, 'null'] }
         cwd: { type: [string, 'null'] }
         additional_directories:
           type: array
@@ -1355,7 +1242,6 @@ components:
       required: [message]
       properties:
         message: { type: string, minLength: 1 }
-        flow_id: { type: [string, 'null'] }
         model: { type: [string, 'null'] }
         references:
           type: array
@@ -1535,71 +1421,11 @@ components:
     StartSessionRun:
       type: object
       properties:
-        flow_id: { type: [string, 'null'] }
         model: { type: [string, 'null'] }
         mode:
           type: string
           enum: [auto]
           default: auto
-    Flow:
-      type: object
-      required: [flow_id, kind, status, source, definition_revision, steps]
-      properties:
-        flow_id: { type: string }
-        name: { type: [string, 'null'] }
-        kind:
-          type: string
-          enum: [ephemeral, guide, runbook]
-        status:
-          type: string
-          enum: [draft, candidate, published, deprecated]
-        source:
-          type: string
-          enum: [agent_generated, user_selected, git]
-        definition_revision: { type: string }
-        review_status:
-          type: string
-          enum: [pending, approved, rejected]
-        git_revision: { type: [string, 'null'] }
-        validation_issues:
-          type: array
-          items: { type: string }
-        steps:
-          type: array
-          items:
-            type: object
-            required: [id]
-            properties:
-              id: { type: string }
-              capability: { type: [string, 'null'] }
-              purpose: { type: [string, 'null'] }
-              depends_on:
-                type: array
-                items: { type: string }
-              branches:
-                type: array
-                items:
-                  type: object
-                  required: [when, next]
-                  properties:
-                    when: { type: string }
-                    next: { type: string }
-              retry:
-                type: [object, 'null']
-                properties:
-                  max_attempts: { type: integer, minimum: 1, maximum: 10 }
-                  delay_ms: { type: integer, minimum: 0, maximum: 300000, default: 0 }
-        session_id: { type: [string, 'null'] }
-    FlowCandidateRequest:
-      type: object
-      required: [session_id, definition_revision]
-      properties:
-        session_id: { type: string }
-        run_id: { type: [string, 'null'] }
-        definition_revision: { type: string }
-        flow:
-          type: object
-          additionalProperties: true
     CreateWorkItem:
       type: object
       required: [conversation_id, message]

@@ -9,7 +9,6 @@ import {
 } from "@codebridge/work-items";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { rejectRetiredFlowRequests } from "./retired-features.js";
 
 const WORK_ITEM_MODES: readonly WorkItemMode[] = [
   "auto",
@@ -37,7 +36,6 @@ export function createWorkItemApp(
     await next();
   });
 
-  rejectRetiredFlowRequests(app);
 
   app.post("/v1/work-items", async (c) => {
     const idempotencyKey = c.req.header("idempotency-key");

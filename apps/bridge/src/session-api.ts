@@ -11,7 +11,6 @@ import type { SqliteEventStore } from "@codebridge/work-items";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { rejectRetiredFlowRequests } from "./retired-features.js";
 import { ProviderHistoryImporter } from "./session-history-import.js";
 import { registerSessionRuntimeCommandRoutes, registerSessionRuntimeReadRoutes } from "./session-runtime-api.js";
 
@@ -70,7 +69,6 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     await next();
   });
 
-  rejectRetiredFlowRequests(app);
 
   registerSessionRuntimeReadRoutes(app, {
     catalog: options.catalog,
@@ -1321,8 +1319,6 @@ function toApiSession(session: ReturnType<SessionCatalogStore["getSession"]>): R
     agent_id: session.agentId,
     provider_session_id: session.providerSessionId,
     task_record_id: session.taskRecordId,
-    flow_id: session.flowId,
-    flow_definition_revision: session.flowDefinitionRevision,
     model: session.model,
     effort: session.effort,
     config_overrides: session.configOverrides,

@@ -246,7 +246,6 @@ describe("session catalog", () => {
       generation: 0,
     });
     expect(migrated?.id).toBe("sess_legacy");
-    expect(migrated?.flowDefinitionRevision).toBeNull();
     expect(store.getChannelSession({
       channel: "feishu",
       conversationId: "chat:orphan",
