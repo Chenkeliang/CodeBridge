@@ -44,6 +44,8 @@ interface GroupState {
 
 export interface FeishuAlertTransport {
   readAlertDone?(messageId: string, after?: number): Promise<FeishuAlertReaction | undefined>;
+  /** Root message of the thread a message belongs to, so reactions on any thread message map to the incident. */
+  resolveAlertThreadRoot?(messageId: string): Promise<{ chatId: string; rootId: string } | undefined>;
   readAlertMessages(chatId: string, startTime: number, endTime: number, pageToken?: string): Promise<FeishuAlertPage>;
   investigateAlert(alert: FeishuAlertMessage, approverOpenIds: string[], instructions: string): Promise<void>;
   isAlertActive(chatId: string, rootId: string): Promise<boolean>;
@@ -347,9 +349,8 @@ export class FeishuAlertMonitor {
   async prepareReaction(reaction: FeishuAlertReaction): Promise<void> {
     if (reaction.operatorType !== undefined && reaction.operatorType !== "user") return;
     if (!reaction.operatorOpenId.startsWith("ou_") || !isEmojiKey(reaction.emojiType)) return;
-    for (const state of Object.values(this.store.read())) {
-      const incident = Object.values(state.incidents).find((item) => (item.sourceMessageIds ?? [item.alert.messageId]).includes(reaction.messageId));
-      if (!incident) continue;
+    const incident = await this.incidentForMessage(reaction.messageId);
+    if (incident) {
       // Every human reaction is tallied so the Agent can see it; only DONE changes state (allowlist).
       this.updateIncident(incident.alert, (item) => {
         const tally = (item.reactions ??= {});
@@ -364,10 +365,29 @@ export class FeishuAlertMonitor {
       if (reaction.action !== "added" || reaction.emojiType !== "DONE" || incident.dismissal) return;
       if (incident.reopenedAt !== undefined && (reaction.actionTime === undefined || reaction.actionTime <= incident.reopenedAt)) return;
       await this.dismissIncident(incident, { messageId: reaction.messageId, chatId: incident.alert.chatId,
-        chatType: "group", senderId: reaction.operatorOpenId, content: "在原告警卡片添加 DONE，确认结案。",
+        chatType: "group", senderId: reaction.operatorOpenId, content: "在告警话题消息上添加 DONE，确认结案。",
       }, "reaction");
-      return;
     }
+  }
+
+  /** Cards, human replies and (via the thread root) the bot's own replies all belong to the incident. */
+  private async incidentForMessage(messageId: string): Promise<Incident | undefined> {
+    const find = (predicate: (item: Incident) => boolean) => {
+      for (const state of Object.values(this.store.read())) {
+        const hit = Object.values(state.incidents).find(predicate);
+        if (hit) return hit;
+      }
+      return undefined;
+    };
+    const direct = find((item) => (item.sourceMessageIds ?? [item.alert.messageId]).includes(messageId) || item.replies.includes(messageId));
+    if (direct || !this.options.transport.resolveAlertThreadRoot) return direct;
+    let root: { chatId: string; rootId: string } | undefined;
+    try { root = await this.options.transport.resolveAlertThreadRoot(messageId); }
+    catch (error) { this.options.log(`话题根消息解析失败 ${messageId}：${error instanceof Error ? error.message : String(error)}`); return undefined; }
+    if (!root || root.rootId === messageId) return undefined;
+    const viaRoot = find((item) => item.alert.chatId === root!.chatId && (item.sourceMessageIds ?? [item.alert.messageId]).includes(root!.rootId));
+    if (viaRoot) this.updateIncident(viaRoot.alert, (item) => { if (!item.replies.includes(messageId)) item.replies.push(messageId); });
+    return viaRoot;
   }
 
   private async reconcileOwnerReactions(config: MonitorConfig): Promise<void> {
