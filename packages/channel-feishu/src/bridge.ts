@@ -1,5 +1,5 @@
-import type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply } from "./alert-types.js";
-import { setAlertReaction } from "./alert-reactions.js";
+import type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply, FeishuAlertReaction } from "./alert-types.js";
+import { setAlertReaction, findOwnerDoneReaction } from "./alert-reactions.js";
 import {
   formatMentionGuidance,
   JsonMapStore,
@@ -81,6 +81,7 @@ export interface FeishuBridgeOptions {
   prepareAlertReply?: (message: FeishuMessage, topicId: string | undefined) => FeishuAlertReply | undefined | Promise<FeishuAlertReply | undefined>;
   isAlertMessage?: (chatId: string, messageId: string) => boolean;
   isAlertChat?: (chatId: string) => boolean;
+  onAlertReaction?: (reaction: FeishuAlertReaction) => Promise<void>;
 }
 
 /** 降级时单条普通消息的最大字符数；结果超过就用 chunkMarkdown 分条发，避免撞飞书消息长度上限 */
@@ -310,6 +311,13 @@ export class FeishuBridge {
         const message = err instanceof Error ? err.message : String(err);
         this.options.onLog?.(`处理入站消息失败: ${message}`);
       });
+    });
+
+    this.channel.on("reaction", (reaction) => {
+      const handler = this.options.onAlertReaction;
+      if (handler) void handler({ messageId: reaction.messageId, operatorOpenId: reaction.operator.openId,
+        emojiType: reaction.emojiType, action: reaction.action, actionTime: reaction.actionTime,
+      }).catch((error) => this.options.onLog?.(`告警表情事件处理失败，将回查：${error instanceof Error ? error.message : String(error)}`));
     });
 
     this.channel.on("reconnecting", () => {
@@ -1274,6 +1282,11 @@ export class FeishuBridge {
       replyTo: rootId, replyInThread: true,
       mentions: [{ key: owner.ref, openId: ownerOpenId, name: owner.name, isBot: false }],
     });
+  }
+
+  async readAlertOwnerDone(messageId: string, ownerOpenId: string, after?: number): Promise<FeishuAlertReaction | undefined> {
+    if (!this.channel) throw new Error("飞书通道未连接");
+    return findOwnerDoneReaction(this.channel.rawClient, messageId, ownerOpenId, after);
   }
 
   async cancelAlertInvestigation(chatId: string, rootId: string): Promise<void> {

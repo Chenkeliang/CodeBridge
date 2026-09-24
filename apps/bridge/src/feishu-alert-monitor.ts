@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { matchAlertNotificationRule } from "./alert-notification-rules.js";
 import { FEISHU_ALERT_STATUSES, type FeishuAlertStatus } from "@codebridge/channel-feishu";
 import { JsonMapStore, type AppConfig } from "@codebridge/core";
-import type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply, FeishuMessage } from "@codebridge/channel-feishu";
+import type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply, FeishuMessage, FeishuAlertReaction } from "@codebridge/channel-feishu";
 
 type MonitorConfig = NonNullable<AppConfig["feishu"]["alertMonitor"]>;
 type Target = MonitorConfig["groups"][number];
@@ -23,18 +24,22 @@ interface Incident {
   reactionApplied?: Record<string, string>;
   ownerNotice?: string;
   awaitingReplyDispatch?: boolean;
-  dismissal?: { ownerOpenId: string; messageId: string; reason: string; at: number };
+  dismissal?: { ownerOpenId: string; messageId: string; reason: string; at: number; via?: "message" | "reaction" };
+  reopenedAt?: number;
+  notificationRule?: { id: string; evidence: string };
 }
 interface GroupState {
   cursor: number;
   activatedAt: number;
   collectionStarted?: boolean;
+  ownerReactionCursor?: number;
   scan?: { start: number; end: number; pageToken: string };
   seen: Record<string, number>;
   incidents: Record<string, Incident>;
 }
 
 export interface FeishuAlertTransport {
+  readAlertOwnerDone?(messageId: string, ownerOpenId: string, after?: number): Promise<FeishuAlertReaction | undefined>;
   readAlertMessages(chatId: string, startTime: number, endTime: number, pageToken?: string): Promise<FeishuAlertPage>;
   investigateAlert(alert: FeishuAlertMessage, ownerOpenId: string, instructions: string): Promise<void>;
   isAlertActive(chatId: string, rootId: string): Promise<boolean>;
@@ -111,8 +116,8 @@ export class FeishuAlertMonitor {
 
   private async poll(): Promise<void> {
     const config = this.options.config();
-    if (!config || config.enabled === false || this.stopped || this.options.isMaintenance?.()) return;
-    for (const target of config.groups) {
+    if (!config || this.stopped || this.options.isMaintenance?.()) return;
+    for (const target of config.enabled === false ? [] : config.groups) {
       if (this.stopped) return;
       try { await this.readGroup(target); }
       catch (error) {
@@ -122,6 +127,7 @@ export class FeishuAlertMonitor {
       }
     }
     if (this.stopped || this.options.isMaintenance?.()) return;
+    await this.reconcileOwnerReactions(config);
     let active = 0;
     for (const state of Object.values(this.store.read())) {
       for (const incident of Object.values(state.incidents).filter((item) => item.active)) {
@@ -157,6 +163,7 @@ export class FeishuAlertMonitor {
           .catch((error) => this.options.log(`告警状态待重试：${error instanceof Error ? error.message : String(error)}`));
       }
     }
+    if (config.enabled === false) return;
     for (const target of config.groups) {
       const state = this.store.read()[target.chatId];
       for (const incident of Object.values(state?.incidents ?? {}).filter((item) => !item.submitted)) {
@@ -233,8 +240,13 @@ export class FeishuAlertMonitor {
       state.seen[message.messageId] = message.createdAt;
       if (message.senderType !== "app" || !target.senderAppIds.includes(message.senderId) || (message.rootId && message.rootId !== message.messageId)) return all;
       const readable = Boolean(message.content.trim()) && !/^\[(?:interactive card|.*消息|图片)\]$/u.test(message.content.trim());
-      const fingerprint = this.alertFingerprint(message);
-      const duplicate = readable ? Object.values(state.incidents).find((item) => this.alertFingerprint(item.alert) === fingerprint
+      let notification;
+      try { notification = matchAlertNotificationRule(target.runbookPath, message); }
+      catch (error) { this.options.log(`通知规则不可用，保留逐条判断：${error instanceof Error ? error.message : String(error)}`); }
+      const fingerprint = notification
+        ? createHash("sha256").update(message.senderId + "\nnotification:" + JSON.stringify(notification)).digest("hex")
+        : this.alertFingerprint(message);
+      const duplicate = readable ? Object.values(state.incidents).find((item) => (item.notificationRule ? item.fingerprint : this.alertFingerprint(item.alert)) === fingerprint
         && (item.dismissal || !["resolved", "no_action"].includes(item.status ?? "")
           || message.createdAt - item.lastSeen <= (this.options.config()?.dedupWindowMs ?? 1_800_000))) : undefined;
       if (duplicate) {
@@ -253,6 +265,11 @@ export class FeishuAlertMonitor {
         statusAt: (this.options.now ?? Date.now)(),
       };
       if (!readable) state.incidents[message.messageId]!.submitted = true;
+      if (notification) {
+        const item = state.incidents[message.messageId]!;
+        item.notificationRule = { id: notification.id, evidence: notification.evidence };
+        item.status = "no_action"; item.summary = notification.summary; item.submitted = true;
+      }
       return all;
     });
   }
@@ -278,6 +295,7 @@ export class FeishuAlertMonitor {
     this.updateIncident(incident.alert, (item) => {
       if (!item.replies.includes(message.messageId)) item.replies.push(message.messageId);
       if (!message.content.trim().startsWith("/")) {
+        if (item.dismissal) item.reopenedAt = (this.options.now ?? Date.now)();
         delete item.dismissal;
         item.status = "investigating"; item.summary = "负责人已回复，继续排查";
         item.statusAt = (this.options.now ?? Date.now)(); item.active = true; item.awaitingReplyDispatch = true; delete item.ownerNotice;
@@ -288,6 +306,42 @@ export class FeishuAlertMonitor {
       topicId: incident.alert.messageId,
       instructions: ALERT_INVESTIGATION_INSTRUCTIONS + this.runbookInstructions(incident.runbookPath) + "\n【负责人本次回复】下面是已核实身份的负责人回复。只处理本次明确授权的具体动作；其他新动作仍须重新 @ 本人确认。",
     };
+  }
+
+  async prepareReaction(reaction: FeishuAlertReaction): Promise<void> {
+    if (reaction.action !== "added" || reaction.emojiType !== "DONE") return;
+    for (const state of Object.values(this.store.read())) {
+      const incident = Object.values(state.incidents).find((item) => (item.sourceMessageIds ?? [item.alert.messageId]).includes(reaction.messageId));
+      if (!incident || incident.ownerOpenId !== reaction.operatorOpenId || incident.dismissal) continue;
+      if (incident.reopenedAt !== undefined && (reaction.actionTime === undefined || reaction.actionTime <= incident.reopenedAt)) return;
+      await this.dismissIncident(incident, { messageId: reaction.messageId, chatId: incident.alert.chatId,
+        chatType: "group", senderId: reaction.operatorOpenId, content: "本人在原告警卡片添加 DONE，确认结案。",
+      }, "reaction");
+      return;
+    }
+  }
+
+  private async reconcileOwnerReactions(config: MonitorConfig): Promise<void> {
+    if (!this.options.transport.readAlertOwnerDone) return;
+    for (const target of config.groups) {
+      const state = this.store.read()[target.chatId];
+      if (!state) continue;
+      const cards = Object.values(state.incidents).filter((item) => !item.dismissal)
+        .sort((a, b) => b.lastSeen - a.lastSeen)
+        .flatMap((item) => (item.sourceMessageIds ?? [item.alert.messageId]).map((messageId) => ({ item, messageId })));
+      if (!cards.length) continue;
+      const start = (state.ownerReactionCursor ?? 0) % cards.length;
+      const count = Math.min(20, cards.length);
+      for (let i = 0; i < count && !this.stopped; i++) {
+        const { item, messageId } = cards[(start + i) % cards.length]!;
+        if (this.store.read()[target.chatId]?.incidents[item.alert.messageId]?.dismissal) continue;
+        try {
+          const reaction = await this.options.transport.readAlertOwnerDone(messageId, item.ownerOpenId, item.reopenedAt);
+          if (reaction) await this.prepareReaction(reaction);
+        } catch (error) { this.options.log(`本人 DONE 回查待重试 ${messageId}：${error instanceof Error ? error.message : String(error)}`); }
+      }
+      this.store.update((all) => { all[target.chatId]!.ownerReactionCursor = (start + count) % cards.length; return all; });
+    }
   }
 
   private statusEmoji(status: FeishuAlertStatus): string | undefined {
@@ -315,9 +369,9 @@ export class FeishuAlertMonitor {
     return related.length ? "\n\n【同群同类型历史，仅用于匹配适用规则，不能代替不同业务对象的事实】\n" + JSON.stringify(related) : "";
   }
 
-  private async dismissIncident(incident: Incident, message: FeishuMessage): Promise<void> {
+  private async dismissIncident(incident: Incident, message: FeishuMessage, via: "message" | "reaction" = "message"): Promise<void> {
     this.updateIncident(incident.alert, (item) => {
-      item.dismissal = { ownerOpenId: message.senderId, messageId: message.messageId, reason: message.content, at: (this.options.now ?? Date.now)() };
+      item.dismissal = { ownerOpenId: message.senderId, messageId: message.messageId, reason: message.content, at: (this.options.now ?? Date.now)(), via };
       item.submitted = true; item.active = false;
       item.status = "dismissed"; item.summary = "本人确认无需处理，已结案；不代表故障被修复。";
       item.statusAt = (this.options.now ?? Date.now)(); delete item.ownerNotice; delete item.awaitingReplyDispatch;

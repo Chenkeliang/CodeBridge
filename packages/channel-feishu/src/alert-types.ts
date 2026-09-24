@@ -24,3 +24,11 @@ export interface FeishuAlertReply {
 
 export const FEISHU_ALERT_STATUSES = ["investigating", "waiting", "resolved", "no_action", "blocked", "dismissed"] as const;
 export type FeishuAlertStatus = typeof FEISHU_ALERT_STATUSES[number];
+
+export interface FeishuAlertReaction {
+  messageId: string;
+  operatorOpenId: string;
+  emojiType: string;
+  action: "added" | "removed";
+  actionTime?: number;
+}

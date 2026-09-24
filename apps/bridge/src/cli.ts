@@ -89,6 +89,7 @@ program
           dataDir,
           onDeploymentMessage: (message) => deployment.handleFeishuMessage(message),
           prepareAlertReply: (message, topicId) => alertMonitor?.prepareReply(message, topicId),
+          onAlertReaction: async (reaction) => { await alertMonitor?.prepareReaction(reaction); },
           isAlertMessage: (chatId, messageId) => alertMonitor?.isAlertMessage(chatId, messageId) ?? false,
           isAlertChat: (chatId) => store.get().feishu.alertMonitor?.groups.some((group) => group.chatId === chatId) ?? false,
           isMaintenance: () => deployment.isMaintenance(),

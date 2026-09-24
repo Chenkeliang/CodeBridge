@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Client } from "@larksuiteoapi/node-sdk";
-import { setAlertReaction } from "./alert-reactions.js";
+import { setAlertReaction, findOwnerDoneReaction } from "./alert-reactions.js";
 const managed = ["OnIt", "OneSecond", "DONE", "CrossMark", "Sigh"];
 function fixture() {
   const list = vi.fn(async () => ({ code: 0, data: { items: [], has_more: false, page_token: "" } }));
@@ -36,4 +36,19 @@ describe("alert state reactions", () => {
     await expect(setAlertReaction(f.client, "cli_self", "om_source", "DONE", managed)).rejects.toThrow("99991672");
     expect(f.remove).not.toHaveBeenCalled();
   });
+});
+
+
+it("reads only the human owner's DONE and ignores old or undated marks after reopening", async () => {
+  const f = fixture();
+  const items = [
+    { reaction_id: "bot", operator: { operator_type: "app", operator_id: "ou_owner" }, reaction_type: { emoji_type: "DONE" }, action_time: "100" },
+    { reaction_id: "other", operator: { operator_type: "user", operator_id: "ou_other" }, reaction_type: { emoji_type: "DONE" }, action_time: "100" },
+    { reaction_id: "owner", operator: { operator_type: "user", operator_id: "ou_owner" }, reaction_type: { emoji_type: "DONE" }, action_time: "100" },
+  ];
+  f.list.mockResolvedValue({ code: 0, data: { items, has_more: false, page_token: "" } } as never);
+  expect(await findOwnerDoneReaction(f.client, "om_source", "ou_owner")).toEqual({ messageId: "om_source", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added", actionTime: 100 });
+  expect(await findOwnerDoneReaction(f.client, "om_source", "ou_owner", 101)).toBeUndefined();
+  f.list.mockResolvedValue({ code: 0, data: { items: [{ ...items[2], action_time: undefined }], has_more: false, page_token: "" } } as never);
+  expect(await findOwnerDoneReaction(f.client, "om_source", "ou_owner", 101)).toBeUndefined();
 });

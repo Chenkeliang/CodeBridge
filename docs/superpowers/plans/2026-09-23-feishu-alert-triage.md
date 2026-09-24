@@ -105,3 +105,13 @@ Surface Matrix 增量：飞书 entry 增加本人文字结案，write=原卡DONE
 新增回归先复现三处旧缺口：本人结案未被接管、排队卡未标记、后续重复卡未继承终态；修正后验证。另验证非本人/否定句/条件句不触发结案，空卡不被吞掉或合并。全局技能检查仍有既有 synced 目录冲突，未伪报通过。
 
 AT-7 验证记录：完整构建通过，lint 0 errors / 8 个既有 warnings，31 文件/292 项相关回归通过；末次补充提交中结案竞态保护和逐卡投递失败隔离后，再构建 bridge 并复核告警合同、状态与活跃飞书入口。新增场景明确验证 owner 结案不再启动 Agent、重复卡 DONE、不被迟到结果回退、排队卡 OnIt、空正文逐卡 waiting、不同业务对象不误合并。未对线上试运行卡片作新的结案操作，也未开启全量。
+
+## AT-8：本人原生 DONE 与纯通知规则归并（2026-09-24）
+
+用户已确认：本人直接点 DONE 即结案；普通告警需要逐个确认原因；已确定的纯通知可一起结案。普通故障继续按业务对象与问题关联，不按标题跨单号关闭。
+
+实现与验收：飞书 SDK reaction 事件进入 Bridge，核对真实 operator open_id、原告警消息和 DONE/added 后执行本人结案；移除表情不重开，小 V 自己和其他人的 DONE 不构成确认。分批只读回查已登记原卡片的本人 DONE，补偿断线、重启或先点后采集；显式重新排查后忽略旧 DONE。通知规则在 SKILL references/notification-rules.json 中维护，只有 verified、kind=notification、来源/标题/正文条件逐卡匹配且证据齐备的唯一规则才归并；草稿、歧义和普通故障回退逐条判断。
+
+Surface Matrix 增量：飞书 entry 增加已验证身份的 Reaction 与只读回查；read path=messageReaction.list；write path=复用 dismissed/DONE 投影；error/recovery=分批进度与失败重试；终态仍记录本人结案而非恢复。Agent 不获得伪造个人结案的入口，已确认通知可不启动 Agent；Web/Telegram 无新增入口。AT-8 本地合同和活跃 SDK 接线测试；AT-4 生产上线仍未执行。
+
+AT-8 最终验证：已遵循最新规则迁回现有检出 `/Users/keliang/projects/CodeBridge`，从最新 origin/main 26a3825 建立 `codex/feishu-alert-triage-checkout`，保留已移除 Flow 的生产行为。`pnpm build` 通过；`pnpm lint` 0 errors、8 个既有 warnings；`pnpm test --no-file-parallelism` 覆盖告警合同、监控状态、飞书活跃适配器和 SDK reaction listener、出站 API、配置、fcb，共 33 文件/288 项通过。测试数量随生产基线移除 Flow 测试发生变化，不沿用旧基线总数。SKILL quick_validate 通过；全局 skills-check 仍受既有 synced 真实目录影响，未声称 OK。原 worktree 和迁移备份保留，未继续在其中开发。未部署新代码、未启用全量、未将模拟事件验证声称为线上用户点击 DONE 的实测。
