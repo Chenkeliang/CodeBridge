@@ -374,7 +374,10 @@ class Deployer:
             candidate = self.git("show", job["commit"] + ":" + name)
             if not installed_hash or hashlib.sha256(candidate).hexdigest() != installed_hash:
                 raise DeployError("此版本修改了独立发布控制器或安装器，请先单独安装控制器；普通业务发布不会更新已安装的控制器。")
-        patch = self.git("diff", "--unified=0", baseline, job["commit"], "--", "*.ts", "*.sql").decode()
+        # DDL that only disappears with a deleted file never touches a live database; only surviving files can migrate.
+        deleted = self.git("diff", "--name-only", "--diff-filter=D", baseline, job["commit"]).decode().splitlines()
+        patch = self.git("diff", "--unified=0", baseline, job["commit"], "--", "*.ts", "*.sql",
+                         *(":(exclude)" + name for name in deleted)).decode()
         if any(re.search(r"\b(CREATE|ALTER|DROP)\s+TABLE\b", line, re.I)
                for line in patch.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))):
             raise DeployError("database schema change requires a separately reviewed migration")

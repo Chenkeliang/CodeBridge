@@ -415,6 +415,31 @@ class Tests(unittest.TestCase):
                 with self.assertRaisesRegex(m.DeployError, "请先单独安装控制器"):
                     self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
 
+    def test_schema_ddl_in_modified_file_blocks_publish(self):
+        self.job["commit"] = "newcommit"
+        def git(*args):
+            if args[:2] == ("diff", "--name-only"):
+                return b"" if "--diff-filter=D" in args else b"apps/bridge/src/store.ts"
+            if args[:2] == ("diff", "--unified=0"):
+                return b"--- a/apps/bridge/src/store.ts\n+++ b/apps/bridge/src/store.ts\n@@ -1 +1 @@\n+  ALTER TABLE runs ADD COLUMN extra TEXT\n"
+            return b""
+        with patch.object(self.d, "git", side_effect=git):
+            with self.assertRaisesRegex(m.DeployError, "schema change"):
+                self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+
+    def test_schema_ddl_only_in_deleted_files_is_not_a_migration(self):
+        self.job["commit"] = "newcommit"
+        def git(*args):
+            if args[:2] == ("diff", "--name-only"):
+                return b"apps/bridge/src/old-store.ts" if "--diff-filter=D" in args else b"apps/bridge/src/old-store.ts\napps/bridge/src/cli.ts"
+            if args[:2] == ("diff", "--unified=0"):
+                self.assertIn(":(exclude)apps/bridge/src/old-store.ts", args)
+                return b"--- a/apps/bridge/src/cli.ts\n+++ b/apps/bridge/src/cli.ts\n@@ -1 +1 @@\n-import { OldStore } from \"./old-store.js\";\n"
+            return b""
+        with patch.object(self.d, "git", side_effect=git):
+            self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+        self.assertFalse(self.job["restartRunner"])
+
     def test_matching_separately_installed_controller_changes_allowed(self):
         self.job["commit"] = "newcommit"
         payload = b"installed bytes"
