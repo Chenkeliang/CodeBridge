@@ -175,6 +175,14 @@ describe("alert polling through the active Feishu adapter", () => {
     expect(f.send).not.toHaveBeenCalled();
   });
 
+  it("resolves a reaction on the bot's reply to the alert thread through the real adapter", async () => {
+    const f = fixture();
+    f.get.mockResolvedValueOnce({ code: 0, data: { items: [{ message_id: "om_bot_reply", chat_id: "oc_alerts", root_id: "om_alert" }] } } as never);
+    await expect(f.bridge.resolveAlertThreadRoot("om_bot_reply")).resolves.toEqual({ chatId: "oc_alerts", rootId: "om_alert" });
+    f.get.mockResolvedValueOnce({ code: 0, data: { items: [{ message_id: "om_root_only", chat_id: "oc_alerts" }] } } as never);
+    await expect(f.bridge.resolveAlertThreadRoot("om_root_only")).resolves.toEqual({ chatId: "oc_alerts", rootId: "om_root_only" });
+  });
+
   it("rejects a failed Feishu API response instead of treating it as an empty successful scan", async () => {
     const f = fixture(); f.list.mockResolvedValueOnce({ code: 99991672, data: undefined } as never);
     await expect(f.bridge.readAlertMessages("oc_alerts", 1000, 1001)).rejects.toThrow("99991672");

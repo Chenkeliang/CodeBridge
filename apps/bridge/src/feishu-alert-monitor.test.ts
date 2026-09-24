@@ -142,6 +142,22 @@ describe("FeishuAlertMonitor", () => {
     expect(JSON.parse(fs.readFileSync(f.statePath, "utf8")).oc_alerts.incidents.om_alert.dismissal.ownerOpenId).toBe("ou_c");
   });
 
+  it("closes on DONE placed on the bot's own thread reply by resolving the thread root", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [f.message()] }); await f.monitor.tick();
+    const resolveAlertThreadRoot = vi.fn(async (messageId: string) => messageId === "om_bot_reply" ? { chatId: "oc_alerts", rootId: "om_alert" } : undefined);
+    const monitor = new FeishuAlertMonitor({ ...f.options, transport: { ...f.transport, resolveAlertThreadRoot } });
+    await monitor.prepareReaction({ messageId: "om_unrelated", operatorOpenId: "ou_c", operatorType: "user", emojiType: "DONE", action: "added", actionTime: f.options.now() });
+    expect(JSON.parse(fs.readFileSync(f.statePath, "utf8")).oc_alerts.incidents.om_alert.dismissal).toBeUndefined();
+    await monitor.prepareReaction({ messageId: "om_bot_reply", operatorOpenId: "ou_c", operatorType: "user", emojiType: "DONE", action: "added", actionTime: f.options.now() });
+    const incident = JSON.parse(fs.readFileSync(f.statePath, "utf8")).oc_alerts.incidents.om_alert;
+    expect(incident.dismissal).toMatchObject({ ownerOpenId: "ou_c", messageId: "om_bot_reply", via: "reaction" });
+    expect(incident.replies).toContain("om_bot_reply");
+    expect(resolveAlertThreadRoot).toHaveBeenCalledTimes(2);
+    await monitor.prepareReaction({ messageId: "om_bot_reply", operatorOpenId: "ou_d", operatorType: "user", emojiType: "THUMBSUP", action: "added", actionTime: f.options.now() });
+    expect(resolveAlertThreadRoot).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores DONE reactions whose operator is not a user", async () => {
     const f = fixture(); await f.monitor.tick(); f.advance();
     f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [f.message()] }); await f.monitor.tick();

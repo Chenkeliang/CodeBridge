@@ -1297,6 +1297,15 @@ export class FeishuBridge {
     });
   }
 
+  async resolveAlertThreadRoot(messageId: string): Promise<{ chatId: string; rootId: string } | undefined> {
+    if (!this.channel) throw new Error("飞书通道未连接");
+    const response = await this.channel.rawClient.im.v1.message.get({ path: { message_id: messageId } });
+    if (response.code !== undefined && response.code !== 0) throw new Error(`Message lookup failed (${response.code}): ${response.msg}`);
+    const item = response.data?.items?.[0];
+    if (!item?.chat_id) return undefined;
+    return { chatId: item.chat_id, rootId: item.root_id || item.message_id || messageId };
+  }
+
   async readAlertDone(messageId: string, after?: number): Promise<FeishuAlertReaction | undefined> {
     if (!this.channel) throw new Error("飞书通道未连接");
     return findHumanDoneReaction(this.channel.rawClient, messageId, after);
