@@ -43,7 +43,6 @@ function setupSessionRun() {
     message: {
       text: "调查",
       attachmentIds: [],
-      flowId: null,
       executionKind: "agent",
       model: null,
       effort: null,
@@ -260,7 +259,6 @@ describe("RunExecutor", () => {
       message: {
         text: "调查",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,
@@ -412,7 +410,6 @@ describe("RunExecutor", () => {
       message: {
         text: "调查",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,
@@ -504,7 +501,6 @@ describe("RunExecutor", () => {
         message: {
           text,
           attachmentIds: [],
-          flowId: null,
           executionKind: "agent",
           model: null,
           effort: null,
@@ -574,7 +570,6 @@ describe("RunExecutor", () => {
         message: {
           text,
           attachmentIds: [],
-          flowId: null,
           executionKind: "agent",
           model: null,
           effort: null,
@@ -658,7 +653,6 @@ describe("RunExecutor", () => {
         message: {
           text: "调查",
           attachmentIds: [],
-          flowId: null,
           executionKind: "agent",
           model: null,
           effort: null,
@@ -787,7 +781,6 @@ describe("RunExecutor", () => {
       message: {
         text: "继续",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,
@@ -868,7 +861,6 @@ describe("RunExecutor", () => {
       message: {
         text: "调查",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,
@@ -926,7 +918,6 @@ describe("RunExecutor", () => {
       message: {
         text: "调查",
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,

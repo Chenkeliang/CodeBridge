@@ -221,7 +221,6 @@ async function createReadOnlyMatrixFixture() {
     message: {
       text: "请读取这个上下文",
       attachmentIds: [],
-      flowId: null,
       executionKind: "agent",
       model: null,
       effort: null,
@@ -245,7 +244,6 @@ async function createReadOnlyMatrixFixture() {
     message: {
       text: "继续追踪",
       attachmentIds: [],
-      flowId: null,
       executionKind: "agent",
       model: null,
       effort: null,

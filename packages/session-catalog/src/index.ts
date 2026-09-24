@@ -187,7 +187,7 @@ export class SessionCatalogStore {
         "ALTER TABLE agent_sessions ADD COLUMN flow_definition_revision TEXT",
       );
     } catch {
-      // Existing databases already contain the immutable Flow revision column.
+      // Existing databases already contain the legacy column.
     }
     try {
       this.database.exec("ALTER TABLE agent_sessions ADD COLUMN model TEXT");

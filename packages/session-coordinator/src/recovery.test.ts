@@ -19,7 +19,6 @@ function setupRunningRun(replaySafety: ReplaySafety = "safe") {
     message: {
       text: "调查",
       attachmentIds: [],
-      flowId: null,
       executionKind: "agent",
       model: null,
       effort: null,

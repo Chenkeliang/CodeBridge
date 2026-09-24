@@ -88,7 +88,7 @@ describe("SqliteEventStore", () => {
       );
       INSERT INTO session_turns VALUES (
         'turn_flow', 'sess_old', 2, 'queued',
-        '{"text":"flow","attachmentIds":[],"flowId":"flow_old","flowInvocationSource":"request","model":null,"effort":null,"permissionMode":null,"plan":{"planId":"p"}}',
+        '{"text":"legacy","attachmentIds":[],"model":null,"effort":null,"permissionMode":null,"plan":{"planId":"p"}}',
         1, NULL, 't', NULL, NULL
       );
     `);
@@ -213,12 +213,12 @@ describe("SqliteEventStore", () => {
     firstStore.close();
   });
 
-  it("persists Flow save events and lists them by target in sequence order", () => {
+  it("persists targeted events and lists them by target in sequence order", () => {
     const store = new SqliteEventStore(":memory:");
     const item = store.createWorkItem({
-      title: "save a reusable Flow",
+      title: "targeted events",
       mode: "auto",
-      conversationId: "web:flow-save",
+      conversationId: "web:targeted",
       riskLevel: "read_only",
     });
     const run = store.createRun({
@@ -230,10 +230,10 @@ describe("SqliteEventStore", () => {
     const requested = store.appendEventOnce({
       workItemId: item.id,
       runId: run.id,
-      type: "FLOW_SAVE_REQUESTED",
+      type: "APPROVAL_REQUESTED",
       actor: "user",
       target: "fsr_one",
-      inputHash: "flow-save-request:http:sess_1:key_1",
+      inputHash: "targeted-event:http:sess_1:key_1",
       payload: {
         request_id: "fsr_one",
         session_id: "sess_1",
@@ -244,7 +244,7 @@ describe("SqliteEventStore", () => {
     store.appendEvent({
       workItemId: item.id,
       runId: run.id,
-      type: "FLOW_SAVE_DISMISSED",
+      type: "APPROVAL_REJECTED",
       actor: "user",
       target: "fsr_one",
       payload: { request_id: "fsr_one" },
@@ -252,18 +252,17 @@ describe("SqliteEventStore", () => {
     store.appendEvent({
       workItemId: item.id,
       runId: run.id,
-      type: "FLOW_CANDIDATE_CREATED",
+      type: "ARTIFACT_CREATED",
       actor: "system",
       target: "fsr_candidate",
       payload: {
         request_id: "fsr_candidate",
-        flow_id: "flow_from_fsr_candidate",
       },
     });
     store.appendEvent({
       workItemId: item.id,
       runId: run.id,
-      type: "FLOW_SAVE_FAILED",
+      type: "VERIFICATION_COMPLETED",
       actor: "system",
       target: "fsr_failed",
       payload: {
@@ -274,15 +273,15 @@ describe("SqliteEventStore", () => {
 
     expect(store.listEventsByTarget("fsr_one").map((event) => event.type))
       .toEqual([
-        "FLOW_SAVE_REQUESTED",
-        "FLOW_SAVE_DISMISSED",
+        "APPROVAL_REQUESTED",
+        "APPROVAL_REJECTED",
       ]);
     expect(store.listEvents(item.id).map((event) => event.type)).toEqual(
       expect.arrayContaining([
-        "FLOW_SAVE_REQUESTED",
-        "FLOW_SAVE_DISMISSED",
-        "FLOW_CANDIDATE_CREATED",
-        "FLOW_SAVE_FAILED",
+        "APPROVAL_REQUESTED",
+        "APPROVAL_REJECTED",
+        "ARTIFACT_CREATED",
+        "VERIFICATION_COMPLETED",
       ]),
     );
     expect(requested.target).toBe("fsr_one");

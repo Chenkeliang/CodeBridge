@@ -128,7 +128,6 @@ export class SessionCoordinator {
           payload: {
             queue_position: turn.queuePosition,
             actor_ref: turn.message.actorRef ?? null,
-            flow_invocation_source: turn.message.flowInvocationSource ?? "none",
           },
         });
       }

@@ -51,7 +51,6 @@ function seedLargeSession(store: SqliteEventStore) {
       tx.insertTurn(sessionId, {
         text: `完成第 ${index + 1} 次回合`,
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,
@@ -94,7 +93,6 @@ function seedLargeSession(store: SqliteEventStore) {
     tx.insertTurn(sessionId, {
       text: "保持队列热度",
       attachmentIds: [],
-      flowId: null,
       executionKind: "agent",
       model: null,
       effort: null,
@@ -109,7 +107,6 @@ function seedLargeSession(store: SqliteEventStore) {
       tx.insertTurn(sessionId, {
         text: `排队第 ${index + 1} 条`,
         attachmentIds: [],
-        flowId: null,
         executionKind: "agent",
         model: null,
         effort: null,

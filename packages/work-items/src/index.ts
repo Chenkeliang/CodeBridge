@@ -35,7 +35,7 @@ export type {
   ChannelDeliveryInput,
   ChannelDeliveryRow,
   ChannelDeliveryStatus,
-  FlowActorRef,
+  ChannelActorRef,
   ImportedHistoryEntry,
   ProviderHistoryImportInput,
   ProviderHistoryImportResult,
@@ -104,13 +104,6 @@ export type DomainEventType =
   | "TURN_CANCELLED"
   | "DISCOVERY_STARTED"
   | "PROJECT_CANDIDATE_FOUND"
-  | "FLOW_PROPOSED"
-  | "FLOW_SELECTED"
-  | "FLOW_SAVED_AS_CANDIDATE"
-  | "FLOW_SAVE_REQUESTED"
-  | "FLOW_SAVE_DISMISSED"
-  | "FLOW_CANDIDATE_CREATED"
-  | "FLOW_SAVE_FAILED"
   | "PLAN_PROPOSED"
   | "PLAN_VALIDATED"
   | "APPROVAL_REQUESTED"
@@ -124,16 +117,7 @@ export type DomainEventType =
   | "BRANCH_SELECTED"
   | "ARTIFACT_CREATED"
   | "VERIFICATION_COMPLETED"
-  | "WORK_ITEM_COMPLETED"
-  | "PARAM_RESOLVED"
-  | "FLOW_RECOMMENDED"
-  | "FLOW_REJECTED"
-  | "FLOW_BATCH_DRAFTED"
-  | "FLOW_BATCH_CONFIRMED"
-  | "FLOW_BATCH_UPDATED"
-  | "FLOW_BATCH_COMPLETED"
-  | "VERIFICATION_FAILED"
-  | "RUN_SNAPSHOT";
+  | "WORK_ITEM_COMPLETED";
 
 export type DomainEventActor =
   | "user"
@@ -2193,7 +2177,6 @@ function legacyTurnMessageFromEvent(event: DomainEvent): SessionTurnMessage {
     attachmentIds: Array.isArray(payload.attachment_ids)
       ? payload.attachment_ids.map((value) => String(value))
       : [],
-    flowId: null,
     executionKind: "agent",
     model: null,
     effort: null,
@@ -2206,7 +2189,6 @@ function emptyLegacyTurnMessage(): SessionTurnMessage {
   return {
     text: "",
     attachmentIds: [],
-    flowId: null,
     executionKind: "agent",
     model: null,
     effort: null,
@@ -2807,89 +2789,4 @@ function clonePlanStep(step: PersistedPlanStep): PersistedPlanStep {
     branches: step.branches.map((branch) => ({ ...branch })),
     retry: step.retry ? { ...step.retry } : null,
   };
-}
-
-// ---- Learning-signal payloads (docs/superpowers/specs/2026-08-13-flow-design.md §5.1) ----
-// Strong schemas: these feed the data flywheel, dirty data cannot be learned from.
-
-export type ParamResolution = "edited" | "picked_alternative" | "confirmed";
-
-export interface ParamResolvedPayload {
-  flow_id: string;
-  flow_revision: string;
-  field: string;
-  candidate_value: unknown;
-  final_value: unknown;
-  resolution: ParamResolution;
-  source: "user" | "agent_extracted" | "step_output" | "default" | `context.${string}`;
-  /** Required when source is agent_extracted: links back to the conversation event. */
-  evidence_ref?: string;
-  context?: string;
-  resolver_version?: string;
-}
-
-export interface FlowRecommendedPayload {
-  flow_id: string;
-  flow_revision: string;
-  match_reason: string;
-  confidence: number;
-}
-
-export type FlowRejectReason = "wrong_intent" | "missing_capability" | "bad_timing" | "other";
-
-export interface FlowRejectedPayload {
-  flow_id: string;
-  reason: FlowRejectReason;
-  note?: string;
-  user_chose?: "freeform" | string;
-}
-
-export type VerificationFailureCategory = "verification" | "infrastructure" | "policy" | "llm_output";
-
-export interface VerificationFailedPayload {
-  step_id: string;
-  category: VerificationFailureCategory;
-  postcondition: string;
-  /** Output summary, capped at 4KB serialized; truncated flags the cap was hit. */
-  actual: unknown;
-  truncated: boolean;
-}
-
-/** Attribution block: every variable that can change output, hashed (spec §5.2). */
-export interface Attribution {
-  /** plan_ir_hash — the compiled execution artifact, NOT the YAML hash. */
-  flow_revision: string;
-  prompt_revision: string;
-  tool_schema_revision: string;
-  capability_revisions: Record<string, string>;
-  resolver_revision: string;
-  authorization_revision: string;
-}
-
-export interface ResolvedInput {
-  field: string;
-  value: unknown;
-  source: ParamResolvedPayload["source"];
-  evidence_ref?: string;
-  resolver_version: string;
-  /** directory inputs must carry the authorization record ref. */
-  authorization_ref?: string;
-}
-
-export interface DecisionTraceStep {
-  step_id: string;
-  capability_id: string;
-  capability_revision: string;
-  /** Must be an artifact:// reference; large outputs are never inlined. */
-  output_ref: string;
-  verification_status: "passed" | "failed" | "skipped";
-}
-
-export interface RunSnapshotPayload {
-  flow_id: string;
-  flow_revision: string;
-  resolved_inputs: ResolvedInput[];
-  steps: DecisionTraceStep[];
-  outcome: "succeeded" | "failed";
-  attribution: Attribution;
 }

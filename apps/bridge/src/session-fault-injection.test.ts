@@ -52,7 +52,6 @@ function createFaultFixture(boundary: Boundary) {
     message: {
       text: "检查 Session",
       attachmentIds: [],
-      flowId: null,
       executionKind: "agent",
       model: null,
       effort: null,
@@ -164,7 +163,6 @@ function createFaultFixture(boundary: Boundary) {
         return tx.insertTurn(sessionId, {
           text: "下一次回合已落库",
           attachmentIds: [],
-          flowId: null,
           executionKind: "agent",
           model: null,
           effort: null,

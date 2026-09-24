@@ -23,7 +23,7 @@ let builtServerPath = "";
 beforeAll(async () => {
   childFixtureDir = await fs.mkdtemp(path.join(
     os.tmpdir(),
-    "codebridge-flow-save-mcp-child-",
+    "codebridge-deploy-mcp-child-",
   ));
   childFixtureDir = await fs.realpath(childFixtureDir);
   const compile = (source: string, fileName: string) =>
@@ -72,13 +72,13 @@ afterEach(() => {
 });
 
 describe("deployment MCP transport", () => {
-  it("binds each server config to a distinct run even without flow availability", () => {
+  it("binds each server config to a distinct run", () => {
     const first = createDeploymentMcpServerConfig("/tmp/server.js", { api: "http://127.0.0.1:19790", token: "private", runId: "run_one" });
     const second = createDeploymentMcpServerConfig("/tmp/server.js", { api: "http://127.0.0.1:19790", token: "private", runId: "run_two" });
     expect(first.env.FCB_RUN_ID).toBe("run_one");
     expect(second.env.FCB_RUN_ID).toBe("run_two");
     expect(JSON.stringify(first.env)).not.toBe(JSON.stringify(second.env));
-    expect(first.env.CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY).toBeUndefined();
+    expect(first.env.CODEBRIDGE_SAMPLE_FLAG).toBeUndefined();
   });
   it("serves a strict deployment tool over stdio using only its trusted environment identity", async () => {
     const requests: { body: unknown; auth?: string }[] = [];

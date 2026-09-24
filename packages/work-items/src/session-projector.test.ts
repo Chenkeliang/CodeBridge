@@ -24,7 +24,6 @@ function seedDispatchedTurn(
     const turn = tx.insertTurn("sess_1", {
       text: "检查项目",
       attachmentIds: [],
-      flowId: null,
       executionKind,
       model: null,
       effort: null,
@@ -518,7 +517,7 @@ describe("Session projector", () => {
     });
     store.appendEvent({
       workItemId: item.id,
-      type: "RUN_SNAPSHOT",
+      type: "DISCOVERY_STARTED",
       actor: "system",
     });
 

@@ -32,7 +32,6 @@ const base = {
   idempotencyKey: "key-1",
   input: {
     message: "hello",
-    flowId: null,
     model: null,
     attachments: [],
     permissionMode: null,

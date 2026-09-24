@@ -5,7 +5,6 @@ import { SessionCoordinator } from "./coordinator.js";
 const message = {
   text: "检查项目",
   attachmentIds: [],
-  flowId: null,
   executionKind: "agent" as const,
   model: null,
   effort: null,

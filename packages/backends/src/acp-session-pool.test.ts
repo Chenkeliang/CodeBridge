@@ -88,34 +88,34 @@ describe("AcpSessionPool", () => {
     const server = {
       name: "codebridge-internal",
       command: "/usr/bin/node",
-      args: ["/opt/codebridge/flow-save-mcp-server.js"],
+      args: ["/opt/codebridge/sample-mcp-server.js"],
     };
     const unavailable = buildSessionMatchKeys({
       ...base,
       mcpServers: [{
         ...server,
-        env: { SECOND: "stable", CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY: "false" },
+        env: { SECOND: "stable", CODEBRIDGE_SAMPLE_FLAG: "false" },
       }],
     }).mcpServersKey;
     const sameUnavailable = buildSessionMatchKeys({
       ...base,
       mcpServers: [{
         ...server,
-        env: { CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY: "false", SECOND: "stable" },
+        env: { CODEBRIDGE_SAMPLE_FLAG: "false", SECOND: "stable" },
       }],
     }).mcpServersKey;
     const available = buildSessionMatchKeys({
       ...base,
       mcpServers: [{
         ...server,
-        env: { SECOND: "stable", CODEBRIDGE_FLOW_SAVE_SOURCE_AVAILABILITY: "true" },
+        env: { SECOND: "stable", CODEBRIDGE_SAMPLE_FLAG: "true" },
       }],
     }).mcpServersKey;
 
     expect(sameUnavailable).toBe(unavailable);
     expect(available).not.toBe(unavailable);
     expect(unavailable).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(unavailable).not.toContain("flow-save-mcp-server.js");
+    expect(unavailable).not.toContain("sample-mcp-server.js");
     expect(unavailable).not.toContain("stable");
     expect(unavailable).not.toContain("false");
   });
@@ -174,7 +174,7 @@ describe("AcpSessionPool", () => {
     expect(a.disposed()).toBe(true);
   });
 
-  it("Flow save availability false→true 时不复用旧 MCP 进程", () => {
+  it("MCP env false→true 时不复用旧 MCP 进程", () => {
     const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
     const unavailable = fakeResources("s1", { mcpServersKey: MCP_KEY_UNAVAILABLE });
     pool.release(unavailable.resources);

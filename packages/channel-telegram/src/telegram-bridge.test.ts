@@ -490,7 +490,7 @@ describe("TelegramBridge inbound commands", () => {
             payload: {},
           };
           yield {
-            type: "FLOW_SAVE_REQUESTED",
+            type: "LEGACY_UNKNOWN_EVENT",
             sequence: 4,
             runId: "run_1",
             occurredAt: null,
@@ -503,7 +503,7 @@ describe("TelegramBridge inbound commands", () => {
             },
           };
           yield {
-            type: "FLOW_SAVE_REQUESTED",
+            type: "LEGACY_UNKNOWN_EVENT",
             sequence: 4,
             runId: "run_1",
             occurredAt: null,
@@ -539,10 +539,6 @@ describe("TelegramBridge inbound commands", () => {
     const writes = JSON.stringify(editMessage.mock.calls);
     expect(writes).toContain("public result");
     expect(writes).not.toContain("private reasoning");
-    const terminalText = String(editMessage.mock.calls.at(-1)?.[2]);
-    expect(terminalText.match(
-      /已记录“存为 Flow”请求。请前往 Web → Flows → 待生成确认；尚未创建 Candidate。/g,
-    )).toBeNull();
     expect(editMessage.mock.calls.every((call) => call[1] === 8)).toBe(true);
     expect(sendMessage).not.toHaveBeenCalled();
     expect(completeDelivery).toHaveBeenCalledTimes(1);
