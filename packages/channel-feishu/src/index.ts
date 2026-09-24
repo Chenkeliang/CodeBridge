@@ -9,3 +9,5 @@ export type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply } from "./al
 
 export { FEISHU_ALERT_STATUSES } from "./alert-types.js";
 export type { FeishuAlertStatus } from "./alert-types.js";
+
+export type { FeishuAlertReaction } from "./alert-types.js";
