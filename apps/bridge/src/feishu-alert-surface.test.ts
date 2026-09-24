@@ -132,7 +132,7 @@ describe("alert polling through the active Feishu adapter", () => {
     f.config.feishu.alertMonitor!.statusReactions = { investigating: "OnIt", waiting: "OneSecond", resolved: "DONE", no_action: "CrossMark", blocked: "Sigh" };
     await f.monitor.tick(); f.advance(); await f.monitor.tick();
     await f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "请确认是否重试 TT123");
-    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "请确认是否重试 TT123" }, expect.objectContaining({
+    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "**需要你确认**\n请确认是否重试 TT123" }, expect.objectContaining({
       replyTo: "om_alert", replyInThread: true,
       mentions: [expect.objectContaining({ openId: "ou_owner" }), expect.objectContaining({ openId: "ou_second" })],
     }));
@@ -166,7 +166,7 @@ describe("alert polling through the active Feishu adapter", () => {
     expect(f.reactionCreate).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: { reaction_type: { emoji_type: "OneSecond" } } }));
     expect(f.reactionDelete).toHaveBeenCalledWith({ path: { message_id: "om_alert", reaction_id: "r0" } });
     expect(f.send).toHaveBeenCalledTimes(1);
-    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "请确认补货计划" }, expect.objectContaining({ replyTo: "om_alert", replyInThread: true,
+    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "**需要你确认**\n请确认补货计划" }, expect.objectContaining({ replyTo: "om_alert", replyInThread: true,
       mentions: [expect.objectContaining({ openId: "ou_owner" })] }));
   });
 

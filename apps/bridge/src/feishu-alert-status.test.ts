@@ -38,7 +38,7 @@ describe("alert status and runbook", () => {
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "请确认补货计划");
     expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_root", "OneSecond", expect.any(Array));
     expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_duplicate", "OneSecond", expect.any(Array));
-    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], "请确认补货计划");
+    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], "**需要你确认**\n请确认补货计划");
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "请确认补货计划");
     expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(1);
     await f.monitor.prepareReply({ messageId: "om_reply", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "继续查" }, "om_root");
@@ -56,7 +56,7 @@ describe("alert status and runbook", () => {
   it("does not turn an ended Agent run into a business success automatically", async () => {
     const f = await fixture(); f.advance(); await f.monitor.tick();
     expect(f.transport.setAlertMessageReaction).toHaveBeenLastCalledWith("om_root", "Sigh", expect.any(Array));
-    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], expect.stringContaining("未提交可核验"));
+    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], expect.stringMatching(/^\*\*排查受阻\*\*\n.*未提交可核验/su));
     expect(f.transport.setAlertMessageReaction.mock.calls.some((call) => (call as unknown[])[1] === "DONE")).toBe(false);
   });
   it("loads the configured skill for every alert and owner follow-up", async () => {
