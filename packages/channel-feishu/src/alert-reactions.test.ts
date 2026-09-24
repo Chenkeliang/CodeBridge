@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Client } from "@larksuiteoapi/node-sdk";
-import { setAlertReaction, findOwnerDoneReaction } from "./alert-reactions.js";
+import { setAlertReaction, findHumanDoneReaction } from "./alert-reactions.js";
 const managed = ["OnIt", "OneSecond", "DONE", "CrossMark", "Sigh"];
 function fixture() {
   const list = vi.fn(async () => ({ code: 0, data: { items: [], has_more: false, page_token: "" } }));
@@ -39,7 +39,7 @@ describe("alert state reactions", () => {
 });
 
 
-it("reads only the human owner's DONE and ignores old or undated marks after reopening", async () => {
+it("reads any human DONE, never the bot's own, and ignores old or undated marks after reopening", async () => {
   const f = fixture();
   const items = [
     { reaction_id: "bot", operator: { operator_type: "app", operator_id: "ou_owner" }, reaction_type: { emoji_type: "DONE" }, action_time: "100" },
@@ -47,8 +47,11 @@ it("reads only the human owner's DONE and ignores old or undated marks after reo
     { reaction_id: "owner", operator: { operator_type: "user", operator_id: "ou_owner" }, reaction_type: { emoji_type: "DONE" }, action_time: "100" },
   ];
   f.list.mockResolvedValue({ code: 0, data: { items, has_more: false, page_token: "" } } as never);
-  expect(await findOwnerDoneReaction(f.client, "om_source", "ou_owner")).toEqual({ messageId: "om_source", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added", actionTime: 100 });
-  expect(await findOwnerDoneReaction(f.client, "om_source", "ou_owner", 101)).toBeUndefined();
-  f.list.mockResolvedValue({ code: 0, data: { items: [{ ...items[2], action_time: undefined }], has_more: false, page_token: "" } } as never);
-  expect(await findOwnerDoneReaction(f.client, "om_source", "ou_owner", 101)).toBeUndefined();
+  expect(await findHumanDoneReaction(f.client, "om_source")).toEqual({ messageId: "om_source", operatorOpenId: "ou_other", emojiType: "DONE", action: "added", actionTime: 100 });
+  expect(await findHumanDoneReaction(f.client, "om_source", 101)).toBeUndefined();
+  f.list.mockResolvedValue({ code: 0, data: { items: [items[0]!, { ...items[2], action_time: undefined }], has_more: false, page_token: "" } } as never);
+  expect(await findHumanDoneReaction(f.client, "om_source", 101)).toBeUndefined();
+  expect(await findHumanDoneReaction(f.client, "om_source")).toMatchObject({ operatorOpenId: "ou_owner", actionTime: undefined });
+  f.list.mockResolvedValue({ code: 0, data: { items: [items[0]!], has_more: false, page_token: "" } } as never);
+  expect(await findHumanDoneReaction(f.client, "om_source")).toBeUndefined();
 });

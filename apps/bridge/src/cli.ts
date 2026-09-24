@@ -92,6 +92,7 @@ program
           onAlertReaction: async (reaction) => { await alertMonitor?.prepareReaction(reaction); },
           isAlertMessage: (chatId, messageId) => alertMonitor?.isAlertMessage(chatId, messageId) ?? false,
           isAlertChat: (chatId) => store.get().feishu.alertMonitor?.groups.some((group) => group.chatId === chatId) ?? false,
+          isAlertSender: (chatId, ids) => store.get().feishu.alertMonitor?.groups.some((group) => group.chatId === chatId && ids.some((id) => group.senderAppIds.includes(id))) ?? false,
           isMaintenance: () => deployment.isMaintenance(),
           onLog: (m) => console.log(m),
         })

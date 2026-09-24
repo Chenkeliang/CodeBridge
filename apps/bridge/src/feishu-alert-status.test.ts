@@ -13,13 +13,13 @@ async function fixture(duplicates = false, runbook = false) {
   const runbookPath = path.join(root, "SKILL.md");
   if (runbook) fs.writeFileSync(runbookPath, "# Runbook v1\nRead the alarm matrix before investigating.");
   const config: NonNullable<AppConfig["feishu"]["alertMonitor"]> = {
-    pollIntervalMs: 60_000, lookbackMs: 600_000, dedupWindowMs: 1_800_000, maxConcurrent: 2,
+    pollIntervalMs: 60_000, lookbackMs: 600_000, dedupWindowMs: 1_800_000, maxConcurrent: 2, incidentRetentionMs: 604_800_000,
     statusReactions: { investigating: "OnIt", waiting: "OneSecond", resolved: "DONE", no_action: "CrossMark", blocked: "Sigh" },
     groups: [{ chatId: "oc_alert", ownerOpenId: "ou_owner", senderAppIds: ["cli_alarm"], ...(runbook ? { runbookPath } : {}) }],
   };
   const message = { messageId: "om_root", chatId: "oc_alert", senderId: "cli_alarm", senderType: "app", createdAt: 1_000_100, content: "failure" };
   const transport = {
-    readAlertOwnerDone: vi.fn(async (): Promise<FeishuAlertReaction | undefined> => undefined),
+    readAlertDone: vi.fn(async (): Promise<FeishuAlertReaction | undefined> => undefined),
     readAlertMessages: vi.fn(async () => ({ messages: duplicates ? [message, { ...message, messageId: "om_duplicate" }] : [message], hasMore: false })),
     investigateAlert: vi.fn(async () => {}), isAlertActive: vi.fn(async () => false),
     setAlertMessageReaction: vi.fn(async () => "reaction"), notifyAlertOwner: vi.fn(async () => {}), cancelAlertInvestigation: vi.fn(async () => {}),
@@ -37,7 +37,7 @@ describe("alert status and runbook", () => {
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "请确认补货计划");
     expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_root", "OneSecond", expect.any(Array));
     expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_duplicate", "OneSecond", expect.any(Array));
-    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", "ou_owner", "请确认补货计划");
+    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], "请确认补货计划");
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "请确认补货计划");
     expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(1);
     await f.monitor.prepareReply({ messageId: "om_reply", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "继续查" }, "om_root");
@@ -55,12 +55,12 @@ describe("alert status and runbook", () => {
   it("does not turn an ended Agent run into a business success automatically", async () => {
     const f = await fixture(); f.advance(); await f.monitor.tick();
     expect(f.transport.setAlertMessageReaction).toHaveBeenLastCalledWith("om_root", "Sigh", expect.any(Array));
-    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", "ou_owner", expect.stringContaining("未提交可核验"));
+    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], expect.stringContaining("未提交可核验"));
     expect(f.transport.setAlertMessageReaction.mock.calls.some((call) => (call as unknown[])[1] === "DONE")).toBe(false);
   });
   it("loads the configured skill for every alert and owner follow-up", async () => {
     const f = await fixture(false, true);
-    expect(f.transport.investigateAlert).toHaveBeenCalledWith(f.message, "ou_owner", expect.stringContaining("Runbook v1"));
+    expect(f.transport.investigateAlert).toHaveBeenCalledWith(f.message, ["ou_owner"], expect.stringContaining("Runbook v1"));
     fs.writeFileSync(f.runbookPath, "# Runbook v2\nUpdated alarm matrix rules.");
     const reply = await f.monitor.prepareReply({ messageId: "om_reply", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "继续" }, "om_root");
     expect(reply?.instructions).toContain("Runbook v2");
@@ -82,7 +82,7 @@ describe("alert status and runbook", () => {
     const saved = JSON.parse(fs.readFileSync(f.options.statePath, "utf8"));
     expect(saved.oc_alert.activatedAt).toBe(1_061_000);
     expect(saved.oc_alert.incidents.om_root).toBeDefined();
-    expect((await resumed.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "批准" }, "om_root"))?.allowed).toBe(false);
+    expect(await resumed.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "批准" }, "om_root")).toMatchObject({ allowed: true, instructions: expect.stringContaining("不构成任何写操作授权") });
   });
 
   it("closes every duplicate card as owner-dismissed and ignores late Agent status reports", async () => {
@@ -98,14 +98,17 @@ describe("alert status and runbook", () => {
     expect(f.transport.notifyAlertOwner).not.toHaveBeenCalled();
   });
 
-  it("does not accept an Agent's or another person's claimed dismissal", async () => {
+  it("does not accept an Agent's claimed dismissal, but any group member may close explicitly", async () => {
     const f = await fixture();
     await expect(f.monitor.setStatus("oc_alert", "om_root", "dismissed", "owner said no action")).rejects.toThrow();
-    expect(await f.monitor.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "无需处理" }, "om_root")).toMatchObject({ allowed: false });
     for (const content of ["如果无需处理就结束", "不是无需处理，继续查", "他说无需处理"]) {
       const reply = await f.monitor.prepareReply({ messageId: "om_context", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content }, "om_root");
       expect(reply?.handled).not.toBe(true);
     }
+    expect(await f.monitor.prepareReply({ messageId: "om_other", chatId: "oc_alert", chatType: "group", senderId: "ou_other", content: "无需处理" }, "om_root")).toMatchObject({ allowed: true, handled: true });
+    const incident = JSON.parse(fs.readFileSync(f.options.statePath, "utf8")).oc_alert.incidents.om_root;
+    expect(incident.dismissal).toMatchObject({ ownerOpenId: "ou_other", messageId: "om_other" });
+    expect(incident.summary).toContain("群成员确认无需处理");
   });
 
   it("gives queued cards an intermediate reaction even when the investigation limit is reached", async () => {
@@ -165,17 +168,17 @@ describe("alert status and runbook", () => {
     expect(incident.reactionApplied.om_duplicate).toBe("CrossMark");
   });
 
-  it("closes by the owner's native DONE on an original duplicate card, never by another user or by removal", async () => {
+  it("closes by any human's native DONE on an original duplicate card, never by the bot, by removal or by another emoji", async () => {
     const f = await fixture(true);
     for (const reaction of [
-      { operatorOpenId: "ou_other", emojiType: "DONE", action: "added" as const },
+      { operatorOpenId: "cli_bot", emojiType: "DONE", action: "added" as const },
       { operatorOpenId: "ou_owner", emojiType: "DONE", action: "removed" as const },
       { operatorOpenId: "ou_owner", emojiType: "THUMBSUP", action: "added" as const },
     ]) await f.monitor.prepareReaction({ messageId: "om_duplicate", ...reaction });
     expect(JSON.parse(fs.readFileSync(f.options.statePath, "utf8")).oc_alert.incidents.om_root.dismissal).toBeUndefined();
-    await f.monitor.prepareReaction({ messageId: "om_duplicate", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added", actionTime: f.options.now() });
+    await f.monitor.prepareReaction({ messageId: "om_duplicate", operatorOpenId: "ou_other", emojiType: "DONE", action: "added", actionTime: f.options.now() });
     const incident = JSON.parse(fs.readFileSync(f.options.statePath, "utf8")).oc_alert.incidents.om_root;
-    expect(incident.dismissal).toMatchObject({ ownerOpenId: "ou_owner", messageId: "om_duplicate", via: "reaction" });
+    expect(incident.dismissal).toMatchObject({ ownerOpenId: "ou_other", messageId: "om_duplicate", via: "reaction" });
     for (const id of ["om_root", "om_duplicate"]) expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith(id, "DONE", expect.any(Array));
     expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
   });
@@ -183,7 +186,7 @@ describe("alert status and runbook", () => {
   it("recovers a missed owner DONE while collection is paused and keeps old reactions from reclosing an explicitly reopened case", async () => {
     const f = await fixture(); f.config.enabled = false;
     const oldTime = f.options.now();
-    f.transport.readAlertOwnerDone.mockResolvedValue({ messageId: "om_root", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added", actionTime: oldTime });
+    f.transport.readAlertDone.mockResolvedValue({ messageId: "om_root", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added", actionTime: oldTime });
     const restarted = new FeishuAlertMonitor(f.options); await restarted.tick();
     expect(JSON.parse(fs.readFileSync(f.options.statePath, "utf8")).oc_alert.incidents.om_root.status).toBe("dismissed");
     f.advance(); await restarted.prepareReply({ messageId: "om_reopen", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "重新排查" }, "om_root");

@@ -147,6 +147,8 @@ export const ConfigSchema = z.object({
       lookbackMs: z.number().int().min(1_000).max(86_400_000).default(600_000),
       dedupWindowMs: z.number().int().min(1_000).max(86_400_000).default(1_800_000),
       maxConcurrent: z.number().int().min(1).max(10).default(2),
+      /** Terminal incidents older than this leave the state file and stop shaping their thread. */
+      incidentRetentionMs: z.number().int().min(3_600_000).max(90 * 86_400_000).default(7 * 86_400_000),
       statusReactions: z.object({
         investigating: z.string().min(1), waiting: z.string().min(1), resolved: z.string().min(1),
         no_action: z.string().min(1), blocked: z.string().min(1),
@@ -154,9 +156,12 @@ export const ConfigSchema = z.object({
       groups: z.array(z.object({
         chatId: z.string().regex(/^oc_/),
         senderAppIds: z.array(z.string().min(1)).min(1),
-        ownerOpenId: z.string().regex(/^ou_/),
+        /** Deprecated alias for a single approver; kept so existing configs load. */
+        ownerOpenId: z.string().regex(/^ou_/).optional(),
+        /** People who can authorize write actions. Anyone in the group can chat, close or reopen. */
+        approverOpenIds: z.array(z.string().regex(/^ou_/)).optional(),
         runbookPath: z.string().min(1).optional(),
-      })).min(1).refine((groups) => new Set(groups.map((group) => group.chatId)).size === groups.length, "Duplicate alert group"),
+      }).refine((group) => (group.approverOpenIds?.length ?? 0) > 0 || Boolean(group.ownerOpenId), "Alert group needs at least one approver")).min(1).refine((groups) => new Set(groups.map((group) => group.chatId)).size === groups.length, "Duplicate alert group"),
     }).optional(),
   }),
   telegram: z
