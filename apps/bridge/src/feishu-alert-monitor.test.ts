@@ -44,6 +44,7 @@ describe("FeishuAlertMonitor", () => {
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("未记录流程级授权或条件不满足时，不自行执行写操作");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("幂等性");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("fcb alert status waiting");
+    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("**需要你**");
   });
 
   it("does not resubmit a message after restart or overlap", async () => {
