@@ -36,24 +36,24 @@ export async function setAlertReaction(
   return reactionId;
 }
 
-/** Read a human owner's DONE, excluding the bot's projected state and other users. */
-export async function findOwnerDoneReaction(
-  client: Client, messageId: string, ownerOpenId: string, after?: number,
+/** Read any human's DONE, excluding the bot's own projected state. */
+export async function findHumanDoneReaction(
+  client: Client, messageId: string, after?: number,
 ): Promise<import("./alert-types.js").FeishuAlertReaction | undefined> {
   let pageToken: string | undefined;
   do {
     const result = await client.im.v1.messageReaction.list({ path: { message_id: messageId },
       params: { reaction_type: "DONE", user_id_type: "open_id", page_size: 50, page_token: pageToken } });
-    if (result.code !== 0 || !result.data) throw new Error(`Owner reaction read failed (${result.code}): ${result.msg}`);
+    if (result.code !== 0 || !result.data) throw new Error(`Reaction read failed (${result.code}): ${result.msg}`);
     for (const item of result.data.items) {
-      if (item.operator?.operator_type !== "user" || item.operator.operator_id !== ownerOpenId || item.reaction_type?.emoji_type !== "DONE") continue;
+      if (item.operator?.operator_type !== "user" || !item.operator.operator_id || item.reaction_type?.emoji_type !== "DONE") continue;
       const rawTime = Number(item.action_time);
       const actionTime = Number.isFinite(rawTime) && rawTime > 0 ? rawTime : undefined;
       if (after !== undefined && (actionTime === undefined || actionTime <= after)) continue;
-      return { messageId, operatorOpenId: ownerOpenId, emojiType: "DONE", action: "added", actionTime };
+      return { messageId, operatorOpenId: item.operator.operator_id, emojiType: "DONE", action: "added", actionTime };
     }
     pageToken = result.data.has_more ? result.data.page_token : undefined;
-    if (result.data.has_more && !pageToken) throw new Error("Incomplete owner reaction pagination");
+    if (result.data.has_more && !pageToken) throw new Error("Incomplete reaction pagination");
   } while (pageToken);
   return undefined;
 }

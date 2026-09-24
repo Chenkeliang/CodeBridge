@@ -8,7 +8,7 @@ import { FeishuBridge } from "./bridge.js";
 it("routes the active SDK reaction listener with the original card and real owner identity", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "alert-reaction-surface-"));
   const config = defaultConfig();
-  config.feishu.alertMonitor = { pollIntervalMs: 60_000, lookbackMs: 600_000, dedupWindowMs: 1_800_000, maxConcurrent: 1,
+  config.feishu.alertMonitor = { pollIntervalMs: 60_000, lookbackMs: 600_000, dedupWindowMs: 1_800_000, maxConcurrent: 1, incidentRetentionMs: 604_800_000,
     statusReactions: { investigating: "OnIt", waiting: "OneSecond", resolved: "DONE", no_action: "CrossMark", blocked: "Sigh" },
     groups: [{ chatId: "oc_alert", senderAppIds: ["cli_alarm"], ownerOpenId: "ou_owner" }] };
   const handlers = new Map<string, (event: unknown) => void>();
