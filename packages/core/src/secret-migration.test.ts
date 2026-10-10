@@ -51,13 +51,34 @@ describe("codebridge secrets migrate", () => {
     expect(text).not.toMatch(/real-feishu-secret|real-runner-token/);
     expect(text).toContain("# my notes stay");
     expect(text).toContain("# keep me");
-    expect(text).toContain("appSecret: keychain:codebridge.feishu.appSecret");
+    expect(text).toMatch(/appSecret: keychain:codebridge\.[0-9a-f]{8}\.feishu\.appSecret/);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     const store = new ConfigStore({ dataDir, secrets: keychain.options });
     expect(store.get().feishu.appSecret).toBe("real-feishu-secret");
     expect(store.get().runner.token).toBe("real-runner-token-0123456789");
     expect(store.secretSources()).toEqual({ "feishu.appSecret": "keychain", "runner.token": "keychain", "telegram.botToken": "missing" });
     expect(migrateConfigSecrets(file, keychain.options).migrated).toEqual([]);
+  });
+
+  it("updates the real file behind a symlinked config.yaml", () => {
+    const real = path.join(dataDir, "dotfiles-config.yaml");
+    fs.renameSync(file, real);
+    fs.symlinkSync(real, file);
+    migrateConfigSecrets(file, fakeKeychain().options);
+    expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(real, "utf8")).not.toContain("real-feishu-secret");
+  });
+
+  it("keeps a non-default data dir's items separate and never overwrites a different existing value", () => {
+    const keychain = fakeKeychain();
+    migrateConfigSecrets(file, keychain.options);
+    const service = [...keychain.items.keys()].find((name) => name.endsWith(".runner.token"))!;
+    expect(service).toMatch(/^codebridge\.[0-9a-f]{8}\.runner\.token$/);
+
+    fs.writeFileSync(file, CONFIG.replace("real-runner-token-0123456789", "other-runner-token-0123456789"));
+    expect(() => migrateConfigSecrets(file, keychain.options)).toThrow("已存在且值不同，未做任何修改");
+    expect(keychain.items.get(service)).toBe("real-runner-token-0123456789");
+    expect(fs.readFileSync(file, "utf8")).toContain("other-runner-token-0123456789");
   });
 
   it("leaves config.yaml untouched when a secret does not read back", () => {

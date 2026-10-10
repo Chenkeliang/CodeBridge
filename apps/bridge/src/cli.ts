@@ -550,15 +550,20 @@ program
   .description("诊断配置与 Runner 连接")
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
   .action(async (opts: { dataDir: string }) => {
-    const store = new ConfigStore({ dataDir: opts.dataDir });
-    const config = store.get();
-    const report = await runDoctor(config, opts.dataDir);
-    const plaintext = Object.entries(store.secretSources()).filter(([, source]) => source === "plaintext").map(([name]) => name);
-    console.log(JSON.stringify({
-      ...report,
-      secrets: store.secretSources(),
-      ...(plaintext.length ? { warnings: [`config.yaml 中 ${plaintext.join("、")} 为明文，运行 codebridge secrets migrate 移入系统钥匙串`] } : {}),
-    }, null, 2));
+    // Inspect secrets first and without throwing: a broken ref is exactly what doctor must report.
+    const secretReport = ConfigStore.inspectSecrets(path.join(opts.dataDir, "config.yaml"));
+    const warnings = [
+      ...Object.entries(secretReport).filter(([, item]) => item.source === "plaintext")
+        .map(([name]) => `config.yaml 中 ${name} 为明文，运行 codebridge secrets migrate 移入系统钥匙串`),
+      ...Object.entries(secretReport).filter(([, item]) => item.error).map(([, item]) => item.error!),
+    ];
+    let report: unknown;
+    try {
+      report = await runDoctor(new ConfigStore({ dataDir: opts.dataDir }).get(), opts.dataDir);
+    } catch (error) {
+      report = { ok: false, configError: error instanceof Error ? error.message : String(error) };
+    }
+    console.log(JSON.stringify({ ...(report as object), secrets: secretReport, ...(warnings.length ? { warnings } : {}) }, null, 2));
   });
 
 const secrets = program
@@ -570,7 +575,7 @@ secrets
   .description("显示每个密钥的来源（keychain / env / plaintext / missing），不输出值")
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
   .action((opts: { dataDir: string }) => {
-    console.log(JSON.stringify(new ConfigStore({ dataDir: opts.dataDir }).secretSources(), null, 2));
+    console.log(JSON.stringify(ConfigStore.inspectSecrets(path.join(opts.dataDir, "config.yaml")), null, 2));
   });
 
 secrets
@@ -578,14 +583,13 @@ secrets
   .description("把明文密钥移入系统钥匙串，并在 config.yaml 中改为 keychain: 引用")
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
   .action((opts: { dataDir: string }) => {
-    const store = new ConfigStore({ dataDir: opts.dataDir });
-    if (!fs.existsSync(store.path)) throw new Error(`${store.path} 不存在`);
-    const result = migrateConfigSecrets(store.path);
-    // Prove the rewritten file still loads before reporting success.
-    new ConfigStore({ dataDir: opts.dataDir });
-    console.log(JSON.stringify(result, null, 2));
+    const configPath = path.join(opts.dataDir, "config.yaml");
+    if (!fs.existsSync(configPath)) throw new Error(`${configPath} 不存在`);
+    const result = migrateConfigSecrets(configPath);
+    console.log(JSON.stringify({ ...result, secrets: ConfigStore.inspectSecrets(configPath) }, null, 2));
     if (result.migrated.length) {
-      console.error("已改为钥匙串引用。Bridge/Runner 重启后生效；部署器需重新安装才会改用引用（scripts/install-host-deployer.mjs）。");
+      // A running Bridge still holds the plaintext and would write it back on its next config save.
+      console.error("已改为钥匙串引用。请立即重启 Bridge 和 Runner；部署器需重新安装才会改用引用（scripts/install-host-deployer.mjs）。");
     }
   });
 

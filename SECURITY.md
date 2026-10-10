@@ -12,7 +12,11 @@
 - `codebridge secrets migrate` moves existing plaintext values into the keychain (written via stdin, never argv)
   and rewrites them as references; `codebridge secrets status` and `codebridge doctor` report each source without values.
 - When CodeBridge saves config it writes back the reference (or the original on-disk value), so resolved and
-  env-provided secrets are never persisted. The host deployer copies keychain references, not values.
+  env-provided secrets are never persisted. The host deployer copies keychain references, not values
+  (an `env:` reference or env override is still copied into the deployer's `config.json` as a value).
+- Scope: references keep secrets out of files on disk. They do not hide secrets from other processes of the same
+  user, nor from the agents the Runner launches (agents inherit the Runner's environment, so `env:` values are
+  visible to them). Keychain items are per data dir (`codebridge.<field>` for `~/.codebridge`).
 
 ## ACP mode / permissions
 

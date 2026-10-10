@@ -89,6 +89,19 @@ need_cmd() {
   return 0
 }
 
+# Resolved secret value (keychain:/env: refs included) via the built ConfigStore.
+# read_yaml_scalar returns ref text as-is, which is right for "is it configured?" checks only.
+read_config_secret() {
+  local key="$1"
+  DATA_DIR="$DATA_DIR" node --input-type=module - "$ROOT" "$key" <<'NODE'
+const [root, key] = process.argv.slice(2);
+const { ConfigStore } = await import(`file://${root}/packages/core/dist/index.js`);
+const value = key.split(".").reduce((node, part) => node?.[part], new ConfigStore({ resolve: [key] }).get());
+if (typeof value !== "string" || !value) process.exit(1);
+console.log(value);
+NODE
+}
+
 read_yaml_scalar() {
   local key="$1"
   node - "$CONFIG" "$key" <<'NODE'
@@ -1026,7 +1039,7 @@ start_runner_bg() {
   echo $! >"$RUNNER_PID"
   disown -h 2>/dev/null || true
   local token
-  token="$(read_yaml_scalar runner.token)"
+  token="$(read_config_secret runner.token)"
   if wait_runner "$token"; then
     info "Runner 就绪: http://127.0.0.1:${RUNNER_PORT}/health"
   else
@@ -1151,11 +1164,13 @@ cmd_docker() {
   cmd_stop
 
   local token app_id app_secret
-  token="$(read_yaml_scalar runner.token)"
+  # The container cannot reach the host keychain: resolve refs here and hand values over in .env.
+  token="$(read_config_secret runner.token)"
   app_id="$(read_yaml_scalar feishu.appId)"
-  app_secret="$(read_yaml_scalar feishu.appSecret)"
+  app_secret="$(read_config_secret feishu.appSecret)"
 
   local env_file="$ROOT/deploy/.env"
+  ( umask 077; : >"$env_file" )
   cat >"$env_file" <<EOF
 FEISHU_APP_ID=$app_id
 FEISHU_APP_SECRET=$app_secret

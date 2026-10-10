@@ -13,7 +13,8 @@ async function main() {
     process.env.DATA_DIR = path.dirname(path.resolve(configFile));
   }
 
-  const store = new ConfigStore();
+  // The Runner only needs its own token; never fail on Feishu/Telegram secrets it does not use.
+  const store = new ConfigStore({ resolve: ["runner.token"] });
   const config = store.reload();
 
   const listen =

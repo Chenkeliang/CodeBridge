@@ -8,6 +8,7 @@ import {
 } from "./config-schema.js";
 import { DEFAULT_DATA_DIR } from "./types.js";
 import {
+  SECRET_ENV_VARS,
   SECRET_PATHS,
   getPath,
   isSecretRef,
@@ -23,12 +24,26 @@ export interface ConfigStoreOptions {
   dataDir?: string;
   configFileName?: string;
   secrets?: SecretOptions;
+  /**
+   * Secret fields to resolve (e.g. ["runner.token"] for the Runner). Others keep their
+   * ref text, so a process never fails on a secret it does not use. Default: all.
+   */
+  resolve?: readonly string[];
+}
+
+export interface SecretInspection {
+  source: SecretSource;
+  /** Whether the value (ref or env override) can be read right now. */
+  readable: boolean;
+  error?: string;
 }
 
 /** How a secret field was loaded, so persist() never writes a resolved/env value to disk. */
 interface LoadedSecret {
   /** Value as written in config.yaml (a ref, plaintext, or absent). */
   disk: unknown;
+  /** Env var that supplied the loaded value, if any. */
+  envVar?: string;
   /** Value handed to the app after resolution and env overrides. */
   loaded: unknown;
   /** The loaded value came from a ref or an env override, not from plaintext on disk. */
@@ -49,7 +64,38 @@ export class ConfigStore {
       options.configFileName ?? "config.yaml",
     );
     this.secretOptions = options.secrets ?? {};
+    this.resolveFields = options.resolve;
     this.config = this.loadFromDisk();
+  }
+
+  private readonly resolveFields?: readonly string[];
+
+  /**
+   * Per-field secret report that never throws, for doctor/status: a broken ref is a
+   * finding to show, not a reason to crash the diagnostic.
+   */
+  static inspectSecrets(configPath: string, options: SecretOptions = {}): Record<string, SecretInspection> {
+    const parsed = fs.existsSync(configPath)
+      ? ((parseYaml(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>)
+      : {};
+    const env = options.env ?? process.env;
+    return Object.fromEntries(SECRET_PATHS.map((secretPath) => {
+      const name = secretPathName(secretPath);
+      const value = getPath(parsed, secretPath);
+      const inspection: SecretInspection = { source: secretSourceOf(value), readable: true };
+      if (env[SECRET_ENV_VARS[name]!]) return [name, inspection];
+      if (isSecretRef(value)) {
+        try {
+          resolveSecretRef(value, options);
+        } catch (error) {
+          inspection.readable = false;
+          inspection.error = error instanceof Error ? error.message : String(error);
+        }
+      } else if (inspection.source === "missing") {
+        inspection.readable = false;
+      }
+      return [name, inspection];
+    }));
   }
 
   /** Where each secret field comes from, as written on disk (no values). */
@@ -115,7 +161,8 @@ export class ConfigStore {
       const current = getPath(output, secretPath);
       if (entry?.external && current === entry.loaded) {
         // Unchanged value from a ref or env: write back what was on disk, never the secret.
-        setPath(output, secretPath, entry.disk);
+        // Env-only values become an env: ref so the file still loads where that env is set.
+        setPath(output, secretPath, entry.disk ?? (entry.envVar ? `env:${entry.envVar}` : undefined));
       } else {
         this.secrets.set(name, { disk: current, loaded: current, external: false });
       }
@@ -134,7 +181,7 @@ export class ConfigStore {
     const fromEnv = this.loadFromEnv();
     if (!fs.existsSync(this.configPath)) {
       const config = Object.keys(fromEnv).length > 0
-        ? ConfigSchema.parse({ ...defaultConfig(), ...fromEnv })
+        ? ConfigSchema.parse(deepMerge(defaultConfig() as unknown as Record<string, unknown>, fromEnv))
         : defaultConfig();
       this.recordSecrets(new Map(), fromEnv, config);
       return config;
@@ -145,7 +192,11 @@ export class ConfigStore {
     const resolved = structuredClone(parsed);
     for (const secretPath of SECRET_PATHS) {
       const value = getPath(resolved, secretPath);
-      if (isSecretRef(value)) setPath(resolved, secretPath, resolveSecretRef(value, this.secretOptions));
+      const wanted = !this.resolveFields || this.resolveFields.includes(secretPathName(secretPath));
+      // An env override wins anyway; do not fail on a ref it replaces.
+      if (isSecretRef(value) && wanted && getPath(fromEnv, secretPath) === undefined) {
+        setPath(resolved, secretPath, resolveSecretRef(value, this.secretOptions));
+      }
     }
     const config = ConfigSchema.parse(deepMerge(resolved, fromEnv));
     this.recordSecrets(disk, fromEnv, config);
@@ -156,10 +207,12 @@ export class ConfigStore {
     this.secrets = new Map(SECRET_PATHS.map((secretPath) => {
       const name = secretPathName(secretPath);
       const onDisk = disk.get(name);
+      const fromEnvValue = getPath(fromEnv, secretPath) !== undefined;
       return [name, {
         disk: onDisk,
+        envVar: fromEnvValue ? SECRET_ENV_VARS[name] : undefined,
         loaded: getPath(config, secretPath),
-        external: isSecretRef(onDisk) || getPath(fromEnv, secretPath) !== undefined,
+        external: isSecretRef(onDisk) || fromEnvValue,
       }];
     }));
   }
@@ -205,7 +258,9 @@ function deepMerge(
       out[key] !== null &&
       !Array.isArray(out[key])
     ) {
-      out[key] = { ...(out[key] as object), ...(value as object) };
+      // Skip undefined: RUNNER_URL alone must not blank a runner.token from disk.
+      const defined = Object.fromEntries(Object.entries(value as object).filter(([, v]) => v !== undefined));
+      out[key] = { ...(out[key] as object), ...defined };
     } else if (value !== undefined) {
       out[key] = value;
     }

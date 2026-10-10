@@ -178,6 +178,17 @@ class Tests(unittest.TestCase):
         self.assertEqual(http.call_args[0][1], "kc-runner")
         self.assertNotIn("security", json.dumps([c for c in self.fake.calls if c[0] != "read_secret"]))
 
+    def test_real_read_secret_handles_helper_failures(self):
+        ok = m.subprocess.CompletedProcess([], 0, stdout=b"tok-1\n")
+        with patch.object(m.subprocess, "run", return_value=ok) as run:
+            self.assertEqual(m.Adapter().read_secret("svc"), "tok-1")
+        self.assertEqual(run.call_args[0][0][:2], ["/usr/bin/security", "find-generic-password"])
+        self.assertEqual(run.call_args.kwargs["stderr"], m.subprocess.DEVNULL)
+        for outcome in (m.subprocess.CompletedProcess([], 44, stdout=b""), m.subprocess.TimeoutExpired("security", 10), OSError("no binary")):
+            kwargs = {"side_effect": outcome} if isinstance(outcome, BaseException) else {"return_value": outcome}
+            with patch.object(m.subprocess, "run", **kwargs), self.assertRaises(m.DeployError):
+                m.Adapter().read_secret("svc")
+
     def test_recovery_rolls_back_without_reapplying(self):
         self.job["state"] = "switching"
         self.job["previousPlist"] = str(self.plist)

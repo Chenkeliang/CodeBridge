@@ -3,19 +3,13 @@
  * 实况并发测试：向本机 Runner 同时发起 cursor + claude 两次 run。
  * 用法: node scripts/test-concurrency-live.mjs
  */
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { ConfigStore } from "../packages/core/dist/index.js";
 
-const configPath = path.join(
-  os.homedir(),
-  ".codebridge",
-  "config.yaml",
-);
-const raw = fs.readFileSync(configPath, "utf8");
-const url = raw.match(/^\s*url:\s*(\S+)/m)?.[1];
-const token = raw.match(/^\s*token:\s*(\S+)/m)?.[1];
+// ConfigStore resolves keychain:/env: refs; a raw regex would send the ref text as the token.
+const { url, token } = new ConfigStore({ dataDir: path.join(os.homedir(), ".codebridge"), resolve: ["runner.token"] }).get().runner;
 if (!url || !token) {
   console.error("无法从 config.yaml 解析 runner.url / runner.token");
   process.exit(1);
