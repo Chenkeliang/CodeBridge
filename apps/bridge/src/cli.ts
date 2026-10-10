@@ -12,6 +12,7 @@ import {
 } from "@codebridge/core";
 import { McpRuntime, McpServerRegistry, SdkMcpClientFactory } from "@codebridge/mcp-runtime";
 import { FeishuAlertMonitor } from "./feishu-alert-monitor.js";
+import { runInitWizard, terminalIo } from "./init-wizard.js";
 import {
   ApprovalService,
   CapabilityRegistry,
@@ -537,12 +538,31 @@ skillApp,
 
 program
   .command("init")
-  .description("生成默认 config.yaml")
+  .description("交互式初始化：只补缺失项、校验凭据、密钥存入系统钥匙串")
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
-  .action((opts: { dataDir: string }) => {
-    const store = new ConfigStore({ dataDir: opts.dataDir });
-    store.save(defaultConfig());
-    console.log("已写入:", store.path);
+  .option("--defaults", "非交互：仅在 config.yaml 不存在时写入默认配置")
+  .action(async (opts: { dataDir: string; defaults?: boolean }) => {
+    const configPath = path.join(opts.dataDir, "config.yaml");
+    if (opts.defaults || !process.stdin.isTTY) {
+      // Never overwrite: the old init replaced an existing config with defaults.
+      if (fs.existsSync(configPath)) {
+        console.log("config.yaml 已存在，未修改:", configPath);
+        return;
+      }
+      new ConfigStore({ dataDir: opts.dataDir }).save(defaultConfig());
+      console.log("已写入默认配置:", configPath);
+      return;
+    }
+    const io = terminalIo();
+    try {
+      const summary = await runInitWizard({ dataDir: opts.dataDir, io });
+      io.print(`\n✓ 已保存 ${summary.configPath}`);
+      io.print(`  通道：${summary.channels.join("、") || "无"}；默认 Agent：${summary.defaultAgent ?? "未设置"}`);
+      io.print(`  密钥：${Object.entries(summary.secretStorage).map(([name, where]) => `${name}=${where}`).join("，")}`);
+      io.print("下一步：./scripts/start.sh start 启动；codebridge doctor 检查连接。");
+    } finally {
+      io.close();
+    }
   });
 
 program

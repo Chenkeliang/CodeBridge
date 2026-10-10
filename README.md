@@ -63,7 +63,7 @@ cd CodeBridge
 ./scripts/start.sh start
 ```
 
-The setup wizard stores configuration at `~/.codebridge/config.yaml`. It can configure Feishu credentials and generate a random Runner token for you.
+The setup wizard (also available as `codebridge init`) writes `~/.codebridge/config.yaml`. It verifies Feishu / Telegram credentials on the spot, generates a Runner token, and picks the project root and default agent. Secrets go to the OS keychain; the file only holds `keychain:` references. On an existing config it only fills what is missing. Telegram requires an allowlist of user IDs.
 
 Verify the installation:
 

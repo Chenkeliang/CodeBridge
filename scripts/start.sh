@@ -297,30 +297,6 @@ print_feishu_checklist() {
   echo ""
 }
 
-prompt_feishu_credentials() {
-  if [[ ! -f "$CONFIG" ]]; then return; fi
-  local app_id app_secret
-  app_id="$(read_yaml_scalar feishu.appId 2>/dev/null || true)"
-  app_secret="$(read_yaml_scalar feishu.appSecret 2>/dev/null || true)"
-  if [[ "$app_id" == "cli_placeholder" || -z "$app_id" ]]; then
-    echo ""
-    warn "feishu.appId 尚未配置"
-    read -r -p "  输入飞书 App ID（回车跳过）: " input_id
-    if [[ -n "$input_id" ]]; then
-      sed -i.bak -E "s/(^[[:space:]]*appId:[[:space:]]*).*/\\1${input_id}/" "$CONFIG"
-      rm -f "$CONFIG.bak"
-    fi
-  fi
-  if [[ "$app_secret" == "secret_placeholder" || -z "$app_secret" ]]; then
-    warn "feishu.appSecret 尚未配置"
-    read -r -p "  输入飞书 App Secret（回车跳过）: " input_secret
-    if [[ -n "$input_secret" ]]; then
-      sed -i.bak -E "s/(^[[:space:]]*appSecret:[[:space:]]*).*/\\1${input_secret}/" "$CONFIG"
-      rm -f "$CONFIG.bak"
-    fi
-  fi
-}
-
 print_checklist() {
   print_feishu_checklist
   print_usage_guide
@@ -338,32 +314,17 @@ cmd_setup() {
   info "构建项目…"
   (cd "$ROOT" && pnpm build)
 
-  if [[ ! -f "$CONFIG" ]]; then
-    info "生成默认配置 $CONFIG"
-    DATA_DIR="$DATA_DIR" node "$ROOT/apps/bridge/dist/cli.js" init
-  fi
-
-  local token
-  token="$(read_yaml_scalar runner.token 2>/dev/null || true)"
-  if [[ -z "$token" || "$token" == change-me* ]]; then
-    local new_token
-    new_token="$(openssl rand -hex 24 2>/dev/null || node -e "console.log(require('crypto').randomBytes(24).toString('hex'))")"
-    info "生成 Runner token"
-    if grep -q 'token:' "$CONFIG"; then
-      sed -i.bak -E "s/(^[[:space:]]*token:[[:space:]]*).*/\\1${new_token}/" "$CONFIG"
-      rm -f "$CONFIG.bak"
-    fi
-  fi
-
-  if ask_yes "是否现在填写飞书 App 凭据？" "y"; then
-    prompt_feishu_credentials
-  fi
-
+  # Install CLIs first: the wizard picks the default agent from what is installed.
   if ask_yes "是否尝试安装缺失的 Agent CLI？" "y"; then
     offer_cli_install
   fi
 
   check_agent_clis || true
+
+  # Credentials, runner token, workspace and default agent: the wizard verifies them and
+  # keeps secrets in the OS keychain; it only fills what is missing in an existing config.
+  info "初始化配置 $CONFIG"
+  node "$ROOT/apps/bridge/dist/cli.js" init --data-dir "$DATA_DIR"
 
   info "引导完成"
   print_checklist

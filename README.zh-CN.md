@@ -65,7 +65,7 @@ cd CodeBridge
 ./scripts/start.sh start
 ```
 
-引导配置保存在 `~/.codebridge/config.yaml`，可交互填写飞书凭据，并自动生成 Runner token。
+引导配置保存在 `~/.codebridge/config.yaml`。初始化向导（也可单独运行 `codebridge init`）会当场校验飞书 / Telegram 凭据、生成 Runner token、选择项目目录和默认 Agent；密钥存入系统钥匙串，配置文件里只写 `keychain:` 引用。对已有配置只补缺失项，不覆盖其他内容。启用 Telegram 时必须填写允许使用的用户 ID。
 
 检查状态：
 

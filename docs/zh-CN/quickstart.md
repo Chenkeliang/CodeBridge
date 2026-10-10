@@ -38,7 +38,7 @@ web:
 
 ```bash
 pnpm install && pnpm build
-node apps/bridge/dist/cli.js init
+node apps/bridge/dist/cli.js init   # 交互式向导；只补缺失项，密钥存入系统钥匙串
 ```
 
 ### Runner（宿主机）

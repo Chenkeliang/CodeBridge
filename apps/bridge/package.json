@@ -26,7 +26,8 @@
     "@codebridge/work-items": "workspace:*",
     "@hono/node-server": "^1.19.14",
     "commander": "^12.1.0",
-    "hono": "^4.12.27"
+    "hono": "^4.12.27",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
