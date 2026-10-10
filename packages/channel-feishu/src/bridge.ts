@@ -33,6 +33,7 @@ import { FeishuDeliveryReconciler } from "./delivery-reconciler.js";
 import { durableMarkdownCard } from "./durable-markdown-card.js";
 import { registerFeishuExtraEvents } from "./feishu-extra-events.js";
 import { feishuHttpClient } from "./feishu-http.js";
+import { redactingLogger } from "./redacting-logger.js";
 import { buildInboundPromptPrefix } from "./feishu-inbound-context.js";
 import { downloadInboundAttachments, resolveInboundPrompt } from "./feishu-inbound-media.js";
 import { shouldAcceptGroupMessage, topicActiveForMessage } from "./feishu-mention-gate.js";
@@ -299,6 +300,7 @@ export class FeishuBridge {
       appSecret: feishu.appSecret,
       domain: feishu.domain,
       loggerLevel: LoggerLevel.info,
+      logger: redactingLogger(() => [this.config.feishu.appSecret, this.config.runner.token, this.config.telegram?.botToken]),
       includeRawEvent: true,
       httpInstance: feishuHttpClient(),
       // SDK mergeBatch keeps only the last messageId while pooling resources.

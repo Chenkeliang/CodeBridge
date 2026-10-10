@@ -94,6 +94,12 @@ describe("FeishuBridge stream lifecycle", () => {
     expect(createLarkChannel).toHaveBeenCalledWith(
       expect.objectContaining({ includeRawEvent: true }),
     );
+    // The SDK dumps failed token requests through this logger; it must not print app_secret.
+    const { logger } = createLarkChannel.mock.calls[0]![0] as unknown as { logger: { error(...msg: unknown[]): void } };
+    const printed = vi.spyOn(console, "log").mockImplementation(() => {});
+    logger.error([{ config: { data: JSON.stringify({ app_id: "cli", app_secret: defaultConfig().feishu.appSecret }) } }]);
+    expect(JSON.stringify(printed.mock.calls)).not.toContain(defaultConfig().feishu.appSecret);
+    printed.mockRestore();
     expect(listDeliveries).toHaveBeenCalledTimes(1);
 
     lifecycleHandlers.get("reconnected")?.();
