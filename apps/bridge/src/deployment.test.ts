@@ -106,10 +106,19 @@ describe("deployment ingress", () => {
     } as unknown as SqliteEventStore;
     expect(service.guidanceForRun("run_1", store)).toBe("");
     await service.handleFeishuMessage({ ...message, content: "修改菜单，测好后上线" });
-    expect(service.guidanceForRun("run_1", store)).toContain("本轮已明确授权");
+    expect(service.guidanceForRun("run_1", store)).toContain("已明确要求 CodeBridge 测试通过后上线");
     expect(service.guidanceForRun("run_1", store)).toContain("/projects/CodeBridge-safe");
     await service.handleFeishuMessage({ ...message, content: "修改菜单，不要上线" });
-    expect(service.guidanceForRun("run_1", store)).toContain("本轮未授权");
+    expect(service.guidanceForRun("run_1", store)).toContain("CodeBridge 只用 codebridge_deploy（action=prepare）准备候选");
+  });
+
+  it("scopes the no-publish note to CodeBridge so it never contradicts approval for other projects", async () => {
+    const { service } = setup({ token: "secret", ownerOpenId: "ou_owner", sourceRepo: "/projects/CodeBridge-safe" });
+    // Real message that previously produced "本轮未授权自动上线" and made the agent re-ask for a Meepo push.
+    const guidance = service.guidance("ou_owner", "1. 1的都有哪三笔？\n2. 上线解决问题？还是？\n3. 确认代码不缺失 没问题就上线就好了。");
+    expect(guidance).not.toMatch(/本轮未授权|未授权自动上线/);
+    expect(guidance.startsWith("【CodeBridge 自身修改，仅在本任务修改 CodeBridge 时适用；不涉及其他项目")).toBe(true);
+    expect(guidance).toContain("其他项目的推送、合并、上线授权只以用户原话为准");
   });
 
 });
