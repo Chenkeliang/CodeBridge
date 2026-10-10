@@ -10,7 +10,7 @@ pnpm install && pnpm build
 
 # 初始化配置
 node apps/bridge/dist/cli.js init
-# 编辑 ~/.codebridge/config.yaml
+# 按向导配置通道；密钥保存在宿主机钥匙串中
 
 # 前台启动 Runner
 node packages/runner-host/dist/cli.js
@@ -24,11 +24,10 @@ Runner 默认监听 `127.0.0.1:19789`，仅本机可访问。
 ## 2. Docker：启动 Bridge
 
 ```bash
-cp .env.example .env
-# 填写 FEISHU_APP_ID、FEISHU_APP_SECRET、RUNNER_TOKEN
-
-docker compose -f deploy/docker-compose.yml up -d --build
+bash scripts/start.sh docker
 ```
+
+该脚本读取宿主机配置并解析钥匙串引用，生成权限为 `600` 的 `deploy/.env`，让容器与宿主机 Runner 使用同一个 token。不要另造一个 `RUNNER_TOKEN`。容器无法读取宿主机钥匙串，因此 `deploy/.env` 包含明文密钥，请勿提交或分享。脚本会停止脚本管理的现有实例，再启动宿主机 Runner 和 Docker Bridge。
 
 Bridge 通过 `host.docker.internal:19789` 调用宿主机 Runner。
 
@@ -43,7 +42,7 @@ Bridge 通过 `host.docker.internal:19789` 调用宿主机 Runner。
 
 ```bash
 node apps/bridge/dist/cli.js doctor
-curl -H "Authorization: Bearer $RUNNER_TOKEN" http://127.0.0.1:19789/health
+docker compose -f deploy/docker-compose.yml ps
 ```
 
 ## 安全说明

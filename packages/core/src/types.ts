@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 /** 唯一标识一次「飞书对话面」 */
 export interface SessionKey {
   chatId: string;
@@ -414,4 +416,6 @@ export function parseSessionKey(raw: string): SessionKey {
 
 export const DEFAULT_DATA_DIR = `${process.env.HOME ?? ""}/.codebridge`;
 
-export const VERSION = "0.1.0";
+export const VERSION: string = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;

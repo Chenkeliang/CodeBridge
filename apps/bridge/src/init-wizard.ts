@@ -1,15 +1,16 @@
+import { execFileSync } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline/promises";
-import { Writable } from "node:stream";
 import { parseDocument, stringify as stringifyYaml, type Document } from "yaml";
 import {
-  ConfigSchema,
+  ConfigStore,
   SUPPORTED_AGENT_IDS,
   defaultConfig,
   keychainServiceFor,
+  resolveSecretRef,
   secretSourceOf,
   storeKeychainSecret,
   type SecretOptions,
@@ -18,9 +19,10 @@ import {
 
 /** Terminal I/O the wizard needs; injected so the whole flow is testable. */
 export interface WizardIo {
+  checkCancelled(): void;
   print(text: string): void;
   ask(question: string, defaultValue?: string): Promise<string>;
-  /** Input is not echoed. */
+  /** Input is never echoed. */
   askSecret(question: string): Promise<string>;
   confirm(question: string, defaultYes: boolean): Promise<boolean>;
 }
@@ -33,6 +35,7 @@ export interface InitWizardOptions {
   /** Whether a command is on PATH. */
   hasCommand?: (command: string) => boolean;
   newToken?: () => string;
+  newCode?: () => string;
 }
 
 export interface InitSummary {
@@ -73,10 +76,64 @@ function defaultHasCommand(command: string): boolean {
   });
 }
 
+function newRunnerToken(): string {
+  return randomBytes(24).toString("hex");
+}
+
+/** Stage beside the real target so rename remains atomic and preserves config symlinks. */
+function stageConfig(configPath: string, text: string): { temporary: string; target: string } {
+  const target = fs.existsSync(configPath) ? fs.realpathSync(configPath) : path.resolve(configPath);
+  const dataDir = path.dirname(target);
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const temporary = path.join(dataDir, `.config.${randomBytes(12).toString("hex")}.tmp`);
+  try {
+    fs.writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
+    try {
+      new ConfigStore({ dataDir, configFileName: path.basename(temporary), resolve: [] });
+    } catch {
+      // Schema errors may contain credential values; never dump them to the terminal.
+      throw new Error("配置校验失败，请检查 config.yaml 和环境变量；原配置和密钥未修改");
+    }
+    return { temporary, target };
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
+/** Delete only a new, wizard-owned staging item, never an existing credential. */
+function removeStagedSecret(service: string, secrets: SecretOptions = {}): void {
+  const run = secrets.run ?? ((file: string, args: string[]) => execFileSync(file, args, {
+    encoding: "utf8", timeout: 10_000, stdio: ["pipe", "pipe", "pipe"],
+  }));
+  if ((secrets.platform ?? process.platform) === "darwin") {
+    run("/usr/bin/security", ["delete-generic-password", "-s", service, "-a", "codebridge"]);
+  } else {
+    run("secret-tool", ["clear", "service", service, "account", "codebridge"]);
+  }
+}
+
+/** No TTY: generate a token in a 0600 file; never access the keychain or overwrite a config. */
+export function initDefaults(dataDir: string): { written: boolean; configPath: string } {
+  const configPath = path.join(dataDir, "config.yaml");
+  if (fs.existsSync(configPath)) return { written: false, configPath };
+  const doc = parseDocument(stringifyYaml(defaultConfig()));
+  doc.setIn(["runner", "token"], process.env.RUNNER_TOKEN ? "env:RUNNER_TOKEN" : newRunnerToken());
+  const staged = stageConfig(configPath, doc.toString());
+  try {
+    // link is no-clobber even if another init creates the config after our initial check.
+    fs.linkSync(staged.temporary, staged.target);
+  } finally {
+    fs.rmSync(staged.temporary, { force: true });
+  }
+  return { written: true, configPath };
+}
+
 /**
- * Interactive, non-destructive setup: fills what is missing in config.yaml, keeps every
- * other field and comment, verifies credentials against Feishu/Telegram, and stores
- * secrets in the OS keychain with keychain: refs in the file.
+ * Interactive setup. Fills what is missing in config.yaml and keeps every other field and
+ * comment; verifies credentials against Feishu/Telegram; stores secrets in the OS keychain
+ * with keychain: refs in the file. Nothing (keychain or file) is written until every step
+ * has finished and the result validates. New keychain items are isolated until config commit.
  */
 export async function runInitWizard(options: InitWizardOptions): Promise<InitSummary> {
   const { io, dataDir } = options;
@@ -85,162 +142,290 @@ export async function runInitWizard(options: InitWizardOptions): Promise<InitSum
   const configPath = path.join(dataDir, "config.yaml");
   const existed = fs.existsSync(configPath);
   const doc: Document = parseDocument(existed ? fs.readFileSync(configPath, "utf8") : stringifyYaml(defaultConfig()));
+  if (doc.errors.length) throw new Error("config.yaml 格式错误，未修改配置");
   const summary: InitSummary = { configPath, channels: [], secretStorage: {} };
-
-  io.print(existed ? `更新已有配置：${configPath}（只补缺失项，其余保持不变）` : `新建配置：${configPath}`);
-
-  const storeSecret = async (secretPath: SecretPath, value: string): Promise<void> => {
-    const name = secretPath.join(".");
-    const service = keychainServiceFor(secretPath, dataDir);
+  /** Secrets to store at the very end, after everything else succeeded. */
+  const pending = new Map<string, { secretPath: SecretPath; value: string }>();
+  const setSecret = (secretPath: SecretPath, value: string) => pending.set(secretPath.join("."), { secretPath, value });
+  const resolveExisting = (value: unknown): string | undefined => {
+    if (typeof value !== "string" || needsValue(value)) return undefined;
+    if (!value.startsWith("keychain:") && !value.startsWith("env:")) return value;
     try {
-      storeKeychainSecret(service, value, options.secrets);
-      doc.setIn(secretPath, `keychain:${service}`);
-      summary.secretStorage[name] = "keychain";
-    } catch (error) {
-      io.print(`无法写入系统钥匙串：${error instanceof Error ? error.message : String(error)}`);
-      if (!(await io.confirm(`改为明文写入 config.yaml（文件权限 600）？`, false))) {
-        throw new Error(`${name} 未保存，初始化中止；config.yaml 未修改`);
-      }
-      doc.setIn(secretPath, value);
-      summary.secretStorage[name] = "plaintext";
+      return resolveSecretRef(value, options.secrets);
+    } catch {
+      return undefined;
     }
   };
 
+  io.print(existed ? `更新已有配置：${configPath}（保留已有设置；只修改本次确认的项目，YAML 格式可能调整）` : `新建配置：${configPath}`);
+
   // Runner token: generated, never typed.
-  if (needsValue(doc.getIn(["runner", "token"]))) {
-    await storeSecret(["runner", "token"], options.newToken?.() ?? randomBytes(24).toString("hex"));
-  } else {
+  if (process.env.RUNNER_TOKEN) {
+    if (needsValue(doc.getIn(["runner", "token"]))) doc.setIn(["runner", "token"], "env:RUNNER_TOKEN");
     summary.secretStorage["runner.token"] = "kept";
-  }
+  } else if (needsValue(doc.getIn(["runner", "token"]))) setSecret(["runner", "token"], options.newToken?.() ?? newRunnerToken());
+  else summary.secretStorage["runner.token"] = "kept";
 
   // Feishu.
-  const feishuConfigured = !needsValue(doc.getIn(["feishu", "appSecret"])) && doc.getIn(["feishu", "appId"]) !== "cli_placeholder";
+  const feishuFromEnv = Boolean(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET);
+  const feishuConfigured = feishuFromEnv || !needsValue(doc.getIn(["feishu", "appSecret"])) && doc.getIn(["feishu", "appId"]) !== "cli_placeholder";
   if (await io.confirm("启用飞书机器人？", true)) {
-    summary.channels.push("feishu");
-    if (!feishuConfigured || await io.confirm("飞书凭据已配置，是否重新填写？", false)) {
-      await promptFeishu(doc, io, fetchImpl, storeSecret);
-    } else {
+    if (feishuFromEnv) io.print("飞书凭据由环境变量提供；运行时环境变量优先于文件设置。");
+    if (feishuConfigured && !(await io.confirm("飞书凭据已配置，是否重新填写？", false))) {
+      summary.channels.push("feishu");
       summary.secretStorage["feishu.appSecret"] = "kept";
+    } else {
+      const feishu = await promptFeishu(doc, io, fetchImpl);
+      if (feishu) {
+        doc.setIn(["feishu", "appId"], feishu.appId);
+        setSecret(["feishu", "appSecret"], feishu.appSecret);
+        summary.channels.push("feishu");
+      }
+    }
+    const policy = doc.getIn(["feishu", "policy", "dmMode"]);
+    if (summary.channels.includes("feishu") && (policy ?? "open") === "open") {
+      io.print("  注意：飞书私聊当前对租户内所有人开放（feishu.policy.dmMode: open）。只给自己用时，需在 config.yaml 同时设置 dmMode: allowlist 和 dmAllowlist。");
     }
   }
 
-  // Telegram: never without an allowlist, since an empty one lets anyone drive local agents.
-  const telegramConfigured = Boolean(doc.getIn(["telegram", "botToken"]));
+  // Telegram: never left without an allowlist, since an empty one lets anyone drive local agents.
+  const telegramFromEnv = Boolean(process.env.TELEGRAM_BOT_TOKEN);
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN || doc.getIn(["telegram", "botToken"]);
+  if (telegramFromEnv) io.print("Telegram 凭据由环境变量提供，本次保留该机器人；更换机器人需先更新或移除 TELEGRAM_BOT_TOKEN 再运行向导。");
+  const telegramConfigured = Boolean(telegramToken);
   if (await io.confirm("启用 Telegram 机器人？", telegramConfigured)) {
-    summary.channels.push("telegram");
-    if (!telegramConfigured || await io.confirm("Telegram 已配置，是否重新填写？", false)) {
-      await promptTelegram(doc, io, fetchImpl, storeSecret);
-    } else {
+    if (telegramConfigured && (telegramFromEnv || !(await io.confirm("Telegram 已配置，是否重新填写？", false)))) {
+      summary.channels.push("telegram");
       summary.secretStorage["telegram.botToken"] = "kept";
+      if (!hasItems(doc.getIn(["telegram", "allowedUsers"])) && !hasItems(doc.getIn(["telegram", "allowedChats"]))) {
+        io.print("⚠ 现有 Telegram 配置没有白名单，任何人都能通过机器人操作这台电脑，必须补上。");
+        doc.setIn(["telegram", "allowedUsers"], await promptTelegramUsers(io, fetchImpl, resolveExisting(telegramToken), options));
+      }
+    } else {
+      const telegram = await promptTelegram(io, fetchImpl, doc, options);
+      if (telegram) {
+        setSecret(["telegram", "botToken"], telegram.token);
+        doc.setIn(["telegram", "allowedUsers"], telegram.users);
+        if (telegram.replaceChats) doc.deleteIn(["telegram", "allowedChats"]);
+        summary.channels.push("telegram");
+      }
+    }
+  }
+
+  if (feishuConfigured && !summary.channels.includes("feishu")) {
+    summary.channels.push("feishu");
+    io.print("本次未修改已有飞书配置。");
+  }
+  if (telegramConfigured && !summary.channels.includes("telegram")) {
+    summary.channels.push("telegram");
+    io.print("本次未修改已有 Telegram 凭据。");
+    if (!hasItems(doc.getIn(["telegram", "allowedUsers"])) && !hasItems(doc.getIn(["telegram", "allowedChats"]))) {
+      io.print("现有 Telegram 仍会启用，需补上白名单。");
+      doc.setIn(["telegram", "allowedUsers"], await promptTelegramUsers(io, fetchImpl, resolveExisting(telegramToken), options));
     }
   }
 
   // Workspace root.
   const currentRoot = String(doc.getIn(["workspaces", "root"]) ?? path.join(os.homedir(), "Projects"));
-  const root = path.resolve((await io.ask("项目根目录（Agent 默认在这里工作）", currentRoot)).replace(/^~(?=$|\/)/, os.homedir()));
+  const answerRoot = await io.ask("项目根目录（Agent 默认在这里工作）", currentRoot);
+  const root = path.resolve(answerRoot.replace(/^~(?=$|\/)/, os.homedir()));
+  if (answerRoot !== currentRoot || !doc.hasIn(["workspaces", "root"])) doc.setIn(["workspaces", "root"], root);
+  let createRoot = false;
   if (!fs.existsSync(root)) {
-    if (await io.confirm(`${root} 不存在，现在创建？`, true)) fs.mkdirSync(root, { recursive: true });
+    createRoot = await io.confirm(`${root} 不存在，现在创建？`, true);
+    if (!createRoot) throw new Error("项目目录不存在，初始化中止；原配置和密钥未修改");
   }
-  doc.setIn(["workspaces", "root"], root);
 
-  // Default agent among installed CLIs.
+  // Default agent: installed CLIs, plus the current default (e.g. pi or a custom backend).
   const installed = Object.entries(AGENT_COMMANDS).filter(([, commands]) => commands.some(hasCommand)).map(([id]) => id);
+  const current = String(doc.getIn(["defaultAgent"]) ?? "") || (existed ? String(doc.getIn(["defaultBackend"]) ?? "") : "");
+  const backends = doc.getIn(["backends"]) as { has?: (key: string) => boolean } | undefined;
+  const currentValid = Boolean(current) && ((SUPPORTED_AGENT_IDS as readonly string[]).includes(current) || backends?.has?.(current) === true);
+  const choices = [...new Set([...(currentValid ? [current] : []), ...installed])];
   io.print(`已检测到的 Agent CLI：${installed.length ? installed.join("、") : "无"}`);
   for (const [id, hint] of Object.entries(INSTALL_HINTS)) {
     if (!installed.includes(id)) io.print(`  未安装 ${id}：${hint}`);
   }
-  if (installed.length) {
-    const current = String(doc.getIn(["defaultAgent"]) ?? doc.getIn(["defaultBackend"]) ?? "");
+  if (choices.length) {
     let choice = "";
-    while (!installed.includes(choice)) {
-      choice = (await io.ask(`默认 Agent（${installed.join(" / ")}）`, installed.includes(current) ? current : installed[0])).trim();
+    while (!choices.includes(choice)) {
+      choice = (await io.ask(`默认 Agent（${choices.join(" / ")}）`, choices[0])).trim();
     }
-    doc.setIn(["defaultAgent"], choice);
-    if ((SUPPORTED_AGENT_IDS as readonly string[]).includes(choice)) doc.setIn(["defaultBackend"], choice);
+    if (choice !== current) {
+      doc.setIn(["defaultAgent"], choice);
+      if ((SUPPORTED_AGENT_IDS as readonly string[]).includes(choice)) doc.setIn(["defaultBackend"], choice);
+    }
     summary.defaultAgent = choice;
   } else {
     io.print("至少安装一个 Agent CLI 才能写代码；安装后重新运行 codebridge init 选择默认 Agent。");
   }
 
-  // Refs are strings, so the schema validates the file exactly as written.
-  ConfigSchema.parse(doc.toJS());
-  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const temporary = `${configPath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, doc.toString(), { mode: 0o600, flag: "wx" });
-  fs.renameSync(temporary, configPath);
+  // Validate before touching credentials. Each new item has its own name, so even a
+  // failed commit cannot replace a secret referenced by the live config/deployer.
+  io.checkCancelled();
+  const planned = [...pending.values()].map((entry) => ({
+    ...entry, service: `${keychainServiceFor(entry.secretPath, dataDir)}.init-${randomBytes(12).toString("hex")}`,
+  }));
+  for (const entry of planned) doc.setIn(entry.secretPath, `keychain:${entry.service}`);
+  const staged = stageConfig(configPath, doc.toString());
+  const stored: string[] = [];
+  let committed = false;
+  try {
+    for (const { secretPath, value, service } of planned) {
+      const name = secretPath.join(".");
+      let saved = false;
+      try {
+        storeKeychainSecret(service, value, options.secrets);
+        stored.push(service);
+        saved = resolveSecretRef(`keychain:${service}`, options.secrets) === value;
+      } catch { /* Offer explicit plaintext fallback, without leaking helper errors. */ }
+      if (saved) {
+        summary.secretStorage[name] = "keychain";
+      } else {
+        if (stored.includes(service)) {
+          removeStagedSecret(service, options.secrets);
+          stored.splice(stored.indexOf(service), 1);
+        }
+        if (!(await io.confirm(`无法写入系统钥匙串，把 ${name} 明文写入 config.yaml（文件权限 600）？`, false))) {
+          throw new Error(`${name} 未保存，初始化中止；原配置和密钥未修改`);
+        }
+        doc.setIn(secretPath, value);
+        summary.secretStorage[name] = "plaintext";
+      }
+    }
+    io.checkCancelled();
+    fs.writeFileSync(staged.temporary, doc.toString());
+    if (createRoot) fs.mkdirSync(root, { recursive: true });
+    fs.renameSync(staged.temporary, staged.target);
+    committed = true;
+  } finally {
+    fs.rmSync(staged.temporary, { force: true });
+    if (!committed) {
+      const failed: string[] = [];
+      for (const service of stored) {
+        try { removeStagedSecret(service, options.secrets); } catch { failed.push(service); }
+      }
+      if (failed.length) io.print(`未能清理新建钥匙串条目：${failed.join("、")}；原配置引用的密钥未修改。`);
+    }
+  }
   return summary;
 }
 
-type StoreSecret = (secretPath: SecretPath, value: string) => Promise<void>;
+function hasItems(node: unknown): boolean {
+  const items = (node as { items?: unknown[] } | undefined)?.items;
+  return Array.isArray(node) ? node.length > 0 : Boolean(items?.length);
+}
 
-async function promptFeishu(doc: Document, io: WizardIo, fetchImpl: typeof fetch, storeSecret: StoreSecret): Promise<void> {
-  const domain = String(doc.getIn(["feishu", "domain"]) ?? "https://open.feishu.cn").replace(/\/$/, "");
+async function promptFeishu(doc: Document, io: WizardIo, fetchImpl: typeof fetch): Promise<{ appId: string; appSecret: string } | undefined> {
+  const domain = String(process.env.FEISHU_DOMAIN ?? doc.getIn(["feishu", "domain"]) ?? "https://open.feishu.cn").replace(/\/$/, "");
   io.print("飞书开放平台 → 企业自建应用 → 凭证与基础信息，复制 App ID 和 App Secret。");
   for (let attempt = 1; attempt <= 3; attempt++) {
     const current = String(doc.getIn(["feishu", "appId"]) ?? "");
-    const appId = (await io.ask("飞书 App ID", current === "cli_placeholder" ? undefined : current)).trim();
+    const appId = (await io.ask("飞书 App ID（输入 /skip 跳过；无默认值时回车也可跳过）", current === "cli_placeholder" ? undefined : current)).trim();
+    if (!appId || appId === "/skip") {
+      io.print("已跳过飞书。");
+      return undefined;
+    }
     const appSecret = (await io.askSecret("飞书 App Secret（输入不显示）")).trim();
-    if (!appId || !appSecret) {
-      io.print("App ID 和 App Secret 都不能为空。");
-      continue;
+    if (!appSecret) {
+      io.print("已跳过飞书，本次不修改凭据。");
+      return undefined;
     }
     const problem = await verifyFeishu(fetchImpl, domain, appId, appSecret);
     if (!problem) {
-      doc.setIn(["feishu", "appId"], appId);
-      await storeSecret(["feishu", "appSecret"], appSecret);
       io.print("✓ 飞书凭据有效。");
       io.print("  还需在开放平台：开启机器人；开通 im:message、im:message:send_as_bot；事件订阅选长连接并添加 im.message.receive_v1。");
-      return;
+      return { appId, appSecret };
     }
     io.print(`✗ 飞书凭据校验失败：${problem}`);
   }
-  throw new Error("飞书凭据连续 3 次校验失败，初始化中止；config.yaml 未修改");
+  if (await io.confirm("飞书连续 3 次校验失败，跳过飞书、先完成其余配置？", true)) return undefined;
+  throw new Error("飞书凭据连续 3 次校验失败，初始化中止；原配置和密钥未修改");
 }
 
 async function verifyFeishu(fetchImpl: typeof fetch, domain: string, appId: string, appSecret: string): Promise<string | undefined> {
+  // Never send the secret over plain HTTP.
+  if (!/^https:\/\//.test(domain)) return `feishu.domain 不是 https（${domain}），不发送密钥`;
   try {
     const response = await fetchImpl(`${domain}/open-apis/auth/v3/tenant_access_token/internal`, {
       method: "POST",
+      redirect: "error",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
       signal: AbortSignal.timeout(10_000),
     });
     const body = await response.json().catch(() => ({})) as { code?: number; msg?: string };
-    return body.code === 0 ? undefined : `${body.msg ?? `HTTP ${response.status}`}（code ${body.code ?? "?"}）`;
+    return response.ok && body.code === 0 ? undefined : `${body.msg ?? `HTTP ${response.status}`}（code ${body.code ?? "?"}）`.replaceAll(appSecret, "[REDACTED]");
   } catch (error) {
-    return `无法连接 ${domain}：${error instanceof Error ? error.message : String(error)}`;
+    return `无法连接 ${domain}：${error instanceof Error ? error.message : String(error)}`.replaceAll(appSecret, "[REDACTED]");
   }
 }
 
-async function promptTelegram(doc: Document, io: WizardIo, fetchImpl: typeof fetch, storeSecret: StoreSecret): Promise<void> {
+async function promptTelegram(io: WizardIo, fetchImpl: typeof fetch, doc: Document, options: InitWizardOptions): Promise<{ token: string; users: string[]; replaceChats: boolean } | undefined> {
   io.print("在 Telegram 找 @BotFather，/newbot 后复制 bot token。");
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const token = (await io.askSecret("Telegram bot token（输入不显示）")).trim();
+    const token = (await io.askSecret("Telegram bot token（输入不显示，回车跳过 Telegram）")).trim();
+    if (!token) {
+      io.print("已跳过 Telegram。");
+      return undefined;
+    }
     const bot = await telegramCall<{ username?: string }>(fetchImpl, token, "getMe");
     if (!bot.ok) {
       io.print(`✗ Telegram token 校验失败：${bot.error}`);
       continue;
     }
     io.print(`✓ 机器人 @${bot.result.username ?? "?"} 有效。`);
-    const users = await promptTelegramUsers(io, fetchImpl, token);
-    await storeSecret(["telegram", "botToken"], token);
-    doc.setIn(["telegram", "allowedUsers"], users);
-    return;
+    const existing = doc.getIn(["telegram", "allowedUsers"]) as { toJSON?: () => unknown } | undefined;
+    const existingUsers = (existing?.toJSON?.() as string[] | undefined) ?? [];
+    const chats = doc.getIn(["telegram", "allowedChats"]) as { toJSON?: () => unknown } | undefined;
+    const existingChats = (chats?.toJSON?.() as string[] | undefined) ?? [];
+    if ((existingUsers.length || existingChats.length) && await io.confirm(`保留现有白名单（用户：${existingUsers.join(", ") || "未限制"}；聊天：${existingChats.join(", ") || "未限制"}；选否将改用新用户白名单并清除原聊天限制）？`, true)) {
+      return { token, users: existingUsers.map(String), replaceChats: false };
+    }
+    return { token, users: await promptTelegramUsers(io, fetchImpl, token, options), replaceChats: true };
   }
-  throw new Error("Telegram token 连续 3 次校验失败，初始化中止；config.yaml 未修改");
+  if (await io.confirm("Telegram 连续 3 次校验失败，跳过 Telegram、先完成其余配置？", true)) return undefined;
+  throw new Error("Telegram token 连续 3 次校验失败，初始化中止；原配置和密钥未修改");
 }
 
-/** An empty allowlist lets anyone who finds the bot drive local agents, so at least one id is required. */
-async function promptTelegramUsers(io: WizardIo, fetchImpl: typeof fetch, token: string): Promise<string[]> {
-  if (await io.confirm("自动识别你的 Telegram 用户 ID？（需要你先给机器人发一条消息）", true)) {
-    io.print("现在去 Telegram 给机器人发任意一条消息，然后回到这里按回车。");
-    await io.ask("已发送？按回车继续", "");
-    const updates = await telegramCall<Array<{ message?: { from?: { id?: number; username?: string } } }>>(fetchImpl, token, "getUpdates");
-    const sender = updates.ok ? [...updates.result].reverse().find((update) => update.message?.from?.id)?.message?.from : undefined;
-    if (sender?.id && await io.confirm(`识别到用户 ${sender.username ? `@${sender.username} ` : ""}(${sender.id})，只允许此人使用？`, true)) {
-      return [String(sender.id)];
+interface TelegramUpdate {
+  update_id: number;
+  message?: { text?: string; chat?: { type?: string }; from?: { id?: number; username?: string; is_bot?: boolean } };
+}
+
+/**
+ * At least one user id is required. Auto-detection binds to a one-time code the user sends
+ * in a private chat, so a stranger messaging the public bot can never be picked.
+ */
+async function promptTelegramUsers(io: WizardIo, fetchImpl: typeof fetch, token: string | undefined, options: InitWizardOptions): Promise<string[]> {
+  if (token && await io.confirm("自动识别你的 Telegram 用户 ID？（需要私聊机器人发一个验证码）", true)) {
+    const code = options.newCode?.() ?? `cb-${randomBytes(8).toString("hex")}`;
+    io.print(`在 Telegram 私聊你的机器人，发送这段验证码：${code}`);
+    await io.ask("发送后按回车继续", "");
+    let offset: number | undefined;
+    let match: TelegramUpdate | undefined;
+    for (let page = 0; page < 10 && !match; page++) {
+      const updates = await telegramCall<TelegramUpdate[]>(fetchImpl, token, `getUpdates${offset === undefined ? "" : `?offset=${offset}`}`);
+      if (!updates.ok) {
+        io.print(`读取消息失败（${updates.error}），改为手动填写。`);
+        break;
+      }
+      match = updates.result.find((update) => update.message?.text?.trim() === code
+        && update.message.chat?.type === "private" && update.message.from?.is_bot === false && update.message.from?.id);
+      if (match || updates.result.length < 100) break;
+      offset = updates.result.at(-1)!.update_id + 1;
     }
-    io.print(updates.ok ? "没有识别到消息，改为手动填写。" : `读取消息失败（${updates.error}），改为手动填写。`);
+    if (match) {
+      // Acknowledge, so the code is not delivered to the bridge as a prompt on first start.
+      const acknowledged = await telegramCall(fetchImpl, token, `getUpdates?offset=${match.update_id + 1}&limit=1`);
+      if (!acknowledged.ok) throw new Error("Telegram 验证码消息未能确认，初始化中止以免它被当作任务执行；原配置和密钥未修改");
+      const from = match.message!.from!;
+      if (await io.confirm(`验证码来自 ${from.username ? `@${from.username} ` : ""}(${from.id})，只允许此人使用？`, false)) {
+        return [String(from.id)];
+      }
+    } else {
+      io.print("没有收到这段验证码的私聊消息，改为手动填写。");
+    }
   }
   for (;;) {
     const ids = (await io.ask("允许使用的 Telegram 用户 ID（数字，逗号分隔；可问 @userinfobot）")).split(",").map((id) => id.trim()).filter(Boolean);
@@ -252,45 +437,130 @@ async function promptTelegramUsers(io: WizardIo, fetchImpl: typeof fetch, token:
 async function telegramCall<T>(fetchImpl: typeof fetch, token: string, method: string): Promise<{ ok: true; result: T } | { ok: false; error: string }> {
   if (!/^\d+:[A-Za-z0-9_-]+$/.test(token)) return { ok: false, error: "格式应为 123456:ABC…" };
   try {
-    const response = await fetchImpl(`https://api.telegram.org/bot${token}/${method}`, { signal: AbortSignal.timeout(10_000) });
+    const response = await fetchImpl(`https://api.telegram.org/bot${token}/${method}`, { redirect: "error", signal: AbortSignal.timeout(10_000) });
     const body = await response.json().catch(() => ({})) as { ok?: boolean; result?: T; description?: string };
-    return body.ok ? { ok: true, result: body.result as T } : { ok: false, error: body.description ?? `HTTP ${response.status}` };
+    return response.ok && body.ok ? { ok: true, result: body.result as T } : { ok: false, error: (body.description ?? `HTTP ${response.status}`).replaceAll(token, "[REDACTED]") };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, error: (error instanceof Error ? error.message : String(error)).replaceAll(token, "[REDACTED]") };
   }
 }
 
-/** Readline-backed WizardIo; askSecret mutes echo while the user types. */
-export function terminalIo(): WizardIo & { close(): void } {
-  let muted = false;
-  const output = new Writable({
-    write(chunk, encoding, callback) {
-      if (!muted) process.stdout.write(chunk, encoding);
-      callback();
-    },
-  });
-  const rl = createInterface({ input: process.stdin, output, terminal: true });
-  const ask = async (question: string, defaultValue?: string) => {
-    const answer = await rl.question(`${question}${defaultValue ? ` [${defaultValue}]` : ""}: `);
-    return answer.trim() || defaultValue || "";
-  };
-  return {
-    print: (text) => process.stdout.write(`${text}\n`),
-    ask,
-    askSecret: async (question) => {
-      process.stdout.write(`${question}: `);
-      muted = true;
-      try {
-        return await rl.question("");
-      } finally {
-        muted = false;
-        process.stdout.write("\n");
+export interface LineState {
+  buffer: string;
+  escape?: string;
+  done: boolean;
+  cancelled: boolean;
+  echo: string;
+}
+
+/** No history; discard pasted lines after Enter, including fragmented escape sequences. */
+export function applyLineInput(state: Pick<LineState, "buffer" | "escape">, chunk: string, secret: boolean): LineState {
+  let buffer = state.buffer;
+  let escape = state.escape ?? "";
+  let echo = "";
+  for (const ch of chunk) {
+    if (escape) {
+      escape += ch;
+      if (escape.length === 2 && (ch === "[" || ch === "O")) continue;
+      if (escape.length === 2 || /[@-~]/.test(ch)) escape = "";
+      continue;
+    }
+    if (ch === "\x1b") { escape = ch; continue; }
+    if (ch === "\r" || ch === "\n") return { buffer, done: true, cancelled: false, echo };
+    if (ch === "\u0003" || (ch === "\u0004" && !buffer)) return { buffer: "", done: true, cancelled: true, echo };
+    if (ch === "\u007f" || ch === "\b") {
+      if (buffer) {
+        buffer = [...buffer].slice(0, -1).join("");
+        if (!secret) echo += "\b \b";
       }
+      continue;
+    }
+    if (ch < " ") continue;
+    buffer += ch;
+    if (!secret) echo += ch;
+  }
+  return { buffer, escape, done: false, cancelled: false, echo };
+}
+
+/** Keep raw mode until close so type-ahead during network calls is never echoed. */
+export function terminalIo(): WizardIo & { close(): void } {
+  const stdin = process.stdin;
+  const wasRaw = stdin.isRaw;
+  let decoder = new StringDecoder("utf8");
+  let active: { secret: boolean; state: Pick<LineState, "buffer" | "escape">; resolve(value: string): void; reject(error: Error): void } | undefined;
+  let cancelled = false;
+  let pasting = false;
+  let discardPaste = false;
+  let marker = "";
+  const consume = (text: string) => {
+    if (text.includes("\u0003")) {
+      cancelled = true;
+      active?.reject(new Error("已取消初始化"));
+      active = undefined;
+      return;
+    }
+    if (discardPaste) return;
+    if (!active) {
+      if (text.includes("\u0003") || text.includes("\u0004")) cancelled = true;
+      return;
+    }
+    const next = applyLineInput(active.state, text, active.secret);
+    if (next.echo) process.stdout.write(next.echo);
+    active.state = next;
+    if (!next.done) return;
+    const pending = active;
+    active = undefined;
+    if (pasting) discardPaste = true;
+    process.stdout.write("\n");
+    if (next.cancelled) { cancelled = true; pending.reject(new Error("已取消初始化")); }
+    else pending.resolve(next.buffer);
+  };
+  const onData = (chunk: Buffer) => {
+    for (const ch of decoder.write(chunk)) {
+      if (marker || ch === "\x1b") {
+        marker += ch;
+        if (marker === "\x1b[200~") { pasting = true; marker = ""; continue; }
+        if (marker === "\x1b[201~") { pasting = false; discardPaste = false; marker = ""; continue; }
+        if ("\x1b[200~".startsWith(marker) || "\x1b[201~".startsWith(marker)) continue;
+        consume(marker);
+        marker = "";
+      } else consume(ch);
+    }
+  };
+  const onEnd = () => {
+    cancelled = true;
+    active?.reject(new Error("终端输入已关闭，初始化中止"));
+    active = undefined;
+  };
+  stdin.setRawMode(true);
+  process.stdout.write("\x1b[?2004h");
+  stdin.on("data", onData);
+  stdin.on("end", onEnd);
+  stdin.resume();
+  const readLine = (prompt: string, secret: boolean) => new Promise<string>((resolve, reject) => {
+    if (cancelled) { reject(new Error("已取消初始化")); return; }
+    decoder = new StringDecoder("utf8");
+    active = { secret, state: { buffer: "" }, resolve, reject };
+    process.stdout.write(prompt);
+  });
+  return {
+    checkCancelled: () => { if (cancelled) throw new Error("已取消初始化"); },
+    print: (text) => process.stdout.write(`${text}\n`),
+    ask: async (question, defaultValue) => {
+      const answer = (await readLine(`${question}${defaultValue ? ` [${defaultValue}]` : ""}: `, false)).trim();
+      return answer || defaultValue || "";
     },
+    askSecret: (question) => readLine(`${question}: `, true),
     confirm: async (question, defaultYes) => {
-      const answer = (await rl.question(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"}: `)).trim().toLowerCase();
+      const answer = (await readLine(`${question} ${defaultYes ? "[Y/n]" : "[y/N]"}: `, false)).trim().toLowerCase();
       return answer ? answer.startsWith("y") : defaultYes;
     },
-    close: () => rl.close(),
+    close: () => {
+      stdin.off("data", onData);
+      stdin.off("end", onEnd);
+      process.stdout.write("\x1b[?2004l");
+      stdin.setRawMode(wasRaw ?? false);
+      stdin.pause();
+    },
   };
 }

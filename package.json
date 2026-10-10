@@ -19,7 +19,12 @@
     "runner": "node packages/runner-host/dist/cli.js",
     "start:all": "bash scripts/start.sh",
     "setup": "bash scripts/start.sh setup",
-    "design:qa": "node scripts/design-qa.mjs"
+    "design:qa": "node scripts/design-qa.mjs",
+    "version": "node scripts/sync-version.mjs",
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "package:release": "pnpm build && node scripts/package-release.mjs",
+    "test:package": "node scripts/package-smoke.mjs"
   },
   "bin": {
     "codebridge": "./apps/bridge/dist/cli.js",

@@ -1,10 +1,18 @@
 #!/usr/bin/env node
-import { ConfigStore } from "@codebridge/core";
+import { ConfigStore, VERSION } from "@codebridge/core";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes("--version") || args.includes("-V")) {
+    console.log(VERSION);
+    return;
+  }
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("Usage: codebridge-runner [-c <config.yaml>] [--version] [--help]");
+    return;
+  }
   const configFlag = args.indexOf("-c");
   const configFile =
     configFlag >= 0 ? args[configFlag + 1] : undefined;

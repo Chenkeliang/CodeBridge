@@ -6,13 +6,12 @@ import {
   ConfigStore,
   DEFAULT_DATA_DIR,
   VERSION,
-  defaultConfig,
   migrateConfigSecrets,
   resolveDefaultAgentId,
 } from "@codebridge/core";
 import { McpRuntime, McpServerRegistry, SdkMcpClientFactory } from "@codebridge/mcp-runtime";
 import { FeishuAlertMonitor } from "./feishu-alert-monitor.js";
-import { runInitWizard, terminalIo } from "./init-wizard.js";
+import { initDefaults, runInitWizard, terminalIo } from "./init-wizard.js";
 import {
   ApprovalService,
   CapabilityRegistry,
@@ -542,15 +541,10 @@ program
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
   .option("--defaults", "非交互：仅在 config.yaml 不存在时写入默认配置")
   .action(async (opts: { dataDir: string; defaults?: boolean }) => {
-    const configPath = path.join(opts.dataDir, "config.yaml");
     if (opts.defaults || !process.stdin.isTTY) {
-      // Never overwrite: the old init replaced an existing config with defaults.
-      if (fs.existsSync(configPath)) {
-        console.log("config.yaml 已存在，未修改:", configPath);
-        return;
-      }
-      new ConfigStore({ dataDir: opts.dataDir }).save(defaultConfig());
-      console.log("已写入默认配置:", configPath);
+      const result = initDefaults(opts.dataDir);
+      console.log(result.written ? "已写入默认配置（随机 Runner token 或环境变量引用，文件权限 600）:" : "config.yaml 已存在，未修改:", result.configPath);
+      if (result.written) console.log("非交互模式未校验通道凭据；可运行 codebridge init 完成配置，secrets migrate 将明文密钥迁入钥匙串。");
       return;
     }
     const io = terminalIo();
@@ -559,7 +553,7 @@ program
       io.print(`\n✓ 已保存 ${summary.configPath}`);
       io.print(`  通道：${summary.channels.join("、") || "无"}；默认 Agent：${summary.defaultAgent ?? "未设置"}`);
       io.print(`  密钥：${Object.entries(summary.secretStorage).map(([name, where]) => `${name}=${where}`).join("，")}`);
-      io.print("下一步：./scripts/start.sh start 启动；codebridge doctor 检查连接。");
+      io.print("下一步：运行 codebridge-runner，另开终端运行 codebridge start；源码安装也可用 ./scripts/start.sh start。codebridge doctor 检查连接。");
     } finally {
       io.close();
     }

@@ -21,3 +21,6 @@ jobs:
       - run: pnpm build
       - run: pnpm lint
       - run: pnpm test
+      - run: pnpm version:check
+      - run: node scripts/package-release.mjs
+      - run: pnpm test:package

@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/brand/agnet-logo-carbon.svg" />
-    <img alt="AGNET · CodeBridge" src="apps/web/public/brand/agnet-logo.svg" width="320" />
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/brand/agent-logo-carbon.svg" />
+    <img alt="AGENT · CodeBridge" src="apps/web/public/brand/agent-logo.svg" width="320" />
   </picture>
 </p>
 
@@ -30,6 +30,12 @@ Telegram 长轮询 ─┘
 | **ACP adapter** | Cursor、Claude Code、Codex 的协议适配 |
 
 Bridge 与 Runner 分开设计：Bridge 可以放在 Docker 或远程机器，Runner 必须靠近 CLI、代码和凭据所在的宿主机。
+
+## npm 安装候选
+
+仓库可通过 `pnpm package:release` 生成 `dist/codebridge-0.1.0.tgz`，再用 `npm install -g /absolute/path/codebridge-0.1.0.tgz` 安装。安装包包含 Bridge、宿主机 Runner 和 Web 静态资源，无需在目标机器构建源码。
+
+这是尚未公开发布的候选包，不能直接假设 `npx codebridge` 可用。安装、隔离验收和发布步骤见 [npm 交付说明](docs/zh-CN/npm-release.md)。
 
 ## 主要能力
 
@@ -65,7 +71,9 @@ cd CodeBridge
 ./scripts/start.sh start
 ```
 
-引导配置保存在 `~/.codebridge/config.yaml`。初始化向导（也可单独运行 `codebridge init`）会当场校验飞书 / Telegram 凭据、生成 Runner token、选择项目目录和默认 Agent；密钥存入系统钥匙串，配置文件里只写 `keychain:` 引用。对已有配置只补缺失项，不覆盖其他内容。启用 Telegram 时必须填写允许使用的用户 ID。
+引导配置保存在 `~/.codebridge/config.yaml`。初始化向导（也可单独运行 `codebridge init`）会当场校验飞书 / Telegram 凭据、生成 Runner token、选择项目目录和默认 Agent；密钥存入系统钥匙串，配置文件里只写 `keychain:` 引用。已有设置和注释保留，只修改向导中确认的项目；YAML 排版可能调整。Telegram 必须有用户或聊天白名单，自动识别用户时需私聊机器人发送一次性验证码。
+
+`codebridge init --defaults` 或无终端运行时，仅新建不存在的配置；随机 Runner token 以明文写入权限 `600` 的文件（已有 `RUNNER_TOKEN` 环境变量时保存引用），不访问钥匙串、不校验通道凭据。之后可运行 `codebridge secrets migrate` 迁入钥匙串。
 
 检查状态：
 

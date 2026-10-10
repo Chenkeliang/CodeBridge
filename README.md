@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/brand/agnet-logo-carbon.svg" />
-    <img alt="AGNET · CodeBridge" src="apps/web/public/brand/agnet-logo.svg" width="320" />
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/brand/agent-logo-carbon.svg" />
+    <img alt="AGENT · CodeBridge" src="apps/web/public/brand/agent-logo.svg" width="320" />
   </picture>
 </p>
 
@@ -28,6 +28,12 @@ Telegram polling ─┘
 | **Agent adapters** | Cursor, Claude Code, and Codex ACP adapters plus the native Pi Node SDK adapter |
 
 The Bridge and Runner are intentionally separate: the Bridge can be remote or containerized, but the Runner stays next to the CLIs and files it needs to access.
+
+## npm distribution candidate
+
+Run `pnpm package:release` to build `dist/codebridge-0.1.0.tgz`, then install the artifact with `npm install -g /absolute/path/codebridge-0.1.0.tgz`. It includes the Bridge, host Runner and Workbench assets; the target machine does not need a source build.
+
+This is an unpublished candidate, so `npx codebridge` is not yet a supported installation command. Run `pnpm test:package` for isolated installation verification. See the [release guide](docs/zh-CN/npm-release.md) for versioning and publication steps.
 
 ## Highlights
 
@@ -63,7 +69,9 @@ cd CodeBridge
 ./scripts/start.sh start
 ```
 
-The setup wizard (also available as `codebridge init`) writes `~/.codebridge/config.yaml`. It verifies Feishu / Telegram credentials on the spot, generates a Runner token, and picks the project root and default agent. Secrets go to the OS keychain; the file only holds `keychain:` references. On an existing config it only fills what is missing. Telegram requires an allowlist of user IDs.
+The setup wizard (also available as `codebridge init`) writes `~/.codebridge/config.yaml`. It verifies Feishu / Telegram credentials on the spot, generates a Runner token, and picks the project root and default agent. Secrets go to the OS keychain; the file only holds `keychain:` references. Existing settings and comments are preserved unless explicitly changed in the wizard; YAML formatting may change. Telegram requires a user or chat allowlist. Automatic user detection uses a one-time code sent to the bot in a private chat.
+
+With `codebridge init --defaults` or no TTY, only a missing config is created. A random Runner token is stored in plaintext in a mode-600 file (or as an environment reference when `RUNNER_TOKEN` is set). This path does not access the keychain or verify channel credentials. Run `codebridge secrets migrate` afterward to move plaintext secrets to the keychain.
 
 Verify the installation:
 
