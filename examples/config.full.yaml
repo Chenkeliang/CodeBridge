@@ -67,6 +67,13 @@ workspaces:
 #     shared-tools:
 #       transport: http
 #       url: https://mcp.example.com/api
+#   session:
+#     # 新消息到达时，若当前会话闲置太久或上下文太满，自动开新会话（等同 /new，可 /resume 找回）。
+#     # 有运行中或排队的任务时不轮换；飞书告警群不轮换。
+#     autoRotate:
+#       enabled: true        # 默认开启
+#       idleHours: 12        # 闲置超过该小时数即轮换；0 关闭
+#       maxContextRatio: 0.5 # 上下文用量达到模型窗口的该比例即轮换
 
 runnerHost:
   listen: 127.0.0.1:19789

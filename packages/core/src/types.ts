@@ -202,6 +202,12 @@ export interface ChannelCommandContext {
   activeRunId: string | null;
   /** Catalog / runtime 上当前槽位绑定的 ACP provider session；未学到则为 null。 */
   providerSessionId: string | null;
+  /** Last activity of the bound session, read before the incoming message bumps it. */
+  lastActivityAt?: string | null;
+  /** Latest ACP usage_update for the session: context tokens in use and the model window. */
+  contextUsed?: number | null;
+  contextSize?: number | null;
+  queuedTurns?: number;
 }
 
 export interface ChannelSessionEvent {

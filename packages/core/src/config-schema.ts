@@ -125,8 +125,18 @@ export const McpServerConfigSchema = z.discriminatedUnion("transport", [
   }),
 ]);
 
+export const SessionAutoRotateConfigSchema = z.object({
+  /** Default on: a chat should not resume one provider session forever. */
+  enabled: z.boolean().optional(),
+  /** Start a fresh session when the last one has been idle this long; 0 disables. Default 12. */
+  idleHours: z.number().min(0).optional(),
+  /** Start a fresh session once the last reported context use reaches this share of the window. Default 0.5. */
+  maxContextRatio: z.number().gt(0).max(1).optional(),
+});
+
 export const SessionRuntimeConfigSchema = z.object({
   maxQueuedTurns: z.number().int().min(1).max(1_000).default(100),
+  autoRotate: SessionAutoRotateConfigSchema.optional(),
 });
 
 export const OrchestrationConfigSchema = z.object({
@@ -245,6 +255,7 @@ export const ConfigSchema = z.object({
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
+export type SessionAutoRotateConfig = z.infer<typeof SessionAutoRotateConfigSchema>;
 export type FeishuPolicy = z.infer<typeof FeishuPolicySchema>;
 
 /** Web 设置页的 defaultAgent 优先；没有再回退到 defaultBackend。 */

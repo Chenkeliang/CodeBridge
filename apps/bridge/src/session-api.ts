@@ -1118,10 +1118,15 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       });
     }
     const runtime = options.workItems.getSessionRuntime(session.id);
+    const usage = options.workItems.getLatestContextUsage(session.id);
     return c.json({
       session_id: session.id,
       active_run_id: runtime?.activeRunId ?? null,
       provider_session_id: session.providerSessionId,
+      last_activity_at: session.updatedAt,
+      context_used: usage?.used ?? null,
+      context_size: usage?.size ?? null,
+      queued_turns: options.workItems.listQueuedTurns(session.id, { limit: 1 }).total,
     });
   });
 

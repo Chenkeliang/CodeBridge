@@ -1619,6 +1619,36 @@ describe("session API", () => {
     workItems.close();
   });
 
+  it("reports last activity, latest context usage and queued turns for session rotation", async () => {
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({ catalog, agents, workItems, coordinator }, TOKEN);
+    const submit = (key: string) =>
+      app.request("/v1/channels/feishu/conversations/chat/messages", {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", "idempotency-key": key },
+        body: JSON.stringify({ message: "hi", agent_id: "pi", cwd: "/tmp/project" }),
+      });
+    const first = await (await submit("usage-1")).json() as { session_id: string; run_id: string };
+    const workItemId = workItems.getWorkItemBySessionId(first.session_id)!.id;
+    for (const used of [100_000, 711_489]) {
+      workItems.appendEvent({ workItemId, runId: first.run_id, type: "AGENT_EVENT", actor: "adapter",
+        target: "usage_update", payload: { event: { type: "usage_update", used, size: 828_400 } } });
+    }
+    await submit("usage-2");
+    const response = await app.request("/v1/channels/command-context", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: { channel: "feishu", conversation_id: "chat", agent_id: "pi", workspace_key: "/tmp/project", generation: 0 } }),
+    });
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ session_id: first.session_id, context_used: 711_489, context_size: 828_400, queued_turns: 1 });
+    expect(Number.isFinite(Date.parse(body.last_activity_at as string))).toBe(true);
+    catalog.close();
+    workItems.close();
+  });
+
   it("returns a null command context for an unbound slot", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
@@ -1668,6 +1698,10 @@ describe("session API", () => {
       session_id: session.id,
       active_run_id: null,
       provider_session_id: "provider-1",
+      last_activity_at: session.updatedAt,
+      context_used: null,
+      context_size: null,
+      queued_turns: 0,
     });
     catalog.close();
     workItems.close();

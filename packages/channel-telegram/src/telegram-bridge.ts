@@ -5,7 +5,13 @@ import {
   type ChannelSessionIngress,
   type ChannelSlot,
 } from "@codebridge/core";
-import { RunOrchestrator, createChannelStreamProjector, handleSlashCommand } from "@codebridge/router";
+import {
+  RunOrchestrator,
+  createChannelStreamProjector,
+  handleSlashCommand,
+  sessionRotationNotice,
+  sessionRotationReason,
+} from "@codebridge/router";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -413,6 +419,24 @@ export class TelegramBridge {
     }
   }
 
+  /** Start a fresh provider session (same effect as /new) when the bound one is idle or its context is too full. */
+  private async rotateStaleSession(chatId: string, topicId: string | undefined): Promise<void> {
+    if (!this.sessionIngress) return;
+    // Best effort: a failed check must never block the user's message.
+    try {
+      const router = this.orchestrator.router;
+      const generation = router.getSlotGeneration(chatId, topicId);
+      const context = await this.sessionIngress.getSlotCommandContext(this.buildFullSlot(chatId, topicId));
+      const reason = sessionRotationReason(context, this.config.orchestration?.session?.autoRotate, Date.now());
+      // A concurrent message may already have rotated this slot while we awaited.
+      if (!reason || router.getSlotGeneration(chatId, topicId) !== generation) return;
+      router.incrementSlotGeneration(chatId, topicId);
+      await this.sendText(chatId, sessionRotationNotice(reason), topicId).catch(() => {});
+    } catch (err) {
+      this.options.onLog?.(`会话自动轮换检查失败（不影响本条消息）：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   private buildFullSlot(chatId: string, topicId?: string): ChannelSlot {
     const slot = this.orchestrator.router.buildSlot(chatId, topicId);
     return {
@@ -501,6 +525,7 @@ export class TelegramBridge {
       await this.runLegacyAgent(chatId, topicId, prompt);
       return;
     }
+    await this.rotateStaleSession(chatId, topicId);
     const binding = this.orchestrator.router.getBinding(chatId, topicId);
     const showThinking = binding.showThinking ?? true;
     const slot = this.orchestrator.router.buildSlot(chatId, topicId);

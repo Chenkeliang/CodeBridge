@@ -602,6 +602,23 @@ export class SqliteEventStore {
     return row ? toSessionRuntime(row) : undefined;
   }
 
+  /** Latest ACP usage_update persisted for a session (context tokens in use / model window). */
+  getLatestContextUsage(sessionId: string): { used: number; size: number } | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT payload FROM domain_events
+         WHERE work_item_id = (SELECT id FROM work_items WHERE session_id = ?)
+           AND target = 'usage_update'
+         ORDER BY sequence DESC LIMIT 1`,
+      )
+      .get(sessionId) as { payload?: string } | undefined;
+    if (!row?.payload) return undefined;
+    const event = (JSON.parse(row.payload) as { event?: { used?: unknown; size?: unknown } }).event;
+    return typeof event?.used === "number" && typeof event.size === "number"
+      ? { used: event.used, size: event.size }
+      : undefined;
+  }
+
   getTurn(turnId: string): SessionTurn | undefined {
     const row = this.database
       .prepare("SELECT * FROM session_turns WHERE turn_id = ?")

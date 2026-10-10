@@ -351,11 +351,19 @@ export function createChannelSessionIngress(
       session_id: string | null;
       active_run_id: string | null;
       provider_session_id: string | null;
+      last_activity_at?: string | null;
+      context_used?: number | null;
+      context_size?: number | null;
+      queued_turns?: number;
     };
     return {
       sessionId: body.session_id,
       activeRunId: body.active_run_id,
       providerSessionId: body.provider_session_id ?? null,
+      lastActivityAt: body.last_activity_at ?? null,
+      contextUsed: body.context_used ?? null,
+      contextSize: body.context_size ?? null,
+      queuedTurns: body.queued_turns ?? 0,
     };
   };
 

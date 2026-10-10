@@ -4,4 +4,5 @@ export * from "./feishu-stream-presenter.js";
 export * from "./orchestrator.js";
 export * from "./session-list-format.js";
 export * from "./session-router.js";
+export * from "./session-rotation.js";
 export * from "./slash-commands.js";
