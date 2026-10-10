@@ -65,6 +65,49 @@ describe("durable task cards", () => {
     expect(update).toHaveBeenCalledWith("earlier-entity", expect.anything());
   });
 
+  it("retries id conversion while Feishu has not indexed the new card message", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.idConvert
+      .mockResolvedValueOnce({code: 200740, msg: "ErrMsg: queried result is empty;"} as never)
+      .mockResolvedValueOnce({code: 200740, msg: "ErrMsg: queried result is empty;"} as never);
+    const update = vi.fn(async () => {});
+    const streaming = durableMarkdownCard(f.channel, update).stream("chat", {
+      markdown: (controller) => controller.setContent("result"),
+    }, {replyTo: "source"});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.idConvert).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(f.idConvert).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.idConvert).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(700);
+    await streaming;
+    expect(f.idConvert).toHaveBeenCalledTimes(3);
+    expect(f.reply).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith("entity-1", expect.anything());
+  });
+
+  it("gives up after bounded retries", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.idConvert.mockResolvedValue({code: 200740, msg: "empty"} as never);
+    const stuck = expect(durableMarkdownCard(f.channel, vi.fn()).stream("chat", {markdown: vi.fn()}, {replyTo: "source"}))
+      .rejects.toThrow("CardKit id conversion failed (200740) after 5 attempts");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await stuck;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.idConvert).toHaveBeenCalledTimes(5);
+  });
+
+  it("does not retry other conversion errors", async () => {
+    const g = fixture();
+    g.idConvert.mockResolvedValue({code: 99991663, msg: "forbidden"} as never);
+    await expect(durableMarkdownCard(g.channel, vi.fn()).stream("chat", {markdown: vi.fn()}, {replyTo: "source"}))
+      .rejects.toThrow("CardKit id conversion failed (99991663)");
+    expect(g.idConvert).toHaveBeenCalledTimes(1);
+  });
+
   it("does not finalize a Run card until the final API write succeeds", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);

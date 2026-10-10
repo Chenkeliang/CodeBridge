@@ -47,9 +47,7 @@ export function durableMarkdownCard(
       if (sent.code !== 0 || !sent.data?.message_id) {
         throw new Error(`Feishu card reply failed (${sent.code}): ${sent.msg}`);
       }
-      const resolved = await channel.rawClient.cardkit.v1.card.idConvert({
-        data: { message_id: sent.data.message_id },
-      });
+      const resolved = await convertCardId(channel, sent.data.message_id);
       if (resolved.code !== 0 || !resolved.data?.card_id) {
         throw new Error(`CardKit id conversion failed (${resolved.code}): ${resolved.msg}`);
       }
@@ -72,6 +70,22 @@ export function durableMarkdownCard(
       });
     },
   };
+}
+
+/** Feishu indexes a just-sent card message asynchronously; 200740 means "not indexed yet". */
+const ID_CONVERT_NOT_READY = 200740;
+const ID_CONVERT_RETRY_DELAYS_MS = [300, 700, 1500, 3000];
+
+async function convertCardId(channel: LarkChannel, messageId: string) {
+  for (let attempt = 0; ; attempt++) {
+    const resolved = await channel.rawClient.cardkit.v1.card.idConvert({ data: { message_id: messageId } });
+    if (resolved.code !== ID_CONVERT_NOT_READY) return resolved;
+    const delay = ID_CONVERT_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined) {
+      throw new Error(`CardKit id conversion failed (${resolved.code}) after ${attempt + 1} attempts: ${resolved.msg}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
 
 export function markdownCard(content: string): object {
