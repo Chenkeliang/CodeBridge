@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0 — Unreleased candidate
+## 0.1.0 — 2026-10-10
 
-This is the first npm distribution candidate; no public npm release or Git tag has been created yet.
+First npm distribution release.
 
 - Ships the Bridge, host Runner, internal modules and Workbench static assets in one installable package.
 - Adds interactive initialization with credential verification, Telegram allowlists, keychain references and safe cancellation.

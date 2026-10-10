@@ -1,5 +1,5 @@
 {
-  "name": "codebridge",
+  "name": "@graychennpm/codebridge",
   "version": "0.1.0",
   "private": true,
   "description": "自托管多通道 ACP 网关：从飞书或 Telegram 远程驱动本机 Cursor、Claude Code、Codex",

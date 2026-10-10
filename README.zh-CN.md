@@ -31,11 +31,11 @@ Telegram 长轮询 ─┘
 
 Bridge 与 Runner 分开设计：Bridge 可以放在 Docker 或远程机器，Runner 必须靠近 CLI、代码和凭据所在的宿主机。
 
-## npm 安装候选
+## npm 安装
 
-仓库可通过 `pnpm package:release` 生成 `dist/codebridge-0.1.0.tgz`，再用 `npm install -g /absolute/path/codebridge-0.1.0.tgz` 安装。安装包包含 Bridge、宿主机 Runner 和 Web 静态资源，无需在目标机器构建源码。
+需要 Node.js 22.19 或更高版本。运行 `npm install -g @graychennpm/codebridge@0.1.0` 安装，然后运行 `codebridge init` 完成初始化。在两个终端分别运行 `codebridge-runner` 和 `codebridge start`。安装包包含 Bridge、宿主机 Runner 和 Web 静态资源，无需构建源码。
 
-这是尚未公开发布的候选包，不能直接假设 `npx codebridge` 可用。安装、隔离验收和发布步骤见 [npm 交付说明](docs/zh-CN/npm-release.md)。
+也可以使用 `npx @graychennpm/codebridge@0.1.0 init`。源码仓库仍支持 `pnpm package:release` 生成本地 tarball，安装、隔离验收和维护步骤见 [npm 交付说明](docs/zh-CN/npm-release.md)。
 
 ## 主要能力
 

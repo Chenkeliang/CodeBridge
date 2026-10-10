@@ -29,11 +29,11 @@ Telegram polling ─┘
 
 The Bridge and Runner are intentionally separate: the Bridge can be remote or containerized, but the Runner stays next to the CLIs and files it needs to access.
 
-## npm distribution candidate
+## Install with npm
 
-Run `pnpm package:release` to build `dist/codebridge-0.1.0.tgz`, then install the artifact with `npm install -g /absolute/path/codebridge-0.1.0.tgz`. It includes the Bridge, host Runner and Workbench assets; the target machine does not need a source build.
+Requires Node.js 22.19 or newer. Install with `npm install -g @graychennpm/codebridge@0.1.0`, then run `codebridge init`. Start `codebridge-runner` and `codebridge start` in separate terminals. The package includes the Bridge, host Runner and Workbench assets; no source build is needed.
 
-This is an unpublished candidate, so `npx codebridge` is not yet a supported installation command. Run `pnpm test:package` for isolated installation verification. See the [release guide](docs/zh-CN/npm-release.md) for versioning and publication steps.
+You can also run `npx @graychennpm/codebridge@0.1.0 init`. For local distribution, `pnpm package:release` produces a tarball in `dist/`; `pnpm test:package` verifies a clean installation. See the [release guide](docs/zh-CN/npm-release.md).
 
 ## Highlights
 
