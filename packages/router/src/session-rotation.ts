@@ -16,8 +16,11 @@ export function sessionRotationReason(
   if (policy?.enabled === false || !context.sessionId) return undefined;
   if (context.activeRunId || (context.queuedTurns ?? 0) > 0) return undefined;
   const ratio = policy?.maxContextRatio ?? DEFAULT_MAX_CONTEXT_RATIO;
-  const { contextUsed: used, contextSize: size } = context;
-  if (used && size && used / size >= ratio) {
+  const { contextUsed: used, contextSize: size, contextFirstUsed: first } = context;
+  // Only rotate a session that grew past the limit itself. One that started above it was
+  // resumed on purpose (/resume) or carries a huge base prompt; rotating it would loop.
+  const grewPastLimit = first === null || first === undefined || first / (size || 1) < ratio;
+  if (used && size && used / size >= ratio && grewPastLimit) {
     return `上一会话上下文已用 ${Math.round((used / size) * 100)}%（${Math.round(used / 1000)}k / ${Math.round(size / 1000)}k tokens）`;
   }
   const idleMs = (policy?.idleHours ?? DEFAULT_IDLE_HOURS) * 3_600_000;

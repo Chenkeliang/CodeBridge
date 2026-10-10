@@ -207,6 +207,8 @@ export interface ChannelCommandContext {
   /** Latest ACP usage_update for the session: context tokens in use and the model window. */
   contextUsed?: number | null;
   contextSize?: number | null;
+  /** First usage_update of the session: a resumed or prompt-heavy session already starts large. */
+  contextFirstUsed?: number | null;
   queuedTurns?: number;
 }
 

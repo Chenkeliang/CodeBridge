@@ -106,7 +106,7 @@ describe("deployment ingress", () => {
     } as unknown as SqliteEventStore;
     expect(service.guidanceForRun("run_1", store)).toBe("");
     await service.handleFeishuMessage({ ...message, content: "修改菜单，测好后上线" });
-    expect(service.guidanceForRun("run_1", store)).toContain("已明确要求 CodeBridge 测试通过后上线");
+    expect(service.guidanceForRun("run_1", store)).toContain("仅当本任务修改的是 CodeBridge 时，测试通过后可用");
     expect(service.guidanceForRun("run_1", store)).toContain("/projects/CodeBridge-safe");
     await service.handleFeishuMessage({ ...message, content: "修改菜单，不要上线" });
     expect(service.guidanceForRun("run_1", store)).toContain("CodeBridge 只用 codebridge_deploy（action=prepare）准备候选");

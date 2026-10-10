@@ -1643,8 +1643,13 @@ describe("session API", () => {
       body: JSON.stringify({ slot: { channel: "feishu", conversation_id: "chat", agent_id: "pi", workspace_key: "/tmp/project", generation: 0 } }),
     });
     const body = await response.json() as Record<string, unknown>;
-    expect(body).toMatchObject({ session_id: first.session_id, context_used: 711_489, context_size: 828_400, queued_turns: 1 });
-    expect(Number.isFinite(Date.parse(body.last_activity_at as string))).toBe(true);
+    expect(body).toMatchObject({
+      session_id: first.session_id, context_used: 711_489, context_size: 828_400, context_first_used: 100_000, queued_turns: 1,
+    });
+    // Idle is measured from the latest runtime event (e.g. a run finishing), not only the catalog row.
+    const runtime = workItems.getSessionRuntime(first.session_id)!;
+    const catalogRow = catalog.getSession(first.session_id)!;
+    expect(body.last_activity_at).toBe([runtime.updatedAt, catalogRow.updatedAt].sort().at(-1));
     catalog.close();
     workItems.close();
   });
@@ -1701,6 +1706,7 @@ describe("session API", () => {
       last_activity_at: session.updatedAt,
       context_used: null,
       context_size: null,
+      context_first_used: null,
       queued_turns: 0,
     });
     catalog.close();

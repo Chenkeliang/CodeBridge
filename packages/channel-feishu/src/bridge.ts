@@ -235,6 +235,8 @@ export class FeishuBridge {
     this.mentionRegistry = createMentionRegistry(
       path.join(options.dataDir, "feishu-mention-targets.json"),
     );
+    // Older versions stored the approver role as the person's name; it then leaked into DMs.
+    this.mentionRegistry.forgetNames([ALERT_APPROVER_ROLE]);
     this.config = options.config;
     this.sessionIngress = options.sessionIngress;
     this.cardUpdateSequences = new JsonMapStore<number>(

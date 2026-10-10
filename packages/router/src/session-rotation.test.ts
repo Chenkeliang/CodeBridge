@@ -41,6 +41,15 @@ describe("sessionRotationReason", () => {
     expect(sessionRotationReason(ctx({ lastActivityAt: hoursAgo(500) }), { idleHours: 0 }, NOW)).toBeUndefined();
   });
 
+  it("does not rotate a session that started above the limit (/resume or a huge base prompt)", () => {
+    // /resume binds the old provider session again; its first usage is already large.
+    const resumed = ctx({ contextFirstUsed: 700_000, contextUsed: 711_489, contextSize: 828_400 });
+    expect(sessionRotationReason(resumed, undefined, NOW)).toBeUndefined();
+    expect(sessionRotationReason({ ...resumed, lastActivityAt: hoursAgo(13) }, undefined, NOW)).toBe("上一会话已闲置 13 小时");
+    expect(sessionRotationReason(ctx({ contextFirstUsed: 20_000, contextUsed: 711_489, contextSize: 828_400 }), undefined, NOW))
+      .toContain("86%");
+  });
+
   it("ignores missing usage instead of guessing", () => {
     expect(sessionRotationReason(ctx({ contextUsed: null, contextSize: null, lastActivityAt: null }), undefined, NOW)).toBeUndefined();
   });

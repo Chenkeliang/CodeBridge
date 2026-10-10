@@ -1118,14 +1118,20 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       });
     }
     const runtime = options.workItems.getSessionRuntime(session.id);
-    const usage = options.workItems.getLatestContextUsage(session.id);
+    const usage = options.workItems.getContextUsage(session.id);
+    // The catalog row is bumped at submit/run start; runtime is bumped by every event, incl. run end.
+    const lastActivityAt = [session.updatedAt, runtime?.updatedAt]
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1) ?? null;
     return c.json({
       session_id: session.id,
       active_run_id: runtime?.activeRunId ?? null,
       provider_session_id: session.providerSessionId,
-      last_activity_at: session.updatedAt,
-      context_used: usage?.used ?? null,
-      context_size: usage?.size ?? null,
+      last_activity_at: lastActivityAt,
+      context_used: usage?.latest.used ?? null,
+      context_size: usage?.latest.size ?? null,
+      context_first_used: usage?.first.used ?? null,
       queued_turns: options.workItems.listQueuedTurns(session.id, { limit: 1 }).total,
     });
   });

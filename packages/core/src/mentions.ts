@@ -98,15 +98,32 @@ export class MentionRegistry {
     const scoped = this.refsByScope.get(scopeKey(scope)) ?? new Set<string>();
     scoped.add(registered.ref);
     this.refsByScope.set(scopeKey(scope), scoped);
-    if (this.store) {
-      const saved: Record<string, StoredMentionTarget> = {};
-      for (const [ref, target] of this.targetByRef) saved[ref] = { target, scopes: [] };
-      for (const [key, refs] of this.refsByScope) {
-        for (const ref of refs) saved[ref]!.scopes.push(key);
-      }
-      this.store.write(saved);
-    }
+    this.save();
     return registered;
+  }
+
+  /** Drop stored names that are really labels (e.g. a role written by an older version). Returns how many were cleared. */
+  forgetNames(names: readonly string[]): number {
+    let cleared = 0;
+    for (const [ref, target] of this.targetByRef) {
+      if (target.name === undefined || !names.includes(target.name)) continue;
+      const { name: _dropped, ...rest } = target;
+      this.targetByRef.set(ref, rest);
+      this.targetByKey.set(targetKey(rest), rest);
+      cleared += 1;
+    }
+    if (cleared) this.save();
+    return cleared;
+  }
+
+  private save(): void {
+    if (!this.store) return;
+    const saved: Record<string, StoredMentionTarget> = {};
+    for (const [ref, target] of this.targetByRef) saved[ref] = { target, scopes: [] };
+    for (const [key, refs] of this.refsByScope) {
+      for (const ref of refs) saved[ref]!.scopes.push(key);
+    }
+    this.store.write(saved);
   }
 
   resolve(

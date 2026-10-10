@@ -354,6 +354,7 @@ export function createChannelSessionIngress(
       last_activity_at?: string | null;
       context_used?: number | null;
       context_size?: number | null;
+      context_first_used?: number | null;
       queued_turns?: number;
     };
     return {
@@ -363,6 +364,7 @@ export function createChannelSessionIngress(
       lastActivityAt: body.last_activity_at ?? null,
       contextUsed: body.context_used ?? null,
       contextSize: body.context_size ?? null,
+      contextFirstUsed: body.context_first_used ?? null,
       queuedTurns: body.queued_turns ?? 0,
     };
   };

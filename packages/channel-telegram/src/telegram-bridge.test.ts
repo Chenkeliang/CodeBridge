@@ -57,6 +57,41 @@ describe("TelegramBridge inbound commands", () => {
     );
   });
 
+  it("rotates an over-full session before submitting, then tells the user", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.telegram = { botToken: "123:token", pollingTimeoutSec: 25 };
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 8 });
+    const submit = vi.fn().mockResolvedValue({
+      sessionId: "sess_new", turnId: "turn_1", runId: "run_1", acceptance: "dispatched", queueState: "ready", eventSequence: 0,
+    });
+    const bridge = new TelegramBridge({
+      config,
+      dataDir,
+      api: { sendMessage } as never,
+      sessionIngress: {
+        getSlotCommandContext: vi.fn().mockResolvedValue({
+          sessionId: "sess_old", activeRunId: null, providerSessionId: "prov",
+          lastActivityAt: new Date().toISOString(), contextUsed: 200_000, contextSize: 258_400, contextFirstUsed: 9_000, queuedTurns: 0,
+        }),
+        submit,
+      } as unknown as ChannelSessionIngress,
+    });
+    (bridge as unknown as { ensureSessionWatcher: () => unknown }).ensureSessionWatcher = () => ({
+      openRunMessage: vi.fn(), openCardForRun: vi.fn(), registerPendingTurn: vi.fn(), start: vi.fn(),
+    });
+
+    await bridge.handleUpdate({
+      update_id: 43,
+      message: { message_id: 10, chat: { id: 42, type: "private" }, from: { id: 99 }, text: "继续" },
+    });
+
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 }));
+    expect(JSON.stringify(sendMessage.mock.calls)).toContain("上一会话上下文已用 77%");
+  });
+
   it("registers native commands before polling", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-telegram-"));
     tmpDirs.push(dataDir);

@@ -76,4 +76,20 @@ describe("MentionRegistry", () => {
     expect(guidance).toContain("fcb mention <对象引用> \"<消息>\"");
     expect(guidance).toContain("仅在确实需要主动通知时使用");
   });
+
+  it("heals a role stored as a name by an older version, on disk too", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mention-heal-"));
+    const file = path.join(dir, "mentions.json");
+    const old = new MentionRegistry(file);
+    old.register({ chatId: "oc_alerts", topicId: "om_alert" }, { channel: "feishu", kind: "user", id: "ou_owner", name: "告警审批人" });
+    old.register({ chatId: "oc_x" }, { channel: "feishu", kind: "user", id: "ou_other", name: "维护者" });
+
+    const healed = new MentionRegistry(file);
+    expect(healed.forgetNames(["告警审批人"])).toBe(1);
+    const dm = healed.register({ chatId: "oc_dm" }, { channel: "feishu", kind: "user", id: "ou_owner" });
+    expect(formatMentionGuidance([dm], dm.ref)).not.toContain("告警审批人");
+    expect(new MentionRegistry(file).list({ chatId: "oc_x" })[0]?.name).toBe("维护者");
+    expect(new MentionRegistry(file).list({ chatId: "oc_dm" })[0]?.name).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
