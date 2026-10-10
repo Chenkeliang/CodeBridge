@@ -85,11 +85,21 @@ describe("alert polling through the active Feishu adapter", () => {
     expect(f.watcher.openCardForRun).toHaveBeenCalled();
     await f.internal.cardHost().channel!.stream("oc_alerts", { markdown: async () => {} }, { replyTo: "om_alert" });
     expect(f.reply).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: expect.objectContaining({ reply_in_thread: true }) }));
-    const ref = prompt.match(/- (u\d+)：告警审批人/)![1]!;
+    const ref = prompt.match(/- (u\d+)：ou_owner（告警审批人）/)![1]!;
     await f.bridge.sendOutboundMention("oc_alerts", ref, "请确认是否重试 TT123", "om_alert");
     expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "请确认是否重试 TT123" }, expect.objectContaining({
       replyTo: "om_alert", replyInThread: true, mentions: [expect.objectContaining({ openId: "ou_owner" })],
     }));
+  });
+
+  it("does not leak the alert approver role into the same person's private chat prompt", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    expect(f.submit).toHaveBeenCalledTimes(1);
+    await f.internal.handleMessage({ messageId: "om_dm", chatId: "oc_dm", chatType: "p2p", senderId: "ou_owner", content: "帮我看下这个订单" });
+    await vi.waitFor(() => expect(f.submit).toHaveBeenCalledTimes(2));
+    const dm = (f.submit.mock.calls[1] as unknown as [{ message: string }])[0].message;
+    expect(dm).toContain("（当前发送者）");
+    expect(dm).not.toContain("告警审批人");
   });
 
   it("routes the owner's native thread reply back to the same incident, even when thread_id differs from root_id", async () => {

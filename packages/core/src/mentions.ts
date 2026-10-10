@@ -124,9 +124,14 @@ export class MentionRegistry {
   }
 }
 
+/**
+ * `roles` labels a target for this prompt only (e.g. an alert approver).
+ * Roles are never stored as the target's name: the registry is shared across chats.
+ */
 export function formatMentionGuidance(
   targets: RegisteredMentionTarget[],
   requesterRef?: string,
+  roles: Record<string, string> = {},
 ): string {
   if (targets.length === 0) return "";
   const lines = targets.map((target) => {
@@ -135,11 +140,13 @@ export function formatMentionGuidance(
       target.username ??
       (target.ref === requesterRef ? "当前发送者" : target.id);
     const role =
-      target.ref === requesterRef
-        ? "（当前发送者）"
-        : target.kind === "bot"
-          ? "（机器人）"
-          : "";
+      roles[target.ref] !== undefined
+        ? `（${roles[target.ref]}）`
+        : target.ref === requesterRef
+          ? "（当前发送者）"
+          : target.kind === "bot"
+            ? "（机器人）"
+            : "";
     return `- ${target.ref}：${label}${role}`;
   });
   return [
