@@ -61,6 +61,10 @@ class Fake(m.Adapter):
     def sleep(self, seconds):
         pass
 
+    def read_secret(self, service):
+        self.calls.append(["read_secret", service])
+        return {"codebridge.feishu.appSecret": "kc-feishu", "codebridge.runner.token": "kc-runner"}[service]
+
     def http(self, url, token, data=None):
         self.notifications.append((url, data))
         if "tenant_access_token" in url:
@@ -161,6 +165,18 @@ class Tests(unittest.TestCase):
         self.d.flush_notifications()
         self.assertEqual(len(self.d.state["notifications"]), 1)
         self.assertEqual(sum("/reply" in url for url, _ in self.fake.notifications), 1)
+
+    def test_keychain_refs_resolve_without_touching_stage_logs(self):
+        self.d.c["feishu"]["appSecret"] = "keychain:codebridge.feishu.appSecret"
+        self.d.c["runnerToken"] = "keychain:codebridge.runner.token"
+        self.d.notify(self.job)
+        self.d.flush_notifications()
+        token_request = next(data for url, data in self.fake.notifications if "tenant_access_token" in url)
+        self.assertEqual(token_request["app_secret"], "kc-feishu")
+        with patch.object(self.fake, "http", wraps=self.fake.http) as http:
+            self.d.health()
+        self.assertEqual(http.call_args[0][1], "kc-runner")
+        self.assertNotIn("security", json.dumps([c for c in self.fake.calls if c[0] != "read_secret"]))
 
     def test_recovery_rolls_back_without_reapplying(self):
         self.job["state"] = "switching"

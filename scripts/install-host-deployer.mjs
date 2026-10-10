@@ -32,7 +32,13 @@ execFileSync(pythonPath, ["-c", "import sys; assert sys.version_info >= (3, 9)"]
 const bridgePlist = path.join(os.homedir(), "Library/LaunchAgents/com.codebridge.bridge.plist");
 const runnerPlist = path.join(os.homedir(), "Library/LaunchAgents/com.codebridge.runner.plist");
 for (const file of [bridgePlist, runnerPlist]) fs.accessSync(file, fs.constants.R_OK);
-const config = new ConfigStore({dataDir}).get();
+const store = new ConfigStore({dataDir});
+const config = store.get();
+// The deployer resolves keychain: refs itself; copy the ref, never the resolved secret.
+const deployerSecret = (name, resolved) => {
+  const disk = store.diskSecret(name);
+  return typeof disk === "string" && disk.startsWith("keychain:") ? disk : resolved;
+};
 const installedScript = path.join(rootDir, "host-deployer.py");
 const controllerSource = path.join(sourceRepo, "scripts/host-deployer.py");
 fs.accessSync(controllerSource, fs.constants.R_OK);
@@ -43,8 +49,8 @@ const settings = {
   installerHash: createHash("sha256").update(fs.readFileSync(fileURLToPath(import.meta.url))).digest("hex"),
   bridgePlist, runnerPlist, bridgeLabel: "com.codebridge.bridge", runnerLabel: "com.codebridge.runner",
   apiPort: config.bridge?.apiPort ?? 19790,
-  runnerToken: config.runner.token, runnerUrl: config.runner.url,
-  feishu: {appId: config.feishu.appId, appSecret: config.feishu.appSecret, domain: config.feishu.domain},
+  runnerToken: deployerSecret("runner.token", config.runner.token), runnerUrl: config.runner.url,
+  feishu: {appId: config.feishu.appId, appSecret: deployerSecret("feishu.appSecret", config.feishu.appSecret), domain: config.feishu.domain},
   readinessTimeoutSec: 90, drainTimeoutSec: 300, stabilitySec: 10, ackGraceSec: 3,
 };
 if (!args.includes("--install")) {

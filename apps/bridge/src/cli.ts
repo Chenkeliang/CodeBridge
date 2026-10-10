@@ -7,6 +7,7 @@ import {
   DEFAULT_DATA_DIR,
   VERSION,
   defaultConfig,
+  migrateConfigSecrets,
   resolveDefaultAgentId,
 } from "@codebridge/core";
 import { McpRuntime, McpServerRegistry, SdkMcpClientFactory } from "@codebridge/mcp-runtime";
@@ -552,7 +553,40 @@ program
     const store = new ConfigStore({ dataDir: opts.dataDir });
     const config = store.get();
     const report = await runDoctor(config, opts.dataDir);
-    console.log(JSON.stringify(report, null, 2));
+    const plaintext = Object.entries(store.secretSources()).filter(([, source]) => source === "plaintext").map(([name]) => name);
+    console.log(JSON.stringify({
+      ...report,
+      secrets: store.secretSources(),
+      ...(plaintext.length ? { warnings: [`config.yaml 中 ${plaintext.join("、")} 为明文，运行 codebridge secrets migrate 移入系统钥匙串`] } : {}),
+    }, null, 2));
+  });
+
+const secrets = program
+  .command("secrets")
+  .description("管理 config.yaml 中的密钥（飞书 appSecret、Runner token、Telegram botToken）");
+
+secrets
+  .command("status")
+  .description("显示每个密钥的来源（keychain / env / plaintext / missing），不输出值")
+  .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
+  .action((opts: { dataDir: string }) => {
+    console.log(JSON.stringify(new ConfigStore({ dataDir: opts.dataDir }).secretSources(), null, 2));
+  });
+
+secrets
+  .command("migrate")
+  .description("把明文密钥移入系统钥匙串，并在 config.yaml 中改为 keychain: 引用")
+  .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
+  .action((opts: { dataDir: string }) => {
+    const store = new ConfigStore({ dataDir: opts.dataDir });
+    if (!fs.existsSync(store.path)) throw new Error(`${store.path} 不存在`);
+    const result = migrateConfigSecrets(store.path);
+    // Prove the rewritten file still loads before reporting success.
+    new ConfigStore({ dataDir: opts.dataDir });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.migrated.length) {
+      console.error("已改为钥匙串引用。Bridge/Runner 重启后生效；部署器需重新安装才会改用引用（scripts/install-host-deployer.mjs）。");
+    }
   });
 
 const publisher = program

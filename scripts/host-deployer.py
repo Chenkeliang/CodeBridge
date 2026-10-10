@@ -55,6 +55,18 @@ def atomic(path, value, binary=False):
 
 
 class Adapter:
+    def read_secret(self, service):
+        # Never via command(): its stdout is copied into the active build-stage log.
+        try:
+            result = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", service, "-a", "codebridge", "-w"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            raise DeployError("keychain unavailable")
+        value = result.stdout.decode().rstrip("\n")
+        if result.returncode or not value:
+            raise DeployError("keychain secret unavailable: " + service)
+        return value
+
     def command(self, args, cwd=None, timeout=1200):
         try:
             result = subprocess.run(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -196,6 +208,12 @@ class Deployer:
                 threading.Thread(target=launch, args=(job,), daemon=True).start()
             return result
 
+    def secret(self, value):
+        """Resolve a keychain: ref written by the installer; plaintext from older installs passes through."""
+        if isinstance(value, str) and value.startswith("keychain:"):
+            return self.a.read_secret(value[len("keychain:"):])
+        return value
+
     def abort(self, job):
         if job.get("cancelRequested"):
             raise DeployError("release cancelled")
@@ -324,7 +342,7 @@ class Deployer:
 
     def health(self, release_id=None, commit=None):
         base = "http://127.0.0.1:" + str(self.c.get("apiPort", 19790))
-        token = self.c["runnerToken"]
+        token = self.secret(self.c["runnerToken"])
         result = self.a.http(base + "/deploy/readiness", token)
         if result.get("ok") is not True or result.get("feishuConnected") is not True:
             raise DeployError("Bridge not ready or Feishu disconnected")
@@ -540,7 +558,7 @@ class Deployer:
                 continue
             try:
                 result = self.a.http(domain + "/open-apis/auth/v3/tenant_access_token/internal", "", {
-                    "app_id": feishu["appId"], "app_secret": feishu["appSecret"]})
+                    "app_id": feishu["appId"], "app_secret": self.secret(feishu["appSecret"])})
                 if result.get("code") != 0 or not result.get("tenant_access_token"):
                     continue
                 message_id = notification["messageId"]

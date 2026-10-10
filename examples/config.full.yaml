@@ -1,7 +1,11 @@
+# 密钥字段（appSecret / botToken / runner.token）可写引用，不必明文：
+#   keychain:<服务名>  macOS 钥匙串或 Linux Secret Service；`codebridge secrets migrate` 可一键迁移
+#   env:<变量名>       从环境变量读取
+# 应用保存配置时只写回引用，不会把解析后的密钥落盘。`codebridge secrets status` 查看来源。
 feishu:
   domain: https://open.feishu.cn
-  appId: ${FEISHU_APP_ID}
-  appSecret: ${FEISHU_APP_SECRET}
+  appId: cli_xxxxxxxx
+  appSecret: keychain:codebridge.feishu.appSecret
   policy:
     requireMention: true
     dmMode: open
@@ -13,14 +17,14 @@ feishu:
 
 # 可选；配置后与飞书同时启动，也支持仅配置 Telegram token 的模式
 # telegram:
-#   botToken: ${TELEGRAM_BOT_TOKEN}
+#   botToken: env:TELEGRAM_BOT_TOKEN
 #   allowedUsers: ["123456789"]
 #   allowedChats: ["-1001234567890"]
 #   pollingTimeoutSec: 25
 
 runner:
   url: http://127.0.0.1:19789
-  token: ${RUNNER_TOKEN}
+  token: keychain:codebridge.runner.token
 
 defaultBackend: cursor
 

@@ -7,15 +7,39 @@ import {
   type AppConfig,
 } from "./config-schema.js";
 import { DEFAULT_DATA_DIR } from "./types.js";
+import {
+  SECRET_PATHS,
+  getPath,
+  isSecretRef,
+  resolveSecretRef,
+  secretPathName,
+  secretSourceOf,
+  setPath,
+  type SecretOptions,
+  type SecretSource,
+} from "./secret-refs.js";
 
 export interface ConfigStoreOptions {
   dataDir?: string;
   configFileName?: string;
+  secrets?: SecretOptions;
+}
+
+/** How a secret field was loaded, so persist() never writes a resolved/env value to disk. */
+interface LoadedSecret {
+  /** Value as written in config.yaml (a ref, plaintext, or absent). */
+  disk: unknown;
+  /** Value handed to the app after resolution and env overrides. */
+  loaded: unknown;
+  /** The loaded value came from a ref or an env override, not from plaintext on disk. */
+  external: boolean;
 }
 
 export class ConfigStore {
   private config: AppConfig;
   private readonly configPath: string;
+  private readonly secretOptions: SecretOptions;
+  private secrets = new Map<string, LoadedSecret>();
   private listeners: Array<(config: AppConfig) => void> = [];
 
   constructor(options: ConfigStoreOptions = {}) {
@@ -24,7 +48,21 @@ export class ConfigStore {
       dataDir,
       options.configFileName ?? "config.yaml",
     );
+    this.secretOptions = options.secrets ?? {};
     this.config = this.loadFromDisk();
+  }
+
+  /** Where each secret field comes from, as written on disk (no values). */
+  secretSources(): Record<string, SecretSource> {
+    return Object.fromEntries(SECRET_PATHS.map((secretPath) => {
+      const entry = this.secrets.get(secretPathName(secretPath));
+      return [secretPathName(secretPath), secretSourceOf(entry?.disk)];
+    }));
+  }
+
+  /** The on-disk value of a secret field: a ref when one is configured. */
+  diskSecret(name: string): unknown {
+    return this.secrets.get(name)?.disk;
   }
 
   get path(): string {
@@ -70,7 +108,19 @@ export class ConfigStore {
     const dir = path.dirname(this.configPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const existed = fs.existsSync(this.configPath);
-    fs.writeFileSync(this.configPath, stringifyYaml(this.config), {
+    const output = structuredClone(this.config) as unknown as Record<string, unknown>;
+    for (const secretPath of SECRET_PATHS) {
+      const name = secretPathName(secretPath);
+      const entry = this.secrets.get(name);
+      const current = getPath(output, secretPath);
+      if (entry?.external && current === entry.loaded) {
+        // Unchanged value from a ref or env: write back what was on disk, never the secret.
+        setPath(output, secretPath, entry.disk);
+      } else {
+        this.secrets.set(name, { disk: current, loaded: current, external: false });
+      }
+    }
+    fs.writeFileSync(this.configPath, stringifyYaml(output), {
       encoding: "utf8",
       mode: 0o600,
     });
@@ -83,15 +133,35 @@ export class ConfigStore {
   private loadFromDisk(): AppConfig {
     const fromEnv = this.loadFromEnv();
     if (!fs.existsSync(this.configPath)) {
-      if (Object.keys(fromEnv).length > 0) {
-        return ConfigSchema.parse({ ...defaultConfig(), ...fromEnv });
-      }
-      return defaultConfig();
+      const config = Object.keys(fromEnv).length > 0
+        ? ConfigSchema.parse({ ...defaultConfig(), ...fromEnv })
+        : defaultConfig();
+      this.recordSecrets(new Map(), fromEnv, config);
+      return config;
     }
     const raw = fs.readFileSync(this.configPath, "utf8");
-    const parsed = parseYaml(raw) as Record<string, unknown>;
-    const merged = deepMerge(parsed, fromEnv);
-    return ConfigSchema.parse(merged);
+    const parsed = (parseYaml(raw) ?? {}) as Record<string, unknown>;
+    const disk = new Map(SECRET_PATHS.map((secretPath) => [secretPathName(secretPath), getPath(parsed, secretPath)]));
+    const resolved = structuredClone(parsed);
+    for (const secretPath of SECRET_PATHS) {
+      const value = getPath(resolved, secretPath);
+      if (isSecretRef(value)) setPath(resolved, secretPath, resolveSecretRef(value, this.secretOptions));
+    }
+    const config = ConfigSchema.parse(deepMerge(resolved, fromEnv));
+    this.recordSecrets(disk, fromEnv, config);
+    return config;
+  }
+
+  private recordSecrets(disk: Map<string, unknown>, fromEnv: Partial<AppConfig>, config: AppConfig): void {
+    this.secrets = new Map(SECRET_PATHS.map((secretPath) => {
+      const name = secretPathName(secretPath);
+      const onDisk = disk.get(name);
+      return [name, {
+        disk: onDisk,
+        loaded: getPath(config, secretPath),
+        external: isSecretRef(onDisk) || getPath(fromEnv, secretPath) !== undefined,
+      }];
+    }));
   }
 
   private loadFromEnv(): Partial<AppConfig> {
