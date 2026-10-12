@@ -96,7 +96,7 @@ class Tests(unittest.TestCase):
             db.execute("CREATE TABLE channel_turn_delivery (status TEXT, created_at TEXT, run_id TEXT)")
         archive = io.BytesIO()
         with tarfile.open(fileobj=archive, mode="w") as tar:
-            for name, value in {"package.json": json.dumps({"scripts": {"build": "build", "test": "test"}}), "pnpm-lock.yaml": "lock"}.items():
+            for name, value in {"package.json": json.dumps({"scripts": {"build": "build", "test": "test", "check:codex-network": "node scripts/check-codex-network.mjs"}}), "pnpm-lock.yaml": "lock"}.items():
                 info = tarfile.TarInfo(name)
                 raw = value.encode()
                 info.size = len(raw)
@@ -118,6 +118,31 @@ class Tests(unittest.TestCase):
         self.d.prepare(self.job)
         self.assertEqual(self.job["state"], "failed")
         self.assertEqual(self.fake.calls, [])
+
+    def test_network_check_runs_after_tests_with_the_shared_config(self):
+        self.d.prepare(self.job)
+        commands = [c for c in self.fake.calls if "run" in c]
+        self.assertEqual(commands[-2][2], "test")
+        self.assertEqual(commands[-1], ["/bin/sh", "run", "check:codex-network", "--config", str(self.d.data / "config.yaml")])
+
+    def test_network_check_failure_never_drains_or_switches(self):
+        self.fake.fail = "check:codex-network"
+        self.d.prepare(self.job)
+        self.assertEqual(self.job["state"], "failed")
+        self.assertIn("check:codex-network", self.job["error"])
+        self.assertFalse((self.d.root / "maintenance.json").exists())
+        self.assertFalse(any("launchctl" in c[0] for c in self.fake.calls))
+
+    def test_network_check_is_repeated_before_publishing_a_prepared_release(self):
+        self.d.prepare(self.job)
+        self.assertEqual(self.job["state"], "prepared")
+        self.fake.fail = "check:codex-network"
+        original = self.plist.read_bytes()
+        self.d.publish(self.job)
+        self.assertEqual(self.job["state"], "failed")
+        self.assertEqual(self.plist.read_bytes(), original)
+        self.assertFalse((self.d.root / "maintenance.json").exists())
+        self.assertFalse(any("launchctl" in c[0] for c in self.fake.calls))
 
     def test_build_failure_never_switches(self):
         self.fake.fail = "build"

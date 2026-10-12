@@ -386,6 +386,8 @@ export interface BackendProfile {
   /** ACP spawn 命令；仅 ACP profiles 使用，pi-sdk 由 Node SDK 直接创建 */
   acpCommand?: string;
   acpArgs?: string[];
+  /** ACP 会话配置默认值；会话覆盖优先。 */
+  acpConfig?: Record<string, string | boolean>;
   model?: string;
   effort?: string;
   /** Claude ACP mode 的兼容默认值；飞书非交互场景建议 bypassPermissions */

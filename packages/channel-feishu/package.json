@@ -16,7 +16,8 @@
   "dependencies": {
     "@codebridge/core": "workspace:*",
     "@codebridge/router": "workspace:*",
-    "@larksuiteoapi/node-sdk": "^1.54.0"
+    "@larksuiteoapi/node-sdk": "^1.54.0",
+    "mdast-util-from-markdown": "2.0.3"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

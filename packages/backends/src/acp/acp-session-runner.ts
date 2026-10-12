@@ -34,6 +34,7 @@ import {
 import { resolveAcpSpawn } from "./acp-spawn-profiles.js";
 import {
   applySessionConfigOptions,
+  resolveCustomSessionConfig,
   resolveDesiredConfig,
 } from "./acp-config-options.js";
 import { friendlyAuthErrorMessage } from "../auth-error-hints.js";
@@ -675,12 +676,14 @@ export async function* runAcpSession(
         // 预排干会先消费跨轮残留的 config_option_update，之后再应用本轮 model/effort/mode；
         // 这样池复用时使用的是最新能力快照，而非首次 session/new 的旧列表。
         const desired = resolveDesiredConfig(ctx, options.permissionPolicy);
+        const { custom, requiredConfigIds } = resolveCustomSessionConfig(ctx.backendConfig, ctx.acpConfig);
         const result = await applySessionConfigOptions(
           r.connection.agent,
           r.sessionId,
           r.configOptions,
           desired,
-          ctx.acpConfig,
+          custom,
+          requiredConfigIds,
         );
         r.configOptions = [...result.configOptions];
         const events: AgentEvent[] = result.warnings.map((message) => ({

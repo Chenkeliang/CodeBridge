@@ -17,6 +17,36 @@ function fixture() {
 describe("durable task cards", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("finalizes a live image-bearing answer without submitting a filesystem image key", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const update = vi.fn(async (_id: string, card: object) => {
+      if (JSON.stringify(card).includes("![截图](/private/tmp/screenshot.png)")) {
+        throw new Error("CardKit write failed (200570): card contains invalid image keys");
+      }
+    });
+    const host: FeishuCardHost = {
+      channel: durableMarkdownCard(f.channel, update), updateCard: update,
+      sendMarkdown: vi.fn(), registerPendingStream: vi.fn(), clearPendingStream: vi.fn(),
+      log: vi.fn(), isDisconnecting: () => false,
+    };
+    const card = new FeishuRunCard(host, "chat", "source", "run", false);
+    try {
+      await card.open();
+      await vi.advanceTimersByTimeAsync(500);
+      await card.onAgentEvent({ type: "text_delta", phase: "final_answer", text: "![截图](/private/tmp/screenshot.png)" });
+      await vi.advanceTimersByTimeAsync(500);
+      const finalizing = card.finalize("succeeded");
+      await vi.advanceTimersByTimeAsync(500);
+      await finalizing;
+      expect(JSON.stringify(update.mock.calls.at(-1))).toContain("已完成");
+      expect(JSON.stringify(update.mock.calls.at(-1))).toContain("图片地址：/private/tmp/screenshot.png");
+      expect(host.clearPendingStream).toHaveBeenCalledWith("message-1");
+    } finally {
+      card.abort();
+    }
+  });
+
   it("updates the same streaming entity past 10 minutes and acknowledges the final result", async () => {
     vi.useFakeTimers();
     const start = new Date("2026-09-06T00:00:00Z").getTime();

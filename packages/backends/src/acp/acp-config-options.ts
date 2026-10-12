@@ -7,6 +7,7 @@ import {
 import type {
   AcpPermissionPolicy,
   BackendConfigOption,
+  BackendProfile,
   RunContext,
 } from "@codebridge/core";
 
@@ -21,6 +22,20 @@ export interface DesiredSessionConfig {
 }
 
 export type CustomSessionConfig = Record<string, string | boolean>;
+
+/** 后端默认与会话覆盖共用同一合并、类型和必需项规则。 */
+export function resolveCustomSessionConfig(
+  profile: BackendProfile,
+  overrides: CustomSessionConfig = {},
+): { custom: CustomSessionConfig; requiredConfigIds: string[] } {
+  const custom = { ...profile.acpConfig, ...overrides };
+  const requiredConfigIds = profile.type === "codex" && Object.hasOwn(custom, "network_access")
+    ? ["network_access"] : [];
+  if (requiredConfigIds.length && typeof custom.network_access !== "boolean") {
+    throw new Error("Codex ACP network_access 必须是 boolean，本轮已在发送任务前终止。");
+  }
+  return { custom, requiredConfigIds };
+}
 
 /** 展平 select 选项（可能是「分组」结构），拿到全部可选值 */
 function flattenSelectOptions(
@@ -151,6 +166,7 @@ export async function applySessionConfigOptions(
   configOptions: SessionConfigOption[],
   desired: DesiredSessionConfig,
   custom: CustomSessionConfig = {},
+  requiredConfigIds: readonly string[] = [],
 ): Promise<{
   warnings: string[];
   configOptions: SessionConfigOption[];
@@ -226,9 +242,14 @@ export async function applySessionConfigOptions(
     }
   }
   for (const [configId, wanted] of Object.entries(custom)) {
+    const required = requiredConfigIds.includes(configId);
+    const configurationError = (message: string) => {
+      if (required) throw new Error(`${message} 本轮已在发送任务前终止。`);
+      warnings.push(message);
+    };
     const option = currentOptions.find((candidate) => candidate.id === configId);
     if (!option) {
-      warnings.push(`ACP config=${configId} 未在当前会话能力中找到，未生效。`);
+      configurationError(`ACP config=${configId} 未在当前会话能力中找到，未生效。`);
       continue;
     }
     let params:
@@ -236,18 +257,18 @@ export async function applySessionConfigOptions(
       | { sessionId: string; configId: string; value: string };
     if (option.type === "boolean") {
       if (typeof wanted !== "boolean") {
-        warnings.push(`ACP config=${configId} 需要 boolean 值，未生效。`);
+        configurationError(`ACP config=${configId} 需要 boolean 值，未生效。`);
         continue;
       }
       params = { sessionId, configId, type: "boolean", value: wanted };
     } else {
       if (typeof wanted !== "string") {
-        warnings.push(`ACP config=${configId} 需要 select 值，未生效。`);
+        configurationError(`ACP config=${configId} 需要 select 值，未生效。`);
         continue;
       }
       const value = matchConfigValue(option, wanted);
       if (!value) {
-        warnings.push(`ACP config=${configId}=${wanted} 不在可选值内，未生效。`);
+        configurationError(`ACP config=${configId}=${wanted} 不在可选值内，未生效。`);
         continue;
       }
       params = { sessionId, configId, value };
@@ -258,9 +279,15 @@ export async function applySessionConfigOptions(
         params,
       )) as { configOptions: SessionConfigOption[] };
       currentOptions = response.configOptions;
+      if (required) {
+        const actual = currentOptions.find((candidate) => candidate.id === configId);
+        if (actual?.type !== option.type || actual.currentValue !== params.value) {
+          throw new Error(`ACP config=${configId} 设置后读回值不一致，未生效。`);
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      warnings.push(`ACP 设置 config=${configId} 失败：${msg}`);
+      configurationError(`ACP 设置 config=${configId} 失败：${msg}`);
     }
   }
   // 读回本轮 set-config 回合后 model 分类的实际 currentValue：适配器可能规范化了 value，

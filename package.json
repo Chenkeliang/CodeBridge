@@ -13,6 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:acp-probe": "node scripts/acp-probe.mjs",
+    "check:codex-network": "node scripts/check-codex-network.mjs",
+    "verify:codex-network": "node scripts/verify-codex-network.mjs",
     "lint": "tsc -b && eslint apps/web/src",
     "doctor": "node apps/bridge/dist/cli.js doctor",
     "start": "node apps/bridge/dist/cli.js start",

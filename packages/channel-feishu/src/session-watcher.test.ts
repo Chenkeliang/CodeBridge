@@ -197,6 +197,35 @@ async function waitUntil(
 }
 
 describe("FeishuSessionWatcher", () => {
+  it("recovers an image-bearing terminal card and then delivers the following run", async () => {
+    const { host } = makeHost();
+    host.updateCard = vi.fn(async (_id, card) => {
+      if (JSON.stringify(card).includes("![截图](/private/tmp/screenshot.png)")) {
+        throw new Error("CardKit write failed (200570): card contains invalid image keys");
+      }
+    });
+    const ingress = makeIngress();
+    const w = watcher(ingress, host);
+    try {
+      for (const runId of ["run_1", "run_2"]) {
+        ingress.replayEvents.mockResolvedValue([
+          { ...terminalEvent(7), type: "AGENT_EVENT", runId, payload: { event: {
+            type: "text_delta", phase: "final_answer", text: "完成\n![截图](/private/tmp/screenshot.png)",
+          } } },
+          { ...terminalEvent(9), runId },
+        ]);
+        const row = { ...delivery("succeeded"), runId, turnId: `turn_${runId}`, surfaceCardId: `card_${runId}` };
+        await w.reconcileDelivery(row, turn(row.turnId), "connected");
+      }
+      expect(ingress.completeDelivery).toHaveBeenCalledTimes(2);
+      const final = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+      expect(final).toContain("已完成");
+      expect(final).toContain("图片地址：/private/tmp/screenshot.png");
+    } finally {
+      w.abort();
+    }
+  });
+
   it("classifies only known invalid-card signals as permanent", () => {
     expect(classifyFeishuCardWriteError(new Error("11310 cardid invalid"))).toBe(
       "permanent",

@@ -36,6 +36,8 @@ export const BackendProfileSchema = z.object({
   transport: z.literal("acp").optional(),
   acpCommand: z.string().optional(),
   acpArgs: z.array(z.string()).optional(),
+  /** ACP 会话配置默认值；会话的 configOverrides 可逐项覆盖。 */
+  acpConfig: z.record(z.union([z.string(), z.boolean()])).optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
   /** true 时，若适配器未 advertise 想要的 model，本轮直接失败而非静默用适配器默认；默认 false */

@@ -248,7 +248,10 @@ class Deployer:
                 raise DeployError("release requires build and test scripts")
             if not (app / "pnpm-lock.yaml").is_file():
                 raise DeployError("frozen lockfile missing")
-            for args in (("install", "--frozen-lockfile"), ("run", "build"), ("run", "test")):
+            checks = [("install", "--frozen-lockfile"), ("run", "build"), ("run", "test")]
+            if package.get("scripts", {}).get("check:codex-network"):
+                checks.append(("run", "check:codex-network", "--config", str(self.data / "config.yaml")))
+            for args in checks:
                 self.abort(job)
                 job["stage"] = "install" if args[0] == "install" else args[1]
                 log_path = app.parent / (job["stage"] + ".log")
@@ -418,6 +421,12 @@ class Deployer:
     def publish(self, job):
         switched = False
         try:
+            if not job.get("manualRollback"):
+                package_path = Path(job["app"]) / "package.json"
+                package = json.loads(package_path.read_text()) if package_path.is_file() else {}
+                if package.get("scripts", {}).get("check:codex-network"):
+                    self.a.command([self.c["pnpmPath"], "run", "check:codex-network", "--config",
+                                    str(self.data / "config.yaml")], cwd=job["app"])
             self.drain(job)
             with self.mutex:
                 self.abort(job)

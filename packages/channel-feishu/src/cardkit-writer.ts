@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { LarkChannel } from "@larksuiteoapi/node-sdk";
+import { fromMarkdown } from "mdast-util-from-markdown";
 
 export interface RunCardParts {
   answer: string;
@@ -29,10 +30,41 @@ function preview(text: string, budget: number): string {
   return result;
 }
 
+function cardMarkdown(text: string): string {
+  if (!text.includes("![")) return text;
+  const nodes = [...fromMarkdown(text).children];
+  for (const node of nodes) {
+    if ("children" in node) nodes.push(...node.children);
+  }
+  const definitions = new Map<string, string>();
+  for (const node of nodes) {
+    if (node.type === "definition" && !definitions.has(node.identifier)) {
+      definitions.set(node.identifier, node.url);
+    }
+  }
+  const replacements = nodes.flatMap((node) => {
+    if (node.type !== "image" && node.type !== "imageReference") return [];
+    const url = node.type === "image" ? node.url : definitions.get(node.identifier);
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (!url || /^img_[\w-]+$/.test(url) || start === undefined || end === undefined) return [];
+    // CardKit image destinations must be uploaded image keys, not filesystem paths or URLs.
+    // Keep the reference readable without uploading arbitrary Agent-produced destinations.
+    const content = `${node.alt || "图片"}（图片地址：${url}）`.replace(/[\\`*_[\]<>!]/g, "\\$&");
+    return [{ start, end, content }];
+  });
+  for (const { start, end, content } of replacements.sort((a, b) => b.start - a.start)) {
+    text = text.slice(0, start) + content + text.slice(end);
+  }
+  return text;
+}
+
 export function runCardJson(parts: RunCardParts): RunCardJson {
-  const answer = preview(parts.answer, 18_000);
-  const progress = preview(parts.progress, 6_000);
-  const overflow = answer !== parts.answer || progress !== parts.progress;
+  const fullAnswer = cardMarkdown(parts.answer);
+  const fullProgress = cardMarkdown(parts.progress);
+  const answer = preview(fullAnswer, 18_000);
+  const progress = preview(fullProgress, 6_000);
+  const overflow = answer !== fullAnswer || progress !== fullProgress;
   return {
     ...(overflow ? { overflowText: [parts.answer, parts.progress].filter(Boolean).join("\n\n---\n\n") } : {}),
     schema: "2.0",

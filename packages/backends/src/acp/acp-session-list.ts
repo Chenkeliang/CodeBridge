@@ -22,7 +22,7 @@ import type {
 } from "../session-discovery.js";
 import { killProcessTree } from "./acp-kill.js";
 import { acpContinueMethod, resolveAcpSpawn } from "./acp-spawn-profiles.js";
-import { mapSessionConfigOptions } from "./acp-config-options.js";
+import { applySessionConfigOptions, mapSessionConfigOptions, resolveCustomSessionConfig } from "./acp-config-options.js";
 import { mapSessionUpdate } from "./acp-event-mapper.js";
 import { ACP_CLIENT_CAPABILITIES } from "./headless-client.js";
 import { raceWithAbort } from "./acp-race.js";
@@ -266,9 +266,14 @@ export async function listAcpConfigOptions(
     });
     const fetchOptions = (async () => {
       const active = await agent.buildSession(cwd).start();
-      const options = active.newSessionResponse.configOptions ?? [];
-      active.dispose();
-      return mapSessionConfigOptions(options);
+      try {
+        const { custom, requiredConfigIds } = resolveCustomSessionConfig(profile);
+        const result = await applySessionConfigOptions(agent, active.sessionId,
+          active.newSessionResponse.configOptions ?? [], {}, custom, requiredConfigIds);
+        return mapSessionConfigOptions(result.configOptions);
+      } finally {
+        active.dispose();
+      }
     })();
     return Promise.race([fetchOptions, timeout]);
   });

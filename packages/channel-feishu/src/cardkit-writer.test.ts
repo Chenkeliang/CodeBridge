@@ -27,6 +27,26 @@ function fixture() {
 const card = (answer: string, status = "任务状态：执行中", terminal = false) =>
   runCardJson({ answer, progress: "工具执行", status, terminal });
 
+describe("CardKit image references", () => {
+  it("renders local images as text while preserving native images, links and code", () => {
+    const code = "`![example](/tmp/example.png)`\n```md\n![example](/tmp/example.png)\n```";
+    const answer = `![截图](/private/tmp/screenshot.png)\n![飞书图片](img_v3_valid-key)\n[链接](https://example.com)\n${code}`;
+    const rendered = card(answer).body.elements[0].content;
+    expect(rendered).toContain("截图（图片地址：/private/tmp/screenshot.png）");
+    expect(rendered).toContain("![飞书图片](img_v3_valid-key)");
+    expect(rendered).toContain("[链接](https://example.com)");
+    expect(rendered).toContain(code);
+    expect(card(answer).overflowText).toBeUndefined();
+  });
+
+  it("normalizes progress, nested paths and reference-style images", () => {
+    const parts = { answer: "![截图](</tmp/a (1).png>)", progress: "![进度][p]\n\n[p]: https://example.com/progress.png", status: "执行中", terminal: false };
+    const rendered = runCardJson(parts);
+    expect(rendered.body.elements[0].content).toBe("截图（图片地址：/tmp/a (1).png）");
+    expect(rendered.body.elements[1].content).toContain("进度（图片地址：https://example.com/progress.png）");
+  });
+});
+
 async function settle<T>(promise: Promise<T>): Promise<T> {
   const observed = promise.then((value) => ({ value }), (error: unknown) => ({ error }));
   await vi.runAllTimersAsync();
