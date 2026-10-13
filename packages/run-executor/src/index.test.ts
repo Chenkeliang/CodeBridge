@@ -355,7 +355,7 @@ describe("RunExecutor", () => {
     }
   });
 
-  it("rejects the first Agent event after the Session lease has expired", async () => {
+  it("reclaims its own expired Session lease before persisting an Agent event", async () => {
     const startedAt = new Date("2026-09-06T00:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(startedAt);
@@ -365,6 +365,7 @@ describe("RunExecutor", () => {
         async *run(): AsyncGenerator<AgentEvent> {
           vi.setSystemTime(new Date(startedAt.getTime() + 61_000));
           yield { type: "session_info_update" };
+          yield { type: "done", exitCode: 0 };
         },
       }, {
         sessionCoordinator: coordinator,
@@ -381,21 +382,102 @@ describe("RunExecutor", () => {
         }),
       });
 
-      expect((await executor.execute(run.id)).status).toBe("running");
+      expect((await executor.execute(run.id)).status).toBe("succeeded");
       expect(store.listEvents(run.workItemId).filter((event) =>
         event.type === "AGENT_EVENT"
-      )).toHaveLength(0);
+      )).toHaveLength(2);
       const recovery = new SessionRecoveryService(
         store,
         coordinator,
         new SessionLeaseService(store, { now: () => new Date() }),
       );
-      expect(recovery.scanExpired()).toEqual([
-        { runId: run.id, action: "interrupted" },
-      ]);
+      expect(recovery.scanExpired()).toEqual([]);
     } finally {
       store.close();
       vi.useRealTimers();
+    }
+  });
+
+  it.each(["heartbeat", "recovery"])("survives a stalled event loop when %s runs first", async (first) => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-10-13T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    const { store, coordinator, leaseService, run } = setupSessionRun();
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    let resume!: () => void;
+    const proceed = new Promise<void>((resolve) => { resume = resolve; });
+    try {
+      const executor = new RunExecutor(store, {
+        async *run(): AsyncGenerator<AgentEvent> {
+          yield { type: "session", sessionId: "prov_stall" };
+          ready();
+          await proceed;
+          yield { type: "text_delta", text: "still alive" };
+          yield { type: "done", exitCode: 0 };
+        },
+      }, {
+        sessionCoordinator: coordinator, sessionLeaseService: leaseService, executorOwner: "bridge:123",
+        resolveRequest: () => ({ runId: run.id, sessionKey: { chatId: "conv_sess_1", backendId: "pi", cwd: "/tmp/project" }, prompt: "调查" }),
+      });
+      const recovery = new SessionRecoveryService(store, coordinator, leaseService, () => new Date(), {
+        owner: "bridge:123", isExecuting: (id) => executor.isExecuting(id),
+      });
+      const execution = executor.execute(run.id);
+      await started;
+      vi.setSystemTime(new Date(startedAt.getTime() + 76_000));
+      if (first === "recovery") {
+        expect(recovery.scanExpired()).toEqual([{ runId: run.id, action: "reclaimed_own" }]);
+      }
+      vi.advanceTimersByTime(15_000);
+      expect(executor.isExecuting(run.id)).toBe(true);
+      expect(recovery.scanExpired()).toEqual([]);
+      expect(store.findLiveProviderLease("pi", "prov_stall", new Date().toISOString())).toEqual({ runId: run.id });
+      resume();
+      expect((await execution).status).toBe("succeeded");
+      expect(store.listEvents(run.workItemId).filter((event) => event.type === "RUN_INTERRUPTED")).toHaveLength(0);
+    } finally {
+      resume(); store.close(); vi.useRealTimers();
+    }
+  });
+
+  it.each(["heartbeat", "event"])("does not reclaim from a new owner through %s", async (first) => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-10-13T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    const { store, coordinator, leaseService, run } = setupSessionRun();
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    let resume!: () => void;
+    const proceed = new Promise<void>((resolve) => { resume = resolve; });
+    try {
+      const executor = new RunExecutor(store, {
+        async *run(): AsyncGenerator<AgentEvent> {
+          ready(); await proceed;
+          yield { type: "text_delta", text: "must not be written" };
+          yield { type: "done", exitCode: 0 };
+        },
+      }, {
+        sessionCoordinator: coordinator, sessionLeaseService: leaseService, executorOwner: "bridge:123",
+        resolveRequest: () => ({ runId: run.id, sessionKey: { chatId: "conv_sess_1", backendId: "pi", cwd: "/tmp/project" }, prompt: "调查" }),
+      });
+      const execution = executor.execute(run.id);
+      await started;
+      vi.setSystemTime(new Date(startedAt.getTime() + 76_000));
+      store.withSessionTransaction((tx) => tx.updateRun(run.id, {
+        leaseOwner: "bridge:456",
+        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }));
+      if (first === "heartbeat") {
+        vi.advanceTimersByTime(15_000);
+        expect(executor.isExecuting(run.id)).toBe(false);
+      }
+      resume(); await execution;
+      expect(store.getRun(run.id)?.leaseOwner).toBe("bridge:456");
+      expect(store.getRun(run.id)?.status).toBe("running");
+      expect(store.listEvents(run.workItemId).filter((event) => event.type === "AGENT_EVENT")).toHaveLength(0);
+    } finally {
+      resume(); store.close(); vi.useRealTimers();
     }
   });
 
@@ -638,7 +720,7 @@ describe("RunExecutor", () => {
     store.close();
   });
 
-  it("interrupts exactly once when the provider lease renew fails", async () => {
+  it("interrupts exactly once when the provider lease is lost during a stall", async () => {
     vi.useFakeTimers();
     try {
       const store = new SqliteEventStore(":memory:");
@@ -710,12 +792,18 @@ describe("RunExecutor", () => {
         providerSessionId: "prov_1",
         runId: run.id,
       });
+      vi.setSystemTime(new Date(Date.now() + 76_000));
+      expect(store.claimProviderSession({
+        agentId: "pi", providerSessionId: "prov_1", runId: "other_run",
+        now: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      })).toBe(true);
       vi.advanceTimersByTime(15_000);
 
       const result = await execution;
       expect(result.status).toBe("interrupted");
       expect(result.terminalReason).toBe("provider_session_busy");
       expect(finishSpy).toHaveBeenCalledTimes(1);
+      expect(store.findLiveProviderLease("pi", "prov_1", new Date().toISOString())).toEqual({ runId: "other_run" });
       store.close();
     } finally {
       vi.useRealTimers();

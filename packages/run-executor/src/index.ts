@@ -107,6 +107,15 @@ export class RunExecutor {
     return controller !== undefined && !controller.signal.aborted;
   }
 
+  private renewActiveRunLease(runId: string, owner: string): Run | null {
+    const leases = this.options.sessionLeaseService!;
+    const renewed = leases.renew(runId, owner);
+    if (renewed) return renewed;
+    // A stalled event loop may deliver the heartbeat or Agent event before recovery.
+    // Reclaim only our still-active Run; the store fences by owner and running status.
+    return this.isExecuting(runId) ? leases.reclaimOwn(runId, owner) : null;
+  }
+
   cancelRun(runId: string): Run {
     const run = this.store.getRun(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);
@@ -213,7 +222,7 @@ export class RunExecutor {
           runId,
           owner: this.options.executorOwner!,
           renew: (id, owner) => {
-            const renewed = this.options.sessionLeaseService!.renew(id, owner);
+            const renewed = this.renewActiveRunLease(id, owner);
             if (!renewed) return null;
             if (!this.renewProviderSession(runId)) {
               // 只标记失败 + abort + 停表，终态由主路径唯一调用 finishRun。
@@ -524,7 +533,7 @@ export class RunExecutor {
       // 错过一个窗口，先续租再落事件，避免恢复扫描把仍在产出事件的 Run 误判中断。
       const now = Date.now();
       if (run.sessionId && now >= renewFromEventAfter) {
-        if (!this.options.sessionLeaseService!.renew(
+        if (!this.renewActiveRunLease(
           run.id,
           this.options.executorOwner!,
         )) {

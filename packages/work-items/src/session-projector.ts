@@ -407,7 +407,8 @@ function resolveThoughtBlockId(
   const running = database
     .prepare(
       `SELECT block_id FROM session_timeline_blocks
-       WHERE run_id = ? AND kind = 'thought' AND status = 'running'
+       WHERE turn_id = (SELECT turn_id FROM session_timeline_turns WHERE run_id = ?)
+         AND kind = 'thought' AND status = 'running'
        ORDER BY block_index DESC
        LIMIT 1`,
     )
@@ -473,7 +474,8 @@ function completeOpenThoughtBlocks(
   const rows = database
     .prepare(
       `SELECT block_id, metadata_json FROM session_timeline_blocks
-       WHERE run_id = ? AND kind = 'thought' AND status = 'running'`,
+       WHERE turn_id = (SELECT turn_id FROM session_timeline_turns WHERE run_id = ?)
+         AND kind = 'thought' AND status = 'running'`,
     )
     .all(runId) as Array<{ block_id: string; metadata_json?: string }>;
   const update = database.prepare(
@@ -610,7 +612,8 @@ function closeRun(
   const openBlocks = database
     .prepare(
       `SELECT block_id, metadata_json FROM session_timeline_blocks
-       WHERE run_id = ? AND status IN ('running', 'waiting')`,
+       WHERE turn_id = (SELECT turn_id FROM session_timeline_turns WHERE run_id = ?)
+         AND status IN ('running', 'waiting')`,
     )
     .all(runId) as Array<{ block_id: string; metadata_json?: string }>;
   const updateBlock = database.prepare(
@@ -638,7 +641,8 @@ function sealOpenSegmentsForRun(
       `UPDATE session_output_segments
        SET sealed = 1
        WHERE sealed = 0 AND block_id IN (
-         SELECT block_id FROM session_timeline_blocks WHERE run_id = ?
+         SELECT block_id FROM session_timeline_blocks
+         WHERE turn_id = (SELECT turn_id FROM session_timeline_turns WHERE run_id = ?)
        )`,
     )
     .run(runId);

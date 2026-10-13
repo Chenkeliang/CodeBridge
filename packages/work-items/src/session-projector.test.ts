@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DatabaseSync } from "node:sqlite";
 import { SqliteEventStore, type DomainEventType } from "./index.js";
 
@@ -50,6 +50,50 @@ function rawDatabase(store: SqliteEventStore): DatabaseSync {
 }
 
 describe("Session projector", () => {
+  it("projects and closes one Run without scanning other Runs' blocks", () => {
+    const { store, item } = setup();
+    seedDispatchedTurn(store, item.id);
+    const database = rawDatabase(store);
+    database.exec(`
+      INSERT INTO session_timeline_turns VALUES
+        ('sess_other', 1, 'turn_other', 'run_other', 1, NULL, 'running', '2026-10-13');
+      INSERT INTO session_timeline_blocks VALUES
+        ('thought_other', 'sess_other', 'turn_other', 'run_other', 0, 'thought', 'running', '{}');
+      INSERT INTO session_output_segments VALUES
+        ('segment_other', 'thought_other', 0, 'other', 5, 0);
+    `);
+    const statements: string[] = [];
+    const prepare = database.prepare.bind(database);
+    const spy = vi.spyOn(database, "prepare").mockImplementation((sql) => {
+      if (sql.includes("session_timeline_blocks") && /^\s*(SELECT|UPDATE)/.test(sql)) statements.push(sql);
+      return prepare(sql);
+    });
+    try {
+      for (const event of [
+        { type: "thought_delta", text: "thinking" },
+        { type: "text_delta", text: "answer" },
+        { type: "thought_delta", text: "checking" },
+        { type: "tool_start", id: "tool_1", title: "check" },
+      ]) {
+        store.appendEvent({ workItemId: item.id, runId: "run_1", type: "AGENT_EVENT", actor: "agent", payload: { event } });
+      }
+      store.appendEvent({ workItemId: item.id, runId: "run_1", type: "RUN_SUCCEEDED", actor: "system" });
+      spy.mockRestore();
+      expect(database.prepare("SELECT status FROM session_timeline_blocks WHERE block_id = 'thought_other'").get()).toMatchObject({ status: "running" });
+      expect(database.prepare("SELECT sealed FROM session_output_segments WHERE segment_id = 'segment_other'").get()).toMatchObject({ sealed: 0 });
+      expect(store.listTimelineTurns("sess_1", { limit: 50 }).turns[0]?.status).toBe("succeeded");
+      const plans = [...new Set(statements)].flatMap((sql) => {
+        const params = Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => "run_1");
+        return database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params).map((row) => String(row.detail));
+      });
+      expect(plans.some((plan) => plan.includes("SEARCH session_timeline_blocks USING INDEX"))).toBe(true);
+      expect(plans.filter((plan) => /SCAN (session_timeline_blocks|session_output_segments)/.test(plan))).toEqual([]);
+    } finally {
+      spy.mockRestore();
+      store.close();
+    }
+  });
+
   it("creates a Turn and seals every block on a terminal event", () => {
     const { store, item } = setup();
     seedDispatchedTurn(store, item.id);
