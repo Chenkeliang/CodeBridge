@@ -3,8 +3,35 @@ import type { ClientConnection } from "@agentclientprotocol/sdk";
 import { openActiveSession } from "./acp/acp-active-session.js";
 import { AcpTimeoutError, raceWithAbort } from "./acp/acp-race.js";
 import { defaultConfig } from "@codebridge/core";
+import { spawn } from "node:child_process";
 
 describe("raceWithAbort", () => {
+  it("accepts an already queued child response after the parent event loop stalls", async () => {
+    const startedAt = Date.now();
+    const child = spawn(process.execPath, ["-e", 'process.stdout.write(String(Date.now()) + "\\n");'], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const response = new Promise<number>((resolve, reject) => {
+      child.once("error", reject);
+      child.stdout!.once("data", (data: Buffer) => resolve(Number(data.toString().trim())));
+    });
+    try {
+      const pending = raceWithAbort(response, () => false, 2000, "timed out");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2500);
+      const writtenAt = await pending;
+      expect(writtenAt - startedAt).toBeLessThan(2000);
+    } finally {
+      child.kill();
+    }
+  }, 10_000);
+
+  it("honours cancellation when a response is queued behind the deadline", async () => {
+    let aborted = false;
+    const pending = raceWithAbort(new Promise<string>(() => {}), () => aborted, 1, "timed out");
+    aborted = true;
+    await expect(pending).rejects.toThrow("aborted");
+  });
+
   it("throws AcpTimeoutError when promise never settles", async () => {
     await expect(
       raceWithAbort(

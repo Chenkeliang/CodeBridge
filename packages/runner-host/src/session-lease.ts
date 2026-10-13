@@ -144,8 +144,12 @@ export class SessionLeaseStore {
         finish(holder);
       };
       const timeout = setTimeout(() => {
-        holder.kill();
-        finish(null, new Error("Timed out while acquiring the session lock"));
+        // Let queued pipe data/exit events win after a parent event-loop stall.
+        setImmediate(() => {
+          if (settled) return;
+          holder.kill();
+          finish(null, new Error("Timed out while acquiring the session lock"));
+        });
       }, 5_000);
 
       holder.once("error", onError);

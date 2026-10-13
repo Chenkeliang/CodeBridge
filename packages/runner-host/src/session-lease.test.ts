@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionLeaseStore } from "./session-lease.js";
+import type { ChildProcess } from "node:child_process";
 
 const tmpDirs: string[] = [];
 
@@ -14,6 +15,30 @@ afterEach(() => {
 });
 
 describe("SessionLeaseStore", () => {
+  it("accepts a ready kernel-lock holder after the parent event loop stalls", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-lease-stall-"));
+    tmpDirs.push(dataDir);
+    fs.writeFileSync(path.join(dataDir, "probe.lock"), "", { mode: 0o600 });
+    const store = new SessionLeaseStore(dataDir);
+    const internal = store as unknown as {
+      acquireKernelLock: (lockPath: string) => Promise<ChildProcess | null>;
+      releaseKernelLock: (holder: ChildProcess) => Promise<void>;
+    };
+    const pending = internal.acquireKernelLock(path.join(dataDir, "probe.lock"));
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 6000);
+    const holder = await pending;
+    try {
+      expect(holder).not.toBeNull();
+      const competing = await internal.acquireKernelLock(path.join(dataDir, "probe.lock"));
+      expect(competing).toBeNull();
+    } finally {
+      if (holder) await internal.releaseKernelLock(holder);
+    }
+    const replacement = await internal.acquireKernelLock(path.join(dataDir, "probe.lock"));
+    expect(replacement).not.toBeNull();
+    if (replacement) await internal.releaseKernelLock(replacement);
+  }, 15_000);
+
   it("atomically rejects a second Runner and releases the kernel lock", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codebridge-lease-"));
     tmpDirs.push(dataDir);

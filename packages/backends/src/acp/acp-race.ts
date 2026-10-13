@@ -23,6 +23,14 @@ export async function raceWithAbort<T>(
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
+      // A stalled parent can run an overdue timer before reading a child's response.
+      // Drain this poll cycle before treating an already-queued reply as a timeout.
+      const completed = await Promise.race([
+        promise.then((value) => ({ value })),
+        new Promise<undefined>((resolve) => setImmediate(() => resolve(undefined))),
+      ]);
+      if (isAborted()) throw new Error("aborted");
+      if (completed) return completed.value;
       throw new AcpTimeoutError(timeoutMessage);
     }
     const result = await Promise.race([
