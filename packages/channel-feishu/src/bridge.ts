@@ -877,17 +877,18 @@ export class FeishuBridge {
 
   /**
    * Start a fresh provider session (same effect as /new) when the bound one is idle or
-   * its context is too full. Alert incidents are exempt: their alert data lives only in
-   * the first prompt of the topic session.
+   * its context is too full. Group replies preserve idle sessions. Alert incidents
+   * are exempt: their alert data lives only in the first prompt of the topic session.
    */
-  private async rotateStaleSession(chatId: string, topicId: string | undefined, replyTo: string): Promise<void> {
+  private async rotateStaleSession(chatId: string, topicId: string | undefined, replyTo: string, preserveIdleSession: boolean): Promise<void> {
     if (!this.sessionIngress || this.options.isAlertChat?.(chatId)) return;
     // Best effort: a failed check must never block the user's message.
     try {
       const router = this.orchestrator.router;
       const generation = router.getSlotGeneration(chatId, topicId);
       const context = await this.sessionIngress.getSlotCommandContext(this.buildFullSlot(chatId, topicId));
-      const reason = sessionRotationReason(context, this.config.orchestration?.session?.autoRotate, Date.now());
+      const policy = this.config.orchestration?.session?.autoRotate;
+      const reason = sessionRotationReason(context, preserveIdleSession ? { ...policy, idleHours: 0 } : policy, Date.now());
       // A concurrent message may already have rotated this slot while we awaited.
       if (!reason || router.getSlotGeneration(chatId, topicId) !== generation) return;
       router.incrementSlotGeneration(chatId, topicId);
@@ -1011,7 +1012,8 @@ export class FeishuBridge {
       await this.streamAgentReply(msg, prompt, topicId);
       return;
     }
-    await this.rotateStaleSession(msg.chatId, topicId, msg.messageId);
+    const isGroupReply = msg.chatType === "group" && Boolean(msg.threadId || msg.rootId || msg.replyToMessageId);
+    await this.rotateStaleSession(msg.chatId, topicId, msg.messageId, isGroupReply);
     const binding = this.orchestrator.router.getBinding(msg.chatId, topicId);
     const showThinking = binding.showThinking ?? true;
     const slot = this.orchestrator.router.buildSlot(msg.chatId, topicId);

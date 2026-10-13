@@ -61,6 +61,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { inspectForeignCodexSessionOwners } from "./codex-session-ownership.js";
+import { restoreArchivedCodexSession } from "./codex-session-archive.js";
 import { createDeploymentMcpServerConfig } from "./deployment-mcp-server.js";
 import { writeFcbScript } from "./fcb-script.js";
 import { cleanupAttachments, materializeAttachments } from "./materialize-attachments.js";
@@ -92,6 +93,8 @@ export interface RunnerHostOptions {
   directoryPicker?: () => Promise<string | null>;
   /** Test/embedding hook for Codex app-server Skill discovery. */
   codexSkillLister?: (cwd: string) => Promise<AgentAvailableCommand[]>;
+  /** Test/embedding hook; production restores archived sessions through Codex. */
+  codexSessionRestorer?: typeof restoreArchivedCodexSession;
   /** Absolute built entrypoint for the Bridge-owned read-only MCP server. */
   deploymentMcpServerPath?: string;
   /** Test/embedding hook; production owns local Skill filesystem projection here. */
@@ -874,7 +877,7 @@ export class RunnerHost {
     let localAttachments: LocalMediaPath[] = [];
     try {
       if (lifecycle.cancelRequested) return;
-      if (backendId === "codex" && request.resumeSessionId) {
+      if (profile.type === "codex" && request.resumeSessionId) {
         const ownerGroup = this.sessionPool.ownerProcessGroupId(
           request.resumeSessionId,
         );
@@ -886,6 +889,21 @@ export class RunnerHost {
           yield {
             type: "error",
             message: `Codex session ${request.resumeSessionId} 正被桌面端/TUI 占用（PID: ${owners.join(", ")}）；请先在原客户端停止该任务`,
+            fatal: true,
+          };
+          yield { type: "done", exitCode: 1 };
+          return;
+        }
+        if (lifecycle.cancelRequested) return;
+        try {
+          await (this.options.codexSessionRestorer ?? restoreArchivedCodexSession)(
+            request.resumeSessionId,
+            resolvedCwd.cwd,
+          );
+        } catch (error) {
+          yield {
+            type: "error",
+            message: `无法恢复 Codex 归档会话 ${request.resumeSessionId}：${error instanceof Error ? error.message : String(error)}`,
             fatal: true,
           };
           yield { type: "done", exitCode: 1 };

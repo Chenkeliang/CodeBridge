@@ -878,18 +878,22 @@ describe("RunnerHost session lifecycle", () => {
     host.shutdown();
   });
 
-  it("refuses to resume a Codex session owned by desktop or TUI", async () => {
+  it.each(["codex", "codex-alert"])("refuses to resume %s owned by desktop or TUI", async (backendId) => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.backends[backendId] = { type: "codex" };
+    const restore = vi.fn();
     const host = new RunnerHost({
       token: "token",
-      config: defaultConfig(),
+      config,
       dataDir,
       inspectSessionOwners: async () => [37540],
+      codexSessionRestorer: restore,
     });
     const run = request(dataDir);
     run.runId = "second";
-    run.sessionKey.backendId = "codex";
+    run.sessionKey.backendId = backendId;
     run.resumeSessionId = "shared-session";
 
     const events = await collect(host.executeRun(run));
@@ -900,6 +904,79 @@ describe("RunnerHost session lifecycle", () => {
       fatal: true,
     });
     expect(events.at(-1)).toEqual({ type: "done", exitCode: 1 });
+    expect(restore).not.toHaveBeenCalled();
+    host.shutdown();
+  });
+
+  it.each(["codex", "codex-alert"])("restores %s before continuing the original ID", async (backendId) => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.backends[backendId] = { type: "codex" };
+    const order: string[] = [];
+    const restore = vi.fn(async () => { order.push("restore"); });
+    const host = new RunnerHost({ token: "token", config, dataDir,
+      inspectSessionOwners: async () => [], codexSessionRestorer: restore });
+    const contexts: RunContext[] = [];
+    vi.spyOn(host as unknown as {
+      executeAcpRun: (runId: string, ctx: RunContext) => AsyncGenerator<AgentEvent>;
+    }, "executeAcpRun").mockImplementation(async function* (_runId, ctx) {
+      order.push("resume"); contexts.push(ctx);
+      yield { type: "done", exitCode: 0 };
+    });
+    const run = request(dataDir);
+    run.sessionKey.backendId = backendId;
+    run.resumeSessionId = "original-session";
+    expect((await collect(host.executeRun(run))).at(-1)).toEqual({ type: "done", exitCode: 0 });
+    expect(order).toEqual(["restore", "resume"]);
+    expect(restore).toHaveBeenCalledWith("original-session", fs.realpathSync(dataDir));
+    expect(contexts[0]?.resumeSessionId).toBe("original-session");
+    host.shutdown();
+  });
+
+  it.each([
+    ["codex", undefined],
+    ["codex-alert", undefined],
+    ["cursor", "original-session"],
+  ])("does not restore for %s with resume ID %s", async (backendId, resumeSessionId) => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const config = defaultConfig();
+    config.backends[backendId!] = { type: backendId === "cursor" ? "cursor-cli" : "codex" };
+    const restore = vi.fn();
+    const host = new RunnerHost({ token: "token", config, dataDir,
+      inspectSessionOwners: async () => [], codexSessionRestorer: restore });
+    vi.spyOn(host as unknown as {
+      executeAcpRun: (runId: string, ctx: RunContext) => AsyncGenerator<AgentEvent>;
+    }, "executeAcpRun").mockImplementation(async function* () { yield { type: "done", exitCode: 0 }; });
+    const run = request(dataDir);
+    run.sessionKey.backendId = backendId!;
+    run.resumeSessionId = resumeSessionId;
+    await collect(host.executeRun(run));
+    expect(restore).not.toHaveBeenCalled();
+    host.shutdown();
+  });
+
+  it("reports restore failure without dispatching a prompt and releases the session lease", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
+    tmpDirs.push(dataDir);
+    const restore = vi.fn().mockRejectedValue(new Error("unarchive failed"));
+    const host = new RunnerHost({ token: "token", config: defaultConfig(), dataDir,
+      inspectSessionOwners: async () => [], codexSessionRestorer: restore });
+    const dispatch = vi.spyOn(host as unknown as {
+      executeAcpRun: (runId: string, ctx: RunContext) => AsyncGenerator<AgentEvent>;
+    }, "executeAcpRun");
+    const run = request(dataDir);
+    run.sessionKey.backendId = "codex";
+    run.resumeSessionId = "original-session";
+    for (const runId of ["first", "retry"]) {
+      const events = await collect(host.executeRun({ ...run, runId }));
+      expect(events).toContainEqual({ type: "error", fatal: true,
+        message: expect.stringContaining("unarchive failed") });
+      expect(events.at(-1)).toEqual({ type: "done", exitCode: 1 });
+    }
+    expect(restore).toHaveBeenCalledTimes(2);
+    expect(dispatch).not.toHaveBeenCalled();
     host.shutdown();
   });
 
