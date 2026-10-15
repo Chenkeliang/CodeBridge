@@ -483,29 +483,29 @@ program
           setOutboundAlertStatus: (chatId, topicId, status, summary) => alertMonitor
             ? alertMonitor.setStatus(chatId, topicId, status, summary)
             : Promise.reject(new Error("告警监控未配置")),
-          sendOutboundFile: (chatId, rawPath, topicId) =>
+          sendOutboundFile: (chatId, rawPath, topicId, sourceMessageId) =>
             chatId.startsWith("telegram:")
               ? telegram
                 ? telegram.sendOutboundFile(chatId, rawPath, topicId)
                 : Promise.reject(new Error("Telegram 通道未配置"))
               : bridge
-                ? bridge.sendOutboundFile(chatId, rawPath, topicId)
+                ? bridge.sendOutboundFile(chatId, rawPath, topicId, sourceMessageId)
                 : Promise.reject(new Error("飞书通道未配置")),
-          sendOutboundMarkdown: (chatId, markdown, topicId) =>
+          sendOutboundMarkdown: (chatId, markdown, topicId, sourceMessageId) =>
             chatId.startsWith("telegram:")
               ? telegram
                 ? telegram.sendOutboundMarkdown(chatId, markdown, topicId)
                 : Promise.reject(new Error("Telegram 通道未配置"))
               : bridge
-                ? bridge.sendOutboundMarkdown(chatId, markdown, topicId)
+                ? bridge.sendOutboundMarkdown(chatId, markdown, topicId, sourceMessageId)
                 : Promise.reject(new Error("飞书通道未配置")),
-          sendOutboundMention: (chatId, ref, text, topicId) =>
+          sendOutboundMention: (chatId, ref, text, topicId, sourceMessageId) =>
             chatId.startsWith("telegram:")
               ? telegram
                 ? telegram.sendOutboundMention(chatId, ref, text, topicId)
                 : Promise.reject(new Error("Telegram 通道未配置"))
               : bridge
-                ? bridge.sendOutboundMention(chatId, ref, text, topicId)
+                ? bridge.sendOutboundMention(chatId, ref, text, topicId, sourceMessageId)
                 : Promise.reject(new Error("飞书通道未配置")),
         },
 config.runner.token,

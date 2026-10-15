@@ -3,6 +3,7 @@ import type { FeishuMessage } from "./bridge.js";
 export interface GroupMentionGateInput {
   chatId: string;
   mentionedBot?: boolean;
+  replyingToBot?: boolean;
   topicId?: string;
   requireMention: boolean;
   /** 本话题是否已有 Agent session 或 bot 已回复过 */
@@ -12,7 +13,7 @@ export interface GroupMentionGateInput {
 /** 群消息是否应触发 Agent（@ 要求由 Bridge 判断，SDK 层需关闭 requireMention） */
 export function shouldAcceptGroupMessage(input: GroupMentionGateInput): boolean {
   if (!input.requireMention) return true;
-  if (input.mentionedBot) return true;
+  if (input.mentionedBot || input.replyingToBot) return true;
   if (input.topicId && input.topicActive) return true;
   return false;
 }

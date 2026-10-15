@@ -7,6 +7,7 @@ export interface RunCardParts {
   progress: string;
   status: string;
   terminal: boolean;
+  recipientId?: string;
 }
 
 type Element = { tag: "markdown"; element_id: string; content: string };
@@ -74,6 +75,7 @@ export function runCardJson(parts: RunCardParts): RunCardJson {
       summary: { content: parts.status.split("\n")[0] || "任务进度" },
     },
     body: { elements: [
+      ...(parts.recipientId ? [{ tag: "markdown" as const, element_id: "recipient", content: `<at id="${parts.recipientId}"></at>` }] : []),
       { tag: "markdown", element_id: "answer", content: answer || " " },
       { tag: "markdown", element_id: "progress", content: (progress + (overflow ? "\n\n正文较长，完成后以 Markdown 文件交付完整结果。" : "")) || " " },
       { tag: "markdown", element_id: "status", content: preview(parts.status, 2_000) || " " },
@@ -163,7 +165,7 @@ export class CardKitWriter {
     const previous = this.confirmed.get(cardId);
     // A terminal acknowledgement fences delayed live snapshots.
     if (previous && previous.config?.streaming_mode === false && card.config?.streaming_mode) return;
-    const structured = card.body?.elements?.every((e) => ["answer", "progress", "status"].includes(e.element_id));
+    const structured = card.body?.elements?.every((e) => ["recipient", "answer", "progress", "status"].includes(e.element_id));
     if (!previous || !structured) {
       // Also migrates legacy single-element cards once after a restart.
       await this.request(cardId, card, (sequence, uuid) =>

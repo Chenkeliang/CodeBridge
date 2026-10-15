@@ -21,7 +21,7 @@ function fixture() {
   const submit = vi.fn(async () => ({ sessionId: "session-1", turnId: "turn-1", runId: "run-1", acceptance: "dispatched", queueState: "ready", eventSequence: 1 }));
   const getSlotCommandContext = vi.fn(async () => ({ sessionId: "session-1", activeRunId: null, providerSessionId: null }));
   const bridge = new FeishuBridge({ config, dataDir: root,
-    sessionIngress: { submit, getSlotCommandContext } as unknown as ChannelSessionIngress,
+    sessionIngress: { submit, getSlotCommandContext, listDeliveries: async () => [] } as unknown as ChannelSessionIngress,
     prepareAlertReply: (message, topic) => monitor.prepareReply(message, topic),
     isAlertMessage: (chat, id) => monitor.isAlertMessage(chat, id),
     isAlertChat: (chat) => chat === "oc_alerts",

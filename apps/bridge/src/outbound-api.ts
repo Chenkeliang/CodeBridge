@@ -12,17 +12,20 @@ export interface OutboundBridge {
     chatId: string,
     rawPath: string,
     topicId?: string,
+    sourceMessageId?: string,
   ): Promise<string>;
   sendOutboundMarkdown(
     chatId: string,
     markdown: string,
     topicId?: string,
+    sourceMessageId?: string,
   ): Promise<void>;
   sendOutboundMention(
     chatId: string,
     ref: string,
     text: string,
     topicId?: string,
+    sourceMessageId?: string,
   ): Promise<void>;
 }
 
@@ -79,7 +82,7 @@ export function resolveOutboundTarget(store: SqliteEventStore, runId: string) {
   }
   const deliveries = ["feishu", "telegram"].flatMap((channel) =>
     store.listDeliveries(channel).filter((row) => row.runId === run.id && row.turnId === run.turnId)
-      .map((row) => ({ channel, conversationId: row.conversationId })),
+      .map((row) => ({ channel, conversationId: row.conversationId, sourceMessageId: row.replyToMessageId })),
   );
   const targets = [...new Map(deliveries.map((row) => [`${row.channel}:${row.conversationId}`, row])).values()];
   if (targets.length !== 1) {
@@ -92,7 +95,7 @@ export function resolveOutboundTarget(store: SqliteEventStore, runId: string) {
     : /^telegram:-?\d+$/.test(chatId))) {
     throw new Error("outbound_invalid_destination：任务来源不是有效的通道聊天 ID");
   }
-  return { chatId, topicId: topicId || undefined };
+  return { chatId, topicId: topicId || undefined, ...(target.channel === "feishu" && target.sourceMessageId ? { sourceMessageId: target.sourceMessageId } : {}) };
 }
 
 /**
@@ -105,7 +108,7 @@ export function createOutboundApp(
   options: OutboundAppOptions = {},
 ) {
   const app = new Hono();
-  const resolvedTargets = new WeakMap<Request, { chatId: string; topicId?: string }>();
+  const resolvedTargets = new WeakMap<Request, { chatId: string; topicId?: string; sourceMessageId?: string }>();
   const publicPathPrefixes = options.publicPathPrefixes ?? [];
   const publishers = options.publishers ?? (() => []);
 
@@ -193,6 +196,7 @@ export function createOutboundApp(
         body.chatId,
         body.path,
         body.topicId,
+        ...(target?.sourceMessageId ? [target.sourceMessageId] : []),
       );
       return c.json({ ok: true, fileName });
     } catch (err) {
@@ -217,6 +221,7 @@ export function createOutboundApp(
         body.chatId,
         body.markdown,
         body.topicId,
+        ...(target?.sourceMessageId ? [target.sourceMessageId] : []),
       );
       return c.json({ ok: true });
     } catch (err) {
@@ -243,6 +248,7 @@ export function createOutboundApp(
         body.ref,
         body.text,
         body.topicId,
+        ...(target?.sourceMessageId ? [target.sourceMessageId] : []),
       );
       return c.json({ ok: true });
     } catch (err) {

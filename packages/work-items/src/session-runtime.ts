@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   ChannelDeliveryInput,
+  ChannelReplyContext,
   ChannelDeliveryRow,
   ChannelDeliveryRunSnapshot,
   ChannelDeliveryStatus,
@@ -64,6 +65,7 @@ export interface SessionTurnMessage {
   effort: string | null;
   permissionMode: string | null;
   actorRef?: ChannelActorRef;
+  replyContext?: ChannelReplyContext;
   executionKind: ExecutionKind;
   plan: {
     planId: string;
@@ -346,7 +348,7 @@ export interface SessionRuntimeTransaction {
     surfaceCardId?: string,
   ): boolean;
   completeDelivery(turnId: string, owner: string): boolean;
-  listDeliveries(channel: string, surfaceMessageId?: string): ChannelDeliveryRow[];
+  listDeliveries(channel: string, surfaceMessageId?: string, messageId?: string): ChannelDeliveryRow[];
   setSessionProviderSessionId(
     sessionId: string,
     providerSessionId: string | null,
@@ -1259,10 +1261,10 @@ export function createSqliteSessionRuntimeTransaction(
       return Number(result.changes) === 1;
     },
 
-    listDeliveries(channel, surfaceMessageId) {
+    listDeliveries(channel, surfaceMessageId, messageId) {
       const rows = database
         .prepare(
-          `SELECT d.*,
+          `SELECT d.*, json_extract(t.message_json, '$.replyContext') AS reply_context,
                   r.status AS run_snapshot_status,
                   r.created_at AS run_snapshot_created_at,
                   r.updated_at AS run_snapshot_updated_at,
@@ -1271,13 +1273,20 @@ export function createSqliteSessionRuntimeTransaction(
                   sr.active_run_id AS run_snapshot_active_run_id,
                   sr.queue_state AS run_snapshot_queue_state
            FROM channel_turn_delivery d
+           LEFT JOIN session_turns t ON t.turn_id = d.turn_id
            LEFT JOIN runs r ON r.id = d.run_id
            LEFT JOIN session_runtime sr ON sr.session_id = d.session_id
-           WHERE d.channel = ? AND ${surfaceMessageId !== undefined
-             ? "d.surface_message_id = ?" : "d.status != 'completed'"}
+           WHERE ${messageId !== undefined
+             ? `d.turn_id IN (
+                 SELECT turn_id FROM channel_turn_delivery WHERE channel = ? AND surface_message_id = ?
+                 UNION
+                 SELECT turn_id FROM channel_turn_delivery WHERE channel = ? AND reply_to_message_id = ?
+               )`
+             : `d.channel = ? AND ${surfaceMessageId !== undefined ? "d.surface_message_id = ?" : "d.status != 'completed'"}`}
            ORDER BY d.accepted_sequence ASC`,
         )
-        .all(...(surfaceMessageId !== undefined ? [channel, surfaceMessageId] : [channel])) as SqliteRow[];
+        .all(...(messageId !== undefined ? [channel, messageId, channel, messageId]
+          : surfaceMessageId !== undefined ? [channel, surfaceMessageId] : [channel])) as SqliteRow[];
       return rows.map(toChannelDeliveryRow);
     },
 
@@ -1824,6 +1833,7 @@ function toChannelDeliveryRow(row: SqliteRow): ChannelDeliveryRow {
     sessionId: String(row.session_id),
     channel: String(row.channel),
     conversationId: String(row.conversation_id),
+    ...(row.reply_context ? { replyContext: JSON.parse(String(row.reply_context)) as ChannelReplyContext } : {}),
     replyToMessageId: String(row.reply_to_message_id),
     showThinking: Number(row.show_thinking) === 1,
     surfaceMessageId: nullableString(row.surface_message_id),

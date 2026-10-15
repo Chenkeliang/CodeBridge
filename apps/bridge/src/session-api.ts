@@ -400,6 +400,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         message: body.message,
         inputs: channelInputRecord(body.inputs),
         ...(actorRef ? { actor_ref: actorRef } : {}),
+        ...(channel === "feishu" && body.reply_context !== undefined ? { reply_context: body.reply_context } : {}),
         model: asNullableString(body.model),
         attachments: body.attachments,
         delivery: hasReplyToMessageId
@@ -902,7 +903,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const channel = c.req.query("channel");
     if (!channel) return c.json({ error: "channel_required" }, 400);
     return c.json({
-      deliveries: options.workItems.listDeliveries(channel, c.req.query("surface_message_id")),
+      deliveries: options.workItems.listDeliveries(channel, c.req.query("surface_message_id"), c.req.query("message_id")),
     });
   });
 

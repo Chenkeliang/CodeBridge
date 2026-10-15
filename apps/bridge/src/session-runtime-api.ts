@@ -50,6 +50,15 @@ export function registerSessionRuntimeCommandRoutes(
     if (delivery === null) {
       return c.json({ error: "invalid_delivery" }, 400);
     }
+    const actorRef = origin === "channel" ? channelActorRef(body.actor_ref) : undefined;
+    const replyContext = body.reply_context as { senderId?: unknown; threadId?: unknown } | undefined;
+    if (replyContext !== undefined && (origin !== "channel" || !delivery
+      || delivery.channel !== "feishu" || actorRef?.channel !== "feishu"
+      || !replyContext || typeof replyContext !== "object"
+      || typeof replyContext.senderId !== "string" || replyContext.senderId !== actorRef.id
+      || (replyContext.threadId !== undefined && typeof replyContext.threadId !== "string"))) {
+      return c.json({ error: "invalid_reply_context" }, 400);
+    }
     try {
       const result = options.coordinator.submitTurn({
         sessionId: session.id,
@@ -66,7 +75,9 @@ export function registerSessionRuntimeCommandRoutes(
           ),
           actorRef: origin === "web"
             ? { channel: "web", id: "local" }
-            : channelActorRef(body.actor_ref),
+            : actorRef,
+          ...(replyContext ? { replyContext: { senderId: String(replyContext.senderId),
+            ...(typeof replyContext.threadId === "string" ? { threadId: replyContext.threadId } : {}) } } : {}),
           executionKind: "agent",
           plan: null,
         },

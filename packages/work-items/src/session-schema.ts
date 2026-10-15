@@ -234,6 +234,12 @@ export function initializeSessionRuntimeSchema(
   );
 
   migrateChannelDeliveryStatusCheck(database);
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS channel_delivery_source_message
+      ON channel_turn_delivery(channel, reply_to_message_id);
+    CREATE INDEX IF NOT EXISTS channel_delivery_surface_message
+      ON channel_turn_delivery(channel, surface_message_id);
+  `);
 }
 
 export function removeMisprojectedAgentFlowBlocks(

@@ -8,6 +8,7 @@ import {
   type AgentEvent,
   type AppConfig,
   type ChannelSessionEvent,
+  type ChannelReplyContext,
   type ChannelSessionIngress,
   type ChannelSlot,
   type RunAttachment,
@@ -22,12 +23,11 @@ import {
   sessionRotationNotice,
   sessionRotationReason,
 } from "@codebridge/router";
-import { createLarkChannel, LoggerLevel, type LarkChannel, type ResourceDescriptor } from "@larksuiteoapi/node-sdk";
+import { createLarkChannel, LoggerLevel, type LarkChannel, type MentionInfo, type ResourceDescriptor } from "@larksuiteoapi/node-sdk";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CardKitWriter } from "./cardkit-writer.js";
-import { ChainTopicTracker } from "./chain-topics.js";
 import { CoalescingCardWriter } from "./coalescing-card-writer.js";
 import { FeishuDeliveryReconciler } from "./delivery-reconciler.js";
 import { durableMarkdownCard } from "./durable-markdown-card.js";
@@ -208,8 +208,6 @@ export class FeishuBridge {
   private config: AppConfig;
   /** chat|topic → 最近一条入站消息 id（出站消息回贴话题用） */
   private readonly lastInboundMessageId: JsonMapStore<string>;
-  /** 普通群回复串 → 会话 topic 映射 */
-  private readonly chainTopics = new ChainTopicTracker();
   /** bot 已参与过的话题（内存；重启后由 Catalog 槽位绑定续上） */
   private readonly botParticipatedTopics = new Set<string>();
   private readonly mentionRegistry: MentionRegistry;
@@ -499,31 +497,44 @@ export class FeishuBridge {
     });
   }
 
-  /**
-   * 消息所属会话 topic：话题群直接用 thread_id；普通群把「回复串」映射为
-   * topic——群根发起的对话延续群级会话，回复陌生消息（如告警推送）的串
-   * 自动成为独立话题、开启全新 session。
-   */
-  private resolveTopicId(msg: FeishuMessage): string | undefined {
-    if (msg.threadId) return msg.threadId;
-    if (msg.chatType !== "group") return undefined;
-    if (!msg.rootId) {
-      this.chainTopics.recordGroupRoot(msg.messageId);
-      return undefined;
+  /** Backend conversation identity is independent of Feishu's visible reply mode. */
+  private async resolveTopicId(msg: FeishuMessage): Promise<{ topicId?: string; replyingToBot?: boolean }> {
+    if (msg.chatType !== "group") return {};
+    for (const id of new Set([msg.replyToMessageId, msg.rootId].filter((id): id is string => Boolean(id)))) {
+      const deliveries = await this.sessionIngress?.listDeliveries("feishu", undefined, id) ?? [];
+      const delivery = deliveries.find((item) => item.conversationId.startsWith(`${msg.chatId}|`)
+        && (item.replyToMessageId === id || item.surfaceMessageId === id));
+      if (delivery) {
+        let replyingToBot = Boolean(msg.replyToMessageId && delivery.surfaceMessageId === msg.replyToMessageId);
+        // Tool/file replies can share the original root without being the primary task card.
+        if (!replyingToBot && !msg.mentionedBot && msg.replyToMessageId
+          && msg.replyToMessageId !== delivery.replyToMessageId && this.channel) {
+          try {
+            const result = await this.channel.rawClient.im.v1.message.get({ path: { message_id: msg.replyToMessageId } });
+            const quoted = result.code === 0 ? result.data?.items?.[0] : undefined;
+            replyingToBot = quoted?.chat_id === msg.chatId && quoted.sender?.sender_type === "app"
+              && quoted.sender.id === this.config.feishu.appId;
+          } catch { /* Without verified sender identity this reply still requires @. */ }
+        }
+        return { topicId: delivery.conversationId.slice(msg.chatId.length + 1) || undefined, replyingToBot };
+      }
     }
-    return this.chainTopics.resolve(msg.rootId);
+    if (msg.threadId) return { topicId: msg.threadId };
+    return { topicId: msg.rootId || msg.replyToMessageId
+      || (msg.content.trim().startsWith("/") ? undefined : msg.messageId) };
   }
 
   private async handleMessage(msg: FeishuMessage): Promise<void> {
     const isDm = msg.chatType === "p2p";
-    if (
-      !checkAccess(this.config, msg.chatId, msg.senderId, isDm)
-    ) {
-      return;
-    }
-
     const policy = this.config.feishu.policy;
-    let topicId = this.resolveTopicId(msg);
+    const configuredGroup = !isDm && Boolean(policy?.groupAllowlist?.includes(msg.chatId)
+      || this.config.access?.allowedChats?.includes(msg.chatId));
+    if (!isDm && ((policy?.groupAllowlist?.length && !policy.groupAllowlist.includes(msg.chatId))
+      || (this.config.access?.allowedChats?.length && !this.config.access.allowedChats.includes(msg.chatId)))) return;
+    if (!configuredGroup && !checkAccess(this.config, msg.chatId, msg.senderId, isDm)) return;
+
+    const route = await this.resolveTopicId(msg);
+    let topicId = route.topicId;
     const alertReply = await this.options.prepareAlertReply?.(msg, topicId);
     if (alertReply && !alertReply.allowed && alertReply.notice) {
       await this.sendMarkdown(msg.chatId, alertReply.notice, msg.messageId);
@@ -546,9 +557,10 @@ export class FeishuBridge {
       !shouldAcceptGroupMessage({
         chatId: msg.chatId,
         mentionedBot: msg.mentionedBot,
+        replyingToBot: route.replyingToBot,
         topicId,
         requireMention: resolveRequireMention(policy, msg.chatId),
-        topicActive: topicActiveForMessage(
+        topicActive: Boolean(msg.threadId || alertReply) && topicActiveForMessage(
           msg,
           topicId,
           Boolean(boundSessionId),
@@ -571,6 +583,14 @@ export class FeishuBridge {
       return;
     }
 
+    const command = msg.content.trim().split(/\s/, 1)[0]!.toLowerCase();
+    const groupOperator = Boolean(this.config.access?.admins?.includes(msg.senderId)
+      || this.config.access?.allowedUsers?.includes(msg.senderId));
+    if (!isDm && !alertReply && command.startsWith("/") && !groupOperator
+      && !["/help", "/status", "/s", "/new", "/stop", "/cancel", "/x", "/continue", "/c", "/steer"].includes(command)) {
+      await this.sendMarkdown(msg.chatId, "你可以在群里提问和续聊；此操作需要已配置的管理员权限。", msg.messageId);
+      return;
+    }
     const slash = await handleSlashCommand({
       chatId: msg.chatId,
       topicId,
@@ -726,7 +746,7 @@ export class FeishuBridge {
         contextPrefix = await buildInboundPromptPrefix(
           this.channel,
           msg,
-          topicId,
+          topicId === msg.messageId ? undefined : topicId,
           this.config.feishu.appId,
           (text, messageId) => {
             const attachments = msg.attachments ?? [];
@@ -803,6 +823,7 @@ export class FeishuBridge {
     );
     const finalPrompt = [
       promptWithContext,
+      `【本轮发送者】${JSON.stringify({ id: msg.senderId, name: msg.senderName })}；群成员发言不自动代表其他人的操作授权。`,
       mentionGuidance,
       FEISHU_OUTPUT_STYLE_GUIDANCE,
     ].join("\n\n");
@@ -954,6 +975,7 @@ export class FeishuBridge {
           chatId,
           sourceMessageId: delivery.replyToMessageId,
           showThinking: delivery.showThinking,
+          ...(delivery.replyContext ? { replyContext: delivery.replyContext } : {}),
         };
         if (delivery.surfaceMessageId) {
           // delivering：从 legacy interrupted recovery 中剔除，避免被覆盖成“服务中断”
@@ -1014,6 +1036,9 @@ export class FeishuBridge {
     }
     const isGroupReply = msg.chatType === "group" && Boolean(msg.threadId || msg.rootId || msg.replyToMessageId);
     await this.rotateStaleSession(msg.chatId, topicId, msg.messageId, isGroupReply);
+    const replyContext: ChannelReplyContext | undefined = msg.chatType === "group"
+      && !this.options.isAlertMessage?.(msg.chatId, msg.messageId)
+      ? { senderId: msg.senderId, ...(msg.threadId ? { threadId: msg.threadId } : {}) } : undefined;
     const binding = this.orchestrator.router.getBinding(msg.chatId, topicId);
     const showThinking = binding.showThinking ?? true;
     const slot = this.orchestrator.router.buildSlot(msg.chatId, topicId);
@@ -1030,12 +1055,14 @@ export class FeishuBridge {
       replyToMessageId: msg.messageId,
       showThinking,
       actorRef: { channel: "feishu", id: msg.senderId },
+      ...(replyContext ? { replyContext } : {}),
     });
     const turn = {
       turnId: receipt.turnId,
       chatId: msg.chatId,
       sourceMessageId: msg.messageId,
       showThinking,
+      ...(replyContext ? { replyContext } : {}),
     };
     const watcher = this.ensureSessionWatcher(receipt.sessionId);
     if (receipt.acceptance === "queued") {
@@ -1226,7 +1253,7 @@ export class FeishuBridge {
             }
           },
         },
-        { replyTo: msg.messageId },
+        { replyTo: msg.messageId, ...(msg.chatType === "group" ? { mentions: [{ key: "requester", openId: msg.senderId, isBot: false }] } : {}) },
       );
     } catch (err) {
       // channel.stream 本身抛（多为建卡阶段就失败，markdown 回调没跑起来）→ 降级
@@ -1282,14 +1309,23 @@ export class FeishuBridge {
    * 话题群出站消息定位：带 topicId 时回贴到该话题最近一条入站消息，
    * 否则（或 Bridge 重启后话题内还没有新消息）落到群根/单聊。
    */
-  private outboundSendOptions(
+  private async outboundSendOptions(
     chatId: string,
     topicId?: string,
-  ): { replyTo: string; replyInThread: true } | undefined {
-    if (!topicId) return undefined;
-    const replyTo = this.lastInboundMessageId.read()[this.chatKey(chatId, topicId)];
+    sourceMessageId?: string,
+  ): Promise<{ replyTo: string; replyInThread?: boolean; mentions?: MentionInfo[] } | undefined> {
+    if (!topicId && !sourceMessageId) return undefined;
+    const replyTo = sourceMessageId ?? this.lastInboundMessageId.read()[this.chatKey(chatId, topicId)];
     if (!replyTo) return undefined;
-    return { replyTo, replyInThread: true };
+    const delivery = (await this.sessionIngress?.listDeliveries("feishu", undefined, replyTo) ?? [])
+      .find((item) => item.conversationId === this.chatKey(chatId, topicId));
+    if (sourceMessageId && !delivery) throw new Error("当前任务的回复来源不存在或不属于此会话");
+    return { replyTo,
+      ...(sourceMessageId && delivery?.replyContext ? { mentions: [{ key: "requester", openId: delivery.replyContext.senderId, isBot: false }] } : {}),
+      ...(delivery?.replyContext
+        ? (delivery.replyContext.threadId ? { replyInThread: true } : {})
+        : topicId?.startsWith("omt_") || this.options.isAlertChat?.(chatId) ? { replyInThread: true } : {}),
+    };
   }
 
   /** Transport adapter for the Bridge-owned alert monitor; always uses bot credentials. */
@@ -1405,13 +1441,14 @@ export class FeishuBridge {
     chatId: string,
     rawPath: string,
     topicId?: string,
+    sourceMessageId?: string,
   ): Promise<string> {
     if (!this.channel) throw new Error("飞书通道未连接");
     const file = await resolveOutboundFile(rawPath);
     await this.channel.send(
       chatId,
       { file: { source: file.path, fileName: file.fileName } },
-      this.outboundSendOptions(chatId, topicId),
+      await this.outboundSendOptions(chatId, topicId, sourceMessageId),
     );
     return file.fileName;
   }
@@ -1421,12 +1458,13 @@ export class FeishuBridge {
     chatId: string,
     markdown: string,
     topicId?: string,
+    sourceMessageId?: string,
   ): Promise<void> {
     if (!this.channel) throw new Error("飞书通道未连接");
     await this.channel.send(
       chatId,
       { markdown },
-      this.outboundSendOptions(chatId, topicId),
+      await this.outboundSendOptions(chatId, topicId, sourceMessageId),
     );
   }
 
@@ -1435,6 +1473,7 @@ export class FeishuBridge {
     ref: string,
     text: string,
     topicId?: string,
+    sourceMessageId?: string,
   ): Promise<void> {
     if (!this.channel) throw new Error("飞书通道未连接");
     const target = this.mentionRegistry.resolve({ chatId, topicId }, ref);
@@ -1445,7 +1484,7 @@ export class FeishuBridge {
       chatId,
       { markdown: text },
       {
-        ...this.outboundSendOptions(chatId, topicId),
+        ...await this.outboundSendOptions(chatId, topicId, sourceMessageId),
         mentions: [
           {
             key: ref,

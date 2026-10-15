@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  ChannelReplyContext,
   ChannelDeliveryRow,
   ChannelDeliveryRunSnapshot,
   ChannelSessionEvent,
@@ -97,6 +98,7 @@ export class FeishuRunCard {
     private readonly sourceMessageId: string,
     readonly runId: string,
     showThinking: boolean,
+    private readonly replyContext?: ChannelReplyContext,
   ) {
     this.projector = createChannelStreamProjector({
       showThinking,
@@ -181,6 +183,7 @@ export class FeishuRunCard {
                     ? [snapshot.thinking, snapshot.progress].filter(Boolean).join("\n\n") : ""),
                 status,
                 terminal: this.runStatus.state !== "running",
+                recipientId: this.replyContext?.senderId,
               },
               statusOnly,
             });
@@ -192,7 +195,7 @@ export class FeishuRunCard {
           await this.cardDone;
         },
       },
-      { replyTo: this.sourceMessageId },
+      { replyTo: this.sourceMessageId, ...(this.replyContext ? { replyContext: this.replyContext } : {}) },
     ).catch((err) => {
       this.host.log(
         `卡片建卡失败: ${err instanceof Error ? err.message : String(err)}`,
@@ -279,6 +282,7 @@ export class FeishuRunCard {
 }
 
 export interface PendingTurn {
+  replyContext?: ChannelReplyContext;
   turnId: string;
   chatId: string;
   sourceMessageId: string;
@@ -286,6 +290,7 @@ export interface PendingTurn {
 }
 
 interface ResumedFeishuCard {
+  replyContext?: ChannelReplyContext;
   surfaceMessageId: string;
   surfaceCardId: string;
   projector: ChannelStreamProjector;
@@ -352,6 +357,7 @@ export class FeishuSessionWatcher {
     owner: string,
     showThinking: boolean,
     surfaceCardId: string,
+    replyContext?: ChannelReplyContext,
   ): void {
     const existing = this.resumedCards.get(runId);
     if (existing) {
@@ -360,6 +366,7 @@ export class FeishuSessionWatcher {
     }
     const runStatus = createFeishuRunStatus();
     this.resumedCards.set(runId, {
+      replyContext,
       surfaceMessageId,
       surfaceCardId,
       projector: createChannelStreamProjector({
@@ -433,6 +440,7 @@ export class FeishuSessionWatcher {
         delivery.claimOwner ?? "",
         turn.showThinking,
         surfaceCardId,
+        turn.replyContext,
       );
     }
 
@@ -676,6 +684,7 @@ export class FeishuSessionWatcher {
           ? [snapshot.thinking, snapshot.progress].filter(Boolean).join("\n\n") : ""),
       status,
       terminal: resumed.runStatus.state !== "running",
+      recipientId: resumed.replyContext?.senderId,
     });
   }
 
@@ -687,6 +696,7 @@ export class FeishuSessionWatcher {
       turn.sourceMessageId,
       runId,
       turn.showThinking,
+      turn.replyContext,
     );
     this.cards.set(runId, card);
     const owner = `feishu:${this.instanceId}:${runId}`;

@@ -1718,9 +1718,9 @@ export class SqliteEventStore {
       .transaction.listCancellationDeadlineRuns(now, limit);
   }
 
-  listDeliveries(channel: string, surfaceMessageId?: string): ChannelDeliveryRow[] {
+  listDeliveries(channel: string, surfaceMessageId?: string, messageId?: string): ChannelDeliveryRow[] {
     return createSqliteSessionRuntimeTransaction(this.database)
-      .transaction.listDeliveries(channel, surfaceMessageId);
+      .transaction.listDeliveries(channel, surfaceMessageId, messageId);
   }
 
   claimProviderSession(input: {

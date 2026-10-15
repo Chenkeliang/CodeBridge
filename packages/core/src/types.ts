@@ -162,6 +162,12 @@ export interface ChannelRuntimeApproval {
   expiresAt: string | null;
 }
 
+export interface ChannelReplyContext {
+  senderId: string;
+  /** Present only when the incoming message already belongs to a Feishu thread. */
+  threadId?: string;
+}
+
 export interface ChannelSessionMessage {
   channel: string;
   conversationId: string;
@@ -171,6 +177,7 @@ export interface ChannelSessionMessage {
   model?: string;
   inputs?: Record<string, unknown>;
   actorRef?: { channel: "feishu" | "telegram"; id: string };
+  replyContext?: ChannelReplyContext;
   attachments?: RunAttachment[];
   idempotencyKey?: string;
   signal?: AbortSignal;
@@ -258,6 +265,7 @@ export interface ChannelDeliveryInput {
 }
 
 export interface ChannelDeliveryRow {
+  replyContext?: ChannelReplyContext;
   turnId: string;
   sessionId: string;
   channel: string;
@@ -294,7 +302,7 @@ export interface ChannelSessionIngress {
     sessionId: string,
     opts: { afterSequence: number },
   ): Promise<ChannelSessionEvent[]>;
-  listDeliveries(channel: string, surfaceMessageId?: string): Promise<ChannelDeliveryRow[]>;
+  listDeliveries(channel: string, surfaceMessageId?: string, messageId?: string): Promise<ChannelDeliveryRow[]>;
   claimDelivery(turnId: string, owner: string): Promise<boolean>;
   ackDelivery(
     turnId: string,

@@ -962,12 +962,13 @@ describe("FeishuBridge mentions", () => {
 
     const send = vi.fn().mockResolvedValue(undefined);
     bridge.channel = { send };
-    await bridge.sendOutboundMention("chat-1", ref!, "发布已经完成");
+    await bridge.sendOutboundMention("chat-1", ref!, "发布已经完成", "message-1");
 
     expect(send).toHaveBeenCalledWith(
       "chat-1",
       { markdown: "发布已经完成" },
       {
+        replyTo: "message-1",
         mentions: [
           { key: ref, openId: "ou_zhangsan", name: "张三", isBot: false },
         ],

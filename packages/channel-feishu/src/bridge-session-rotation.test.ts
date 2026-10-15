@@ -24,7 +24,7 @@ function fixture(context: Partial<ChannelCommandContext>, options: { alertChat?:
     handleMessage(message: FeishuMessage): Promise<void>;
     orchestrator: { router: { getSlotGeneration(chatId: string, topicId?: string): number } };
   };
-  internal.sessionIngress = { getSlotCommandContext, submit } as unknown as ChannelSessionIngress;
+  internal.sessionIngress = { getSlotCommandContext, submit, listDeliveries: async () => [] } as unknown as ChannelSessionIngress;
   internal.channel = { send, async stream() {}, async disconnect() {} };
   internal.ensureSessionWatcher = () => ({ openCardForRun: vi.fn(async () => {}), start: vi.fn(), registerPendingTurn: vi.fn() });
   const message = (messageId: string, chatType: "p2p" | "group" = "p2p"): FeishuMessage => ({

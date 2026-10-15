@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { runCardJson, type RunCardParts } from "./cardkit-writer.js";
+import type { ChannelReplyContext } from "@codebridge/core";
 import type { LarkChannel } from "@larksuiteoapi/node-sdk";
 
 export interface MarkdownCardController {
@@ -13,7 +14,7 @@ export interface MarkdownCardStream {
   stream(
     chatId: string,
     input: { markdown(controller: MarkdownCardController): Promise<void> },
-    options: { replyTo: string },
+    options: { replyTo: string; replyContext?: ChannelReplyContext },
   ): Promise<void>;
 }
 
@@ -28,7 +29,7 @@ export function durableMarkdownCard(
       const created = await channel.rawClient.cardkit.v1.card.create({
         data: {
           type: "card_json",
-          data: JSON.stringify(runCardJson({ answer: "", progress: "", status: "正在启动任务…", terminal: false })),
+          data: JSON.stringify(runCardJson({ answer: "", progress: "", status: "正在启动任务…", terminal: false, recipientId: options.replyContext?.senderId })),
         },
       });
       if (created.code !== 0 || !created.data?.card_id) {
@@ -39,7 +40,7 @@ export function durableMarkdownCard(
         path: { message_id: options.replyTo },
         data: {
           msg_type: "interactive",
-          ...(isAlertMessage?.(_chatId, options.replyTo) ? { reply_in_thread: true } : {}),
+          ...((options.replyContext?.threadId || isAlertMessage?.(_chatId, options.replyTo)) ? { reply_in_thread: true } : {}),
           content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
           uuid: createHash("sha256").update(`run-card:${options.replyTo}`).digest("hex").slice(0, 32),
         },
@@ -59,7 +60,7 @@ export function durableMarkdownCard(
         cardId,
         messageId: sent.data.message_id,
         async setSnapshot(parts) {
-          await update(cardId, runCardJson(parts), sent.data!.message_id!);
+          await update(cardId, runCardJson({ ...parts, recipientId: options.replyContext?.senderId }), sent.data!.message_id!);
         },
         async setContent(content) {
           const delay = Math.max(0, 350 - (Date.now() - lastWriteAt));

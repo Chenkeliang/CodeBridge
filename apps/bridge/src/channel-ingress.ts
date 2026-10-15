@@ -101,6 +101,7 @@ export function createChannelSessionIngress(
           generation: message.generation,
           reply_to_message_id: message.replyToMessageId,
           show_thinking: message.showThinking,
+          ...(message.replyContext ? { reply_context: message.replyContext } : {}),
           attachments: message.attachments?.map((attachment) => ({
             name: attachment.name,
             mime_type: attachment.mimeType,
@@ -244,10 +245,12 @@ export function createChannelSessionIngress(
   const listDeliveries = async (
     channel: string,
     surfaceMessageId?: string,
+    messageId?: string,
   ): Promise<ChannelDeliveryRow[]> => {
     const response = await app.request(
       `/v1/deliveries?channel=${encodeURIComponent(channel)}`
-        + (surfaceMessageId !== undefined ? `&surface_message_id=${encodeURIComponent(surfaceMessageId)}` : ""),
+        + (surfaceMessageId !== undefined ? `&surface_message_id=${encodeURIComponent(surfaceMessageId)}` : "")
+        + (messageId !== undefined ? `&message_id=${encodeURIComponent(messageId)}` : ""),
       { headers: auth },
     );
     if (!response.ok) {
