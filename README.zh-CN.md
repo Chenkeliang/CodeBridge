@@ -19,9 +19,9 @@
 
 - **npm 已发布**：初始化向导、主配置密钥引用、Web 可选入口、会话自动轮换，以及每个 Session 默认最多100条排队消息。
 - **源码已有，尚未发布到 npm**：飞书普通群消息独立会话、引用机器人回复续聊及 @ 当前提问者；群聊回复保留闲置会话、Codex 归档恢复、启动超时和回复投递等后续修复。
-- **本地候选，尚未发布或部署**：工作台新增“渠道”“任务”两个入口，管理渠道访问、Agent定时任务、已有本地计划、推送目标和飞书告警规则，并提供任务详情与恢复、待处理和案件查看。实际支持范围与后续工作见[渠道自动化规划](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/channel-automation-roadmap.md)。
+- **本地候选，尚未发布或部署**：工作台新增“渠道”“任务”两个入口，管理渠道访问、Agent定时任务、已有本地计划、推送目标和飞书告警规则，并提供任务详情与恢复、待处理和案件查看。实际支持范围与后续工作见[渠道自动化规划](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/channel-automation-roadmap.md)。
 
-逐项状态及本地安全、管理候选见[交付状态](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/release-status.md)。正式支持的宿主机为 macOS；Linux 服务管理不在当前支持范围。
+逐项状态及本地安全、管理候选见[交付状态](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/release-status.md)。正式支持的宿主机为 macOS；Linux 服务管理不在当前支持范围。
 
 ## 它解决什么问题
 
@@ -45,7 +45,7 @@ Bridge 处理通道和 API，Runner 启动本机 Agent。推荐两者运行在�
 
 需要 Node.js 22.19 或更高版本。运行 `npm install -g @graychennpm/codebridge@0.1.0` 安装，然后运行 `codebridge init` 完成初始化。在两个终端分别运行 `codebridge-runner` 和 `codebridge start`。安装包包含 Bridge、宿主机 Runner 和 Web 静态资源，无需构建源码、pnpm 或 curl。该路径以前台运行两个进程，不包含源码脚本的后台服务管理器或独立发布控制器。
 
-也可以使用 `npx @graychennpm/codebridge@0.1.0 init`。源码仓库仍支持 `pnpm package:release` 生成本地 tarball，安装、隔离验收和维护步骤见 [npm 交付说明](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/npm-release.md)。
+也可以使用 `npx @graychennpm/codebridge@0.1.0 init`。源码仓库仍支持 `pnpm package:release` 生成本地 tarball，安装、隔离验收和维护步骤见 [npm 交付说明](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/npm-release.md)。
 
 ## 主要能力
 
@@ -71,8 +71,8 @@ Bridge 处理通道和 API，Runner 启动本机 Agent。推荐两者运行在�
 ### 从源码安装与启动
 
 ```bash
-git clone https://github.com/Chenkeliang/CodeBridge-public.git
-cd CodeBridge-public
+git clone https://github.com/Chenkeliang/CodeBridge.git
+cd CodeBridge
 
 # 安装依赖、构建、生成配置、检查本机 CLI
 ./scripts/start.sh setup
@@ -112,7 +112,7 @@ macOS 开机自启推荐使用 launchd。手动后台模式和 launchd 二选一
 
 ### 配置通道
 
-飞书需要创建企业自建应用、开启机器人，并按[飞书应用配置指南](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/feishu-app-setup.md)订阅长连接事件。
+飞书需要创建企业自建应用、开启机器人，并按[飞书应用配置指南](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-app-setup.md)订阅长连接事件。
 
 Telegram 可与飞书同时启用，也可以只配置 Telegram：
 
@@ -124,7 +124,7 @@ telegram:
   pollingTimeoutSec: 25
 ```
 
-主要配置项及可选片段见 [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge-public/blob/main/examples/config.full.yaml)。示例 ID、路径与密钥引用需要替换，不能直接作为有效凭据使用。
+主要配置项及可选片段见 [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge/blob/main/examples/config.full.yaml)。示例 ID、路径与密钥引用需要替换，不能直接作为有效凭据使用。
 
 ### Web Workbench
 
@@ -177,7 +177,7 @@ Web 默认关闭。npm 安装用 `codebridge start --web`，源码安装用 `nod
 
 - macOS 可执行 `./scripts/start.sh install-macos-runner` 安装固定身份 helper。默认 ad-hoc 签名免费且只适合本机；TCC 仍需用户确认。
 
-安全边界详见 [SECURITY.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/SECURITY.md)。
+安全边界详见 [SECURITY.md](https://github.com/Chenkeliang/CodeBridge/blob/main/SECURITY.md)。
 
 ## 并发与限制
 
@@ -192,7 +192,7 @@ Web 默认关闭。npm 安装用 `codebridge start --web`，源码安装用 `nod
 
 ## 后端与适配器
 
-Pi 通过 `pi-sdk` 接入，OpenCode 通过 `opencode acp` 接入；须单独安装、配置并完成相应认证。下表是内建 ACP 启动默认值；显式配置 `acpCommand` / `acpArgs` 会覆盖它们。联网开关不是原版 Codex 适配器的默认能力，详见 [Codex 联网说明](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/codex-acp-network.md)。
+Pi 通过 `pi-sdk` 接入，OpenCode 通过 `opencode acp` 接入；须单独安装、配置并完成相应认证。下表是内建 ACP 启动默认值；显式配置 `acpCommand` / `acpArgs` 会覆盖它们。联网开关不是原版 Codex 适配器的默认能力，详见 [Codex 联网说明](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/codex-acp-network.md)。
 
 | Backend | ACP 启动命令 |
 |---------|--------------|
@@ -212,14 +212,14 @@ RUNNER_TOKEN=... node scripts/test-acp-live.mjs --backend cursor
 
 | 主题 | 文档 |
 |------|------|
-| 飞书应用与权限 | [docs/zh-CN/feishu-app-setup.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/feishu-app-setup.md) |
-| 飞书机器人自定义菜单 | [docs/zh-CN/feishu-bot-menu.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/feishu-bot-menu.md) |
-| 手动 / Docker 快速开始 | [docs/zh-CN/quickstart.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/quickstart.md) |
-| Model、Effort、Permission | [docs/zh-CN/model-effort.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/model-effort.md) |
-| Docker Bridge + 宿主机 Runner | [docs/zh-CN/deploy/docker-host-runner.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/deploy/docker-host-runner.md) |
-| 多项目 Agent 工作台设计基线 | [docs/orchestration/README.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/orchestration/README.md) |
-| 完整配置 | [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge-public/blob/main/examples/config.full.yaml) |
-| 安全策略 | [SECURITY.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/SECURITY.md) |
+| 飞书应用与权限 | [docs/zh-CN/feishu-app-setup.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-app-setup.md) |
+| 飞书机器人自定义菜单 | [docs/zh-CN/feishu-bot-menu.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-bot-menu.md) |
+| 手动 / Docker 快速开始 | [docs/zh-CN/quickstart.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/quickstart.md) |
+| Model、Effort、Permission | [docs/zh-CN/model-effort.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/model-effort.md) |
+| Docker Bridge + 宿主机 Runner | [docs/zh-CN/deploy/docker-host-runner.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/deploy/docker-host-runner.md) |
+| 多项目 Agent 工作台设计基线 | [docs/orchestration/README.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/orchestration/README.md) |
+| 完整配置 | [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge/blob/main/examples/config.full.yaml) |
+| 安全策略 | [SECURITY.md](https://github.com/Chenkeliang/CodeBridge/blob/main/SECURITY.md) |
 
 ## 开发
 

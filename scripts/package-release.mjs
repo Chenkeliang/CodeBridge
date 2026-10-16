@@ -57,7 +57,7 @@ export function stageRelease(root, stage) {
   const distribution = {
     name: manifest.name, version: manifest.version, description: manifest.description,
     license: manifest.license, engines: manifest.engines,
-    repository: { type: 'git', url: 'https://github.com/Chenkeliang/CodeBridge-public.git' },
+    repository: { type: 'git', url: 'https://github.com/Chenkeliang/CodeBridge.git' },
     bin: {
       codebridge: 'node_modules/@codebridge/bridge/dist/cli.js',
       'codebridge-runner': 'node_modules/@codebridge/runner-host/dist/cli.js',

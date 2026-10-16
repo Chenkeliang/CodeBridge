@@ -47,6 +47,6 @@ Bridge 可以 Docker 部署；**Runner 必须在装 CLI 的那台机器上**，A
 - Runner 常驻本机，不是云端 Agent
 - Claude 非交互模式需配 `bypassPermissions`（否则 Bash 会被拒，见 README）
 - 安装：`./scripts/start.sh setup`，按提示填飞书凭据
-- 开源 MIT：[CodeBridge](https://github.com/Chenkeliang/CodeBridge-public)
+- 开源 MIT：[CodeBridge](https://github.com/Chenkeliang/CodeBridge)
 
 有同样在飞书里远程撸本机 CLI 的，欢迎试试，issue 随便扔。
