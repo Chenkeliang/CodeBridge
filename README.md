@@ -19,9 +19,9 @@ As of 2026-10-15, the latest npm release is **`@graychennpm/codebridge@0.1.0`**,
 
 - **Released on npm:** initialization wizard, main-config secret references, opt-in Web, automatic session rotation, and a default queue limit of 100 turns per Session.
 - **In source, not yet on npm:** independent Feishu group requests, quoted replies continuing the original conversation and native mentions of the current requester; preserved idle group replies, Codex archive restoration, and later startup/delivery fixes.
-- **Local candidate, not published or deployed:** two Workbench entries, Channels and Tasks, manage channel access, Agent schedules, existing local schedules, publisher destinations and Feishu alert rules, with run recovery, pending work and incident inspection. The supported scope and remaining work are described in the [channel automation roadmap](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/channel-automation-roadmap.md) (Chinese).
+- **Local candidate, not published or deployed:** two Workbench entries, Channels and Tasks, manage channel access, Agent schedules, existing local schedules, publisher destinations and Feishu alert rules, with run recovery, pending work and incident inspection. The supported scope and remaining work are described in the [channel automation roadmap](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/channel-automation-roadmap.md) (Chinese).
 
-See [release availability](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/release-status.md), including the local security and management candidates. macOS is the supported host setup; Linux service management is outside the current support scope.
+See [release availability](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/release-status.md), including the local security and management candidates. macOS is the supported host setup; Linux service management is outside the current support scope.
 
 ## What it does
 
@@ -43,7 +43,7 @@ Bridge handles channels and APIs; Runner launches local agents. Run both on the 
 
 Requires Node.js 22.19 or newer. Install with `npm install -g @graychennpm/codebridge@0.1.0`, then run `codebridge init`. Start `codebridge-runner` and `codebridge start` in separate terminals. The package includes the Bridge, host Runner and Workbench assets; no source build, pnpm, or curl is needed. This runs two foreground processes; the npm package does not include the source checkout’s background-service scripts or independent host deployer.
 
-You can also run `npx @graychennpm/codebridge@0.1.0 init`. For local distribution, `pnpm package:release` produces a tarball in `dist/`; `pnpm test:package` verifies a clean installation. See the [release guide](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/npm-release.md).
+You can also run `npx @graychennpm/codebridge@0.1.0 init`. For local distribution, `pnpm package:release` produces a tarball in `dist/`; `pnpm test:package` verifies a clean installation. See the [release guide](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/npm-release.md).
 
 ## Highlights
 
@@ -69,8 +69,8 @@ You can also run `npx @graychennpm/codebridge@0.1.0 init`. For local distributio
 ### Install and start from source
 
 ```bash
-git clone https://github.com/Chenkeliang/CodeBridge.git
-cd CodeBridge
+git clone https://github.com/Chenkeliang/CodeBridge-public.git
+cd CodeBridge-public
 
 # Installs dependencies, builds, creates config, and checks local CLIs.
 ./scripts/start.sh setup
@@ -110,7 +110,7 @@ Useful lifecycle commands:
 
 ### Configure a channel
 
-For Feishu, create an enterprise custom app, enable the bot, and subscribe to the long-connection events described in [Feishu app setup](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-app-setup.md).
+For Feishu, create an enterprise custom app, enable the bot, and subscribe to the long-connection events described in [Feishu app setup](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/feishu-app-setup.md).
 
 Telegram is optional. It can run alongside Feishu or in Telegram-only mode:
 
@@ -122,7 +122,7 @@ telegram:
   pollingTimeoutSec: 25
 ```
 
-See [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge/blob/main/examples/config.full.yaml) for the main fields and optional sections. Replace example identities, paths, and secret references before use.
+See [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge-public/blob/main/examples/config.full.yaml) for the main fields and optional sections. Replace example identities, paths, and secret references before use.
 
 ### Web Workbench
 
@@ -177,7 +177,7 @@ To request a real channel notification, say “mention me when it finishes” or
 
 - On macOS, `./scripts/start.sh install-macos-runner` creates the optional fixed-identity helper. Ad-hoc signing is free and local; TCC still requires the user’s approval.
 
-Read [SECURITY.md](https://github.com/Chenkeliang/CodeBridge/blob/main/SECURITY.md) before exposing anything beyond localhost.
+Read [SECURITY.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/SECURITY.md) before exposing anything beyond localhost.
 
 ## Concurrency and known boundaries
 
@@ -192,7 +192,7 @@ Read [SECURITY.md](https://github.com/Chenkeliang/CodeBridge/blob/main/SECURITY.
 
 ## Backends and adapters
 
-Pi uses `pi-sdk`; OpenCode uses `opencode acp`. Install, configure, and authenticate optional agents separately. The following are built-in ACP defaults; explicit `acpCommand` / `acpArgs` override them. Network access is not a default option of the stock Codex adapter; see the [Codex network guide](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/codex-acp-network.md) (Chinese).
+Pi uses `pi-sdk`; OpenCode uses `opencode acp`. Install, configure, and authenticate optional agents separately. The following are built-in ACP defaults; explicit `acpCommand` / `acpArgs` override them. Network access is not a default option of the stock Codex adapter; see the [Codex network guide](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/codex-acp-network.md) (Chinese).
 
 | Backend | ACP command |
 |---------|-------------|
@@ -214,14 +214,14 @@ RUNNER_TOKEN=... node scripts/test-acp-live.mjs --backend cursor
 
 | Topic | Link |
 |-------|------|
-| Feishu app and permissions | [docs/zh-CN/feishu-app-setup.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-app-setup.md) |
-| Feishu custom menu | [docs/zh-CN/feishu-bot-menu.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-bot-menu.md) |
-| Manual / Docker quick start | [docs/zh-CN/quickstart.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/quickstart.md) |
-| Model, effort, and permission | [docs/zh-CN/model-effort.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/model-effort.md) |
-| Docker Bridge + host Runner | [docs/zh-CN/deploy/docker-host-runner.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/deploy/docker-host-runner.md) |
-| Multi-project Agent workbench baseline | [docs/orchestration/README.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/orchestration/README.md) |
-| Full config example | [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge/blob/main/examples/config.full.yaml) |
-| Security policy | [SECURITY.md](https://github.com/Chenkeliang/CodeBridge/blob/main/SECURITY.md) |
+| Feishu app and permissions | [docs/zh-CN/feishu-app-setup.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/feishu-app-setup.md) |
+| Feishu custom menu | [docs/zh-CN/feishu-bot-menu.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/feishu-bot-menu.md) |
+| Manual / Docker quick start | [docs/zh-CN/quickstart.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/quickstart.md) |
+| Model, effort, and permission | [docs/zh-CN/model-effort.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/model-effort.md) |
+| Docker Bridge + host Runner | [docs/zh-CN/deploy/docker-host-runner.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/zh-CN/deploy/docker-host-runner.md) |
+| Multi-project Agent workbench baseline | [docs/orchestration/README.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/docs/orchestration/README.md) |
+| Full config example | [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge-public/blob/main/examples/config.full.yaml) |
+| Security policy | [SECURITY.md](https://github.com/Chenkeliang/CodeBridge-public/blob/main/SECURITY.md) |
 
 ## Development
 
