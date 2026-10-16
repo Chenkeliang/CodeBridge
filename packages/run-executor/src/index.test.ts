@@ -1124,6 +1124,43 @@ describe("RunExecutor", () => {
     }
   });
 
+  it.each([
+    { message: "fetch failed: socket closed", tool: false, expectedCalls: 2, status: "succeeded" },
+    { message: "fetch failed: socket closed", tool: true, expectedCalls: 1, status: "interrupted" },
+    { message: "Internal error", tool: false, expectedCalls: 1, status: "failed" },
+    { message: "usage limit reached", tool: false, expectedCalls: 1, status: "failed" },
+  ])("keeps fatal event details and replay safety: $message, tool=$tool", async ({ message, tool, expectedCalls, status }) => {
+    vi.useFakeTimers();
+    const { store, coordinator, leaseService, run } = setupSessionRun();
+    let calls = 0;
+    const runner = {
+      async *run(): AsyncGenerator<AgentEvent> {
+        calls += 1;
+        if (calls === 1) {
+          if (tool) yield { type: "tool_start", toolCallId: "tool-fixture", name: "write_file", input: {} };
+          yield { type: "error", fatal: true, message };
+          yield { type: "done", exitCode: 1 };
+          return;
+        }
+        yield { type: "done", exitCode: 0 };
+      },
+    };
+    const executor = new RunExecutor(store, runner, {
+      sessionCoordinator: coordinator, sessionLeaseService: leaseService, executorOwner: "bridge:123",
+      resolveRequest: () => ({ runId: run.id, sessionKey: { chatId: "conv_sess_1", backendId: "pi", cwd: "/tmp/project" }, prompt: "inspect" }),
+    });
+    try {
+      const execution = executor.execute(run.id).catch(() => store.getRun(run.id)!);
+      await vi.runAllTimersAsync();
+      expect((await execution).status).toBe(status);
+      expect(calls).toBe(expectedCalls);
+      expect(store.listRunAttempts(run.id)[0]).toMatchObject({providerError: message, sideEffectBoundary: tool ? "outcome_unknown" : "safe"});
+    } finally {
+      store.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not replay after an unknown tool outcome", async () => {
     const { store, coordinator, leaseService, run } =
       setupSessionRun();

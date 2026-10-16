@@ -503,6 +503,7 @@ export class RunExecutor {
     let replaySafety =
       this.store.getRun(run.id)?.replaySafety ?? "safe";
     let droppedOccupiedResume = false;
+    let fatalAgentError: Error | undefined;
     let renewFromEventAfter = 0;
     type ThoughtDelta = Extract<AgentEvent, { type: "thought_delta" }>;
     let pendingThought: ThoughtDelta | null = null;
@@ -626,11 +627,15 @@ export class RunExecutor {
       });
       this.options.onEvent?.(run, event);
       this.throwIfCancellationRequested(run.id);
+      if (event.type === "error" && event.fatal) {
+        fatalAgentError = new Error(event.message);
+      }
       if (event.type === "done" && event.exitCode !== 0) {
-        throw new Error(`Runner exited with code ${event.exitCode}`);
+        throw fatalAgentError ?? new Error(`Runner exited with code ${event.exitCode}`);
       }
     };
     for (let attemptNumber = 1; attemptNumber <= 3; attemptNumber += 1) {
+      fatalAgentError = undefined;
       const attempt = this.store.startRunAttempt(run.id);
       const aggregator = new AgentEventAggregator({
         runId: run.id,
@@ -644,6 +649,7 @@ export class RunExecutor {
         for await (const event of this.runner.run(request, { signal })) {
           aggregator.accept(event);
         }
+        if (fatalAgentError) throw fatalAgentError;
         const asynchronousError = this.activeAsyncErrors.get(run.id);
         if (asynchronousError) throw asynchronousError;
         aggregator.close();

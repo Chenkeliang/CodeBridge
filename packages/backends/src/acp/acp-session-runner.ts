@@ -38,6 +38,7 @@ import {
   resolveDesiredConfig,
 } from "./acp-config-options.js";
 import { friendlyAuthErrorMessage } from "../auth-error-hints.js";
+import { redactSetupOutput } from "../agent-setup.js";
 import {
   resourcesAlive,
   teardownResources,
@@ -461,6 +462,20 @@ function acpMcpServers(ctx: RunContext): McpServer[] {
   }));
 }
 
+function formatAcpError(error: unknown, stderr: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const data = error && typeof error === "object" && "data" in error
+    ? error.data : undefined;
+  const details = data === undefined ? "" : JSON.stringify(data, (key, value) =>
+    /token|secret|password|authorization|api[_-]?key/i.test(key) ? "******" : value,
+  );
+  const combined = [message, details, stderr.trim()]
+    .filter((part): part is string => Boolean(part))
+    .filter((part, index, parts) => parts.indexOf(part) === index)
+    .join("\n\n");
+  return redactSetupOutput(combined);
+}
+
 /**
  * 冷启动一个 ACP 会话的全部资源：spawn 适配器 → 连接 → initialize → 建/续会话。
  * 权限决策器经 runtime 盒子间接读取——连接上的 handler 无法换装，而 requestDecision
@@ -570,15 +585,14 @@ async function openAcpSessionResources(
     };
     return { resources };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const detail = stderr.trim();
+    const message = formatAcpError(err, stderr);
     try {
       connection?.close();
     } catch {
       // 已关闭
     }
     killChild();
-    throw new Error(detail ? `${message}\n\n${detail}` : message);
+    throw new Error(message);
   }
 }
 
@@ -711,10 +725,7 @@ export async function* runAcpSession(
     }
     healthy = !sawFatal && !options.isAborted() && resourcesAlive(r);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const detail = resources?.readStderr().trim() ?? "";
-    const combined =
-      detail && !message.includes(detail) ? `${message}\n\n${detail}` : message;
+    const combined = formatAcpError(err, resources?.readStderr() ?? "");
     yield {
       type: "error",
       message: friendlyAuthErrorMessage(ctx.backendConfig.type, combined),
