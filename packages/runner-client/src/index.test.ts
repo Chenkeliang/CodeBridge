@@ -609,3 +609,25 @@ describe("RunnerClient Agent setup", () => {
     );
   });
 });
+
+describe("RunnerClient pending permission identity", () => {
+  it("reads current pending requests and targets the exact request when resolving", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ permissions: [{ runId: "run-fixture", requestId: "req-fixture", title: "Fixture permission" }] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ resolved: true })));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RunnerClient({ baseUrl: "http://runner/", token: "fixture-token" });
+    expect(await client.listPendingPermissions()).toEqual([{ runId: "run-fixture", requestId: "req-fixture", title: "Fixture permission" }]);
+    expect(await client.resolvePermission("run-fixture", false, "req-fixture")).toBe(true);
+    expect(fetchMock).toHaveBeenLastCalledWith("http://runner/runs/run-fixture/permission", expect.objectContaining({ body: JSON.stringify({ approve: false, request_id: "req-fixture" }) }));
+  });
+});
+
+
+it("reads revision-free task skill metadata through the authenticated selection endpoint", async () => {
+  const snapshot = { skills: [{ id: "fixture", name: "fixture", description: null, source_path: "/skills/fixture", global_state: "enabled", targets: [{ agent_id: "codex", state: "follows_global" }] }] };
+  const request = vi.fn().mockResolvedValue(new Response(JSON.stringify(snapshot)));
+  vi.stubGlobal("fetch", request);
+  const client = new RunnerClient({ baseUrl: "http://runner", token: "token" });
+  await expect(client.listTaskSkills()).resolves.toEqual(snapshot);
+  expect(request).toHaveBeenCalledWith("http://runner/skills/selection", expect.objectContaining({ headers: { Authorization: "Bearer token" } }));
+});

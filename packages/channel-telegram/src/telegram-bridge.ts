@@ -73,6 +73,7 @@ export interface TelegramBridgeOptions {
   config: AppConfig;
   dataDir: string;
   onLog?: (message: string) => void;
+  isMaintenance?: () => boolean;
   api?: TelegramTransport;
   sessionIngress?: ChannelSessionIngress;
 }
@@ -89,6 +90,8 @@ export class TelegramBridge {
   private readonly sessionWatchers = new Map<string, TelegramSessionWatcher>();
   private readonly instanceId = randomUUID();
   private offset = 0;
+  private connectionHealthy = false;
+  private botName?: string;
   private sessionIngress?: ChannelSessionIngress;
 
   constructor(private readonly options: TelegramBridgeOptions) {
@@ -105,6 +108,9 @@ export class TelegramBridge {
     this.offset = this.readOffset();
   }
 
+  get isConnected(): boolean { return this.connectionHealthy && Boolean(this.pollAbort && !this.pollAbort.signal.aborted); }
+  get displayName(): string | undefined { return this.botName; }
+
   updateConfig(config: AppConfig): void {
     this.config = config;
     this.orchestrator.updateConfig(config);
@@ -116,6 +122,8 @@ export class TelegramBridge {
 
   async connect(): Promise<void> {
     const me = await this.api.getMe();
+    this.botName = me.username ? `@${me.username}` : me.first_name;
+    this.connectionHealthy = true;
     try {
       await this.api.setMyCommands?.(TELEGRAM_BOT_COMMANDS);
     } catch (err) {
@@ -130,8 +138,11 @@ export class TelegramBridge {
   }
 
   async disconnect(): Promise<void> {
+    this.connectionHealthy = false;
     this.pollAbort?.abort();
     await this.pollTask?.catch(() => {});
+    this.pollAbort = undefined;
+    this.pollTask = undefined;
     for (const watcher of this.sessionWatchers.values()) watcher.abort();
     this.sessionWatchers.clear();
     await Promise.allSettled([...this.activeReplies]);
@@ -156,6 +167,10 @@ export class TelegramBridge {
     ) return;
 
     const chatId = `telegram:${rawChatId}`;
+    if (this.options.isMaintenance?.()) {
+      await this.api.sendMessage(chatId, "渠道连接正在更新，请稍后重新发送；本条消息尚未提交执行");
+      return;
+    }
     const topicId = message.message_thread_id
       ? String(message.message_thread_id)
       : undefined;
@@ -206,6 +221,13 @@ export class TelegramBridge {
       }
     }
     const normalized = text.replace(/^\/([^\s@]+)@[^\s]+/, "/$1");
+    const command = normalized.trim().split(/\s/, 1)[0]!.toLowerCase();
+    if (message.chat.type !== "private" && telegram.admins !== undefined && command.startsWith("/")
+      && !telegram.admins.includes(senderId)
+      && !["/help", "/status", "/s", "/new", "/stop", "/cancel", "/x", "/continue", "/c", "/steer"].includes(command)) {
+      await this.api.sendMessage(chatId, "此操作需要当前 Telegram 渠道的管理员权限。", topicId);
+      return;
+    }
     const slash = await handleSlashCommand({
       chatId,
       topicId,
@@ -400,6 +422,8 @@ export class TelegramBridge {
       try {
         const timeout = this.config.telegram?.pollingTimeoutSec ?? 25;
         const updates = await this.api.getUpdates(this.offset, timeout, signal);
+        if (signal.aborted) return;
+        this.connectionHealthy = true;
         for (const update of updates) {
           this.offset = Math.max(this.offset, update.update_id + 1);
           this.writeOffset();
@@ -411,6 +435,7 @@ export class TelegramBridge {
         }
       } catch (err) {
         if (signal.aborted) return;
+        this.connectionHealthy = false;
         this.options.onLog?.(
           `Telegram 轮询失败：${err instanceof Error ? err.message : String(err)}`,
         );

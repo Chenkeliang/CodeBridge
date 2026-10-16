@@ -1,5 +1,7 @@
 # CodeBridge Orchestration 设计基线
 
+本目录是架构与产品设计资料，不能将设计条目直接当作 npm 已交付功能；当前状态见[交付状态](../release-status.md)，渠道推送、身份和告警管理目标见[产品规划](../zh-CN/channel-automation-roadmap.md)。
+
 状态：Session-first 架构规范；当前运行时仍使用 WorkItem/Run 作为内部持久化和兼容 API，Web 的目标入口是 Agent 分组下的 Session，Workflow 是与 Agents 平级的可选资源。
 
 本目录是 CodeBridge 多项目 Agent 工作台的设计规范入口，也是这套架构文档的唯一事实源。
@@ -60,7 +62,7 @@ examples/orchestration/     非业务的配置形状参考（保持通用）
 
 示例不是生产配置，不包含凭据，也不代表相关项目或 Agent 已经注册。仓库不提供可运行的业务流程示例；Workflow 由用户输入、Agent 发现或受控目录动态提供。
 
-`/Users/demo/mypy/orchestration/` 仅保留迁移指针；规范来源为本目录。
+规范来源为本目录；不依赖作者机器上的外部目录。
 
 ## 阅读顺序
 
@@ -69,7 +71,6 @@ examples/orchestration/     非业务的配置形状参考（保持通用）
 3. [CodeBridge 集成边界](codebridge-integration.md)
 4. [接口规范](api-contract.md)
 5. [Flow、Run 与 DSL 引擎](engine.md)
-6. [Flow 产品与运行时设计](flow-design.md)
 7. [项目发现和自生成](self-generation.md)
 8. [交互建议](interaction.md)
 9. [AGNET Design System](DESIGN.md)

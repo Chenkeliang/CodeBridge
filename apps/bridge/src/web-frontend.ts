@@ -1,3 +1,4 @@
+import { isLocalManagementRequest } from "./local-management.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Hono } from "hono";
@@ -27,6 +28,10 @@ const MIME_TYPES: Record<string, string> = {
 /** Serves the optional Vite build without adding a second backend contract. */
 export function createWebFrontendApp(options: WebFrontendOptions): Hono {
   const app = new Hono();
+  app.use("*", async (c, next) => {
+    if (!isLocalManagementRequest(c.req.raw)) return c.json({ error: "local_management_only", message: "管理入口只接受本机同源访问" }, 403);
+    await next();
+  });
 
   app.get("/config.json", (c) => {
     return c.json({ token: options.token ?? "" }, 200, {

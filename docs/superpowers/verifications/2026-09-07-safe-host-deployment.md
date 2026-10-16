@@ -8,7 +8,7 @@ Base production commit d975427; source worktree CodeBridge-wt-safe-deploy on fea
 - Python publisher suite: 33 tests pass.
 - Independent reviewer reproduced and closed auto-publish double-worker race, state-persist/maintenance-cleanup crash windows, notification loss/retry availability, rollback mutex blockage, custom data directory, and queued-delivery drain deadlock.
 - Installer dry-run and installation healthy; script digest matches installed controller. No business service restart performed by installer.
-- Actual Feishu bootstrap/prepare/publish/status/rollback final evidence saved under /Users/demo/outputs/codebridge-safe-deploy after live verification, not inferred from mocks.
+- Actual Feishu bootstrap/prepare/publish/status/rollback final evidence saved under /Users/example/outputs/codebridge-safe-deploy after live verification, not inferred from mocks.
 
 ## Surface matrix
 | Surface | Entry/read/write/events | Recovery/error/terminal | Evidence |

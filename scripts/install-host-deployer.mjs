@@ -5,7 +5,7 @@ import os from "node:os";
 import { randomBytes, createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ConfigStore } from "../packages/core/dist/index.js";
+import { ConfigStore, isSecretRef, resolveSecretRef, keychainServiceFor, storeKeychainSecret } from "../packages/core/dist/index.js";
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -34,17 +34,22 @@ const runnerPlist = path.join(os.homedir(), "Library/LaunchAgents/com.codebridge
 for (const file of [bridgePlist, runnerPlist]) fs.accessSync(file, fs.constants.R_OK);
 const store = new ConfigStore({dataDir});
 const config = store.get();
-// The deployer resolves keychain: refs itself; copy the ref, never the resolved secret.
-const deployerSecret = (name, resolved) => {
-  const disk = store.diskSecret(name);
-  return typeof disk === "string" && disk.startsWith("keychain:") ? disk : resolved;
+// Preview never writes credentials. Install verifies every planned value before stopping the controller.
+const pendingSecrets = new Map();
+const secretRef = (field, value, previousRef) => {
+  if (typeof previousRef === "string" && previousRef.startsWith("keychain:")) return previousRef;
+  const service = keychainServiceFor(field.split("."), dataDir);
+  pendingSecrets.set(service, value);
+  return `keychain:${service}`;
 };
+const controllerToken = previous.token ? (isSecretRef(previous.token) ? resolveSecretRef(previous.token) : previous.token) : randomBytes(32).toString("hex");
+const deployerSecret = (name, resolved) => secretRef(`deployer.${name}`, resolved, store.diskSecret(name));
 const installedScript = path.join(rootDir, "host-deployer.py");
 const controllerSource = path.join(sourceRepo, "scripts/host-deployer.py");
 fs.accessSync(controllerSource, fs.constants.R_OK);
 const settings = {
   ...previous, rootDir, dataDir, sourceRepo, ownerOpenId, nodePath, pythonPath, pnpmPath, gitPath,
-  token: previous.token || randomBytes(32).toString("hex"),
+  token: secretRef("deployer.token", controllerToken, previous.token),
   installedControllerHash: createHash("sha256").update(fs.readFileSync(controllerSource)).digest("hex"),
   installerHash: createHash("sha256").update(fs.readFileSync(fileURLToPath(import.meta.url))).digest("hex"),
   bridgePlist, runnerPlist, bridgeLabel: "com.codebridge.bridge", runnerLabel: "com.codebridge.runner",
@@ -61,14 +66,21 @@ if (!args.includes("--install")) {
 const label = "com.codebridge.deployer";
 const domain = `gui/${process.getuid()}`;
 const exists = () => spawnSync("/bin/launchctl", ["print", `${domain}/${label}`], {stdio: "ignore"}).status === 0;
-if (exists()) {
+const wasRunning = exists();
+if (wasRunning) {
   // Updating the rescue controller is deliberately separate from ordinary releases.
   const response = await fetch("http://127.0.0.1:19791/health", {
-    headers: {authorization: `Bearer ${previous.token}`}, signal: AbortSignal.timeout(3000),
+    headers: {authorization: `Bearer ${controllerToken}`}, signal: AbortSignal.timeout(3000),
   });
   if (!response.ok) throw new Error("Existing deployer is unhealthy; inspect it before replacing the rescue controller");
   const health = await response.json();
   if (health.active) throw new Error("A deployment is active; do not replace its controller");
+}
+for (const [service, value] of pendingSecrets) {
+  storeKeychainSecret(service, value);
+  if (resolveSecretRef(`keychain:${service}`) !== value) throw new Error("Deployer keychain verification failed; installed config unchanged");
+}
+if (wasRunning) {
   execFileSync("/bin/launchctl", ["bootout", `${domain}/${label}`]);
   const deadline = Date.now() + 15000;
   while (exists()) {
@@ -105,7 +117,7 @@ let ready = false;
 for (let i = 0; i < 30; i++) {
   try {
     const r = await fetch("http://127.0.0.1:19791/health", {
-      headers: {authorization: `Bearer ${settings.token}`}, signal: AbortSignal.timeout(1000),
+      headers: {authorization: `Bearer ${controllerToken}`}, signal: AbortSignal.timeout(1000),
     });
     if (r.ok && (await r.json()).ok) { ready = true; break; }
   } catch {}

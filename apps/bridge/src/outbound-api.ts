@@ -1,3 +1,4 @@
+import type { AgentTaskTarget } from "@codebridge/core";
 import { Hono } from "hono";
 import { createWorkItemApp } from "./work-item-api.js";
 import { type SqliteEventStore } from "@codebridge/work-items";
@@ -33,6 +34,8 @@ interface OutboundAppOptions {
   publicPathPrefixes?: string[];
   workItemStore?: SqliteEventStore;
   publishers?: () => OutboundPublisher[];
+  taskTarget?: (runId: string) => AgentTaskTarget | undefined;
+  taskFile?: (runId: string, filePath: string) => string | undefined;
 }
 
 /** 装配出站能力、兼容 TaskRecord API 和 Session-first API，共享同一个本地 Bearer Token。 */
@@ -48,10 +51,12 @@ export function createBridgeApp(
   mcpApp?: Hono,
   skillApp?: Hono,
   publishers?: () => OutboundPublisher[],
+  taskOptions?: Pick<OutboundAppOptions, "taskTarget" | "taskFile">,
 ) {
   const app = createOutboundApp(bridge, token, {
     workItemStore,
     publishers,
+    ...taskOptions,
     publicPathPrefixes: webWorkbenchApp ? ["/workbench"] : [],
   });
   app.route("/", createWorkItemApp(workItemStore, token, approvalService, executor));
@@ -75,7 +80,7 @@ function outboundRouteOf(requestPath: string): OutboundRoute | undefined {
 }
 
 /** Resolve only the current Run's persisted delivery; never infer a recipient from an ID prefix. */
-export function resolveOutboundTarget(store: SqliteEventStore, runId: string) {
+export function resolveOutboundTarget(store: SqliteEventStore, runId: string, taskTarget?: AgentTaskTarget) {
   const run = store.getRun(runId);
   if (!run || run.status !== "running" || !run.turnId) {
     throw new Error("outbound_active_run_required：请在当前 CodeBridge 任务内发送文件");
@@ -84,6 +89,8 @@ export function resolveOutboundTarget(store: SqliteEventStore, runId: string) {
     store.listDeliveries(channel).filter((row) => row.runId === run.id && row.turnId === run.turnId)
       .map((row) => ({ channel, conversationId: row.conversationId, sourceMessageId: row.replyToMessageId })),
   );
+  if (taskTarget && taskTarget.channel !== "local" && taskTarget.chatId) deliveries.push({ channel: taskTarget.channel,
+    conversationId: `${taskTarget.channel === "telegram" ? "telegram:" : ""}${taskTarget.chatId}|${taskTarget.topicId ?? ""}`, sourceMessageId: "" });
   const targets = [...new Map(deliveries.map((row) => [`${row.channel}:${row.conversationId}`, row])).values()];
   if (targets.length !== 1) {
     throw new Error("outbound_source_required：当前任务没有唯一的聊天来源，请从目标聊天窗口重新发起任务");
@@ -155,7 +162,9 @@ export function createOutboundApp(
       return c.json({ error: "outbound_run_required：请使用当前任务的 fcb，发送目标由 Bridge 自动解析" }, 400);
     }
     try {
-      const target = resolveOutboundTarget(options.workItemStore, body.runId);
+      const taskTarget = options.taskTarget?.(body.runId);
+      if (taskTarget && ["/outbound/mention", "/outbound/alert-status"].includes(c.req.path)) throw new Error("scheduled_task_source_has_no_participants：定时任务没有本次聊天参与者，只提供固定目标的消息和文件交付");
+      const target = resolveOutboundTarget(options.workItemStore, body.runId, taskTarget);
       resolvedTargets.set(c.req.raw, target);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -192,9 +201,11 @@ export function createOutboundApp(
       return c.json({ error: "chatId 和 path 必填" }, 400);
     }
     try {
+      const source = typeof (body as Record<string, unknown>).runId === "string"
+        ? options.taskFile?.((body as Record<string, unknown>).runId as string, body.path) ?? body.path : body.path;
       const fileName = await bridge.sendOutboundFile(
         body.chatId,
-        body.path,
+        source,
         body.topicId,
         ...(target?.sourceMessageId ? [target.sourceMessageId] : []),
       );

@@ -46,6 +46,7 @@ function panelProps(): ComponentProps<typeof SessionPanel> {
     sessions: [session],
     selectedSessionId: session.session_id,
     showArchived: false,
+    onClose: vi.fn(),
     onCreate: vi.fn(),
     onQuery: vi.fn(),
     onRefresh: vi.fn(),

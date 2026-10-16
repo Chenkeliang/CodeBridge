@@ -2,7 +2,7 @@
 
 ## 范围与验收
 
-在 Runner 收到带 `resumeSessionId` 的 Codex 请求时，先取得已有会话锁并检查外部占用，再检查归档目录；仅对命中的原 ID 调用官方 `codex --no-daemon unarchive <ID>`，成功后仍将原 ID 交给 ACP。按 `profile.type === "codex"` 判断，覆盖 `codex` 和 `codex-alert`。不改新会话、其他后端、消息正文和权限设置。
+在 Runner 收到带 `resumeSessionId` 的 Codex 请求时，先取得已有会话锁并检查外部占用，再检查归档目录；仅对命中的原 ID 调用官方 `codex --no-daemon unarchive <ID>`，成功后仍将原 ID 交给 ACP。按 `profile.type === "codex"` 判断，覆盖 `codex` 和 `codex-profile`。不改新会话、其他后端、消息正文和权限设置。
 
 新增 `codex-session-archive.ts`：现有 ownership 文件只处理进程占用；归档恢复调用官方 CLI，让 Codex 同步文件与元数据，不手工移动文件或修改数据库。沿用 Runner 环境中的 CODEX_HOME、CODEX_PATH，超时 15 秒。未归档直接继续；读取归档目录失败或 CLI 失败输出 fatal error/done，不发送 prompt。通过现有 finally 释放租约。
 
@@ -27,7 +27,7 @@
 
 ## 验证
 
-- GitNexus：指定 `/Users/demo/projects/CodeBridge-deploy`，在基线 35d6fcb 重建索引；executeRunInner 上游 1 个直接调用、2 个受影响符号，LOW。
+- GitNexus：指定 `/Users/example/projects/CodeBridge-deploy`，在基线 35d6fcb 重建索引；executeRunInner 上游 1 个直接调用、2 个受影响符号，LOW。
 - 回归：暂时还原旧入口，新增的 3 项恢复测试全部失败；恢复修复后定向 29 文件 / 259 测试通过。
 - `pnpm test`：最终 147 文件 / 1380 测试通过（包含飞书回复豁免新增 6 项）。
 - `pnpm build`：通过；`pnpm lint`：通过，Web 既有 7 warning、0 error。
@@ -36,7 +36,7 @@
 
 ## 飞书原话题的闲置轮换修复（用户已确认）
 
-普通飞书在进入 Runner 前有自动轮换逻辑：默认闲置 12 小时或上下文增长超过 50% 后换新会话。当前 `/Users/demo/.codebridge/config.yaml` 未覆盖这些默认值。告警群豁免。用户已明确选择原话题回复保留原会话、跳过闲置换新。`submitAndStream` 根据群消息的 threadId/rootId/replyToMessageId 判断回复，仅本次调用共享 `sessionRotationReason` 时覆盖 idleHours=0；保留配置中的 enabled 与 maxContextRatio。私聊和群中新消息、上下文过满、告警群豁免均保持原逻辑。这里不新增共享轮换规则，只由通道把回复语义适配为现有策略参数。
+普通飞书在进入 Runner 前有自动轮换逻辑：默认闲置 12 小时或上下文增长超过 50% 后换新会话。当前 `/Users/example/.codebridge/config.yaml` 未覆盖这些默认值。告警群豁免。用户已明确选择原话题回复保留原会话、跳过闲置换新。`submitAndStream` 根据群消息的 threadId/rootId/replyToMessageId 判断回复，仅本次调用共享 `sessionRotationReason` 时覆盖 idleHours=0；保留配置中的 enabled 与 maxContextRatio。私聊和群中新消息、上下文过满、告警群豁免均保持原逻辑。这里不新增共享轮换规则，只由通道把回复语义适配为现有策略参数。
 
 新增 6 项飞书活跃入口回归：3 种回复形式在闲置 48 小时后保留原 conversationId、agentId、cwd 和 generation；私聊/群中新消息仍轮换；原话题上下文过满仍轮换。旧逻辑下 3 项保留绑定测试失败（其余 6 项通过），修复后该文件 9 项全部通过。GitNexus 将 rotateStaleSession / submitAndStream 标为 HIGH（分别 1/2 个直接调用，均涉及 3 条上游流程），已在修改前告知并用上述表面测试核验边界。
 

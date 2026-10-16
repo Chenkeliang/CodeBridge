@@ -582,3 +582,14 @@ describe("FeishuBridge stream lifecycle", () => {
     expect(rendered).not.toContain("other");
   });
 });
+
+it("closes the raw SDK reconnect loop even when its handshake never became connected", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-failed-handshake-"));
+  try {
+    const bridge = new FeishuBridge({ config: defaultConfig(), dataDir });
+    const close = vi.fn(), disconnect = vi.fn(async () => {});
+    Object.assign(bridge, { channel: { disconnect, rawWsClient: { close } } });
+    await bridge.disconnect();
+    expect(disconnect).toHaveBeenCalledOnce(); expect(close).toHaveBeenCalledWith({ force: true });
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

@@ -182,3 +182,19 @@ describe("policy and approval", () => {
     reopened.close();
   });
 });
+
+it("suppresses an inactive source for this runtime without deleting its persisted records", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cb-capability-source-")); tempDirectories.push(directory);
+  const databasePath = path.join(directory, "registry.sqlite");
+  const registry = new CapabilityRegistry([
+    { id: "demo.echo", risk: "read_only", adapter: "demo.echo", source: { kind: "function", ref: "demo" } },
+    { id: "equity.balance", risk: "read_only", adapter: "equity.balance", source: { kind: "function", ref: "equity" } },
+    { id: "real.read", risk: "read_only", adapter: "real.read", source: { kind: "skill", ref: "demo" } },
+  ], { databasePath });
+  registry.suppressSource("function", "demo"); registry.suppressSource("function", "equity");
+  expect(registry.list().map((entry) => entry.id)).toEqual(["real.read"]);
+  expect(registry.get("equity.balance")).toBeUndefined();
+  registry.close();
+  const reopened = new CapabilityRegistry([], { databasePath });
+  expect(reopened.get("demo.echo")).toBeDefined(); reopened.close();
+});

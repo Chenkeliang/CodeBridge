@@ -5,7 +5,7 @@
 ## 事实与范围
 
 运行版本为 `c166c40952184f9f1c699545559ca5cf2716c38c`，发布目录为
-`/Users/demo/.codebridge/deployer/releases/20261012-110228-0d790c51/app`。
+`/Users/example/.codebridge/deployer/releases/20261012-110228-0d790c51/app`。
 2026-10-12 19:07（北京时间）任务 `run_4ccfc5c1565a404ca31d694509d0c8b0`
 已成功结束，但卡片 `7695734922859072454` 将本地 PNG 路径作为图片标识提交，
 飞书返回 `200570: card contains invalid image keys`。事件消费停在 sequence 1301，
@@ -39,7 +39,7 @@
 
 ## 交接与上线边界
 
-修复在 `/Users/demo/projects/CodeBridge-deploy` 新建的 `codex/feishu-image-reference` 分支开始，
+修复在 `/Users/example/projects/CodeBridge-deploy` 新建的 `codex/feishu-image-reference` 分支开始，
 基于已 fetch 的 `origin/main`（`1762c53`），创建后领先提交数为 0。
 收尾检查发现其他操作已将同一 checkout 切换到 `feat_acp_codex_network_config`（相同 HEAD）。
 本次未再切分支，修复仍为工作区未提交改动，并单独导出补丁备份，避免与并发任务混合提交。

@@ -129,26 +129,31 @@ export class TelegramApi {
     body: object | FormData,
     signal?: AbortSignal,
   ): Promise<T> {
-    const isForm = body instanceof FormData;
-    const response = await this.fetchImpl(
-      `${this.baseUrl}/bot${this.options.token}/${method}`,
-      {
-        method: "POST",
-        headers: isForm ? undefined : { "Content-Type": "application/json" },
-        body: isForm ? body : JSON.stringify(body),
-        signal,
-      },
-    );
-    const payload = (await response.json().catch(() => null)) as {
-      ok?: boolean;
-      result?: T;
-      description?: string;
-    } | null;
-    if (!response.ok || !payload?.ok || payload.result === undefined) {
-      throw new Error(
-        payload?.description ?? `Telegram API ${method} failed: ${response.status}`,
+    try {
+      const isForm = body instanceof FormData;
+      const response = await this.fetchImpl(
+        `${this.baseUrl}/bot${this.options.token}/${method}`,
+        {
+          method: "POST",
+          headers: isForm ? undefined : { "Content-Type": "application/json" },
+          body: isForm ? body : JSON.stringify(body),
+          signal,
+          redirect: "error",
+        },
       );
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        result?: T;
+        description?: string;
+      } | null;
+      if (!response.ok || !payload?.ok || payload.result === undefined) {
+        throw new Error(
+          payload?.description ?? `Telegram API ${method} failed: ${response.status}`,
+        );
+      }
+      return payload.result;
+    } catch (error) {
+      throw new Error((error instanceof Error ? error.message : String(error)).replaceAll(this.options.token, "[REDACTED]"));
     }
-    return payload.result;
   }
 }

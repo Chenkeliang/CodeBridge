@@ -108,3 +108,10 @@ describe("chunkTelegramText", () => {
     expect(chunks.map((chunk) => chunk.length)).toEqual([4096, 1]);
   });
 });
+
+it("redacts tokens from transport failures before they reach logs or callers", async () => {
+  const token = "12345:fixture_private_token";
+  const api = new TelegramApi({ token, fetch: vi.fn().mockRejectedValue(new Error(`request failed at https://api.telegram.org/bot${token}/getMe`)) });
+  await expect(api.getMe()).rejects.toThrow("[REDACTED]");
+  await api.getMe().catch((error: Error) => expect(error.message).not.toContain(token));
+});

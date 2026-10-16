@@ -12,7 +12,11 @@ import type { AgentProfile, AgentSession } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   Archive,
+  X,
   BookOpen,
+  Network,
+  ListTodo,
+  Inbox,
   ChevronDown,
   MoreHorizontal,
   Pencil,
@@ -57,12 +61,13 @@ export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onAre
   theme: Theme;
   onTheme: () => void;
 }) {
-  return <aside className={cn("flex min-h-0 flex-col items-center gap-3 border-r px-2.5 py-3", "bg-sidebar", "border-line")}>
+  const railControl = "grid size-11 shrink-0 place-items-center rounded-md border border-transparent transition-colors duration-150 hover:bg-surface-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-control-accent";
+  return <aside aria-label="工作台导航" className={cn("flex min-h-0 flex-col items-center gap-2 border-r px-2 py-3", "bg-sidebar", "border-line")}>
     <div className={cn("mb-3 grid size-9 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")} title="AGNET · CodeBridge"><PixelMark className="size-4" /></div>
     <div className="grid w-full gap-2">
       {agents.map((agent) => {
         const selected = area === "agents" && selectedAgentId === agent.agent_id;
-        return <button aria-label={agent.display_name} aria-pressed={selected} className={cn("group relative grid size-[42px] place-items-center rounded-md border border-transparent transition-all duration-150 hover:-translate-y-px hover:opacity-80", "text-muted", selected && cn("bg-surface", "text-ink", "border-line-strong", "shadow-card"))} key={agent.agent_id} onClick={() => onAgent(agent.agent_id)} title={`${agent.display_name} · ${statusLabel[agent.status] ?? agent.status}`} type="button">
+        return <button aria-label={agent.display_name} aria-pressed={selected} className={cn("group relative", railControl, "text-muted", selected && cn("bg-surface", "text-ink", "border-line-strong", "shadow-card"))} key={agent.agent_id} onClick={() => onAgent(agent.agent_id)} title={`${agent.display_name} · ${statusLabel[agent.status] ?? agent.status}`} type="button">
           {selected && <span aria-hidden="true" className={cn("absolute bottom-1.5 left-0 top-1.5 w-[3px] rounded-full", agentTintClass(agent.agent_id))} />}
           <BrandAgentIcon agentId={agent.agent_id} className="size-[18px]" />
         </button>;
@@ -70,10 +75,13 @@ export function AgentRail({ agents, area, selectedAgentId, theme, onAgent, onAre
     </div>
     <div className={cn("my-2 h-px w-8 border-t", "border-line")} />
 
-    <button aria-label="Skills" aria-pressed={area === "skills"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "skills" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("skills")} title="Skills" type="button"><BookOpen className="size-3.5" /></button>
+    <button aria-label="Skills" aria-pressed={area === "skills"} className={cn(railControl, "text-muted", area === "skills" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("skills")} title="Skills" type="button"><BookOpen className="size-3.5" /></button>
+    <button aria-label="渠道" aria-pressed={area === "channels"} className={cn(railControl, "text-muted", area === "channels" && "bg-surface text-ink")} onClick={() => onArea("channels")} title="渠道" type="button"><Network className="size-4" /></button>
+    <button aria-label="待处理" aria-pressed={area === "inbox"} className={cn(railControl, "text-muted", area === "inbox" && "bg-surface text-ink")} onClick={() => onArea("inbox")} title="待处理" type="button"><Inbox className="size-4" /></button>
+    <button aria-label="任务" aria-pressed={area === "tasks"} className={cn(railControl, "text-muted", area === "tasks" && "bg-surface text-ink")} onClick={() => onArea("tasks")} title="任务" type="button"><ListTodo className="size-4" /></button>
     <div className="flex-1" />
-    <button aria-label="设置" aria-pressed={area === "settings"} className={cn("grid size-9 place-items-center rounded-md transition-colors hover:opacity-80", "text-muted", area === "settings" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("settings")} title="设置" type="button"><Settings2 className="size-3.5" /></button>
-    <button aria-label="切换主题" className={cn("grid size-9 place-items-center rounded-md transition-all hover:-translate-y-px hover:opacity-80", "text-muted")} onClick={onTheme} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-3.5" /></button>
+    <button aria-label="设置" aria-pressed={area === "settings"} className={cn(railControl, "text-muted", area === "settings" && cn("bg-surface", "text-ink", "shadow-card"))} onClick={() => onArea("settings")} title="设置" type="button"><Settings2 className="size-3.5" /></button>
+    <button aria-label="切换主题" className={cn(railControl, "text-muted")} onClick={onTheme} title={theme === "paper" ? "Carbon Vermilion" : "Paper Lime"} type="button"><Sun className="size-3.5" /></button>
   </aside>;
 }
 
@@ -110,7 +118,7 @@ function SessionRow({ session, selected, onSession, onUpdateSession, onDeleteSes
   </div>;
 }
 
-export function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, loading, query, sessions, selectedSessionId, showArchived, onCreate, onQuery, onRefresh, onSession, onUpdateSession, onDeleteSession, onToggleArchived }: {
+export function SessionPanel({ agent, activeSessionCount, area, archivedSessionCount, loading, query, sessions, selectedSessionId, showArchived, onClose, onCreate, onQuery, onRefresh, onSession, onUpdateSession, onDeleteSession, onToggleArchived }: {
   agent: AgentProfile | null;
   agents?: AgentProfile[];
   activeSessionCount: number;
@@ -124,6 +132,7 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
 
   selectedSessionId: string | null;
   showArchived: boolean;
+  onClose: () => void;
   onCreate: () => void;
 
   onQuery: (value: string) => void;
@@ -133,10 +142,18 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
   onDeleteSession: (session: AgentSession) => Promise<void>;
   onToggleArchived: () => void;
 }) {
-  return <aside className={cn("flex min-h-0 min-w-0 flex-col border-r", "bg-sidebar", "border-line")}>
+  const [mobile, setMobile] = useState(() => window.innerWidth < 768);
+  const drawer = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const resize = () => setMobile(window.innerWidth < 768);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+  useEffect(() => { if (mobile) drawer.current?.showModal(); }, [mobile]);
+  const content = <aside id="workbench-session-panel" className={cn("flex h-full min-h-0 min-w-0 flex-col border-r", "bg-sidebar", "border-line")}>
     <header className="flex items-start justify-between gap-3 px-5 pb-4 pt-6">
-      <div className="min-w-0"><p className={cn("mb-1 font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-muted")}>{"当前 Agent"}</p><h1 className={cn("truncate font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>{agent?.display_name ?? "Agents"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-xs", "text-muted")}>{(agent?.status === "healthy" ? `${sessions.length} 个会话` : `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "不可用"} · ${sessions.length} 个会话`)}</p></div>
-      <div className="flex gap-1">
+      <div className="min-w-0"><h1 className={cn("truncate font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>{agent?.display_name ?? "Agents"}</h1><p className={cn("mt-1.5 flex items-center gap-1.5 text-xs", "text-muted")}>{(agent?.status === "healthy" ? `${sessions.length} 个会话` : `${statusLabel[agent?.status ?? "unavailable"] ?? agent?.status ?? "不可用"} · ${sessions.length} 个会话`)}</p></div>
+      <div className="flex gap-1"><Button aria-label="关闭会话列表" className="size-9 px-0 md:hidden" onClick={onClose} size="icon" variant="ghost"><X className="size-4" /></Button>
         <Button aria-label="刷新" className={cn("size-8 px-0 hover:opacity-80", "text-muted")} onClick={onRefresh} size="icon" variant="ghost"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} /></Button>
         {area === "agents" && <Button aria-label="新建 Session" className={cn("size-8 border px-0 hover:-translate-y-px hover:opacity-80", "bg-surface", "text-ink", "border-line-strong")} disabled={!agent || agent.status !== "healthy"} onClick={onCreate} size="icon" variant="outline"><Plus className="size-4" /></Button>}
 
@@ -152,6 +169,7 @@ export function SessionPanel({ agent, activeSessionCount, area, archivedSessionC
       <footer className={cn("border-t px-3 py-2", "border-line")}><button className={cn("flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs transition-opacity hover:opacity-80", "text-muted")} onClick={onToggleArchived} type="button"><Archive className="size-3.5" /><span className="flex-1">{showArchived ? "返回 Sessions" : "已归档"}</span><span className="font-mono text-xs">{showArchived ? activeSessionCount : archivedSessionCount}</span></button></footer>
     </>}
   </aside>;
+  return mobile ? <dialog aria-label="会话列表" className="fixed inset-y-0 left-[60px] m-0 h-dvh max-h-none w-[min(22rem,calc(100vw-60px))] max-w-none border-0 bg-sidebar p-0 text-ink shadow-panel backdrop:bg-ink/30" onCancel={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }} ref={drawer}>{content}</dialog> : content;
 }
 
 export function SessionHeader({ agent, session, runState, menuOpen, menuView, panelOpen, renameDraft, onDelete, onMenu, onMenuView, onRenameDraft, onTogglePanel, onUpdate }: {
@@ -170,9 +188,9 @@ export function SessionHeader({ agent, session, runState, menuOpen, menuView, pa
   onUpdate: (update: Record<string, unknown>) => void;
 }) {
   const menuRef = useDismissOnOutside(menuOpen, onMenu);
-  return <header className={cn("flex min-h-[72px] min-w-0 shrink-0 items-center justify-between gap-5 border-b px-8 py-4", "border-line")}>
+  return <header className={cn("flex min-h-[72px] min-w-0 shrink-0 items-center justify-between gap-3 border-b px-4 py-4 md:gap-5 md:px-8", "border-line")}>
     <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-      <Button aria-label={panelOpen ? "收起 Session 面板" : "展开 Session 面板"} className={cn("size-8 shrink-0 px-0", "text-muted")} onClick={onTogglePanel} size="icon" title={panelOpen ? "收起面板" : "展开面板"} variant="ghost"><ChevronDown className={cn("size-4 transition-transform", panelOpen ? "rotate-90" : "-rotate-90")} /></Button>{agent && <span aria-hidden="true" className={cn("w-[3px] self-stretch shrink-0 rounded-full", agentTintClass(agent.agent_id))} />}      <span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <PixelMark className="size-3.5" />}</span><div className="min-w-0 flex-1 overflow-hidden"><h2 className={cn("truncate font-brand text-sm font-normal tracking-[-0.02em]", "text-ink")} title={session?.title || undefined}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-xs", "text-muted")}>{session?.cwd || agent?.display_name || "Agent Workbench"}{agent && agent.status !== "healthy" ? ` · ${statusLabel[agent.status] ?? agent.status}` : ""}</p></div></div>
+      <Button aria-controls="workbench-session-panel" aria-expanded={panelOpen} aria-label={panelOpen ? "收起 Session 面板" : "展开 Session 面板"} className={cn("size-8 shrink-0 px-0", "text-muted")} onClick={onTogglePanel} size="icon" title={panelOpen ? "收起面板" : "展开面板"} variant="ghost"><ChevronDown className={cn("size-4 transition-transform", panelOpen ? "rotate-90" : "-rotate-90")} /></Button>{agent && <span aria-hidden="true" className={cn("w-[3px] self-stretch shrink-0 rounded-full", agentTintClass(agent.agent_id))} />}      <span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", "bg-accent", "text-accent-ink", "border-line-strong")}>{agent ? <BrandAgentIcon agentId={agent.agent_id} className="size-3.5" /> : <PixelMark className="size-3.5" />}</span><div className="min-w-0 flex-1 overflow-hidden"><h2 className={cn("truncate font-brand text-sm font-normal tracking-[-0.02em]", "text-ink")} title={session?.title || undefined}>{session?.title || (agent ? `${agent.display_name} Session` : "CodeBridge")}</h2><p className={cn("mt-0.5 truncate text-xs", "text-muted")}>{session?.cwd || agent?.display_name || "Agent Workbench"}{agent && agent.status !== "healthy" ? ` · ${statusLabel[agent.status] ?? agent.status}` : ""}</p></div></div>
     {session && <div className="relative flex shrink-0 items-center gap-2" ref={menuRef}>
       {runState !== "idle" && <span className={cn("hidden items-center gap-1.5 text-xs sm:flex", "text-muted")}><span className={cn("size-1.5 rounded-full", runState === "running" ? "bg-success" : "bg-warning")} />{runState === "running" ? "运行中" : "已暂停"}</span>}
       <Button aria-label="Session 操作" className={cn("size-8 px-0", "text-muted")} onClick={onMenu} size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button>

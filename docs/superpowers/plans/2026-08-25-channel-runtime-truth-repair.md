@@ -399,7 +399,7 @@ Review the changed symbols and affected processes before every commit; HIGH/CRIT
 ```bash
 bash scripts/start.sh restart
 bash scripts/start.sh status
-tail -n 200 /Users/demo/.codebridge/bridge.log
+tail -n 200 /Users/example/.codebridge/bridge.log
 ```
 
 Verify ports 19790/19789 are healthy, the Bridge log contains the current startup timestamp plus the Feishu connection/reconciler startup, and no schema migration or recovery loop error appears.
@@ -425,4 +425,4 @@ Telegram remains `implemented + contract-tested`, not `reachable/closed-loop`, u
 - Verification: 28 test files / 491 tests passed; Core, Work Items, Session Coordinator, Run Executor, Router, Feishu, Telegram, Bridge, and Web production builds passed.
 - Production migration: `agent=579`, `flow=10`; false Agent Flow blocks remaining `0`; legitimate `flow_step=16`, `flow_param=5`, `flow_run=4`, and `flow_batch=9` retained.
 - Live Feishu: `/thinking off` persisted across Bridge restart; a normal Agent Run returned `execution-kind-smoke-ok` without Flow summary; two distinct `/c` commands on the same Session both restored the queue.
-- Backup: `/Users/demo/.codebridge/backups/orchestration-before-execution-kind-20260825T1250.sqlite`.
+- Backup: `/Users/example/.codebridge/backups/orchestration-before-execution-kind-20260825T1250.sqlite`.

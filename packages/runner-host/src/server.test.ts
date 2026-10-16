@@ -261,6 +261,15 @@ describe("RunnerHost Skill control plane", () => {
     });
     expect(list.status).toBe(200);
     expect(await list.json()).toEqual(snapshot);
+    expect(skillControlPlane.scan).toHaveBeenLastCalledWith(true);
+    snapshot.skills.push({ id: "fixture", name: "fixture", description: null, source_path: "/skills/fixture", global_state: "enabled",
+      package_revision: "must-not-be-exposed", revision: "must-not-be-exposed", targets: [{ agent_id: "codex", state: "follows_global", mutable: false }] } as never);
+    expect((await app.request("/skills/selection")).status).toBe(401);
+    const selection = await app.request("/skills/selection", { headers: { authorization: "Bearer token" } });
+    expect(selection.status).toBe(200);
+    expect(await selection.json()).toEqual({ skills: [{ id: "fixture", name: "fixture", description: null, source_path: "/skills/fixture", global_state: "enabled", targets: [{ agent_id: "codex", state: "follows_global" }] }] });
+    expect(skillControlPlane.scan).toHaveBeenLastCalledWith(false);
+    snapshot.skills.pop();
 
     const source = await app.request("/skills/sources", {
       method: "POST",
@@ -878,7 +887,7 @@ describe("RunnerHost session lifecycle", () => {
     host.shutdown();
   });
 
-  it.each(["codex", "codex-alert"])("refuses to resume %s owned by desktop or TUI", async (backendId) => {
+  it.each(["codex", "codex-profile"])("refuses to resume %s owned by desktop or TUI", async (backendId) => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);
     const config = defaultConfig();
@@ -908,7 +917,7 @@ describe("RunnerHost session lifecycle", () => {
     host.shutdown();
   });
 
-  it.each(["codex", "codex-alert"])("restores %s before continuing the original ID", async (backendId) => {
+  it.each(["codex", "codex-profile"])("restores %s before continuing the original ID", async (backendId) => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));
     tmpDirs.push(dataDir);
     const config = defaultConfig();
@@ -936,7 +945,7 @@ describe("RunnerHost session lifecycle", () => {
 
   it.each([
     ["codex", undefined],
-    ["codex-alert", undefined],
+    ["codex-profile", undefined],
     ["cursor", "original-session"],
   ])("does not restore for %s with resume ID %s", async (backendId, resumeSessionId) => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fcb-runner-"));

@@ -1,8 +1,10 @@
 # 飞书口语安全发布
 
+适用于源码安装、同机运行 Bridge / Runner、已独立安装发布控制器的 macOS 主机。npm 包不包含控制器安装脚本；此能力只接受绑定的飞书负责人，不是跨渠道通用发布管理。版本范围见[交付状态](../release-status.md)。
+
 ## 日常使用
 
-与小V直接说：
+向自己配置的飞书机器人发送：
 
 - “修改 CodeBridge 的……，测试通过后上线”：Agent 在指定代码目录修改、验证、提交，随后提交准备并自动发布请求。
 - “先改好，暂时别上线”：仅准备候选，不切换服务。
@@ -16,7 +18,7 @@
 
 ## Agent 内部调用
 
-Codex 默认 shell 沙箱禁止访问本机网络，不能依赖 shell 中的 HTTP 命令。Agent 优先使用内置 `codebridge_deploy` MCP 工具；工具由 Runner 绑定当前 Run，不接受调用方伪造身份。后端仍检查原始飞书消息和上线授权。无需修改沙箱权限，用户也无需记住工具名称。
+Agent 的 shell 网络权限取决于其当前沙箱配置，不能把能执行 shell 当作能访问本机发布器的保证。Agent 优先使用内置 `codebridge_deploy` MCP 工具；工具由 Runner 绑定当前 Run，不接受调用方伪造身份。后端仍检查原始飞书消息和上线授权。无需修改沙箱权限，用户也无需记住工具名称。
 
 ## 工作方式
 
@@ -30,23 +32,62 @@ Codex 默认 shell 沙箱禁止访问本机网络，不能依赖 shell 中的 HT
 
 数据库结构变更不自动发布；检测到迁移需单独审核。发布器和安装器自身更新也不能走普通发布，需在宿主机独立安装，保持救援入口不随业务版本一起变化。
 
-## 发布源目录约定
+## 独立新数据库的初始化审核
 
-发布取的是 `config.json` 里 `sourceRepo` 指向目录的提交，聊天命令固定用该目录的 `HEAD`，无法在话里指定分支。所以这个目录必须是一个只用于发布的独立克隆，长期停在 `main`，任何人都不在里面改代码或切分支。
+已有数据库的迁移仍不得通过普通发布自动执行。新增功能若仅创建独立、此前不存在的私有SQLite文件，可先单独审核初始化代码，再保存宿主机审核凭据；没有凭据时维持原拒绝行为。
 
-当前为 `/Users/demo/projects/CodeBridge-deploy`。不要把它指向 worktree 或日常开发目录：worktree 会因为同名分支不能在两处检出而被迫进入游离头指针，开发目录则常带未提交改动，而准备阶段遇到脏工作区会直接拒绝。两种情况都发生过，后者表现为发布报错，前者更糟，会静默发布错误的分支。
+审核必须确认：具体数据库文件名及运行时调用路径、全部建表语句、文件权限，以及没有读取或修改现有会话、执行或业务数据库。源码提交必须固定，初始化模块和真实调用方都要纳入SHA-256核对。不能仅因测试通过或文件名带“新库”就签发凭据。
 
-发布前更新该目录：
+凭据保存在`<dataDir>/deployer/reviews/<完整候选commit>.json`，只由宿主机维护流程写入，不进入仓库或发布包；目录保持0700，文件0600。格式为：
 
-```bash
-git -C /Users/demo/projects/CodeBridge-deploy pull --ff-only
+```json
+{
+  "scope": "new-database-only",
+  "baseline": "当前正在运行的完整commit",
+  "commit": "本次候选的完整commit",
+  "database": "agent-tasks.sqlite",
+  "reviewer": "本次实际审核者",
+  "reviewedAt": "实际审核时间",
+  "sourceHashes": {
+    "apps/bridge/src/agent-task-store.ts": "该初始化模块的SHA-256",
+    "apps/bridge/src/cli.ts": "该运行时调用方的SHA-256"
+  }
+}
 ```
 
-走 HTTP 接口发起时，请求里显式带 `"ref": "main"`，不要依赖 `HEAD` 的默认值。聊天入口没有这个参数，只能靠上面的目录纪律。
+发布器只接受：基线与候选均精确匹配、凭据为当前系统用户拥有的私有普通文件、代码哈希匹配、DDL只来自新增文件、目标库及其符号链接均不存在，且DDL只有新增的`CREATE TABLE IF NOT EXISTS`。修改/删除已有定义、`ALTER/DROP TABLE`、已有数据库、过期或不完整审核均继续拒绝。审核凭据至少覆盖初始化模块与另一个已审核的实际调用文件。
+
+初始化由已验证版本的正常启动执行，不额外执行SQL或修改旧库。回滚保留新增库文件，不自动删除用户数据；如需在回滚后重新上线而目标库已存在，必须另行审查，不能复用“全新数据库”许可。独立发布控制器的修改仍须先按安装器预览、备份、单独安装并验证。
+
+## 发布源目录约定
+
+发布取的是 `config.json` 里 `sourceRepo` 指向目录的提交，聊天命令固定用该目录的 `HEAD`，无法在话里指定分支。因此每次准备前必须核对该目录的提交及干净状态；不要默认它与开发目录或远端主分支同步。使用现有检出即可，不要求创建新克隆或 worktree；不得在冻结的运行目录直接修改源码。
+
+目录来自安装参数 `--source`，而不是项目内写死的作者路径。聊天入口默认取 `HEAD`；明确指定候选时，Agent 的 `codebridge_deploy` 请求应带可核实的 `ref`（优先具体提交），并核对准备结果中的 commit。
+
+发布前只读核对实际源目录；以下路径需替换：
+
+```bash
+CODEBRIDGE_SOURCE=/absolute/path/to/CodeBridge
+git -C "$CODEBRIDGE_SOURCE" status --short --branch
+git -C "$CODEBRIDGE_SOURCE" rev-parse HEAD
+```
+
+拉取、合并、推送与发布各自遵守维护者授权，不能把核对版本变成隐式更新代码。
+
+直接调用控制器同样应显式指定已核实的 `ref`。`main` 也可能是过期的本地引用，不能代替 commit 核验。保持原始发送人、目标会话及明确发布授权校验，不通过修改提示词绕过。
 
 ## 初次安装（维护者）
 
-先构建仓库，执行 scripts/install-host-deployer.mjs 的预览，确认宿主机、绝对解释器路径、数据目录与原始飞书发送者 open_id。明确 --install 后安装；敏感配置只存在权限600文件，发布器目录700。安装器不会顺带重启Bridge/Runner。
+先完成源码构建与 Bridge / Runner 的 launchd 安装，再预览。下列两个参数必须替换为自己的源码检出及本应用下已核实的负责人身份：
+
+```bash
+CODEBRIDGE_SOURCE=/absolute/path/to/CodeBridge
+FEISHU_OWNER_OPEN_ID=ou_your_verified_owner
+node "$CODEBRIDGE_SOURCE/scripts/install-host-deployer.mjs" --source "$CODEBRIDGE_SOURCE" --owner "$FEISHU_OWNER_OPEN_ID"
+```
+
+预览不安装服务。核对解释器、数据目录和身份后，安装动作需显式加 `--install`；它会替换/重启独立控制器，但不会顺带重启 Bridge / Runner。npm 0.1.0 的控制器与发布者凭据仍可能为明文；本地安全候选（c830331）已支持引用，但尚未部署。真实迁移前须同时升级 Bridge、独立控制器及相应读取方，再按已确认范围操作。
 
 首次将业务服务接到包含发布入口的版本，随后即可在飞书发布。安装使用可工作的宿主机 Python>=3.9，不能从Linux虚拟机运行安装器，也不要临时绕过依赖检查。
 

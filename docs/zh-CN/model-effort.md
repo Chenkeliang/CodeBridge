@@ -1,8 +1,10 @@
 # Model / Effort 切换
 
-## 飞书侧能力调研
+配置说明适用于当前源码；与 npm 的差异见[交付状态](../release-status.md)。下文模型、effort 和权限选项以连接中的适配器及账号实时结果为准，不承诺所有 Agent 具有相同选项。
 
-飞书 **没有** 聊天窗口内置的「模型下拉框」或 effort 控件；机器人也不能像客户端那样自带模型选择 UI。
+## 飞书侧入口
+
+CodeBridge 当前在飞书聊天中通过斜杠命令选择模型和推理强度（effort），尚未提供选模型的交互卡片。
 
 | 方式 | 是否可行 | 说明 |
 |------|----------|------|
@@ -20,9 +22,9 @@
 
 | Backend | model | effort |
 |---------|-------|--------|
-| **cursor** | ✅ | 当前 adapter 未提供 |
-| **claude** | ✅ | ✅ `low` / `medium` / `high` / `xhigh` / `max` |
-| **codex** | ✅ | ✅ `low` / `medium` / `high` / `xhigh` / `max` / `ultra` |
+| **cursor** | 以 `/model` 为准 | 以 `/effort` 实时返回为准 |
+| **claude** | 以 `/model` 为准 | 以 `/effort` 为准 |
+| **codex** | 以 `/model` 为准 | 以 `/effort` 为准 |
 
 优先级：**会话 slash 覆盖** > **config.yaml 默认** > **ACP 适配器默认**。
 
@@ -60,11 +62,11 @@ backends:
 ```
 /model                  # 实时读取当前 backend 的 model 列表
 /model <列表里的名称>   # 名称和值均可；写入前会按实时列表校验
-/model default          # 清除会话覆盖，回到 ACP adapter 默认
+/model default          # 清除会话覆盖；先回到后端配置默认，未配置才用 adapter 默认
 
 /effort                 # 实时读取 thought_level（Claude / Codex）
 /effort high
-/effort ultra           # Codex 当前支持
+/effort ultra           # 仅在当前 /effort 列表包含该值时使用
 /effort default         # 清除覆盖
 
 /permission             # 实时读取当前 backend 的 mode/权限列表
@@ -84,30 +86,24 @@ backends:
 backends:
   cursor:
     type: cursor-cli
-    acpCommand: cursor-agent
-    acpArgs: ["acp"]
   claude:
     type: claude-code
-    acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.81.1"]
     claudePermissionMode: bypassPermissions
   codex:
     type: codex
-    acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.13.1"]
 ```
 
-会话绑定持久化：`~/.codebridge/chat-bindings.json`（按 `chatId|topicId`）。
+命令配置写入通道绑定，并在后续任务中应用；Session / Run 的运行事实保存在数据目录的 SQLite 存储中。不要手工编辑 `chat-bindings.json` 来迁移会话，也不要把配置文件存在当作会话恢复已经成功。
 
-不建议在 yaml 固定 model/effort，否则会覆盖 adapter 随版本更新的默认值。slash 设置的会话覆盖立即生效；`/model default`、`/effort default` 可恢复实时默认。
+不建议在 yaml 固定 model/effort，否则会覆盖 adapter 随版本更新的默认值。slash 设置的覆盖用于后续任务；`/model default`、`/effort default` 清除该会话覆盖，先使用后端配置默认，未配置时才使用适配器默认。
 
-### Claude 模型列表的交互范围
+### 各入口的验证边界
 
 | Surface | 入口与读取 | 设置与持久化 | 错误、恢复与反馈 | 状态 |
 | --- | --- | --- | --- | --- |
-| Web | 会话模型配置接口；不使用 `/model` 命令 | 会话配置接口 | 沿用 Web 会话反馈 | 本次版本更新不涉及 |
-| Agent | 无独立 `/model` 入口 | 使用已解析的会话模型 | 运行结果反馈 | 本次版本更新不涉及 |
-| 飞书 | `/model` 经 Bridge → Runner 实时读取 ACP `configOptions` | `/model <名称>` 写入会话绑定 | 读取失败显示错误；`/model default` 清除覆盖，下一轮生效 | 代码可达；发布后需在窗口验收 |
-| Telegram | `/model` 经 Bridge → Runner 实时读取 ACP `configOptions` | `/model <名称>` 写入会话绑定 | 读取失败显示错误；`/model default` 清除覆盖，下一轮生效 | 代码可达；未做实际通道验收 |
+| Web | 会话模型配置接口；不使用 `/model` 命令 | 会话配置接口 | 沿用 Web 会话反馈 | 既有入口；此文档不新增验收声明 |
+| Agent | 无独立 `/model` 入口 | 使用已解析的会话模型 | 运行结果反馈 | 既有入口；此文档不新增验收声明 |
+| 飞书 | `/model` 经 Bridge → Runner 实时读取 ACP `configOptions` | `/model <名称>` 写入会话绑定 | 读取失败显示错误；`/model default` 清除覆盖，下一轮生效 | 源码有调用路径；安装/升级后须在窗口验收 |
+| Telegram | `/model` 经 Bridge → Runner 实时读取 ACP `configOptions` | `/model <名称>` 写入会话绑定 | 读取失败显示错误；`/model default` 清除覆盖，下一轮生效 | 源码有调用路径；不能据飞书验收推定Telegram已通过 |
 
 列表由适配器与当前账号共同决定。更新默认版本时，还要检查 `~/.codebridge/config.yaml` 是否单独固定了旧版 `acpArgs`；该配置优先于源码默认值。

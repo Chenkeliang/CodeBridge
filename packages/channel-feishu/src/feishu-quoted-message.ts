@@ -151,6 +151,7 @@ export async function fetchMessageContext(
 ): Promise<string | undefined> {
   const res = await channel.rawClient.im.v1.message.get({
     path: { message_id: messageId },
+    params: { card_msg_content_type: "user_card_content" },
   });
   if (res.code !== undefined && res.code !== 0) throw new Error("message_fetch_failed");
   const item = res.data?.items?.[0];

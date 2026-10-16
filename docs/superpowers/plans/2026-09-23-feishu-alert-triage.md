@@ -35,7 +35,7 @@ Agent 的只读及逐次确认要求通过任务指令和负责人入站校验�
 
 AT-1/AT-2/AT-3 的实现及本地验证完成。配置名为 `feishu.alertMonitor`，说明见 `docs/zh-CN/feishu-alert-triage.md`。当前主工作区保留在原分支；候选位于 `codex/feishu-alert-triage`，从已 fetch 的 `origin/main`（38f7e27）起步，初始 ahead 为 0。
 
-真实只读验证：使用候选 `FeishuBridge.readAlertMessages` 和实际安装的 Node SDK 1.68.0，读取「灯塔推送」过去一天的 12 条消息成功；群成员接口核实负责人为维护者。未调用发送、处理业务写或发布接口。
+真实只读验证：使用候选 `FeishuBridge.readAlertMessages` 和实际安装的 Node SDK 1.68.0，读取「业务告警群（名称已匿名化）」过去一天的 12 条消息成功；群成员接口核实负责人的应用内身份（个人姓名已移除）。未调用发送、处理业务写或发布接口。
 
 验证命令：
 
@@ -114,4 +114,4 @@ AT-7 验证记录：完整构建通过，lint 0 errors / 8 个既有 warnings，
 
 Surface Matrix 增量：飞书 entry 增加已验证身份的 Reaction 与只读回查；read path=messageReaction.list；write path=复用 dismissed/DONE 投影；error/recovery=分批进度与失败重试；终态仍记录本人结案而非恢复。Agent 不获得伪造个人结案的入口，已确认通知可不启动 Agent；Web/Telegram 无新增入口。AT-8 本地合同和活跃 SDK 接线测试；AT-4 生产上线仍未执行。
 
-AT-8 最终验证：已遵循最新规则迁回现有检出 `/Users/demo/projects/CodeBridge`，从最新 origin/main 26a3825 建立 `codex/feishu-alert-triage-checkout`，保留已移除 Flow 的生产行为。`pnpm build` 通过；`pnpm lint` 0 errors、8 个既有 warnings；`pnpm test --no-file-parallelism` 覆盖告警合同、监控状态、飞书活跃适配器和 SDK reaction listener、出站 API、配置、fcb，共 33 文件/288 项通过。测试数量随生产基线移除 Flow 测试发生变化，不沿用旧基线总数。SKILL quick_validate 通过；全局 skills-check 仍受既有 synced 真实目录影响，未声称 OK。原 worktree 和迁移备份保留，未继续在其中开发。未部署新代码、未启用全量、未将模拟事件验证声称为线上用户点击 DONE 的实测。
+AT-8 最终验证：已遵循最新规则迁回现有检出 `/Users/example/projects/CodeBridge`，从最新 origin/main 26a3825 建立 `codex/feishu-alert-triage-checkout`，保留已移除 Flow 的生产行为。`pnpm build` 通过；`pnpm lint` 0 errors、8 个既有 warnings；`pnpm test --no-file-parallelism` 覆盖告警合同、监控状态、飞书活跃适配器和 SDK reaction listener、出站 API、配置、fcb，共 33 文件/288 项通过。测试数量随生产基线移除 Flow 测试发生变化，不沿用旧基线总数。SKILL quick_validate 通过；全局 skills-check 仍受既有 synced 真实目录影响，未声称 OK。原 worktree 和迁移备份保留，未继续在其中开发。未部署新代码、未启用全量、未将模拟事件验证声称为线上用户点击 DONE 的实测。

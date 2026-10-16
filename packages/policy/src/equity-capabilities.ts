@@ -8,7 +8,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * 真实领域示例：权益余额查询（只读）。演示一个 registry+runtime 都注册的
+ * 合成示例：模拟权益余额，不查询真实账户，也不在默认启动时注册。演示 registry+runtime 都注册的
  * adapter：capability 有定义、有可执行 adapter、非 forwardToAgent。
  */
 export function registerEquityCapabilities(

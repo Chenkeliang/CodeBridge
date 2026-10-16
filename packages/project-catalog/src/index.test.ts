@@ -12,7 +12,7 @@ import {
 } from "./index.js";
 
 const evidenceReader: DiscoveryEvidenceReader = async () => ({
-  remote: "gitlab.luojilab.com/rock/equity-center.git",
+  remote: "git.example.com/rock/equity-center.git",
   language: "go",
   evidence: [{ kind: "git_remote", ref: "git config remote.origin.url" }],
 });

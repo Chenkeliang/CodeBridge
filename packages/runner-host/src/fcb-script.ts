@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 
 /**
  * fcb — 注入到 Agent 子进程 PATH 的小命令，通过 Bridge 出站 API
@@ -7,6 +9,7 @@ import path from "node:path";
  */
 const FCB_SCRIPT = `#!/usr/bin/env node
 // fcb — 在 CodeBridge Agent 任务里把文件/消息发回当前聊天
+// 任务: fcb tasks help；创建或修改计划必须由用户明确要求。
 // 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb alert status <状态> <证据或待办> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]
 const path = require("node:path");
 const fs = require("node:fs");
@@ -40,7 +43,10 @@ async function main() {
     fail("fcb: 缺少 FCB_API/FCB_TOKEN/FCB_RUN_ID（仅在 CodeBridge 任务中可用）");
   }
   const [cmd, ...rest] = process.argv.slice(2);
-  if (cmd === "deploy") {
+  if (cmd === "tasks") {
+    const { runTaskCommand } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("@codebridge/core/task-cli")).href)});
+    console.log(JSON.stringify(await runTaskCommand(rest, {api, token, runId}), null, 2));
+  } else if (cmd === "deploy") {
     if (!runId) fail("fcb: 发布操作缺少当前任务身份，不能执行");
     const actions = {prepare: "prepare", apply: "publish", status: "status", cancel: "cancel", rollback: "rollback"};
     const action = actions[rest[0]];

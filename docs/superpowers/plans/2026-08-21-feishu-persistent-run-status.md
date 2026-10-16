@@ -283,7 +283,7 @@ bash scripts/start.sh restart
 bash scripts/start.sh status
 ```
 
-Verify `/Users/demo/.codebridge/bridge.log` contains `[ws] ws client ready` and `已连接飞书 bot` after restart.
+Verify `/Users/example/.codebridge/bridge.log` contains `[ws] ws client ready` and `已连接飞书 bot` after restart.
 
 - [ ] **Step 5: Leave implementation uncommitted for user verification**
 

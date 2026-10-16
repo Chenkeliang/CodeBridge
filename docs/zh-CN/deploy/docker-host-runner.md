@@ -1,52 +1,32 @@
-# Docker + 宿主机 Runner 部署
+# Docker Bridge + 宿主机 Runner：当前限制
 
-CodeBridge 采用 **Bridge 容器 + 宿主机 Runner** 架构：Bridge 只负责聊天通道与路由；Cursor / Claude / Codex 必须在宿主机执行以访问本机代码与登录态。
+这是源码仓库保留的实验部署路径，不是当前正式推荐的完整安装方式。npm `0.1.0` 不包含这些脚本；正式宿主机为 macOS。先看[快速开始](../quickstart.md)和[交付状态](../../release-status.md)。
 
-## 1. 宿主机：安装并启动 Runner
+## 网络约束
 
-```bash
-cd CodeBridge
-pnpm install && pnpm build
+Bridge 与 Runner 是两个进程，但独立进程不意味着所有调用都支持跨主机：
 
-# 初始化配置
-node apps/bridge/dist/cli.js init
-# 按向导配置通道；密钥保存在宿主机钥匙串中
+| 方向 | 当前实现 | 限制 |
+| --- | --- | --- |
+| Bridge → Runner | Compose 指向 `http://host.docker.internal:19789` | Runner 默认绑定宿主机 `127.0.0.1`；此绑定是否可被容器访问须实际验证，不能假定 Docker 网络已解决 |
+| Runner / Agent → Bridge | `FCB_API` 指向 Runner 所在主机的 `127.0.0.1:<bridge.apiPort>` | 容器中的 Bridge 默认只监听容器内部回环地址，Compose 未发布 Bridge 端口；文件、消息、@ 等反向出站链路不完整 |
+| Bridge → 发布控制器 | 固定本机 `127.0.0.1:19791`，控制器依赖宿主机 launchd | 容器回环地址不是宿主机，安全发布不作为已可用能力 |
+| 浏览器 → Web | Bridge 默认本地监听，Web 默认关闭 | Compose 未提供完整浏览器访问路径；不能直接按本机工作台地址访问容器 |
 
-# 前台启动 Runner
-node packages/runner-host/dist/cli.js
+因此只检查 Runner 健康不等于部署验收。当前推荐 Bridge 和 Runner 一起在同一台 Mac 运行；不建议临时开放 `0.0.0.0` 或取消鉴权来补齐链路。
 
-# 或安装 macOS 守护进程
-bash deploy/runner/install-macos.sh
-```
+## 保留脚本的行为
 
-Runner 默认监听 `127.0.0.1:19789`，仅本机可访问。
+仓库的 `./scripts/start.sh docker` 会构建源码、读取宿主机配置、解析密钥引用、生成 `deploy/.env`，并启动宿主机 Runner 与 Compose Bridge。它可能停止脚本管理的实例，不能与已存在的 launchd 服务混用。
 
-## 2. Docker：启动 Bridge
+容器不能读取宿主机钥匙串，所以 `deploy/.env` 包含解析后的明文凭据（权限600），不应提交、分享或纳入普通备份。不要另造一个与 Runner 不同的 token。该行为与“配置支持密钥引用”是两个不同的边界。
 
-```bash
-bash scripts/start.sh docker
-```
+未完成上述网络路径的配置和验收前，不把此脚本作为一键可用步骤。若维护这条实验路径，至少分别核对：
 
-该脚本读取宿主机配置并解析钥匙串引用，生成权限为 `600` 的 `deploy/.env`，让容器与宿主机 Runner 使用同一个 token。不要另造一个 `RUNNER_TOKEN`。容器无法读取宿主机钥匙串，因此 `deploy/.env` 包含明文密钥，请勿提交或分享。脚本会停止脚本管理的现有实例，再启动宿主机 Runner 和 Docker Bridge。
+1. Bridge 使用相同 token 连接实际 Runner，且无第二个进程抢端口。
+2. 从 Agent 所在宿主机能访问到经过认证的 Bridge API。
+3. 在专用测试聊天验证任务、终态回复、文件、消息和 @ 的完整闭环。
+4. 不把“消息已发送”混同于“业务任务成功”；不使用业务告警群做连通性试验。
+5. 安全发布控制器与 Web 另外验收，未支持时明确保持禁用。
 
-Bridge 通过 `host.docker.internal:19789` 调用宿主机 Runner。
-
-## 3. 飞书后台
-
-1. 创建企业自建应用，开启机器人
-2. 权限：`im:message`、`im:message:send_as_bot`、`im:message.group_at_msg`、`im:resource`
-3. 事件订阅：**长连接**，订阅 `im.message.receive_v1`
-4. **先启动 bridge**，再在控制台保存长连接配置
-
-## 4. 验证
-
-```bash
-node apps/bridge/dist/cli.js doctor
-docker compose -f deploy/docker-compose.yml ps
-```
-
-## 安全说明
-
-- `RUNNER_TOKEN` 使用长随机字符串
-- Runner 不要绑定 `0.0.0.0`（除非明确知情）
-- Agent 权限由 ACP 适配器和 `runnerHost.acpPermissionPolicy` 共同控制
+当前文档维护没有修改网络配置、启动容器或执行真实通道验收。

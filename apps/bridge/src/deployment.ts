@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isSecretRef, resolveSecretRef, type SecretOptions } from "@codebridge/core";
 import path from "node:path";
 import os from "node:os";
 import type { Hono } from "hono";
@@ -48,6 +49,7 @@ export class DeploymentService {
   constructor(private readonly options: {
     configPath?: string;
     fetch?: typeof fetch;
+    secrets?: SecretOptions;
     feishuConnected?: () => boolean;
     activeRuns?: () => number;
   } = {}) {}
@@ -83,7 +85,7 @@ export class DeploymentService {
     try {
       const response = await (this.options.fetch ?? fetch)("http://127.0.0.1:19791/command", {
         method: "POST",
-        headers: { authorization: `Bearer ${config.token}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${isSecretRef(config.token) ? resolveSecretRef(config.token, this.options.secrets) : config.token}`, "content-type": "application/json" },
         body: JSON.stringify({ ...command, ...context }),
         signal: AbortSignal.timeout(10_000),
       });

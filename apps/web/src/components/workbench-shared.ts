@@ -1,9 +1,10 @@
+import type { ManagedChannel } from "@codebridge/core";
 import type { ConversationProjection } from "@/lib/events";
 import type { AgentSession, ConfigOption } from "@/lib/types";
 
 export type Theme = "paper" | "carbon";
 export type Density = "compact" | "comfortable";
-export type PanelArea = "agents" | "skills" | "settings";
+export type PanelArea = "agents" | "skills" | "settings" | "channels" | "tasks" | "inbox";
 export type MenuView = "actions" | "rename" | "delete";
 
 export const DEFAULT_SELECT_VALUE = "__default__";
@@ -62,4 +63,11 @@ export function formatValue(value: unknown): string {
 
 export function messageOf(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
+}
+
+/** Use the same vocabulary in the channel tab and the connection editor. */
+export function channelConnectionLabel(channel: ManagedChannel): string {
+  const labels = { unconfigured: "未配置", unknown: "状态未确认", connected: "已连接", disconnected: "未连接", pending: "待应用", applying: "正在应用", error: "连接异常" };
+  if (channel.connection) return labels[channel.connection.state];
+  return !channel.configured ? "未配置" : channel.connected === null ? "状态未确认" : channel.connected ? "已连接" : "未连接";
 }

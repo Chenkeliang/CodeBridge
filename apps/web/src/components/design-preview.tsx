@@ -196,7 +196,7 @@ export function DesignPreview() {
   const [area, setArea] = useState<PanelArea>("agents");
   const [activeAgent, setActiveAgent] = useState("codex");
   const [activeSession, setActiveSession] = useState("s1");
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 768);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [model, setModel] = useState("");
@@ -210,7 +210,7 @@ export function DesignPreview() {
   const session = sessions.find((candidate) => candidate.session_id === activeSession) ?? null;
   const agentSessions = sessions.filter((candidate) => candidate.agent_id === activeAgent);
 
-  return <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && area === "agents" ? "grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
+  return <div className={cn("grid h-[100dvh] min-h-[100dvh] overflow-hidden font-sans text-sm tracking-[-0.01em]", panelOpen && area === "agents" ? "grid-cols-[60px_minmax(0,1fr)] md:grid-cols-[60px_286px_minmax(0,1fr)]" : "grid-cols-[60px_minmax(0,1fr)]", "bg-canvas text-ink")} data-density={density} data-reading={reading ? "serif" : "sans"} data-theme={theme}>
     <AgentRail
       agents={agents}
       area={area}
@@ -231,12 +231,13 @@ export function DesignPreview() {
       sessions={area === "agents" ? agentSessions : []}
       selectedSessionId={activeSession}
       showArchived={false}
+      onClose={() => setPanelOpen(false)}
       onCreate={noop}
       onDeleteSession={noopAsync}
 
       onQuery={noop}
       onRefresh={noop}
-      onSession={(value) => setActiveSession(value.session_id)}
+      onSession={(value) => { setActiveSession(value.session_id); if (window.innerWidth < 768) setPanelOpen(false); }}
       onToggleArchived={noop}
       onUpdateSession={noopAsync}
     />}

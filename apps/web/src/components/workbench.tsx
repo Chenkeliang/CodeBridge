@@ -1,3 +1,7 @@
+import { TaskWorkspace } from "@/components/task-workspace";
+import { TaskAttentionPage } from "@/components/task-attention-page";
+import type { TaskLocation } from "@/components/agent-tasks-page";
+import { ManagementPage } from "@/components/management-page";
 import { BrandAgentIcon } from "@/components/brand-agent-icon";
 import { CommandPalette } from "@/components/command-palette";
 import { Composer } from "@/components/composer";
@@ -61,6 +65,7 @@ import {
 export function Workbench() {
   const [theme, setTheme] = useState<Theme>(() => readTheme());
   const [area, setArea] = useState<PanelArea>("agents");
+  const [taskLocation, setTaskLocation] = useState<TaskLocation | null>(null);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
   const [effectiveDefaultAgentId, setEffectiveDefaultAgentId] = useState<string | null>(null);
@@ -377,7 +382,7 @@ export function Workbench() {
   }
 
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 768);
   const [density, setDensity] = useState<Density>(() => window.localStorage.getItem("codebridge:web-density") === "comfortable" ? "comfortable" : "compact");
   const [reading, setReading] = useState(() => window.localStorage.getItem("codebridge:web-reading") === "serif");
 
@@ -414,6 +419,7 @@ export function Workbench() {
   const [pixelWipe, setPixelWipe] = useState(0);
 
   function selectAgent(agentId: string) {
+    if (window.innerWidth < 768) setPanelOpen(true);
     if (agentId !== selectedAgentRef.current && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
       setPixelWipe((value) => value + 1);
       window.setTimeout(() => setPixelWipe(0), 650);
@@ -440,9 +446,19 @@ export function Workbench() {
     setSelectedSessionId(nextSessionId);
   }
 
-  function enterArea(nextArea: PanelArea): void { setArea(nextArea); }
+  function enterArea(nextArea: PanelArea): void { if (nextArea === "tasks") setTaskLocation(null); setArea(nextArea); }
+
+  async function openTaskSession(id: string): Promise<void> {
+    try {
+      const session = (await api.openSession(id)).session;
+      setSessions((current) => [...current.filter((item) => item.session_id !== session.session_id), session]);
+      setShowArchived(Boolean(session.archived_at));
+      selectSession(session); setArea("agents");
+    } catch (caught) { setError(messageOf(caught)); }
+  }
 
   function selectSession(session: AgentSession) {
+    if (window.innerWidth < 768) setPanelOpen(false);
     selectedAgentRef.current = session.agent_id;
     selectedSessionRef.current = session.session_id;
     setSelectedAgentId(session.agent_id);
@@ -903,7 +919,7 @@ export function Workbench() {
         onTheme={toggleTheme}
       />
 
-      {panelOpen && area === "agents" && <div className="hidden min-h-0 min-w-0 md:contents"><SessionPanel
+      {panelOpen && area === "agents" && <div className="contents"><SessionPanel
         agent={selectedAgent}
         agents={agents}
         activeSessionCount={activeSessionCount}
@@ -913,6 +929,7 @@ export function Workbench() {
         query={query}
         sessions={agentSessions}
         selectedSessionId={selectedSessionId}
+        onClose={() => setPanelOpen(false)}
         onCreate={() => selectedAgent && void createSession(selectedAgent.agent_id)}
         onQuery={setQuery}
         onRefresh={() => {
@@ -945,7 +962,13 @@ export function Workbench() {
 
         {error && <div className={cn("mx-8 mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span><button aria-label="关闭错误" onClick={() => setError(null)} type="button"><X className="size-3.5" /></button></div>}
 
-        {area === "skills" ? (
+        {area === "tasks" ? (
+          <TaskWorkspace initial={taskLocation} key={taskLocation?.attemptId ?? taskLocation?.taskId ?? "tasks"} onNotify={notify} onOpenSession={openTaskSession} />
+        ) : area === "inbox" ? (
+          <TaskAttentionPage onOpenSession={openTaskSession} onOpenTask={(taskId, attemptId) => { setTaskLocation({ taskId, attemptId }); setArea("tasks"); }} />
+        ) : area === "channels" ? (
+          <ManagementPage area="channels" key={area} onNotify={notify} />
+        ) : area === "skills" ? (
           <SkillControlPlanePage onNotify={notify} />
         ) : area === "settings" ? (
           <section aria-label="设置" className="min-h-0 flex-1 overflow-y-auto">

@@ -58,6 +58,13 @@ export interface SkillCatalogSnapshot {
   scanned_at: string;
 }
 
+/** Read-only task selection never carries mutation revisions or ownership controls. */
+export type TaskSkillCatalogEntry = Pick<SkillCatalogEntry,
+  "id" | "name" | "description" | "source_path" | "global_state"> & {
+    targets: Array<Pick<SkillTargetView, "agent_id" | "state">>;
+  };
+export interface TaskSkillCatalogSnapshot { skills: TaskSkillCatalogEntry[] }
+
 export type SkillMutationKind = "global_state" | "assignment" | "adopt" | "unmanage";
 
 export interface SkillMutationStep {
@@ -221,7 +228,7 @@ export class SkillControlPlane {
     this.recoverPendingTransactions();
   }
 
-  scan(): SkillCatalogSnapshot {
+  scan(withRevision = true): SkillCatalogSnapshot {
     const discovered = new Map<string, DiscoveredSkill>();
     this.collectRoot(this.sharedRoot, "shared", discovered);
     this.collectRoot(this.disabledRoot, "disabled", discovered);
@@ -238,7 +245,7 @@ export class SkillControlPlane {
       grouped.set(id, [...(grouped.get(id) ?? []), skill]);
     }
     const skills = [...grouped.entries()]
-      .map(([id, candidates]) => this.toCatalogEntry(id, candidates))
+      .map(([id, candidates]) => this.toCatalogEntry(id, candidates, withRevision))
       .sort((left, right) => left.name.localeCompare(right.name));
     const targets = SKILL_AGENT_IDS.map((agentId) => ({
       agent_id: agentId,
@@ -788,7 +795,7 @@ export class SkillControlPlane {
     }
   }
 
-  private toCatalogEntry(id: string, candidates: DiscoveredSkill[]): SkillCatalogEntry {
+  private toCatalogEntry(id: string, candidates: DiscoveredSkill[], withRevision: boolean): SkillCatalogEntry {
     const sorted = [...candidates].sort(
       (left, right) => SOURCE_PRIORITY[right.sourceKind] - SOURCE_PRIORITY[left.sourceKind],
     );
@@ -796,9 +803,12 @@ export class SkillControlPlane {
     const skillFile = path.join(discovered.sourcePath, "SKILL.md");
     const content = fs.readFileSync(skillFile, "utf8");
     const metadata = parseSkillMetadata(content, id);
-    const packageFingerprint = fingerprintSkillPackage(discovered.sourcePath);
+    const identityValid = metadata.name === id;
+    const packageFingerprint = !withRevision && !identityValid
+      ? { revision: "", valid: false }
+      : fingerprintSkillPackage(discovered.sourcePath, withRevision);
     const candidateRevisions = new Set(
-      candidates.map((candidate) => fingerprintSkillPackage(candidate.sourcePath).revision),
+      withRevision ? candidates.map((candidate) => fingerprintSkillPackage(candidate.sourcePath).revision) : [],
     );
     const hasSourceConflict = candidates.length > 1
       && candidateRevisions.size > 1
@@ -807,7 +817,6 @@ export class SkillControlPlane {
         && candidates.some((candidate) => candidate.sourceKind === "disabled"));
     const hasActive = candidates.some((candidate) => candidate.sourceKind === "shared");
     const hasDisabled = candidates.some((candidate) => candidate.sourceKind === "disabled");
-    const identityValid = metadata.name === id;
     const globalState: SkillGlobalState = !identityValid || !packageFingerprint.valid
       ? "invalid"
       : hasActive && hasDisabled
@@ -996,8 +1005,8 @@ function fingerprintPath(candidate: string): string {
   }
 }
 
-function fingerprintSkillPackage(root: string): { revision: string; valid: boolean } {
-  const hash = crypto.createHash("sha256");
+function fingerprintSkillPackage(root: string, withRevision = true): { revision: string; valid: boolean } {
+  const hash = withRevision ? crypto.createHash("sha256") : null;
   let valid = true;
   const visit = (directory: string): void => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })
@@ -1006,14 +1015,14 @@ function fingerprintSkillPackage(root: string): { revision: string; valid: boole
       const relative = path.relative(root, absolute).split(path.sep).join("/");
       const stat = fs.lstatSync(absolute);
       if (stat.isDirectory()) {
-        hash.update(`directory\0${relative}\0${stat.mode & 0o111}\0`);
+        hash?.update(`directory\0${relative}\0${stat.mode & 0o111}\0`);
         visit(absolute);
         continue;
       }
       if (stat.isFile()) {
-        hash.update(`file\0${relative}\0${stat.mode & 0o111}\0`);
-        hash.update(fs.readFileSync(absolute));
-        hash.update("\0");
+        hash?.update(`file\0${relative}\0${stat.mode & 0o111}\0`);
+        hash?.update(fs.readFileSync(absolute));
+        hash?.update("\0");
         continue;
       }
       if (stat.isSymbolicLink()) {
@@ -1023,15 +1032,15 @@ function fingerprintSkillPackage(root: string): { revision: string; valid: boole
         if (path.isAbsolute(target) || relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`)) {
           valid = false;
         }
-        hash.update(`symlink\0${relative}\0${target}\0`);
+        hash?.update(`symlink\0${relative}\0${target}\0`);
         continue;
       }
       valid = false;
-      hash.update(`special\0${relative}\0`);
+      hash?.update(`special\0${relative}\0`);
     }
   };
   visit(root);
-  return { revision: hash.digest("hex"), valid };
+  return { revision: hash?.digest("hex") ?? "", valid };
 }
 
 function parseSkillMetadata(content: string, fallbackName: string): {

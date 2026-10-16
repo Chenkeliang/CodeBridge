@@ -1,3 +1,5 @@
+> 历史记录/草稿，不作为当前安装或功能承诺；当前能力与发行范围见[交付状态](../release-status.md)，使用步骤见[快速开始](quickstart.md)。
+
 # 初始化向导、npm 打包与 README 合并前复核
 
 范围：`origin/main 4d8ad61747f66c91a305c2a6cf08a2782b29cdd8` → `feat_init_wizard`，包含原始向导提交 `30af63e`、本轮未提交修复、打包脚本及两张 AGENT SVG。用户授权复核通过后提交、合并并推送 main，通过现有部署器更新 CodeBridge；不公开发布 npm。

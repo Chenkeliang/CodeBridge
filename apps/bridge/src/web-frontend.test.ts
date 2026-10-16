@@ -51,3 +51,18 @@ describe("React Web frontend hosting", () => {
     expect(await response.text()).toBe("asset");
   });
 });
+
+it("does not expose the local bootstrap token to an untrusted Host or cross-site origin", async () => {
+  const app = createWebFrontendApp({ staticDirectory: "/fixture/web", token: "fixture-private-bootstrap" });
+  for (const [url, headers] of [
+    ["http://attacker.example/config.json", {}],
+    ["http://localhost/config.json", { host: "attacker.example" }],
+    ["http://localhost/config.json", { origin: "https://attacker.example" }],
+    ["http://localhost/config.json", { "sec-fetch-site": "cross-site" }],
+  ] as Array<[string, Record<string, string>]>) {
+    const response = await app.request(url, { headers });
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain("fixture-private-bootstrap");
+  }
+  expect((await app.request("http://127.0.0.1:19790/config.json", { headers: { origin: "http://127.0.0.1:19790" } })).status).toBe(200);
+});

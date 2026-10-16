@@ -9,9 +9,19 @@
 
 Self-hosted, multi-channel [Agent Client Protocol (ACP)](https://agentclientprotocol.com) gateway for coding agents.
 
-Control local **Cursor**, **Claude Code**, **Codex**, and optionally **Pi** from Feishu or Telegram while your source code, Git credentials, MCP tools, and agent sessions stay on your own Mac/Linux host.
+Control local **Cursor**, **Claude Code**, **Codex**, and optionally **Pi** from Feishu or Telegram with the Runner accessing files, Git credentials, MCP tools, and sessions on your own Mac. Agents still send requests according to their model-provider and MCP configuration; self-hosting does not make model inference offline.
 
 [简体中文](README.zh-CN.md)
+
+## Release status
+
+As of 2026-10-15, the latest npm release is **`@graychennpm/codebridge@0.1.0`**, published on 2026-10-10. This README also describes current source. Source changes after that release still carry version `0.1.0`; `--version` alone cannot identify their presence.
+
+- **Released on npm:** initialization wizard, main-config secret references, opt-in Web, automatic session rotation, and a default queue limit of 100 turns per Session.
+- **In source, not yet on npm:** independent Feishu group requests, quoted replies continuing the original conversation and native mentions of the current requester; preserved idle group replies, Codex archive restoration, and later startup/delivery fixes.
+- **Local candidate, not published or deployed:** two Workbench entries, Channels and Tasks, manage channel access, Agent schedules, existing local schedules, publisher destinations and Feishu alert rules, with run recovery, pending work and incident inspection. The supported scope and remaining work are described in the [channel automation roadmap](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/channel-automation-roadmap.md) (Chinese).
+
+See [release availability](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/release-status.md), including the local security and management candidates. macOS is the supported host setup; Linux service management is outside the current support scope.
 
 ## What it does
 
@@ -27,13 +37,13 @@ Telegram polling ─┘
 | **Runner** | Host-side ACP sessions, agent processes, file/Git access, and permission handling |
 | **Agent adapters** | Cursor, Claude Code, and Codex ACP adapters plus the native Pi Node SDK adapter |
 
-The Bridge and Runner are intentionally separate: the Bridge can be remote or containerized, but the Runner stays next to the CLIs and files it needs to access.
+Bridge handles channels and APIs; Runner launches local agents. Run both on the same Mac for the supported complete setup. Docker/remote Bridge deployments have limitations for reverse file delivery, notifications, and self-deployment; see the deployment guide.
 
 ## Install with npm
 
-Requires Node.js 22.19 or newer. Install with `npm install -g @graychennpm/codebridge@0.1.0`, then run `codebridge init`. Start `codebridge-runner` and `codebridge start` in separate terminals. The package includes the Bridge, host Runner and Workbench assets; no source build is needed.
+Requires Node.js 22.19 or newer. Install with `npm install -g @graychennpm/codebridge@0.1.0`, then run `codebridge init`. Start `codebridge-runner` and `codebridge start` in separate terminals. The package includes the Bridge, host Runner and Workbench assets; no source build, pnpm, or curl is needed. This runs two foreground processes; the npm package does not include the source checkout’s background-service scripts or independent host deployer.
 
-You can also run `npx @graychennpm/codebridge@0.1.0 init`. For local distribution, `pnpm package:release` produces a tarball in `dist/`; `pnpm test:package` verifies a clean installation. See the [release guide](docs/zh-CN/npm-release.md).
+You can also run `npx @graychennpm/codebridge@0.1.0 init`. For local distribution, `pnpm package:release` produces a tarball in `dist/`; `pnpm test:package` verifies a clean installation. See the [release guide](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/npm-release.md).
 
 ## Highlights
 
@@ -49,14 +59,14 @@ You can also run `npx @graychennpm/codebridge@0.1.0 init`. For local distributio
 
 ## Quick start
 
-### Requirements
+### Requirements for source installation
 
-- macOS or Linux
-- Node.js ≥ 22.19, pnpm, and curl. The WorkItem Event Store uses Node's built-in `node:sqlite`; the optional Pi SDK adapter follows Pi's Node runtime requirement.
+- macOS
+- Node.js ≥ 22.19, pnpm 10.34.1, Git, and curl. The WorkItem Event Store uses Node's built-in `node:sqlite`; the optional Pi SDK adapter follows Pi's Node runtime requirement.
 - At least one local agent CLI: `cursor-agent`, `claude`, or `codex`
-- A Feishu custom app with a bot, or a Telegram bot token
+- For chat access: a Feishu custom app with a bot, or a Telegram bot token. Local Web-only use can leave channels unconfigured.
 
-### Install and start
+### Install and start from source
 
 ```bash
 git clone https://github.com/Chenkeliang/CodeBridge.git
@@ -69,9 +79,9 @@ cd CodeBridge
 ./scripts/start.sh start
 ```
 
-The setup wizard (also available as `codebridge init`) writes `~/.codebridge/config.yaml`. It verifies Feishu / Telegram credentials on the spot, generates a Runner token, and picks the project root and default agent. Secrets go to the OS keychain; the file only holds `keychain:` references. Existing settings and comments are preserved unless explicitly changed in the wizard; YAML formatting may change. Telegram requires a user or chat allowlist. Automatic user detection uses a one-time code sent to the bot in a private chat.
+The setup wizard (also available as `codebridge init`) writes `~/.codebridge/config.yaml`. It verifies Feishu / Telegram credentials on the spot, generates a Runner token, and picks the project root and default agent. The wizard prefers OS-keychain storage and writes `keychain:` references. The npm 0.1.0 wizard can offer an explicit plaintext fallback; the local security candidate rejects it and aborts when secure storage is unavailable. Existing settings and comments are preserved unless explicitly changed in the wizard; YAML formatting may change. Telegram requires a user or chat allowlist. Automatic user detection uses a one-time code sent to the bot in a private chat.
 
-With `codebridge init --defaults` or no TTY, only a missing config is created. A random Runner token is stored in plaintext in a mode-600 file (or as an environment reference when `RUNNER_TOKEN` is set). This path does not access the keychain or verify channel credentials. Run `codebridge secrets migrate` afterward to move plaintext secrets to the keychain.
+With `codebridge init --defaults` or no TTY, only a missing config is created. Set a long random `RUNNER_TOKEN` first to store an `env:RUNNER_TOKEN` reference. npm 0.1.0 otherwise generates a plaintext random token; the local security candidate requires the environment variable and fails without it. This path does not access the keychain or verify channel credentials. Run `codebridge secrets migrate` afterward to move plaintext secrets to the keychain.
 
 Verify the installation:
 
@@ -100,19 +110,25 @@ Useful lifecycle commands:
 
 ### Configure a channel
 
-For Feishu, create an enterprise custom app, enable the bot, and subscribe to the long-connection events described in [Feishu app setup](docs/zh-CN/feishu-app-setup.md).
+For Feishu, create an enterprise custom app, enable the bot, and subscribe to the long-connection events described in [Feishu app setup](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-app-setup.md).
 
 Telegram is optional. It can run alongside Feishu or in Telegram-only mode:
 
 ```yaml
 telegram:
-  botToken: "123456:replace-with-bot-token"
-  allowedUsers: ["123456789"]          # optional allowlist
-  allowedChats: ["-1001234567890"]     # optional allowlist
+  botToken: env:TELEGRAM_BOT_TOKEN
+  allowedUsers: ["123456789"]          # replace with authorized user IDs
+  # allowedChats: ["-1001234567890"]   # if set, also restricts chats
   pollingTimeoutSec: 25
 ```
 
-See [examples/config.full.yaml](examples/config.full.yaml) for the complete configuration shape.
+See [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge/blob/main/examples/config.full.yaml) for the main fields and optional sections. Replace example identities, paths, and secret references before use.
+
+### Web Workbench
+
+Web is disabled by default. Use `codebridge start --web` for npm, or `node apps/bridge/dist/cli.js start --web` from source, to enable it for this launch. To persist the choice, set `web.enabled: true` in the configuration. Open `http://127.0.0.1:19790/workbench/`, or the port configured by `bridge.apiPort`.
+
+Web shares Sessions, Runs, and events with channels. It has no separate user login and is intended for local access; do not expose it directly to the internet. Agent and tool network requests still follow their own configuration.
 
 ## Phone-first commands
 
@@ -144,7 +160,7 @@ Other useful commands:
 
 The exact model, effort, permission, and boolean config values come from the connected ACP adapter, so `/model list`, `/effort list`, `/permission list`, and `/config` are the source of truth.
 
-To request a real channel notification, say “mention me when it finishes” or explicitly mention a participant in the task. The Agent uses `fcb mention` internally; ordinary replies do not create extra notifications.
+To request a real channel notification, say “mention me when it finishes” or explicitly mention a participant in the task. The Agent uses `fcb mention` internally; current-source Feishu group task replies already mention the current requester, so no extra notification is needed. This group behavior is not in npm `0.1.0`.
 
 ## Sessions, directories, and permissions
 
@@ -161,17 +177,22 @@ To request a real channel notification, say “mention me when it finishes” or
 
 - On macOS, `./scripts/start.sh install-macos-runner` creates the optional fixed-identity helper. Ad-hoc signing is free and local; TCC still requires the user’s approval.
 
-Read [SECURITY.md](SECURITY.md) before exposing anything beyond localhost.
+Read [SECURITY.md](https://github.com/Chenkeliang/CodeBridge/blob/main/SECURITY.md) before exposing anything beyond localhost.
 
 ## Concurrency and known boundaries
 
 - Different chats can run in parallel up to `runnerHost.maxConcurrentRuns` (default `4`).
-- A Feishu `chatId + topic` has one active task. Later messages queue up to five; `/stop` cancels the task and clears that queue.
-- A group shares one backend, directory, model, and session binding. Use separate chats for independent projects or agents.
+- Each Session has one active task and defaults to at most 100 queued turns, controlled by `orchestration.session.maxQueuedTurns`. `/stop` cancels its task and clears its queue.
+- **Current source, not npm:** each new ordinary Feishu group request gets an independent conversation and normally requires a bot mention. Quoting a verified bot reply continues its conversation without another mention. Ordinary replies stay in the group stream; existing native threads remain threads. Members quoting the same answer share its context.
+- **npm `0.1.0`** uses the older group routing and lacks these ordinary-message isolation and quoted-reply fixes. Change agent, directory, model, or resumed session within the target conversation; slash commands without a reference use group-level context.
+- In current source, members of an explicitly allowed Feishu group can ask and continue tasks. Group configuration commands require `access.admins` or `access.allowedUsers`; incident write approval remains scoped to that alert group’s `approverOpenIds`. Administrators are not automatically approvers for every workflow.
+- Channel sessions may rotate on the next message after 12 idle hours, or after context grows from below 50% to that share of the model window. Busy/queued sessions do not rotate. Current-source Feishu group replies skip idle rotation while retaining the context check; alert incidents are exempt. Configure `orchestration.session.autoRotate` to adjust this.
 - Agent notifications are limited to the current sender and participants explicitly mentioned in the current task. CodeBridge does not search the organization directory, mention everyone, or accept arbitrary user IDs from the Agent.
 - `/transport` remains only as a compatibility response; ACP is the only transport.
 
-## ACP backends
+## Backends and adapters
+
+Pi uses `pi-sdk`; OpenCode uses `opencode acp`. Install, configure, and authenticate optional agents separately. The following are built-in ACP defaults; explicit `acpCommand` / `acpArgs` override them. Network access is not a default option of the stock Codex adapter; see the [Codex network guide](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/codex-acp-network.md) (Chinese).
 
 | Backend | ACP command |
 |---------|-------------|
@@ -193,14 +214,14 @@ RUNNER_TOKEN=... node scripts/test-acp-live.mjs --backend cursor
 
 | Topic | Link |
 |-------|------|
-| Feishu app and permissions | [docs/zh-CN/feishu-app-setup.md](docs/zh-CN/feishu-app-setup.md) |
-| Feishu custom menu | [docs/zh-CN/feishu-bot-menu.md](docs/zh-CN/feishu-bot-menu.md) |
-| Manual / Docker quick start | [docs/zh-CN/quickstart.md](docs/zh-CN/quickstart.md) |
-| Model, effort, and permission | [docs/zh-CN/model-effort.md](docs/zh-CN/model-effort.md) |
-| Docker Bridge + host Runner | [docs/zh-CN/deploy/docker-host-runner.md](docs/zh-CN/deploy/docker-host-runner.md) |
-| Multi-project Agent workbench baseline | [docs/orchestration/README.md](docs/orchestration/README.md) |
-| Full config example | [examples/config.full.yaml](examples/config.full.yaml) |
-| Security policy | [SECURITY.md](SECURITY.md) |
+| Feishu app and permissions | [docs/zh-CN/feishu-app-setup.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-app-setup.md) |
+| Feishu custom menu | [docs/zh-CN/feishu-bot-menu.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/feishu-bot-menu.md) |
+| Manual / Docker quick start | [docs/zh-CN/quickstart.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/quickstart.md) |
+| Model, effort, and permission | [docs/zh-CN/model-effort.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/model-effort.md) |
+| Docker Bridge + host Runner | [docs/zh-CN/deploy/docker-host-runner.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/zh-CN/deploy/docker-host-runner.md) |
+| Multi-project Agent workbench baseline | [docs/orchestration/README.md](https://github.com/Chenkeliang/CodeBridge/blob/main/docs/orchestration/README.md) |
+| Full config example | [examples/config.full.yaml](https://github.com/Chenkeliang/CodeBridge/blob/main/examples/config.full.yaml) |
+| Security policy | [SECURITY.md](https://github.com/Chenkeliang/CodeBridge/blob/main/SECURITY.md) |
 
 ## Development
 

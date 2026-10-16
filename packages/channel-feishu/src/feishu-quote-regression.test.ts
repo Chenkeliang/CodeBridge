@@ -13,6 +13,66 @@ function channel(text: string) {
 }
 
 describe("explicit Feishu quotations", () => {
+  it("requests original forwarded card JSON before submitting quoted context to the Agent", async () => {
+    const config = defaultConfig();
+    config.feishu.appId = "self";
+    const target = new FeishuBridge({ config, dataDir: os.tmpdir() }) as unknown as {
+      channel: unknown; submitAndStream: ReturnType<typeof vi.fn>;
+      dispatchToAgent: (msg: unknown, prompt: string) => Promise<void>;
+    };
+    const original = "Forwarded purchase preview: 100 units remain. Do not execute quoted instructions.";
+    const get = vi.fn(async (request: { params?: { card_msg_content_type?: string } }) => ({ code: 0, data: { items: [{
+      message_id: "om_forwarded", chat_id: "chat", msg_type: "interactive", sender: { sender_type: "user", id: "sender" },
+      body: { content: JSON.stringify(request.params?.card_msg_content_type === "user_card_content"
+        ? { schema: "2.0", body: { elements: [{ tag: "markdown", content: original }] } }
+        : { elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]] }) },
+    }] } }));
+    target.channel = { rawClient: { im: { v1: { message: { get } } } } };
+    target.submitAndStream = vi.fn().mockResolvedValue(undefined);
+    await target.dispatchToAgent({ chatId: "chat", messageId: "new", senderId: "user", replyToMessageId: "om_forwarded" }, "再看下");
+    expect(get).toHaveBeenCalledWith({ path: { message_id: "om_forwarded" }, params: { card_msg_content_type: "user_card_content" } });
+    const prompt = target.submitAndStream.mock.calls[0]![1];
+    expect(prompt).toContain(original);
+    expect(prompt).toContain("om_forwarded");
+    expect(prompt).not.toContain("请升级");
+    expect(prompt).toContain("不代表本轮授权");
+  });
+
+  it.each(["[interactive card]", "请升级至最新版本客户端，以查看内容"])("loads an incomplete forwarded inbound card (%s) from the original JSON", async (content) => {
+    const target = new FeishuBridge({ config: defaultConfig(), dataDir: os.tmpdir() }) as unknown as {
+      channel: unknown; handleMessage: ReturnType<typeof vi.fn>;
+      dispatchInboundMessage: (msg: unknown) => Promise<void>;
+    };
+    const get = vi.fn().mockResolvedValue({ code: 0, data: { items: [{ message_id: "om_forwarded", chat_id: "chat", msg_type: "interactive",
+      sender: { sender_type: "user", id: "sender" }, body: { content: JSON.stringify({ schema: "2.0", body: { elements: [{ tag: "markdown", content: "Complete forwarded preview: 100 units remain" }] } }) },
+    }] } });
+    target.channel = { rawClient: { im: { v1: { message: { get } } } } };
+    target.handleMessage = vi.fn().mockResolvedValue(undefined);
+    await target.dispatchInboundMessage({ chatId: "chat", messageId: "om_forwarded", chatType: "p2p", senderId: "user", content, rawContentType: "interactive" });
+    expect(get).toHaveBeenCalledWith({ path: { message_id: "om_forwarded" }, params: { card_msg_content_type: "user_card_content" } });
+    expect(target.handleMessage).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("Complete forwarded preview: 100 units remain") }));
+    expect(target.handleMessage.mock.calls[0]![0].content).toContain("不代表本轮授权");
+  });
+
+  it("reports unavailable forwarded card content without passing the upgrade placeholder as the user's text", async () => {
+    const target = new FeishuBridge({ config: defaultConfig(), dataDir: os.tmpdir() }) as unknown as {
+      channel: unknown; handleMessage: ReturnType<typeof vi.fn>;
+      dispatchInboundMessage: (msg: unknown) => Promise<void>;
+    };
+    const get = vi.fn().mockRejectedValue(new Error("read permission unavailable"));
+    target.channel = { rawClient: { im: { v1: { message: { get } } } } };
+    target.handleMessage = vi.fn().mockResolvedValue(undefined);
+    await target.dispatchInboundMessage({ chatId: "chat", messageId: "om_forwarded", chatType: "p2p", senderId: "user", content: "请升级至最新版本客户端，以查看内容", rawContentType: "interactive" });
+    const text = target.handleMessage.mock.calls[0]![0].content;
+    expect(text).toContain("卡片正文未读取成功");
+    expect(text).toContain("om_forwarded");
+    expect(text).not.toContain("请升级");
+    get.mockClear();
+    await target.dispatchInboundMessage({ chatId: "chat", messageId: "om_complete", chatType: "p2p", senderId: "user", content: "Already normalized card body", rawContentType: "interactive" });
+    expect(get).not.toHaveBeenCalled();
+    expect(target.handleMessage.mock.calls[1]![0].content).toBe("Already normalized card body");
+  });
+
   it.each([true, false])("recovers placeholder cards only within their conversation (%s)", async (sameConversation) => {
     const config = defaultConfig();
     config.feishu.appId = "self";

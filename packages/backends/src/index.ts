@@ -61,6 +61,8 @@ export {
   type SkillAgentId,
   type SkillCatalogEntry,
   type SkillCatalogSnapshot,
+  type TaskSkillCatalogEntry,
+  type TaskSkillCatalogSnapshot,
   type SkillControlPlaneErrorCode,
   type SkillControlPlaneOptions,
   type SkillDeliveryMode,

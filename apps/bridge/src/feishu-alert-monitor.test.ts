@@ -292,3 +292,15 @@ describe("FeishuAlertMonitor", () => {
     expect(f.transport.readAlertMessages).not.toHaveBeenCalled();
   });
 });
+
+it("projects canonical cases without changing polling state, cases or dispatch counts", async () => {
+  const f = fixture(); await f.monitor.tick(); f.advance();
+  f.transport.readAlertMessages.mockResolvedValue({ hasMore: false, messages: [f.message(), f.message("om_duplicate")] });
+  await f.monitor.tick();
+  const before = fs.readFileSync(f.statePath, "utf8"), dispatches = f.transport.investigateAlert.mock.calls.length;
+  const cases = f.monitor.listIncidents("oc_alerts");
+  expect(cases).toHaveLength(1); expect(cases[0]).toMatchObject({ id: "om_alert", repeatCount: 2, content: f.message().content, approverOpenIds: ["ou_owner"] });
+  expect(cases[0]?.sourceMessageIds).toEqual(["om_alert", "om_duplicate"]);
+  expect(fs.readFileSync(f.statePath, "utf8")).toBe(before); expect(f.transport.investigateAlert).toHaveBeenCalledTimes(dispatches);
+  expect(() => f.monitor.listIncidents("oc_other")).toThrow("未配置");
+});

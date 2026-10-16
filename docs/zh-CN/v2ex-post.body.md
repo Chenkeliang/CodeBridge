@@ -1,3 +1,5 @@
+> 历史记录/草稿，不作为当前安装或功能承诺；当前能力与发行范围见[交付状态](../release-status.md)，使用步骤见[快速开始](quickstart.md)。
+
 我日常写代码基本离不开 Cursor、Claude Code、Codex，但人总不能一直坐在电脑前。
 
 通勤、开会、躺沙发上的时候，经常想「刚才终端里那个 session 能不能接着干」。手机 App 和 Web Agent 都能用，可我本机那套 MCP、skill、SSH、未提交的改动都在 Mac 上，懒得再配一遍。

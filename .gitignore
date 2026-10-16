@@ -24,3 +24,17 @@ logs/
 output/
 test-results/
 apps/web/vite.config.ts.timestamp-*.mjs
+
+# Credential-bearing local files and manual configuration backups
+publisher-tokens.json
+*.bak
+*.bak-*
+*.bak.*
+*.backup
+*.before-*
+.gitleaks-report*
+
+# Private management state and encrypted recovery snapshots
+managed-local-tasks.json
+management-backups/
+management-audit.jsonl

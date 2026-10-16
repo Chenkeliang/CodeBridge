@@ -45,7 +45,7 @@ function fixture() {
     im: { v1: { message: { list, reply, get }, messageReaction: {
       list: vi.fn(async () => ({ code: 0, data: { items: reactions, has_more: false, page_token: "" } })),
       create: reactionCreate, delete: reactionDelete,
-    }, chatMembers: { get: vi.fn(async () => ({ code: 0, data: { items: [{ member_id: "ou_owner", name: "维护者" }], has_more: false } })) } } },
+    }, chatMembers: { get: vi.fn(async () => ({ code: 0, data: { items: [{ member_id: "ou_owner", name: "示例成员" }], has_more: false } })) } } },
     cardkit: { v1: { card: { create: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })),
       idConvert: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })) } } },
   } };
@@ -107,7 +107,7 @@ describe("alert polling through the active Feishu adapter", () => {
     await f.internal.handleMessage({ messageId: "om_answer", chatId: "oc_alerts", chatType: "group", senderId: "ou_owner",
       threadId: "omt_native", rootId: "om_alert", content: "只重试 TT123 一次", mentionedBot: true });
     await vi.waitFor(() => expect(f.submit).toHaveBeenCalledTimes(2));
-    expect(f.get).toHaveBeenCalledWith({ path: { message_id: "om_alert" } });
+    expect(f.get).toHaveBeenCalledWith({ path: { message_id: "om_alert" }, params: { card_msg_content_type: "user_card_content" } });
     expect(f.submit).toHaveBeenLastCalledWith(expect.objectContaining({ conversationId: "oc_alerts|om_alert",
       message: expect.stringContaining("超出两者范围时再 @ 审批人") }));
     await f.internal.cardHost().channel!.stream("oc_alerts", { markdown: async () => {} }, { replyTo: "om_answer" });
@@ -188,7 +188,7 @@ describe("alert polling through the active Feishu adapter", () => {
     expect(f.submit).toHaveBeenCalledTimes(1);
     expect(f.reactionCreate).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: { reaction_type: { emoji_type: "DONE" } } }));
     expect(f.send).toHaveBeenCalledTimes(1);
-    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: expect.stringContaining("已结案：由 维护者 回复无需处理确认") }, { replyTo: "om_alert", replyInThread: true });
+    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: expect.stringContaining("已结案：由 示例成员 回复无需处理确认") }, { replyTo: "om_alert", replyInThread: true });
   });
 
   it("resolves a reaction on the bot's reply to the alert thread through the real adapter", async () => {
@@ -203,4 +203,19 @@ describe("alert polling through the active Feishu adapter", () => {
     const f = fixture(); f.list.mockResolvedValueOnce({ code: 99991672, data: undefined } as never);
     await expect(f.bridge.readAlertMessages("oc_alerts", 1000, 1001)).rejects.toThrow("99991672");
   });
+});
+
+it("mentions configured responsible people on failure through the actual Feishu transport", async () => {
+  const f = fixture();
+  Object.assign(f.config.feishu.alertMonitor!.groups[0]!, { responsibleOpenIds: ["ou_responsible", "ou_second"] });
+  await f.monitor.tick(); f.advance(); await f.monitor.tick();
+  f.advance(); await f.monitor.tick();
+  expect(f.send).toHaveBeenLastCalledWith("oc_alerts", { markdown: expect.stringMatching(/^\*\*排查受阻\*\*/u) }, expect.objectContaining({
+    replyTo: "om_alert", replyInThread: true, mentions: [expect.objectContaining({ openId: "ou_responsible", name: "告警联系人" }), expect.objectContaining({ openId: "ou_second", name: "告警联系人" })],
+  }));
+  await f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "Synthetic decision");
+  expect(f.send).toHaveBeenLastCalledWith("oc_alerts", expect.any(Object), expect.objectContaining({ mentions: [expect.objectContaining({ openId: "ou_owner" })] }));
+  const count = f.send.mock.calls.length;
+  await f.monitor.setStatus("oc_alerts", "om_alert", "resolved", "Synthetic verification complete");
+  expect(f.send).toHaveBeenCalledTimes(count);
 });

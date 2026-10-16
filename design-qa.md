@@ -20,7 +20,7 @@ The Codex and Cursor screenshots define interaction hierarchy and information tr
 | Slash reference | `/` suggestions open | 734 × 722 |
 | Slash implementation | Codex commands open | 1440 × 900 |
 | Workspace reference | `@` workspace context open | 852 × 318 |
-| Workspace implementation | `/Users/demo/mypy` listing open | 1440 × 900 |
+| Workspace implementation | `/Users/example/mypy` listing open | 1440 × 900 |
 | Work reference | completed Codex response | 881 × 841 |
 | Work implementation | work details expanded | 1440 × 659 usable browser area |
 
@@ -39,12 +39,12 @@ Each comparison places the supplied interaction reference on the left and the ru
 | Check | Result |
 | --- | --- |
 | Typing `/` opens suggestions immediately | Passed; `/plan`, `/skills`, and the remaining Agent commands were visible |
-| Typing `@` loads current Workspace context | Passed; root `/Users/demo/mypy` and navigable entries were visible |
+| Typing `@` loads current Workspace context | Passed; root `/Users/example/mypy` and navigable entries were visible |
 | Commentary and thought summaries are separated from the final answer | Passed |
 | Work is collapsed by default and expandable | Passed |
 | Tool activity is individually expandable | Passed |
 | Command summaries include the concrete command | Passed; `Ran command /bin/zsh -lc …` was visible |
-| File activity includes absolute paths | Passed; `Read file /Users/demo/…` was present in the rendered DOM |
+| File activity includes absolute paths | Passed; `Read file /Users/example/…` was present in the rendered DOM |
 | Work text renders Markdown without literal markers | Passed; no literal `**Planning …**` remained |
 | Long progress text stays inside the work column | Passed; measured row `clientWidth` and `scrollWidth` were both 780 px |
 | Browser console warnings and errors | Passed; none recorded |

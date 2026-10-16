@@ -1142,13 +1142,15 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       return c.json({ resolved: false, error: "runner_unavailable" }, 503);
     }
     const body = await readJson(c);
-    if (typeof body?.approve !== "boolean") {
+    if (typeof body?.approve !== "boolean" || body.request_id !== undefined && (typeof body.request_id !== "string" || !body.request_id)) {
       return c.json({ error: "approve (boolean) is required" }, 400);
     }
     const resolved = await options.runner.resolvePermission(
       c.req.param("run_id"),
       body.approve,
+      ...(typeof body.request_id === "string" ? [body.request_id] : []),
     );
+    if (!resolved && body.request_id) return c.json({ resolved: false, message: "权限请求已变化或已处理，未批准其他请求；请刷新后处理当前请求" }, 409);
     return c.json({ resolved });
   });
 

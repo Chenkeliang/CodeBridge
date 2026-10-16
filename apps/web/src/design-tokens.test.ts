@@ -94,3 +94,11 @@ describe("design tokens", () => {
     }
   });
 });
+
+it("keeps semantic body text legible on its feedback surface in both themes", () => {
+  for (const vars of [paper, carbon]) {
+    for (const [fg, bg] of [["--agnet-danger", "--agnet-danger-soft"], ["--agnet-warning", "--agnet-warning-soft"], ["--agnet-success", "--agnet-success-soft"]]) {
+      expect(contrast(vars[fg!]!, vars[bg!]!)).toBeGreaterThanOrEqual(4.5);
+    }
+  }
+});

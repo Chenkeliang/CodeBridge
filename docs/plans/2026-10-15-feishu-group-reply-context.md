@@ -32,7 +32,7 @@ P4：隔离 API/SQLite/飞书适配器集成测试、现有告警/Web/Telegram �
 - 消息精确查询使用既有 Delivery 上的两个新增复合索引；真实查询计划验证按 source/surface message ID 精确查找，避免仅按 channel 扫描全部消息。
 - 无新增 npm 依赖、无锁文件变更。ChainTopicTracker 已退出生产路由，其独立旧文件保留，本次不做额外清理。
 
-本地验证命令（工作目录 /Users/demo/projects/CodeBridge）：
+本地验证命令（工作目录 /Users/example/projects/CodeBridge）：
 
 ```sh
 pnpm build

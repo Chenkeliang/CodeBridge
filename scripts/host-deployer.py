@@ -212,6 +212,11 @@ class Deployer:
         """Resolve a keychain: ref written by the installer; plaintext from older installs passes through."""
         if isinstance(value, str) and value.startswith("keychain:"):
             return self.a.read_secret(value[len("keychain:"):])
+        if isinstance(value, str) and value.startswith("env:"):
+            resolved = os.environ.get(value[len("env:"):])
+            if not resolved:
+                raise DeployError("secret environment variable is missing")
+            return resolved
         return value
 
     def abort(self, job):
@@ -399,9 +404,47 @@ class Deployer:
         deleted = self.git("diff", "--name-only", "--diff-filter=D", baseline, job["commit"]).decode().splitlines()
         patch = self.git("diff", "--unified=0", baseline, job["commit"], "--", "*.ts", "*.sql",
                          *(":(exclude)" + name for name in deleted)).decode()
-        if any(re.search(r"\b(CREATE|ALTER|DROP)\s+TABLE\b", line, re.I)
-               for line in patch.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))):
-            raise DeployError("database schema change requires a separately reviewed migration")
+        ddl = []
+        current_file = None
+        for line in patch.splitlines():
+            if line.startswith("+++ b/"):
+                current_file = line[6:]
+            elif line.startswith(("+", "-")) and not line.startswith(("+++", "---")) and re.search(r"\b(CREATE|ALTER|DROP)\s+TABLE\b", line, re.I):
+                ddl.append((current_file, line))
+        if ddl:
+            # Reviews live outside release source. They permit only a new private database,
+            # never a migration of an existing store or a removed/altered table definition.
+            review_path = self.root / "reviews" / (job["commit"] + ".json")
+            try:
+                if review_path.is_symlink() or not review_path.is_file():
+                    raise ValueError("review must be a regular file")
+                review = json.loads(review_path.read_text())
+                private_review = (not review_path.is_symlink() and self.root in review_path.resolve().parents
+                                  and review_path.stat().st_uid == os.getuid() and review_path.stat().st_mode & 0o077 == 0)
+            except (OSError, ValueError):
+                review, private_review = {}, False
+            if not isinstance(review, dict):
+                review = {}
+            database = review.get("database")
+            hashes = review.get("sourceHashes")
+            ddl_files = {name for name, _ in ddl}
+            valid = (private_review and review.get("scope") == "new-database-only"
+                     and review.get("baseline") == baseline and review.get("commit") == job["commit"]
+                     and bool(review.get("reviewer")) and bool(review.get("reviewedAt"))
+                     and isinstance(database, str) and Path(database).name == database and database.endswith(".sqlite")
+                     and not (self.data / database).exists() and not (self.data / database).is_symlink()
+                     and isinstance(hashes, dict) and None not in ddl_files and ddl_files < set(hashes)
+                     and set(hashes).issubset(changes)
+                     and all(line.startswith("+") and len(re.findall(r"\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b", line, re.I))
+                             == len(re.findall(r"\b(CREATE|ALTER|DROP)\s+TABLE\b", line, re.I)) for _, line in ddl))
+            if valid:
+                added = self.git("diff", "--name-only", "--diff-filter=A", baseline, job["commit"], "--", *sorted(ddl_files)).decode().splitlines()
+                valid = set(added) == ddl_files and all(isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)
+                    and hashlib.sha256(self.git("show", job["commit"] + ":" + name)).hexdigest() == digest
+                    for name, digest in hashes.items())
+            if not valid:
+                raise DeployError("database schema change requires a separately reviewed migration")
+            job["reviewedDatabaseInitialization"] = {"database": database, "receipt": str(review_path)}
         bridge_only = ("apps/bridge/", "apps/web/", "packages/channel-feishu/", "packages/run-executor/",
                        "packages/session-coordinator/", "packages/work-items/", "docs/", "scripts/")
         job["restartRunner"] = any(not (name.endswith(".md") or name.startswith(bridge_only))
@@ -607,7 +650,10 @@ def create_server(deployer, port=19791):
             self.wfile.write(body)
 
         def authorized(self):
-            return hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + deployer.c["token"])
+            try:
+                return hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + deployer.secret(deployer.c["token"]))
+            except DeployError:
+                return False
 
         def do_GET(self):
             allowed = self.authorized() and self.path == "/health"

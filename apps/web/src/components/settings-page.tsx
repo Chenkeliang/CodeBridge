@@ -254,21 +254,20 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
     }
   }
 
-  return <div className="mx-auto w-full max-w-[760px] px-8 py-8">
-    <h1 className={cn("font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>设置</h1>
+  return <><header className="border-b border-line bg-sidebar px-5 py-5 md:px-8"><h1 className="font-brand text-xl font-normal tracking-tight text-ink">设置</h1><p className="mt-1 text-sm leading-6 text-muted">管理 Agent、模型供应商和阅读偏好。</p></header><div className="mx-auto w-full max-w-5xl px-5 py-6 md:px-8 md:py-8">
 
     {error && <div className={cn("mt-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft", "text-danger", "border-line-strong")} role="alert"><X className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span></div>}
 
-    <section className="mt-8">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>AGENTS</h2>
+    <section className="mt-8 first:mt-0">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className={cn("text-sm font-semibold", "text-faint")}>Agent</h2>
         <div className="flex items-center gap-2">
           {savedDefaultUnavailable && (
-            <span className={cn("rounded-full border px-2 py-1 text-[11px]", "bg-warning-soft", "text-warning", "border-warning/30")}>
+            <span className={cn("min-h-9 rounded-md border px-3 py-1.5 text-xs", "bg-warning-soft", "text-warning", "border-warning/30")}>
               默认 Agent 当前不可用{effectiveDefaultAgent ? ` · 正在使用 ${effectiveDefaultAgent.display_name}` : ""}
             </span>
           )}
-          <button className={cn("rounded-full border px-2.5 py-1 text-[11px]", "border-line-strong", "text-ink-soft", agentAction?.id === "*" && "opacity-50")} disabled={agentAction !== null} onClick={() => void detectAllAgents()} type="button">
+          <button className={cn("min-h-9 rounded-md border px-3 py-1.5 text-xs", "border-line-strong", "text-ink-soft", agentAction?.id === "*" && "opacity-50")} disabled={agentAction !== null} onClick={() => void detectAllAgents()} type="button">
             {agentAction?.id === "*" ? "检测中…" : "检测全部"}
           </button>
         </div>
@@ -282,31 +281,27 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
           const busy = agentAction?.id === agent.agent_id;
           const diagnostic = setup?.diagnostic;
           const primaryStrategy = manifest.install_strategies.find((strategy) => strategy.available) ?? manifest.install_strategies[0] ?? null;
-          return <div className={cn("grid gap-3 rounded-xl border px-4 py-4", "bg-surface", "border-line-strong")} key={agent.agent_id}>
-            <div className="flex items-start justify-between gap-3">
+          return <div className="grid gap-4 border-b border-line py-5" key={agent.agent_id}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className={cn("flex flex-wrap items-center gap-2", "text-ink")}>
-                  <span className="font-brand text-sm font-normal tracking-[-0.02em]">{manifest.display_name}</span>
+                  <span className="text-base font-semibold tracking-tight">{manifest.display_name}</span>
                   {isSavedDefault && <Badge>已保存默认</Badge>}
                   {!isSavedDefault && isEffectiveDefault && <Badge>当前生效默认</Badge>}
                 </div>
-                <div className={cn("mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs", "text-muted")}>
-                  <span>{setupInstallationLabel(setup)}</span>
-                  <span>{setupConfigurationLabel(setup)}</span>
-                  <span>{setupRuntimeLabel(setup)}</span>
-                </div>
+
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <button className={cn("rounded-full border px-2 py-1 text-[11px]", "border-line-strong", "text-muted", busy && "opacity-50")} disabled={busy} onClick={() => void detectAgent(agent)} type="button">
+                <button className={cn("min-h-9 rounded-md border px-3 py-1.5 text-xs", "border-line-strong", "text-muted", busy && "opacity-50")} disabled={busy} onClick={() => void detectAgent(agent)} type="button">
                   {agentAction?.id === agent.agent_id && agentAction.kind === "detect" ? "检测中…" : "重新检测"}
                 </button>
-                <button className={cn("rounded-full border px-2 py-1 text-[11px]", "border-line-strong", "text-muted", !setup?.can_select_default && "opacity-40", busy && "opacity-50")} disabled={!setup?.can_select_default || busy} onClick={() => void setDefault(agent)} type="button">
+                <button className={cn("min-h-9 rounded-md border px-3 py-1.5 text-xs", "border-line-strong", "text-muted", !setup?.can_select_default && "opacity-40", busy && "opacity-50")} disabled={!setup?.can_select_default || busy} onClick={() => void setDefault(agent)} type="button">
                   {isSavedDefault ? "当前默认" : "设为默认"}
                 </button>
               </div>
             </div>
 
-            <div className={cn("grid gap-2 rounded-lg border px-3 py-3", "bg-surface-tint", "border-line")}>
+            <div className="grid gap-3">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className={cn("rounded-full border px-2 py-0.5", setup?.installation === "installed" ? "border-line bg-surface text-success" : setup?.installation === "missing" ? "border-danger/25 bg-danger-soft text-danger" : "border-line bg-surface text-muted")}>
                   {setupInstallationLabel(setup)}
@@ -321,7 +316,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
               </div>
               <div className="text-xs leading-5 text-muted">
                 <div>{manifest.configuration_owner === "codebridge" ? "CodeBridge 管理该 Agent 的配置入口。" : manifest.documentation_url ? "打开官方文档完成配置。" : "该 Agent 由自身配置入口管理。"}</div>
-                {manifest.configuration_path && <div className="font-mono">{manifest.configuration_path}</div>}
+                {manifest.configuration_path && <div className="break-all font-mono">{manifest.configuration_path}</div>}
                 {primaryStrategy && setup?.installation === "missing" && (
                   <div className="mt-1 text-[11px]">
                     安装命令: <span className="font-mono">{[primaryStrategy.command, ...primaryStrategy.args].join(" ")}</span>
@@ -338,7 +333,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
                   <button className={cn("rounded-md border px-3 py-1.5 text-xs", "bg-surface", "text-ink", "border-line-strong")} onClick={() => {
                     document.getElementById("providers-pi")?.scrollIntoView({ behavior: "smooth", block: "start" });
                   }} type="button">
-                    前往 Providers(Pi)
+                    管理 Pi 模型供应商
                   </button>
                 ) : manifest.documentation_url ? (
                   <button className={cn("rounded-md border px-3 py-1.5 text-xs", "bg-surface", "text-ink", "border-line-strong")} onClick={() => window.open(manifest.documentation_url, "_blank", "noopener")} type="button">
@@ -364,9 +359,9 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
       </div>
     </section>
 
-    <section className="mt-8">
+    <section className="mt-8 first:mt-0">
       <div className="flex items-center justify-between">
-        <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")} id="providers-pi">Providers(Pi)</h2>
+        <h2 className={cn("text-sm font-semibold", "text-faint")} id="providers-pi">模型供应商 · Pi</h2>
       </div>
       <p className={cn("mt-1.5 text-xs leading-5", "text-muted")}>管理 Pi 的模型供应商,写入本机 ~/.pi/agent/models.json。密钥仅保存在本机。</p>
 
@@ -413,9 +408,9 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
     </section>
 
     <section className="mt-10">
-      <h2 className={cn("font-brand text-xs font-normal uppercase tracking-[0.1em]", "text-faint")}>显示</h2>
+      <h2 className={cn("text-sm font-semibold", "text-faint")}>显示</h2>
       <div className={cn("mt-3 grid gap-3 rounded-lg border px-4 py-4", "bg-surface", "border-line")}>
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <span className={cn("text-xs", "text-ink-soft")}>对话密度</span>
           <div className={cn("flex rounded-md border p-0.5", "border-line")}>
             {(["compact", "comfortable"] as const).map((value) => (
@@ -423,7 +418,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
             ))}
           </div>
         </div>
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <span className={cn("text-xs", "text-ink-soft")}>衬线阅读模式</span>
           <button aria-pressed={reading} className={cn("h-6 rounded-md border px-2 text-xs transition-colors", "border-line", reading ? cn("bg-surface-soft", "text-ink") : "text-muted")} onClick={() => onReading(!reading)} type="button">{reading ? "已开启" : "已关闭"}</button>
         </div>
@@ -441,7 +436,7 @@ export function SettingsPage({ density, reading, onDensity, onReading, onNotify,
       onSave={() => void save()}
       onTest={() => void test()}
     />}
-  </div>;
+  </div></>;
 }
 
 const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;

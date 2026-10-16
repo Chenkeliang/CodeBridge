@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+import { readAlertIncidents } from "./alert-incidents.js";
+import { AgentTaskStore } from "./agent-task-store.js";
+import { AgentTaskService } from "./agent-tasks.js";
+import { TaskAttentionService } from "./task-attention.js";
+import { runTaskCommand, TASK_COMMAND_HELP } from "@codebridge/core/task-cli";
+import { ChannelConnections, type ManagedChannelAdapter } from "./channel-connections.js";
+import { inspectRuntimeSecrets, migrateRuntimeSecrets } from "./runtime-secret-migration.js";
 import { AgentRegistry, projectSetupState, supportedAgentSetupManifests } from "@codebridge/agent-registry";
 import { FeishuBridge, runDoctor } from "@codebridge/channel-feishu";
 import { TelegramBridge } from "@codebridge/channel-telegram";
@@ -17,8 +24,6 @@ import {
   CapabilityRegistry,
   CapabilityRuntime,
   PolicyEngine,
-  registerDemoCapabilities,
-  registerEquityCapabilities,
 } from "@codebridge/policy";
 import { ProjectCatalogGitRepository, ProjectCatalogStore, ProjectDiscovery } from "@codebridge/project-catalog";
 import { RunExecutor } from "@codebridge/run-executor";
@@ -51,6 +56,9 @@ import { resolveStartupSurfaces } from "./startup-surfaces.js";
 import { createWebFrontendApp } from "./web-frontend.js";
 
 import { DeploymentService, mountDeploymentRoutes } from "./deployment.js";
+import { createManagementApp } from "./management-api.js";
+import { LocalTaskManager } from "./managed-local-tasks.js";
+import { ManagedRunbooks } from "./managed-runbooks.js";
 import { startEventLoopLagMonitor } from "./event-loop-lag.js";
 
 const program = new Command();
@@ -84,29 +92,28 @@ program
       activeRuns: () => workItemStore.listRunsByStatus(["running"]).length,
     });
     let alertMonitor: FeishuAlertMonitor | undefined;
-    const bridge: FeishuBridge | undefined = surfaces.feishu
-      ? new FeishuBridge({
-          config,
-          dataDir,
-          onDeploymentMessage: (message) => deployment.handleFeishuMessage(message),
-          prepareAlertReply: (message, topicId) => alertMonitor?.prepareReply(message, topicId),
-          onAlertReaction: async (reaction) => { await alertMonitor?.prepareReaction(reaction); },
-          isAlertMessage: (chatId, messageId) => alertMonitor?.isAlertMessage(chatId, messageId) ?? false,
-          isAlertChat: (chatId) => store.get().feishu.alertMonitor?.groups.some((group) => group.chatId === chatId) ?? false,
-          isAlertSender: (chatId, ids) => store.get().feishu.alertMonitor?.groups.some((group) => group.chatId === chatId && ids.some((id) => group.senderAppIds.includes(id))) ?? false,
-          isMaintenance: () => deployment.isMaintenance(),
-          onLog: (m) => console.log(m),
-        })
-      : undefined;
-    const telegram = surfaces.telegram && config.telegram
-      ? new TelegramBridge({
-          config,
-          dataDir,
-          onLog: (m) => console.log(m),
-        })
-      : undefined;
+    let connections: ChannelConnections | undefined;
+    let tasks: AgentTaskService;
+    const createFeishu = (current: typeof config) => new FeishuBridge({
+      config: current, dataDir,
+      onDeploymentMessage: (message) => deployment.handleFeishuMessage(message),
+      prepareAlertReply: (message, topicId) => alertMonitor?.prepareReply(message, topicId),
+      onAlertReaction: async (reaction) => { await alertMonitor?.prepareReaction(reaction); },
+      isAlertMessage: (chatId, messageId) => alertMonitor?.isAlertMessage(chatId, messageId) ?? false,
+      isAlertChat: (chatId) => store.get().feishu.alertMonitor?.groups.some((group) => group.chatId === chatId) ?? false,
+      isAlertSender: (chatId, ids) => store.get().feishu.alertMonitor?.groups.some((group) => group.chatId === chatId && ids.some((id) => group.senderAppIds.includes(id))) ?? false,
+      isMaintenance: () => deployment.isMaintenance() || Boolean(connections?.isApplying("feishu")),
+      onLog: (m) => console.log(m),
+    });
+    const createTelegram = (current: typeof config) => new TelegramBridge({
+      config: current, dataDir, onLog: (m) => console.log(m),
+      isMaintenance: () => Boolean(connections?.isApplying("telegram")),
+    });
+    let bridge: FeishuBridge | undefined = surfaces.feishu ? createFeishu(config) : undefined;
+    let telegram: TelegramBridge | undefined = surfaces.telegram ? createTelegram(config) : undefined;
     const orchestrationPath = path.join(dataDir, "orchestration.sqlite");
     const workItemStore = new SqliteEventStore(orchestrationPath);
+    const taskStore = new AgentTaskStore(path.join(dataDir, "agent-tasks.sqlite"));
     const sessionCatalog = new SessionCatalogStore(
       path.join(dataDir, "sessions.sqlite"),
       {
@@ -144,8 +151,8 @@ program
       databasePath: path.join(dataDir, "capabilities.sqlite"),
     });
     const capabilityRuntime = new CapabilityRuntime();
-    registerDemoCapabilities(capabilityRegistry, capabilityRuntime);
-    registerEquityCapabilities(capabilityRegistry, capabilityRuntime);
+    capabilityRegistry.suppressSource("function", "demo");
+    capabilityRegistry.suppressSource("function", "equity");
     const policyEngine = new PolicyEngine(capabilityRegistry);
     const mcpRegistry = new McpServerRegistry(path.join(dataDir, "mcp.sqlite"));
     for (const [id, definition] of Object.entries(config.orchestration?.mcpServers ?? {})) {
@@ -214,7 +221,7 @@ program
           }
         }
       },
-      resolveRequest: (workItem, run) => {
+      resolveRequest: async (workItem, run) => {
         const linkedSession = workItem.conversationId.startsWith("conv_")
           ? sessionCatalog.getSession(`sess_${workItem.conversationId.slice("conv_".length)}`)
           : undefined;
@@ -243,7 +250,7 @@ program
         const deploymentGuidance = deployment.guidanceForRun(run.id, workItemStore);
         const guidedPrompt = deploymentGuidance ? `${basePrompt}\n\n${deploymentGuidance}` : basePrompt;
         const prompt = guidedPrompt;
-        return {
+        const request = {
           runId: run.id,
           sessionKey: {
             chatId: workItem.conversationId,
@@ -258,6 +265,8 @@ program
           resumeSessionId: run.providerSessionId ?? undefined,
           additionalDirectories: linkedSession?.additionalDirectories,
         };
+        const prepared = tasks ? await tasks.prepareRunRequest(run, request) : request;
+        return prepared === request ? request : { ...prepared, prompt: deploymentGuidance ? `${prepared.prompt}\n\n${deploymentGuidance}` : prepared.prompt };
       },
     });
     const eventLoopLagMonitor = startEventLoopLagMonitor();
@@ -270,6 +279,9 @@ program
           store: workItemStore,
           coordinator: sessionCoordinator,
           execute: (runId) => {
+            const run = workItemStore.getRun(runId);
+            const scheduled = run?.sessionId ? taskStore.forSession(run.sessionId) : undefined;
+            if (scheduled && (!scheduled.runId || scheduled.runId === runId)) return;
             void runExecutor.execute(runId).catch(() => {});
           },
         });
@@ -431,22 +443,52 @@ program
       createChannelIngressApi(sessionCatalogApp),
       config.runner.token,
     );
-    bridge?.setSessionIngress(channelSessionIngress);
-    telegram?.setSessionIngress(channelSessionIngress);
-    if (bridge) alertMonitor = new FeishuAlertMonitor({
-      statePath: path.join(dataDir, "feishu-alert-monitor.json"),
-      config: () => store.get().feishu.alertMonitor,
-      transport: bridge,
-      isMaintenance: () => deployment.isMaintenance(),
-      log: (message) => console.log(message),
+    const resetAlertMonitor = async () => {
+      await alertMonitor?.stop();
+      alertMonitor = bridge ? new FeishuAlertMonitor({
+        statePath: path.join(dataDir, "feishu-alert-monitor.json"),
+        config: () => store.get().feishu.alertMonitor, transport: bridge,
+        isMaintenance: () => deployment.isMaintenance() || Boolean(connections?.isApplying("feishu")),
+        log: (message) => console.log(message),
+      }) : undefined;
+      alertMonitor?.start();
+    };
+    connections = new ChannelConnections({
+      store, initial: { feishu: bridge, telegram },
+      hasActiveRuns: () => workItemStore.listRunsByStatus(["queued", "running", "waiting"]).length > 0,
+      create: (channel, current) => channel === "feishu" ? createFeishu(current) : createTelegram(current),
+      beforeChange: async (channel) => { if (channel === "feishu") await alertMonitor?.stop(); },
+      changed: async (channel, adapter: ManagedChannelAdapter | undefined) => {
+        if (channel === "feishu") { bridge = adapter as FeishuBridge | undefined; await resetAlertMonitor(); }
+        else telegram = adapter as TelegramBridge | undefined;
+      },
     });
+    connections.bindIngress(channelSessionIngress);
+    store.onChange(() => connections!.syncConfig());
 
-    store.onChange((c) => {
-      bridge?.updateConfig(c);
-      telegram?.updateConfig(c);
+    tasks = new AgentTaskService({
+      store: taskStore, workItems: workItemStore, catalog: sessionCatalog, coordinator: sessionCoordinator, executor: runExecutor,
+      config: () => store.get(), agents: () => registry.list(), runner: runnerClient, dataDir,
+      connected: (channel) => channel === "feishu" ? bridge?.isConnected ?? false : telegram?.isConnected ?? false,
+      feishuChats: () => bridge ? bridge.listManagedChats() : Promise.reject(new Error("飞书尚未连接")),
+      pendingPermissions: () => runnerClient.listPendingPermissions(),
+      isMaintenance: () => deployment.isMaintenance() || Boolean(connections?.isApplying()),
+      send: async (target, text) => {
+        if (target.channel === "feishu" && bridge?.isConnected) await bridge.sendOutboundMarkdown(target.chatId!, text, target.topicId);
+        else if (target.channel === "telegram" && telegram?.isConnected) await telegram.sendOutboundMarkdown(`telegram:${target.chatId}`, text, target.topicId);
+        else throw new Error("目标渠道尚未连接，结果已保留");
+      },
+      sendFile: async (target, file) => {
+        if (target.channel === "feishu" && bridge?.isConnected) await bridge.sendOutboundFile(target.chatId!, file, target.topicId);
+        else if (target.channel === "telegram" && telegram?.isConnected) await telegram.sendOutboundFile(`telegram:${target.chatId}`, file, target.topicId);
+        else throw new Error("目标渠道尚未连接，文件已保留");
+      }, log: (message) => console.error(message),
     });
+    const attention = new TaskAttentionService({ catalog: sessionCatalog, workItems: workItemStore, approvals: approvalService, tasks: taskStore,
+      pendingPermissions: () => runnerClient.listPendingPermissions() });
 
     const shutdown = async () => {
+      await tasks.stop();
       await alertMonitor?.stop();
       await bridge?.disconnect();
       await telegram?.disconnect();
@@ -461,15 +503,18 @@ program
       registry.close();
       projectDiscovery.close();
       sessionCatalog.close();
+      taskStore.close();
       workItemStore.close();
       process.exit(0);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
 
-    await bridge?.connect();
-    alertMonitor?.start();
-    if (telegram) await telegram.connect();
+    try { await bridge?.connect(); }
+    catch { connections.noteStartupFailure("feishu"); console.error("飞书启动连接失败；管理页面继续可用，可更新凭据后重试"); }
+    await resetAlertMonitor();
+    try { await telegram?.connect(); }
+    catch { connections.noteStartupFailure("telegram"); console.error("Telegram启动连接失败；管理页面继续可用，可更新凭据后重试"); }
 
     const apiPort = config.bridge?.apiPort ?? 19790;
     const { serve } = await import("@hono/node-server");
@@ -517,14 +562,24 @@ webFrontendApp,
 sessionCatalogApp,
 mcpApp,
 skillApp,
-() => publisherStore.current()
+() => publisherStore.current(),
+{ taskTarget: (runId) => tasks.targetForRun(runId), taskFile: (runId, source) => tasks.prepareOutboundFile(runId, source) }
 );
+    apiApp.route("/", createManagementApp({
+      store, dataDir, token: config.runner.token,
+      local: new LocalTaskManager({ dataDir }), runbooks: new ManagedRunbooks(dataDir),
+      connections, tasks, attention,
+      incidents: (chatId) => readAlertIncidents(alertMonitor, workItemStore, sessionCatalog, chatId),
+      members: (chatId) => bridge ? bridge.listManagedChatMembers(chatId) : Promise.reject(new Error("飞书尚未连接")),
+      chats: () => bridge ? bridge.listManagedChats() : Promise.reject(new Error("飞书尚未连接")),
+      sources: (chatId) => bridge ? bridge.listManagedAlertSources(chatId) : Promise.reject(new Error("飞书尚未连接")),
+    }));
     mountDeploymentRoutes(apiApp, deployment, workItemStore);
     serve({
       fetch: apiApp.fetch,
       hostname: "127.0.0.1",
       port: apiPort,
-    });
+    }, () => tasks.start());
     console.log(`Core API 监听 http://127.0.0.1:${apiPort}`);
     console.log(`Web: ${surfaces.web ? `enabled at http://127.0.0.1:${apiPort}/workbench/` : "disabled"}`);
     console.log(`Feishu: ${surfaces.feishu ? "enabled" : "disabled"}`);
@@ -539,12 +594,12 @@ program
   .command("init")
   .description("交互式初始化：只补缺失项、校验凭据、密钥存入系统钥匙串")
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
-  .option("--defaults", "非交互：仅在 config.yaml 不存在时写入默认配置")
+  .option("--defaults", "非交互：要求 RUNNER_TOKEN，配置只保存环境变量引用")
   .action(async (opts: { dataDir: string; defaults?: boolean }) => {
     if (opts.defaults || !process.stdin.isTTY) {
       const result = initDefaults(opts.dataDir);
-      console.log(result.written ? "已写入默认配置（随机 Runner token 或环境变量引用，文件权限 600）:" : "config.yaml 已存在，未修改:", result.configPath);
-      if (result.written) console.log("非交互模式未校验通道凭据；可运行 codebridge init 完成配置，secrets migrate 将明文密钥迁入钥匙串。");
+      console.log(result.written ? "已写入默认配置（环境变量引用，文件权限 600）:" : "config.yaml 已存在，未修改:", result.configPath);
+      if (result.written) console.log("非交互模式未校验通道凭据；运行 codebridge init 完成配置。");
       return;
     }
     const io = terminalIo();
@@ -565,10 +620,10 @@ program
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
   .action(async (opts: { dataDir: string }) => {
     // Inspect secrets first and without throwing: a broken ref is exactly what doctor must report.
-    const secretReport = ConfigStore.inspectSecrets(path.join(opts.dataDir, "config.yaml"));
+    const secretReport = { ...ConfigStore.inspectSecrets(path.join(opts.dataDir, "config.yaml")), ...inspectRuntimeSecrets(opts.dataDir) };
     const warnings = [
       ...Object.entries(secretReport).filter(([, item]) => item.source === "plaintext")
-        .map(([name]) => `config.yaml 中 ${name} 为明文，运行 codebridge secrets migrate 移入系统钥匙串`),
+        .map(([name]) => `${name} 为明文，运行 codebridge secrets migrate 移入系统钥匙串`),
       ...Object.entries(secretReport).filter(([, item]) => item.error).map(([, item]) => item.error!),
     ];
     let report: unknown;
@@ -582,24 +637,25 @@ program
 
 const secrets = program
   .command("secrets")
-  .description("管理 config.yaml 中的密钥（飞书 appSecret、Runner token、Telegram botToken）");
+  .description("管理主配置、发布控制器和出站发布者的密钥引用");
 
 secrets
   .command("status")
   .description("显示每个密钥的来源（keychain / env / plaintext / missing），不输出值")
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
   .action((opts: { dataDir: string }) => {
-    console.log(JSON.stringify(ConfigStore.inspectSecrets(path.join(opts.dataDir, "config.yaml")), null, 2));
+    console.log(JSON.stringify({ ...ConfigStore.inspectSecrets(path.join(opts.dataDir, "config.yaml")), ...inspectRuntimeSecrets(opts.dataDir) }, null, 2));
   });
 
 secrets
   .command("migrate")
-  .description("把明文密钥移入系统钥匙串，并在 config.yaml 中改为 keychain: 引用")
+  .description("把主配置、发布控制器和发布者的明文密钥改为 keychain: 引用")
   .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
   .action((opts: { dataDir: string }) => {
     const configPath = path.join(opts.dataDir, "config.yaml");
     if (!fs.existsSync(configPath)) throw new Error(`${configPath} 不存在`);
     const result = migrateConfigSecrets(configPath);
+    result.migrated.push(...migrateRuntimeSecrets(opts.dataDir));
     console.log(JSON.stringify({ ...result, secrets: ConfigStore.inspectSecrets(configPath) }, null, 2));
     if (result.migrated.length) {
       // A running Bridge still holds the plaintext and would write it back on its next config save.
@@ -636,7 +692,7 @@ function parseRouteOption(value: string): OutboundRoute[] {
 publisher
   .command("add")
   .description("签发一条凭据；同名 label 视为轮换，旧 token 立即作废")
-  .requiredOption("--label <name>", "调用方名字，例如 stock-daily-trade")
+  .requiredOption("--label <name>", "调用方名字，例如 daily-report")
   .requiredOption("--chat <id>", "固定收件人：飞书 oc_ 开头，Telegram telegram: 开头")
   .option("--topic <id>", "话题 ID")
   .option("--routes <list>", `逗号分隔，默认 markdown,mention；可选 ${OUTBOUND_ROUTES.join("、")}`)
@@ -672,6 +728,20 @@ publisher
     const removed = revokePublisher(opts.dataDir, runnerTokenOf(opts.dataDir), opts.label);
     console.log(JSON.stringify({ label: opts.label, revoked: removed }, null, 2));
     if (!removed) process.exitCode = 1;
+  });
+
+program.command("tasks")
+  .description("管理Agent定时任务、执行记录与结果恢复")
+  .argument("[action]", "list/show/runs/create/edit/preflight/pause/resume/run/result/retry/resend/output/help")
+  .argument("[arguments...]", "任务ID、运行记录ID或命令参数")
+  .option("--data-dir <path>", "数据目录", DEFAULT_DATA_DIR)
+  .allowUnknownOption(true)
+  .action(async (action: string | undefined, args: string[], opts: { dataDir: string }) => {
+    if (!action || ["help", "--help", "-h"].includes(action)) { console.log(TASK_COMMAND_HELP); return; }
+    const config = new ConfigStore({ dataDir: opts.dataDir }).get();
+    const result = await runTaskCommand([action, ...args], { api: process.env.FCB_API ?? `http://127.0.0.1:${config.bridge?.apiPort ?? 19790}`,
+      token: config.runner.token, runId: process.env.FCB_RUN_ID });
+    console.log(JSON.stringify(result, null, 2));
   });
 
 program.parseAsync(process.argv).catch((err) => {

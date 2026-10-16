@@ -45,10 +45,11 @@
   --agnet-accent: #CCFF00;
   --agnet-accent-ink: #171A11;
   --agnet-accent-soft: #E9F6AD;
-  --agnet-success: #3B8659;
-  --agnet-warning: #C27B18;
-  --agnet-danger: #D25D3D;
+  --agnet-success: #2F7149;
+  --agnet-warning: #93600F;
+  --agnet-danger: #AF452B;
   --agnet-danger-soft: #FCEBE6;
+  --agnet-warning-soft: #F7EDD9;
   --agnet-success-soft: #E2EEE7;
   --agnet-control-accent: #3B8659;
   --agnet-shadow-panel: 0 20px 48px rgba(25, 28, 22, 0.08);
@@ -82,6 +83,7 @@
   --agnet-warning: #E7AA4E;
   --agnet-danger: #FF8063;
   --agnet-danger-soft: #41231D;
+  --agnet-warning-soft: #382C1D;
   --agnet-success-soft: #223128;
   --agnet-control-accent: #FF683D;
   --agnet-shadow-panel: 0 20px 56px rgba(0, 0, 0, 0.28);
@@ -140,6 +142,7 @@
   --color-warning: var(--agnet-warning);
   --color-danger: var(--agnet-danger);
   --color-danger-soft: var(--agnet-danger-soft);
+  --color-warning-soft: var(--agnet-warning-soft);
   --color-success-soft: var(--agnet-success-soft);
   --color-control-accent: var(--agnet-control-accent);
   --color-agent-codex: var(--agnet-agent-codex);
@@ -338,3 +341,12 @@
   content: attr(data-placeholder);
   pointer-events: none;
 }
+
+/* Shared keyboard and native-control treatment across the local workbench. */
+[data-theme] :where(button, a, input, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--agnet-control-accent);
+  outline-offset: 3px;
+}
+[data-theme] :where(input, textarea, [contenteditable="true"]) { caret-color: var(--agnet-control-accent); }
+[data-theme] input[type="checkbox"] { accent-color: var(--agnet-control-accent); }
+[data-theme] ::selection { background: var(--agnet-accent-soft); color: var(--agnet-ink); }

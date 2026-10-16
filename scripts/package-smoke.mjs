@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { repositoryRoot, checkVersions } from './package-release.mjs';
 
@@ -11,7 +12,7 @@ const artifact = path.join(repositoryRoot, 'dist', `${manifest.name.replace('@',
 assert.ok(fs.existsSync(artifact), 'Run pnpm package:release first');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'codebridge-install-'));
 const children = [];
-const env = { PATH: process.env.PATH, HOME: path.join(scratch, 'home'), DATA_DIR: path.join(scratch, 'data') };
+const env = { RUNNER_TOKEN: randomBytes(24).toString("hex"), PATH: process.env.PATH, HOME: path.join(scratch, 'home'), DATA_DIR: path.join(scratch, 'data') };
 fs.mkdirSync(env.HOME, { recursive: true });
 fs.writeFileSync(path.join(scratch, 'package.json'), '{"private":true}\n');
 
@@ -97,11 +98,13 @@ config.runner.url = 'http://127.0.0.1:' + process.argv[2];
 config.runnerHost = { listen: '127.0.0.1:' + process.argv[2] };
 config.bridge = { apiPort: Number(process.argv[3]) };
 fs.writeFileSync(process.env.DATA_DIR + '/config.yaml', stringify(config));
-console.log(config.runner.token);
+const { ConfigStore } = await import('@codebridge/core');
+if (new ConfigStore().get().runner.url !== config.runner.url) throw new Error('Packaged Runner URL must match the isolated fixture port');
 `);
   const runnerPort = await freePort();
   const bridgePort = await freePort();
-  const token = run(process.execPath, [probe, String(runnerPort), String(bridgePort)]).trim();
+  run(process.execPath, [probe, String(runnerPort), String(bridgePort)]);
+  const token = env.RUNNER_TOKEN;
   const runnerProcess = start(runner, []);
   const health = await waitFor(`http://127.0.0.1:${runnerPort}/health`, runnerProcess, { authorization: `Bearer ${token}` });
   assert.equal((await health.json()).version, manifest.version);
@@ -109,13 +112,25 @@ console.log(config.runner.token);
   assert.ok(fs.existsSync(path.join(modules, 'runner-host/dist/deployment-mcp-server.js')));
   const bridgeProcess = start(bridge, ['start', '--data-dir', env.DATA_DIR]);
   const page = await waitFor(`http://127.0.0.1:${bridgePort}/workbench/`, bridgeProcess);
+  const managementUrl = `http://127.0.0.1:${bridgePort}/v1/management`;
+  assert.equal((await fetch(managementUrl)).status, 401);
+  const management = await (await fetch(managementUrl, { headers: { authorization: `Bearer ${token}` } })).json();
+  assert.equal(management.channels.length, 2);
+  assert.deepEqual(management.local.tasks, []);
+  assert.ok(!JSON.stringify(management).includes(token), 'management must not return the Runner token');
+  const changed = await fetch(`${managementUrl}/channels/feishu`, { method: 'PATCH', headers: {
+    authorization: `Bearer ${token}`, 'if-match': management.revision, 'content-type': 'application/json',
+  }, body: JSON.stringify({ ...management.channels[0], administrators: ['ou_package_fixture'] }) });
+  assert.equal(changed.status, 200);
+  assert.deepEqual((await changed.json()).channels[0].administrators, ['ou_package_fixture']);
+  assert.match(fs.readFileSync(configFile, 'utf8'), /env:RUNNER_TOKEN/);
   const html = await page.text();
   assert.match(html, /<html/);
   const asset = html.match(/src="([^\"]+\.js)"/)?.[1];
   assert.ok(asset, 'Workbench JavaScript must be referenced');
   assert.equal((await fetch(new URL(asset, `http://127.0.0.1:${bridgePort}`))).status, 200);
   // The actual packaged backend entry modules were imported by probe; no agent tasks are sent.
-  console.log(`PASS: ${manifest.name}@${manifest.version}, CLI/init, internal imports, authenticated Runner and Workbench assets`);
+  console.log(`PASS: ${manifest.name}@${manifest.version}, CLI/init, internal imports, authenticated Runner, management read/write and Workbench assets`);
 } finally {
   await Promise.all(children.map(async ({ child }) => {
     if (child.exitCode !== null) return;

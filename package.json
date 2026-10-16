@@ -26,7 +26,8 @@
     "version:sync": "node scripts/sync-version.mjs",
     "version:check": "node scripts/sync-version.mjs --check",
     "package:release": "pnpm build && node scripts/package-release.mjs",
-    "test:package": "node scripts/package-smoke.mjs"
+    "test:package": "node scripts/package-smoke.mjs",
+    "secrets:check": "bash scripts/secret-check.sh"
   },
   "bin": {
     "codebridge": "./apps/bridge/dist/cli.js",

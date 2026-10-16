@@ -148,6 +148,13 @@ export class CapabilityRegistry {
     }));
   }
 
+  /** Hide an inactive provider from this process; retain its records for explicit reactivation. */
+  suppressSource(kind: CapabilitySource["kind"], ref: string): void {
+    for (const [id, definition] of this.definitions) {
+      if (definition.source?.kind === kind && definition.source.ref === ref) this.definitions.delete(id);
+    }
+  }
+
   close(): void {
     if (this.database.isOpen) this.database.close();
   }

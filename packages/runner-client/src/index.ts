@@ -11,6 +11,7 @@ import type {
   ProviderSessionHistoryEvent,
   SkillAgentId,
   SkillCatalogSnapshot,
+  TaskSkillCatalogSnapshot,
   SkillMutationPlan,
   SkillMutationResult,
 } from "@codebridge/backends";
@@ -27,6 +28,7 @@ export type {
   ProviderSessionHistoryEvent,
   SkillAgentId,
   SkillCatalogSnapshot,
+  TaskSkillCatalogSnapshot,
   SkillMutationPlan,
   SkillMutationResult,
 };
@@ -178,6 +180,10 @@ export class RunnerClient {
 
   async listSkills(): Promise<SkillCatalogSnapshot> {
     return this.requestSetup<SkillCatalogSnapshot>("/skills");
+  }
+
+  async listTaskSkills(): Promise<TaskSkillCatalogSnapshot> {
+    return this.requestSetup<TaskSkillCatalogSnapshot>("/skills/selection");
   }
 
   async addSkillSource(sourcePath: string): Promise<SkillCatalogSnapshot> {
@@ -439,11 +445,17 @@ export class RunnerClient {
   }
 
   /** prompt_feishu：回应 run 挂起的权限请求（/approve /deny） */
-  async resolvePermission(runId: string, approve: boolean): Promise<boolean> {
+  async listPendingPermissions(): Promise<Array<{ runId: string; requestId: string; title: string }>> {
+    const res = await this.fetch("/permissions");
+    if (!res.ok) throw new Error(`Runner权限查询失败：${res.status}`);
+    return ((await res.json()) as { permissions: Array<{ runId: string; requestId: string; title: string }> }).permissions;
+  }
+
+  async resolvePermission(runId: string, approve: boolean, requestId?: string): Promise<boolean> {
     const res = await this.fetch(`/runs/${runId}/permission`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approve }),
+      body: JSON.stringify({ approve, ...(requestId ? { request_id: requestId } : {}) }),
     });
     if (!res.ok) return false;
     const body = (await res.json()) as { resolved?: boolean };

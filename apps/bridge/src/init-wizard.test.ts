@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseDocument, stringify as stringifyYaml } from "yaml";
-import { ConfigStore, defaultConfig, keychainServiceFor, type SecretCommand } from "@codebridge/core";
-import { applyLineInput, initDefaults, runInitWizard, terminalIo, type WizardIo } from "./init-wizard.js";
+import { ConfigStore as ConfigStoreImpl, defaultConfig, SECRET_PATHS, type ConfigStoreOptions, keychainServiceFor, type SecretCommand } from "@codebridge/core";
+import { applyLineInput, initDefaults, runInitWizard as runInitWizardImpl, terminalIo, type WizardIo, type InitWizardOptions } from "./init-wizard.js";
 
 const FEISHU_SECRET = "feishuSecretValue1234";
 const TG_TOKEN = "123456:ABCdefGHI_jkl-MNO";
@@ -31,8 +31,9 @@ function scriptedIo(script: Array<[RegExp, string | boolean]>) {
   return { io, printed, remaining: script };
 }
 
+const fixtureItems = new Map<string, string>();
 function fakeKeychain(options: { fail?: boolean; failAt?: number } = {}) {
-  const items = new Map<string, string>();
+  const items = fixtureItems;
   let writes = 0;
   const run: SecretCommand = (_file, args, input) => {
     if (args[0] === "-i") {
@@ -48,6 +49,16 @@ function fakeKeychain(options: { fail?: boolean; failAt?: number } = {}) {
   };
   return { items, secrets: { platform: "darwin" as const, run } };
 }
+
+class ConfigStore extends ConfigStoreImpl {
+  constructor(options: ConfigStoreOptions) { super({ ...options, secrets: options.secrets ?? fakeKeychain().secrets }); }
+}
+function withoutCredentials(text: string): string {
+  const doc = parseDocument(text);
+  for (const field of SECRET_PATHS) if (doc.getIn(field) !== undefined) doc.setIn(field, "credential-reference");
+  return doc.toString();
+}
+const runInitWizard = (options: InitWizardOptions) => runInitWizardImpl({ secrets: fakeKeychain().secrets, ...options });
 
 function fakeFetch(options: { feishuOk?: boolean; senderId?: number } = {}) {
   const calls: string[] = [];
@@ -72,6 +83,7 @@ describe("codebridge init wizard", () => {
   let dataDir: string;
   let workspace: string;
   beforeEach(() => {
+    fixtureItems.clear();
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-init-"));
     workspace = path.join(dataDir, "projects");
   });
@@ -182,10 +194,10 @@ describe("codebridge init wizard", () => {
     expect(fs.readFileSync(path.join(dataDir, "config.yaml"), "utf8")).toMatch(/allowedUsers:\n\s+- "111"\n\s+- "222"/);
   });
 
-  it("asks before falling back to plaintext when the keychain is unavailable, and aborts on no", async () => {
-    const { io } = scriptedIo([[/启用飞书/, false], [/启用 Telegram/, false], [/项目根目录/, dataDir], [/明文写入/, false]]);
+  it("refuses plaintext fallback when the keychain is unavailable", async () => {
+    const { io } = scriptedIo([[/启用飞书/, false], [/启用 Telegram/, false], [/项目根目录/, dataDir]]);
     await expect(runInitWizard({ dataDir, io, fetch: fakeFetch().impl, secrets: fakeKeychain({ fail: true }).secrets, hasCommand: () => false, newToken: () => "tok-123456789" }))
-      .rejects.toThrow("runner.token 未保存，初始化中止");
+      .rejects.toThrow("runner.token 无法保存到系统钥匙串");
     expect(fs.existsSync(path.join(dataDir, "config.yaml"))).toBe(false);
   });
   function existingConfig(extra?: (doc: ReturnType<typeof parseDocument>) => void) {
@@ -208,8 +220,8 @@ describe("codebridge init wizard", () => {
     const keychain = fakeKeychain();
     const summary = await runInitWizard({ dataDir, io, secrets: keychain.secrets, hasCommand: (c) => c === "claude" });
     expect(summary.defaultAgent).toBe(agent);
-    expect(fs.readFileSync(path.join(dataDir, "config.yaml"), "utf8")).toBe(before);
-    expect(keychain.items.size).toBe(0);
+    expect(withoutCredentials(fs.readFileSync(path.join(dataDir, "config.yaml"), "utf8"))).toBe(withoutCredentials(before));
+    expect(keychain.items.size).toBe(1);
   });
 
   it("keeps a symlink and replaces its target atomically with private permissions", async () => {
@@ -329,7 +341,7 @@ describe("codebridge init wizard", () => {
     vi.stubEnv("FEISHU_APP_SECRET", FEISHU_SECRET);
     const { io } = scriptedIo([[/启用飞书/, true], [/重新填写/, false], [/启用 Telegram/, false], [/项目根目录/, ""], [/默认 Agent/, ""]]);
     await runInitWizard({ dataDir, io, hasCommand: () => false });
-    expect(fs.readFileSync(path.join(dataDir, "config.yaml"), "utf8")).toBe(before);
+    expect(withoutCredentials(fs.readFileSync(path.join(dataDir, "config.yaml"), "utf8"))).toBe(withoutCredentials(before));
   });
 
   it("rejects invalid config before writing any secrets and cleans the temporary file", async () => {
@@ -400,7 +412,7 @@ describe("codebridge init wizard", () => {
     await runInitWizard({ dataDir, io, fetch: net.impl, secrets: keychain.secrets, hasCommand: () => false });
     expect(secretInput).not.toHaveBeenCalled();
     expect(net.calls).toEqual([]);
-    expect(keychain.items.size).toBe(0);
+    expect(keychain.items.size).toBe(1);
     expect(new ConfigStore({ dataDir }).get().telegram).toMatchObject({ botToken: "222:environment", allowedUsers: ["4242"] });
   });
 
@@ -439,20 +451,32 @@ describe("codebridge init wizard", () => {
     const before = existingConfig((doc) => doc.setIn(["workspaces", "root"], root));
     const { io } = scriptedIo([[/启用飞书/, false], [/启用 Telegram/, false], [/项目根目录/, ""], [/默认 Agent/, ""]]);
     await runInitWizard({ dataDir, io, hasCommand: () => false });
-    expect(fs.readFileSync(path.join(dataDir, "config.yaml"), "utf8")).toBe(before);
+    expect(withoutCredentials(fs.readFileSync(path.join(dataDir, "config.yaml"), "utf8"))).toBe(withoutCredentials(before));
   });
 
-  it("non-interactive defaults generate unique tokens, use private files and never overwrite", () => {
-    const other = path.join(dataDir, "other");
-    expect(initDefaults(dataDir).written).toBe(true);
-    initDefaults(other);
-    const filename = path.join(dataDir, "config.yaml");
-    const before = fs.readFileSync(filename, "utf8");
-    expect(new ConfigStore({ dataDir }).get().runner.token).toMatch(/^[0-9a-f]{48}$/);
-    expect(new ConfigStore({ dataDir }).get().runner.token).not.toBe(new ConfigStore({ dataDir: other }).get().runner.token);
-    expect(initDefaults(dataDir).written).toBe(false);
-    expect(fs.readFileSync(filename, "utf8")).toBe(before);
-    expect(fs.statSync(filename).mode & 0o777).toBe(0o600);
+  it("does not create plaintext credentials during unattended initialization", () => {
+    const previous = process.env.RUNNER_TOKEN;
+    delete process.env.RUNNER_TOKEN;
+    try {
+      expect(() => initDefaults(path.join(dataDir, "headless"))).toThrow(/RUNNER_TOKEN/);
+      expect(fs.existsSync(path.join(dataDir, "headless", "config.yaml"))).toBe(false);
+    } finally { if (previous !== undefined) process.env.RUNNER_TOKEN = previous; }
+  });
+
+  it("unattended defaults use an environment reference and never overwrite", () => {
+    const previous = process.env.RUNNER_TOKEN;
+    process.env.RUNNER_TOKEN = "fixture-runner-environment";
+    try {
+      expect(initDefaults(dataDir).written).toBe(true);
+      const filename = path.join(dataDir, "config.yaml");
+      const before = fs.readFileSync(filename, "utf8");
+      expect(before).toContain("env:RUNNER_TOKEN");
+      expect(before).not.toContain(process.env.RUNNER_TOKEN);
+      expect(new ConfigStore({ dataDir }).get().runner.token).toBe(process.env.RUNNER_TOKEN);
+      expect(initDefaults(dataDir).written).toBe(false);
+      expect(fs.readFileSync(filename, "utf8")).toBe(before);
+      expect(fs.statSync(filename).mode & 0o777).toBe(0o600);
+    } finally { if (previous === undefined) delete process.env.RUNNER_TOKEN; else process.env.RUNNER_TOKEN = previous; }
   });
 
 });

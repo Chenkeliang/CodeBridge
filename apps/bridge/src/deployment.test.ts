@@ -31,6 +31,13 @@ describe("deployment ingress", () => {
     expect(await service.handleFeishuMessage(message)).toBe("正在准备");
     expect(JSON.parse(request.mock.calls[0]![1]!.body as string)).toMatchObject({ actorId: "ou_owner", chatId: "oc_chat", messageId: "om_native" });
   });
+  it("authenticates the controller with a resolved reference, never the literal reference", async () => {
+    const f = setup({ token: "keychain:codebridge.deployer.token", ownerOpenId: "ou_owner" });
+    const service = new DeploymentService({ configPath: f.configPath, fetch: f.request, secrets: { platform: "darwin", run: () => "fixture-controller" } });
+    await service.handleFeishuMessage(message);
+    expect(f.request.mock.calls[0]?.[1]?.headers).toMatchObject({ authorization: "Bearer fixture-controller" });
+    expect(fs.readFileSync(f.configPath, "utf8")).toContain("keychain:codebridge.deployer.token");
+  });
   it("lazily loads config and leaves unrelated messages alone", async () => {
     const { service, configPath } = setup(); fs.unlinkSync(configPath);
     expect(await service.handleFeishuMessage({ ...message, content: "你好" })).toBeUndefined();

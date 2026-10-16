@@ -852,7 +852,7 @@ describe("FeishuBridge mentions", () => {
       chatId: "chat-1",
       chatType: "group",
       senderId: "ou_requester",
-      senderName: "维护者",
+      senderName: "示例成员",
       content: "请完成后通知 @张三",
       mentionedBot: true,
       mentions: [
@@ -861,7 +861,7 @@ describe("FeishuBridge mentions", () => {
     });
 
     expect(received).toMatchObject({
-      senderName: "维护者",
+      senderName: "示例成员",
       mentions: [{ openId: "ou_zhangsan", name: "张三", isBot: false }],
     });
   });
@@ -871,6 +871,7 @@ describe("FeishuBridge mentions", () => {
       config: defaultConfig(),
       dataDir: os.tmpdir(),
     }) as unknown as MentionTestableBridge & {
+      submitAndStream(message: FeishuMessage): Promise<void>;
       channel: {
         rawClient: {
           im: {
@@ -890,7 +891,7 @@ describe("FeishuBridge mentions", () => {
     };
     let received: FeishuMessage | undefined;
     const types: string[] = [];
-    bridge.handleMessage = async (message) => {
+    bridge.submitAndStream = async (message) => {
       received = message;
     };
     bridge.channel = {
@@ -944,7 +945,7 @@ describe("FeishuBridge mentions", () => {
       chatId: "chat-1",
       chatType: "group",
       senderId: "ou_requester",
-      senderName: "维护者",
+      senderName: "示例成员",
       content: "请完成后通知 @张三",
       mentionedBot: true,
       mentions: [
@@ -954,7 +955,7 @@ describe("FeishuBridge mentions", () => {
     });
 
     expect(receivedPrompt).toContain("fcb mention <对象引用>");
-    expect(receivedPrompt).toContain("维护者（当前发送者）");
+    expect(receivedPrompt).toContain("示例成员（当前发送者）");
     expect(receivedPrompt).toContain("张三");
     expect(receivedPrompt).not.toContain("小库（机器人）");
     const ref = receivedPrompt.match(/- (u\d+)：张三/)?.[1];

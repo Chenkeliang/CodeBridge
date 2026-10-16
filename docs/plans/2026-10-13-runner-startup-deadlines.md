@@ -31,6 +31,6 @@ GitNexus 在 c6d763d 重建索引；raceWithAbort 上游 7 个直接调用、18 
 
 `pnpm build` 通过；`pnpm lint` 通过（7 条既有 Web warning）；`pnpm test` 148 文件 / 1391 测试全部通过。将两处生产代码临时还原到基线后，两个真实子进程停顿回归均失败；恢复修复后通过。新增真实 ACP 管道、真实 lockf 内核互斥及 3 项模拟时序测试，验证超时后已就绪、真实无响应、排队锁冲突及迟到计时器不杀已交付 holder。
 
-真实 codex / codex-alert 配置只握手验证：测试等待期限 2000ms，暂停独立测试父进程 3000ms，恢复后两者均收到 protocol=1（分别 3009ms/3018ms 返回）；没有创建/续聊业务会话或发送 prompt。
+真实 codex / codex-profile 配置只握手验证：测试等待期限 2000ms，暂停独立测试父进程 3000ms，恢复后两者均收到 protocol=1（分别 3009ms/3018ms 返回）；没有创建/续聊业务会话或发送 prompt。
 
 分支 fix_runner_startup_deadlines 基于 fetch 后的 origin/main c6d763d，创建时独有提交数 0。用户已授权合并 main、推送和上线；发布结果以发布器状态及线上健康验证为准。

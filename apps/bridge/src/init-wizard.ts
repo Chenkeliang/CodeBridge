@@ -1,3 +1,4 @@
+import { verifyFeishu, telegramCall } from "./channel-credentials.js";
 import { execFileSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
@@ -8,6 +9,8 @@ import { parseDocument, stringify as stringifyYaml, type Document } from "yaml";
 import {
   ConfigStore,
   SUPPORTED_AGENT_IDS,
+  SECRET_PATHS,
+  SECRET_ENV_VARS,
   defaultConfig,
   keychainServiceFor,
   resolveSecretRef,
@@ -42,7 +45,7 @@ export interface InitSummary {
   configPath: string;
   channels: string[];
   defaultAgent?: string;
-  secretStorage: Record<string, "keychain" | "plaintext" | "kept">;
+  secretStorage: Record<string, "keychain" | "kept">;
 }
 
 /** Commands AgentSetupService probes for each agent CLI. */
@@ -113,12 +116,15 @@ function removeStagedSecret(service: string, secrets: SecretOptions = {}): void 
   }
 }
 
-/** No TTY: generate a token in a 0600 file; never access the keychain or overwrite a config. */
+/** No TTY: require an externally supplied token; never persist a generated plaintext credential. */
 export function initDefaults(dataDir: string): { written: boolean; configPath: string } {
   const configPath = path.join(dataDir, "config.yaml");
   if (fs.existsSync(configPath)) return { written: false, configPath };
+  if (!process.env.RUNNER_TOKEN || process.env.RUNNER_TOKEN.length < 8) {
+    throw new Error("非交互初始化需要先设置 RUNNER_TOKEN；配置只保存 env: 引用，或运行交互式 codebridge init 使用系统钥匙串");
+  }
   const doc = parseDocument(stringifyYaml(defaultConfig()));
-  doc.setIn(["runner", "token"], process.env.RUNNER_TOKEN ? "env:RUNNER_TOKEN" : newRunnerToken());
+  doc.setIn(["runner", "token"], "env:RUNNER_TOKEN");
   const staged = stageConfig(configPath, doc.toString());
   try {
     // link is no-clobber even if another init creates the config after our initial check.
@@ -263,6 +269,13 @@ export async function runInitWizard(options: InitWizardOptions): Promise<InitSum
   // Validate before touching credentials. Each new item has its own name, so even a
   // failed commit cannot replace a secret referenced by the live config/deployer.
   io.checkCancelled();
+  for (const secretPath of SECRET_PATHS) {
+    const value = doc.getIn(secretPath);
+    const envName = SECRET_ENV_VARS[secretPath.join(".")];
+    if (typeof value === "string" && secretSourceOf(value) === "plaintext" && envName && process.env[envName]) {
+      doc.setIn(secretPath, `env:${envName}`);
+    } else if (typeof value === "string" && secretSourceOf(value) === "plaintext" && !pending.has(secretPath.join("."))) setSecret(secretPath, value);
+  }
   const planned = [...pending.values()].map((entry) => ({
     ...entry, service: `${keychainServiceFor(entry.secretPath, dataDir)}.init-${randomBytes(12).toString("hex")}`,
   }));
@@ -278,7 +291,7 @@ export async function runInitWizard(options: InitWizardOptions): Promise<InitSum
         storeKeychainSecret(service, value, options.secrets);
         stored.push(service);
         saved = resolveSecretRef(`keychain:${service}`, options.secrets) === value;
-      } catch { /* Offer explicit plaintext fallback, without leaking helper errors. */ }
+      } catch { /* Fail closed without leaking helper errors or writing plaintext. */ }
       if (saved) {
         summary.secretStorage[name] = "keychain";
       } else {
@@ -286,11 +299,7 @@ export async function runInitWizard(options: InitWizardOptions): Promise<InitSum
           removeStagedSecret(service, options.secrets);
           stored.splice(stored.indexOf(service), 1);
         }
-        if (!(await io.confirm(`无法写入系统钥匙串，把 ${name} 明文写入 config.yaml（文件权限 600）？`, false))) {
-          throw new Error(`${name} 未保存，初始化中止；原配置和密钥未修改`);
-        }
-        doc.setIn(secretPath, value);
-        summary.secretStorage[name] = "plaintext";
+        throw new Error(`${name} 无法保存到系统钥匙串；请使用 env: 引用配置，原配置和密钥未修改`);
       }
     }
     io.checkCancelled();
@@ -343,23 +352,6 @@ async function promptFeishu(doc: Document, io: WizardIo, fetchImpl: typeof fetch
   throw new Error("飞书凭据连续 3 次校验失败，初始化中止；原配置和密钥未修改");
 }
 
-async function verifyFeishu(fetchImpl: typeof fetch, domain: string, appId: string, appSecret: string): Promise<string | undefined> {
-  // Never send the secret over plain HTTP.
-  if (!/^https:\/\//.test(domain)) return `feishu.domain 不是 https（${domain}），不发送密钥`;
-  try {
-    const response = await fetchImpl(`${domain}/open-apis/auth/v3/tenant_access_token/internal`, {
-      method: "POST",
-      redirect: "error",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    const body = await response.json().catch(() => ({})) as { code?: number; msg?: string };
-    return response.ok && body.code === 0 ? undefined : `${body.msg ?? `HTTP ${response.status}`}（code ${body.code ?? "?"}）`.replaceAll(appSecret, "[REDACTED]");
-  } catch (error) {
-    return `无法连接 ${domain}：${error instanceof Error ? error.message : String(error)}`.replaceAll(appSecret, "[REDACTED]");
-  }
-}
 
 async function promptTelegram(io: WizardIo, fetchImpl: typeof fetch, doc: Document, options: InitWizardOptions): Promise<{ token: string; users: string[]; replaceChats: boolean } | undefined> {
   io.print("在 Telegram 找 @BotFather，/newbot 后复制 bot token。");
@@ -434,16 +426,6 @@ async function promptTelegramUsers(io: WizardIo, fetchImpl: typeof fetch, token:
   }
 }
 
-async function telegramCall<T>(fetchImpl: typeof fetch, token: string, method: string): Promise<{ ok: true; result: T } | { ok: false; error: string }> {
-  if (!/^\d+:[A-Za-z0-9_-]+$/.test(token)) return { ok: false, error: "格式应为 123456:ABC…" };
-  try {
-    const response = await fetchImpl(`https://api.telegram.org/bot${token}/${method}`, { redirect: "error", signal: AbortSignal.timeout(10_000) });
-    const body = await response.json().catch(() => ({})) as { ok?: boolean; result?: T; description?: string };
-    return response.ok && body.ok ? { ok: true, result: body.result as T } : { ok: false, error: (body.description ?? `HTTP ${response.status}`).replaceAll(token, "[REDACTED]") };
-  } catch (error) {
-    return { ok: false, error: (error instanceof Error ? error.message : String(error)).replaceAll(token, "[REDACTED]") };
-  }
-}
 
 export interface LineState {
   buffer: string;

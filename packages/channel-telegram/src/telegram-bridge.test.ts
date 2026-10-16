@@ -337,7 +337,7 @@ describe("TelegramBridge inbound commands", () => {
       message: {
         message_id: 7,
         chat: { id: 42, type: "group" },
-        from: { id: 99, first_name: "维护者" },
+        from: { id: 99, first_name: "示例成员" },
         text: "完成后通知 张三 和 @reviewer",
         entities: [
           {
@@ -353,7 +353,7 @@ describe("TelegramBridge inbound commands", () => {
     await bridge.disconnect();
 
     expect(receivedPrompt).toContain("fcb mention <对象引用>");
-    expect(receivedPrompt).toContain("维护者（当前发送者）");
+    expect(receivedPrompt).toContain("示例成员（当前发送者）");
     expect(receivedPrompt).toContain("张三");
     expect(receivedPrompt).toContain("reviewer");
     const ref = receivedPrompt.match(/- (u\d+)：张三/)?.[1];

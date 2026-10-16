@@ -184,10 +184,9 @@ export function SkillControlPlanePage({ onNotify }: {
   }
 
   return <section aria-label="Skill 管理" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-    <header className={cn("flex min-h-[72px] shrink-0 items-center justify-between gap-4 border-b px-8", "border-line")}>
+    <header className={cn("flex min-h-[96px] shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-sidebar px-5 py-5 md:px-8", "border-line")}>
       <div className="min-w-0">
-        <p className={cn("font-brand text-xs uppercase tracking-[0.1em]", "text-muted")}>Skills / 本机能力资产</p>
-        <h1 className={cn("mt-1 truncate font-brand text-lg font-normal tracking-[-0.035em]", "text-ink")}>Skill 管理</h1>
+        <h1 className={cn("truncate font-brand text-xl font-normal tracking-tight", "text-ink")}>Skill 管理</h1><p className="mt-1 text-sm leading-6 text-muted">查看本机能力，管理 Agent 的可见范围。</p>
       </div>
       <div className="flex shrink-0 gap-2">
         <button aria-label="重新扫描 Skill" className={actionClass(false)} disabled={loading} onClick={() => void load()} title="重新扫描 Skill" type="button">
@@ -202,7 +201,7 @@ export function SkillControlPlanePage({ onNotify }: {
     <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-8 py-6 max-md:px-4 max-md:py-4">
       {error && <div className={cn("mb-4 flex items-start gap-2 rounded-md border px-3 py-2.5 text-xs", "bg-danger-soft text-danger border-line-strong")} role="alert"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0 flex-1">{error}</span><button aria-label="关闭错误" onClick={() => setError(null)} type="button"><X className="size-3.5" /></button></div>}
 
-      <div className={cn("mb-5 grid grid-cols-4 overflow-hidden rounded-md border max-lg:grid-cols-2 max-sm:grid-cols-1", "border-line")}>
+      <div className={cn("mb-5 flex flex-wrap gap-x-6 gap-y-3 border-b pb-4", "border-line")}>
         <Metric label="技能目录" note={`${snapshot?.summary.sources ?? 0} 类来源`} value={snapshot?.summary.total ?? 0} />
         <Metric label="目录投影" note="含 Agent 原生目录" value={snapshot?.summary.linked ?? 0} />
         <Metric label="目标 Agent" note="Runner Adapter" value={snapshot?.targets.length ?? 0} />
@@ -252,9 +251,8 @@ export function SkillControlPlanePage({ onNotify }: {
 }
 
 function Metric({ label, value, note, tone }: { label: string; value: number; note: string; tone?: "warning" }) {
-  return <div className={cn("min-w-0 border-r p-4 last:border-r-0 max-lg:[&:nth-child(2)]:border-r-0 max-sm:border-b max-sm:border-r-0 max-sm:last:border-b-0", "bg-surface border-line")}>
-    <div className={cn("text-xs", "text-muted")}>{label}</div>
-    <div className="mt-1 flex min-w-0 items-baseline gap-2"><span className={cn("font-mono text-2xl", tone === "warning" ? "text-warning" : "text-ink")}>{value}</span><span className={cn("truncate text-[11px]", "text-faint")}>{note}</span></div>
+  return <div className="flex min-w-0 items-baseline gap-2 text-xs" title={note}>
+    <span className="text-muted">{label}</span><span className={cn("font-mono text-sm font-semibold tabular-nums", tone === "warning" && value > 0 ? "text-warning" : "text-ink")}>{value}</span><span className="hidden text-faint xl:inline">{note}</span>
   </div>;
 }
 
@@ -271,8 +269,8 @@ function CatalogView({ filtered, loading, query, source, state, total, onQuery, 
   onState: (value: "all" | "healthy" | "issue") => void;
 }) {
   return <>
-    <div className="mb-4 grid min-w-0 grid-cols-[minmax(220px,360px)_132px_132px_minmax(0,1fr)] gap-2 max-lg:grid-cols-[minmax(160px,1fr)_120px_120px] max-sm:grid-cols-[minmax(0,1fr)_44px_44px]">
-      <label className={cn("flex h-9 min-w-0 items-center gap-2 rounded-md border px-3", "bg-surface border-line")}><Search className={cn("size-3.5 shrink-0", "text-faint")} /><input aria-label="搜索 Skill" className={cn("min-w-0 flex-1 bg-transparent text-xs outline-none", "text-ink placeholder:text-faint")} onChange={(event) => onQuery(event.target.value)} placeholder="搜索名称、说明、标签或来源" value={query} /></label>
+    <div className="mb-4 grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-[minmax(120px,1fr)_120px_120px] lg:grid-cols-[minmax(220px,360px)_132px_132px_minmax(0,1fr)]">
+      <label className={cn("col-span-2 flex h-9 min-w-0 items-center gap-2 rounded-md border px-3 sm:col-span-1", "bg-surface border-line")}><Search className={cn("size-3.5 shrink-0", "text-faint")} /><input aria-label="搜索 Skill" className={cn("min-w-0 flex-1 bg-transparent text-xs outline-none", "text-ink placeholder:text-faint")} onChange={(event) => onQuery(event.target.value)} placeholder="搜索名称、说明、标签或来源" value={query} /></label>
       <FilterSelect
         label="筛选 Skill 来源"
         options={[["all", "全部来源"], ["shared", "共享主目录"], ["disabled", "全局停用"], ["adopted", "已登记目录"], ["agent_native", "Agent 原生"]]}
@@ -358,7 +356,7 @@ function PreviewDialog({ preview, applying, onApply, onClose }: { preview: Skill
 function DetailSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className={cn("border-t py-4", "border-line")}><h4 className={cn("mb-3 font-brand text-[10px] uppercase tracking-[0.08em]", "text-muted")}>{title}</h4>{children}</section>; }
 function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) { return <div className="grid grid-cols-[82px_minmax(0,1fr)] gap-2 py-1.5 text-xs"><span className="text-faint">{label}</span><span className={cn("min-w-0 break-all", mono && "font-mono text-[10px]", "text-ink-soft")}>{value}</span></div>; }
 function StatePill({ label, issue }: { label: string; issue: boolean }) { return <span className={cn("flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[9px]", issue ? "border-warning/30 text-warning" : "border-line text-muted")}><span className={cn("size-1.5 rounded-full", issue ? "bg-warning" : "bg-success")} />{label}</span>; }
-function FilterSelect({ label, options, value, onValue }: { label: string; options: Array<[string, string]>; value: string; onValue: (value: string) => void }) { return <Select onValueChange={onValue} value={value}><SelectTrigger aria-label={label} className="h-9 w-full min-w-0 border-line bg-surface px-2.5 text-xs text-ink shadow-none focus-visible:ring-1 max-sm:w-11 max-sm:px-2"><SelectValue /></SelectTrigger><SelectContent className="border-line-strong text-ink-soft shadow-panel" surface="frosted">{options.map(([id, optionLabel]) => <SelectItem className="data-[highlighted]:bg-surface-soft" key={id} value={id}>{optionLabel}</SelectItem>)}</SelectContent></Select>; }
+function FilterSelect({ label, options, value, onValue }: { label: string; options: Array<[string, string]>; value: string; onValue: (value: string) => void }) { return <Select onValueChange={onValue} value={value}><SelectTrigger aria-label={label} className="h-9 w-full min-w-0 border-line bg-surface px-2.5 text-xs text-ink shadow-none focus-visible:ring-1"><SelectValue /></SelectTrigger><SelectContent className="border-line-strong text-ink-soft shadow-panel" surface="frosted">{options.map(([id, optionLabel]) => <SelectItem className="data-[highlighted]:bg-surface-soft" key={id} value={id}>{optionLabel}</SelectItem>)}</SelectContent></Select>; }
 function actionClass(primary: boolean) { return cn("inline-flex h-9 min-w-9 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50", primary ? "bg-accent text-accent-ink border-accent" : "bg-surface text-ink border-line-strong"); }
 function iconButtonClass() { return cn("grid size-9 place-items-center rounded-md border transition-opacity hover:opacity-80", "border-line text-muted"); }
 function stateTone(state: SkillProjectionState) { return state === "linked" || state === "follows_global" ? "text-success" : state === "conflict" || state === "broken" ? "text-warning" : "text-muted"; }

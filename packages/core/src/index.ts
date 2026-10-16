@@ -9,3 +9,6 @@ export * from "./json-file-store.js";
 export * from "./mentions.js";
 
 export type { StdioMcpServerConfig } from "./mcp-types.js";
+
+export type * from "./management-types.js";
+export type * from "./task-management-types.js";

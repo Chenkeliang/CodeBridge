@@ -57,7 +57,7 @@ describe("MentionRegistry", () => {
       channel: "feishu",
       kind: "user",
       id: "ou_requester",
-      name: "维护者",
+      name: "示例成员",
     });
     registry.register(FEISHU_SCOPE, {
       channel: "feishu",
@@ -71,7 +71,7 @@ describe("MentionRegistry", () => {
       requester.ref,
     );
 
-    expect(guidance).toContain(`${requester.ref}：维护者（当前发送者）`);
+    expect(guidance).toContain(`${requester.ref}：示例成员（当前发送者）`);
     expect(guidance).toContain("发布机器人（机器人）");
     expect(guidance).toContain("fcb mention <对象引用> \"<消息>\"");
     expect(guidance).toContain("仅在确实需要主动通知时使用");
@@ -82,13 +82,13 @@ describe("MentionRegistry", () => {
     const file = path.join(dir, "mentions.json");
     const old = new MentionRegistry(file);
     old.register({ chatId: "oc_alerts", topicId: "om_alert" }, { channel: "feishu", kind: "user", id: "ou_owner", name: "告警审批人" });
-    old.register({ chatId: "oc_x" }, { channel: "feishu", kind: "user", id: "ou_other", name: "维护者" });
+    old.register({ chatId: "oc_x" }, { channel: "feishu", kind: "user", id: "ou_other", name: "示例成员" });
 
     const healed = new MentionRegistry(file);
     expect(healed.forgetNames(["告警审批人"])).toBe(1);
     const dm = healed.register({ chatId: "oc_dm" }, { channel: "feishu", kind: "user", id: "ou_owner" });
     expect(formatMentionGuidance([dm], dm.ref)).not.toContain("告警审批人");
-    expect(new MentionRegistry(file).list({ chatId: "oc_x" })[0]?.name).toBe("维护者");
+    expect(new MentionRegistry(file).list({ chatId: "oc_x" })[0]?.name).toBe("示例成员");
     expect(new MentionRegistry(file).list({ chatId: "oc_dm" })[0]?.name).toBeUndefined();
     fs.rmSync(dir, { recursive: true, force: true });
   });

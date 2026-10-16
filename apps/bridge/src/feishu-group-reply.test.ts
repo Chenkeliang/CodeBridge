@@ -229,3 +229,34 @@ describe("Feishu shared group conversations through the active adapter", () => {
     expect(f.reply).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ reply_in_thread: true }) }));
   });
 });
+
+it("honors reply mode and ignores a mention addressed to another human inside an active thread", async () => {
+  const f = fixture();
+  const a = await f.receive("om_first");
+  await f.internal.handleMessage({ messageId: "om_for_human", chatId: "oc_group", chatType: "group", senderId: "ou_alice", content: "1",
+    rootId: "om_first", threadId: "om_first", mentionedBot: false, mentions: [{ openId: "ou_bob", isBot: false }] });
+  expect(f.store.listDeliveries("feishu")).toHaveLength(1);
+  f.config.feishu.policy!.requireMention = false;
+  await f.receive("om_auto", "ou_bob", { mentionedBot: false });
+  f.config.feishu.policy!.requireMention = true;
+  await f.internal.handleMessage({ messageId: "om_silent", chatId: "oc_group", chatType: "group", senderId: "ou_bob", content: "闲聊" });
+  expect(f.store.listDeliveries("feishu")).toHaveLength(2);
+  const continued = await f.receive("om_direct_reply", "ou_bob", { mentionedBot: false, replyToMessageId: a.surfaceMessageId!, rootId: "om_first" });
+  expect(continued.sessionId).toBe(a.sessionId);
+});
+
+it("does not download or reply to unaddressed attachments in mentioned-only mode", async () => {
+  const f = fixture();
+  const get = vi.fn().mockRejectedValue(new Error("Synthetic attachment unavailable"));
+  Object.assign(f.channel.rawClient.im.v1, { messageResource: { get } });
+  await f.internal.dispatchInboundMessage(Object.assign({ messageId: "om_unaddressed_file", chatId: "oc_group", chatType: "group" as const,
+    senderId: "ou_bob", content: "", mentionedBot: false }, { resources: [{ type: "image" as const, fileKey: "img_fixture" }] }));
+  expect(f.send).not.toHaveBeenCalled();
+  expect(get).not.toHaveBeenCalled();
+  expect(f.store.listDeliveries("feishu")).toHaveLength(0);
+  f.config.feishu.policy!.requireMention = false;
+  await f.internal.dispatchInboundMessage(Object.assign({ messageId: "om_auto_file", chatId: "oc_group", chatType: "group" as const,
+    senderId: "ou_bob", content: "", mentionedBot: false }, { resources: [{ type: "image" as const, fileKey: "img_fixture" }] }));
+  expect(get).toHaveBeenCalledTimes(1);
+  expect(f.send).toHaveBeenCalledTimes(1);
+});

@@ -273,7 +273,7 @@ describe("Run-bound outbound routing", () => {
 
 describe("Publisher-token outbound routing", () => {
   const PUBLISHER = {
-    label: "stock-daily-trade",
+    label: "daily-report",
     token: "publisher-token-abcdefghijklmnop",
     chatId: "oc_bound",
     topicId: "om_bound",

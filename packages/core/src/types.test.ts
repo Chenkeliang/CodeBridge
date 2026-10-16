@@ -217,3 +217,8 @@ describe("resolveDefaultAgentId", () => {
     })).toBe("opencode");
   });
 });
+
+it("ignores a disabled reply override instead of turning on automatic replies", () => {
+  expect(resolveRequireMention({ requireMention: true, dmMode: "open", respondToMentionAll: false,
+    scenarios: [{ name: "Paused exception", chats: ["oc_fixture"], requireMention: false, enabled: false }] }, "oc_fixture")).toBe(true);
+});

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
@@ -14,6 +15,8 @@ import {
   isSecretRef,
   resolveSecretRef,
   secretPathName,
+  keychainServiceFor,
+  storeKeychainSecret,
   secretSourceOf,
   setPath,
   type SecretOptions,
@@ -126,15 +129,19 @@ export class ConfigStore {
   }
 
   save(partial: Partial<AppConfig>): AppConfig {
-    this.config = ConfigSchema.parse({ ...this.config, ...partial });
-    this.persist();
-    this.notify();
-    return this.config;
+    return this.update((current) => ({ ...current, ...partial }));
   }
 
   update(mutator: (current: AppConfig) => AppConfig): AppConfig {
-    this.config = ConfigSchema.parse(mutator(this.config));
-    this.persist();
+    const previous = this.config;
+    const previousSecrets = new Map(this.secrets);
+    this.config = ConfigSchema.parse(mutator(structuredClone(previous)));
+    try { this.persist(); }
+    catch (error) {
+      this.config = previous;
+      this.secrets = previousSecrets;
+      throw error;
+    }
     this.notify();
     return this.config;
   }
@@ -162,19 +169,25 @@ export class ConfigStore {
       if (entry?.external && current === entry.loaded) {
         // Unchanged value from a ref or env: write back what was on disk, never the secret.
         // Env-only values become an env: ref so the file still loads where that env is set.
-        setPath(output, secretPath, entry.disk ?? (entry.envVar ? `env:${entry.envVar}` : undefined));
+        setPath(output, secretPath, secretSourceOf(entry.disk) === "plaintext" && entry.envVar
+          ? `env:${entry.envVar}` : entry.disk ?? (entry.envVar ? `env:${entry.envVar}` : undefined));
+      } else if (typeof current === "string" && secretSourceOf(current) === "plaintext") {
+        const service = `${keychainServiceFor(secretPath, dir)}.saved-${randomBytes(12).toString("hex")}`;
+        storeKeychainSecret(service, current, this.secretOptions);
+        const ref = `keychain:${service}`;
+        if (resolveSecretRef(ref, this.secretOptions) !== current) throw new Error(`${name} 钥匙串读回校验失败，配置未写入`);
+        setPath(output, secretPath, ref);
+        this.secrets.set(name, { disk: ref, loaded: current, external: true });
       } else {
         this.secrets.set(name, { disk: current, loaded: current, external: false });
       }
     }
-    fs.writeFileSync(this.configPath, stringifyYaml(output), {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    // writeFileSync's `mode` only applies when creating the file, so an
-    // already-existing config.yaml keeps its prior permissions unless
-    // explicitly tightened here.
-    if (existed) fs.chmodSync(this.configPath, 0o600);
+    const target = existed ? fs.realpathSync(this.configPath) : this.configPath;
+    const temporary = `${target}.${randomBytes(12).toString("hex")}.tmp`;
+    try {
+      fs.writeFileSync(temporary, stringifyYaml(output), { encoding: "utf8", mode: 0o600, flag: "wx" });
+      fs.renameSync(temporary, target);
+    } finally { fs.rmSync(temporary, { force: true }); }
   }
 
   private loadFromDisk(): AppConfig {
@@ -228,7 +241,7 @@ export class ConfigStore {
     }
     if (process.env.RUNNER_URL || process.env.RUNNER_TOKEN) {
       result.runner = {
-        url: process.env.RUNNER_URL ?? "http://127.0.0.1:19789",
+        url: process.env.RUNNER_URL,
         token: process.env.RUNNER_TOKEN,
       };
     }

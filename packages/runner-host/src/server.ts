@@ -235,7 +235,7 @@ export class RunnerHost {
    */
   private readonly pendingPermissions = new Map<
     string,
-    Array<{ requestId: string; resolve: (approve: boolean) => void }>
+    Array<{ requestId: string; title: string; resolve: (approve: boolean) => void }>
   >();
 
   private readonly deploymentMcpServerPath: string;
@@ -745,8 +745,8 @@ export class RunnerHost {
     }
   }
 
-  scanSkills(): SkillCatalogSnapshot {
-    return this.skillControlPlane.scan();
+  scanSkills(withRevision = true): SkillCatalogSnapshot {
+    return this.skillControlPlane.scan(withRevision);
   }
 
   addSkillSource(sourcePath: string): SkillCatalogSnapshot {
@@ -1010,6 +1010,7 @@ export class RunnerHost {
               const queue = this.pendingPermissions.get(runId) ?? [];
               queue.push({
                 requestId,
+                title: info.title,
                 resolve: (approve: boolean) => {
                   clearTimeout(timer);
                   removePending(requestId);
@@ -1134,9 +1135,13 @@ export class RunnerHost {
   }
 
   /** /approve /deny：回应当前 run 最早挂起的权限请求（FIFO） */
-  resolvePermission(runId: string, approve: boolean): boolean {
+  listPendingPermissions(): Array<{ runId: string; requestId: string; title: string }> {
+    return [...this.pendingPermissions].flatMap(([runId, requests]) => requests.map(({ requestId, title }) => ({ runId, requestId, title })));
+  }
+
+  resolvePermission(runId: string, approve: boolean, expectedRequestId?: string): boolean {
     const pending = this.pendingPermissions.get(runId)?.[0];
-    if (!pending) return false;
+    if (!pending || expectedRequestId !== undefined && pending.requestId !== expectedRequestId) return false;
     pending.resolve(approve);
     return true;
   }
@@ -1209,6 +1214,18 @@ export function createRunnerApp(host: RunnerHost, token: string) {
   app.get("/skills", (c) => {
     try {
       return c.json(host.scanSkills());
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.get("/skills/selection", (c) => {
+    try {
+      const snapshot = host.scanSkills(false);
+      return c.json({ skills: snapshot.skills.map(({ id, name, description, source_path, global_state, targets }) => ({
+        id, name, description, source_path, global_state,
+        targets: targets.map(({ agent_id, state }) => ({ agent_id, state })),
+      })) });
     } catch (error) {
       return skillControlPlaneErrorResponse(c, error);
     }
@@ -1325,14 +1342,17 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }));
   });
 
+  app.get("/permissions", (c) => c.json({ permissions: host.listPendingPermissions() }));
+
   app.post("/runs/:id/permission", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       approve?: boolean;
+      request_id?: string;
     };
-    if (typeof body.approve !== "boolean") {
+    if (typeof body.approve !== "boolean" || body.request_id !== undefined && (typeof body.request_id !== "string" || !body.request_id)) {
       return c.json({ error: "approve (boolean) is required" }, 400);
     }
-    const resolved = host.resolvePermission(c.req.param("id"), body.approve);
+    const resolved = host.resolvePermission(c.req.param("id"), body.approve, body.request_id);
     return c.json({ resolved });
   });
 

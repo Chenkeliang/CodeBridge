@@ -11,7 +11,14 @@ const SECRET = "Fs3cret-from-keychain";
 
 describe("secret references in config.yaml", () => {
   let dataDir: string;
-  const keychain: SecretCommand = (_file, args) => {
+  const saved = new Map<string, string>();
+  const keychain: SecretCommand = (_file, args, input) => {
+    if (args[0] === "-i") {
+      const match = /-s (\S+) -a codebridge -w "([^"]*)"/.exec(input ?? "")!;
+      saved.set(match[1]!, match[2]!); return "";
+    }
+    const stored = saved.get(args[args.indexOf("-s") + 1]!);
+    if (stored !== undefined) return stored;
     if (args.includes("codebridge.feishu.appSecret")) return `${SECRET}\n`;
     throw new Error("The specified item could not be found in the keychain.");
   };
@@ -44,7 +51,8 @@ describe("secret references in config.yaml", () => {
     expect(store.get().feishu.appSecret).toBe("env-only-secret");
     store.update((current) => ({ ...current, defaultAgent: "codex" }));
     expect(onDisk()).not.toContain("env-only-secret");
-    expect(onDisk()).toContain("appSecret: on-disk-secret");
+    expect(onDisk()).not.toContain("on-disk-secret");
+    expect(onDisk()).toContain("appSecret: env:FEISHU_APP_SECRET");
   });
 
   it("writes env: refs, not values, for env-only secrets and the file still loads", () => {
@@ -68,6 +76,12 @@ describe("secret references in config.yaml", () => {
     expect(onDisk()).toContain("token: keychain:codebridge.runner.token");
   });
 
+  it("keeps a configured Runner URL when only its secret comes from the environment", () => {
+    writeConfig((c) => { c.runner.url = "http://127.0.0.1:43210"; });
+    vi.stubEnv("RUNNER_TOKEN", "fixture-runner-environment");
+    expect(new ConfigStore({ dataDir }).get().runner.url).toBe("http://127.0.0.1:43210");
+  });
+
   it("does not blank a secret when only a sibling env var is set", () => {
     writeConfig((c) => { c.runner.token = "disk-token-123456"; });
     vi.stubEnv("RUNNER_URL", "http://127.0.0.1:1");
@@ -82,6 +96,22 @@ describe("secret references in config.yaml", () => {
     expect(store.get().feishu.appSecret).toBe("keychain:codebridge.broken");
   });
 
+  it("never writes a newly supplied plaintext secret to config", () => {
+    const items = new Map<string, string>();
+    const run: SecretCommand = (_file, args, input) => {
+      if (args[0] === "-i") {
+        const match = /-s (\S+) -a codebridge -w "([^"]*)"/.exec(input ?? "")!;
+        items.set(match[1]!, match[2]!); return "";
+      }
+      return items.get(args[args.indexOf("-s") + 1]!) ?? "";
+    };
+    const store = new ConfigStore({ dataDir, secrets: { platform: "darwin", run } });
+    store.save({ runner: { url: "http://127.0.0.1:19789", token: "fixture-runner-secret" } });
+    expect(onDisk()).not.toContain("fixture-runner-secret");
+    expect(onDisk()).toContain("token: keychain:");
+    expect(new ConfigStore({ dataDir, secrets: { platform: "darwin", run } }).get().runner.token).toBe("fixture-runner-secret");
+  });
+
   it("inspects every field without throwing on a broken ref", () => {
     writeConfig((c) => { c.feishu.appSecret = "keychain:codebridge.broken"; c.runner.token = "plain-token-123"; });
     const report = ConfigStore.inspectSecrets(path.join(dataDir, "config.yaml"), { platform: "darwin", run: keychain, env: {} });
@@ -94,7 +124,9 @@ describe("secret references in config.yaml", () => {
     writeConfig((c) => { c.feishu.appSecret = "keychain:codebridge.feishu.appSecret"; });
     const store = new ConfigStore({ dataDir, secrets: { platform: "darwin", run: keychain } });
     store.update((current) => ({ ...current, runner: { ...current.runner, token: "rotated-runner-token" } }));
-    expect(onDisk()).toContain("token: rotated-runner-token");
+    expect(onDisk()).not.toContain("rotated-runner-token");
+    expect(onDisk()).toContain("token: keychain:");
+    expect(store.get().runner.token).toBe("rotated-runner-token");
     expect(onDisk()).toContain("appSecret: keychain:codebridge.feishu.appSecret");
   });
 

@@ -34,10 +34,7 @@ export async function resolveOutboundFile(
   }
 
   const realHome = await fs.realpath(homeDir);
-  const rel = path.relative(realHome, real);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error("仅允许发送主目录内的文件");
-  }
+  assertOutboundFileInHome(real, realHome);
 
   const stat = await fs.stat(real);
   if (!stat.isFile()) {
@@ -50,4 +47,10 @@ export async function resolveOutboundFile(
   }
 
   return { path: real, fileName: path.basename(real) };
+}
+
+/** Both live sending and archived task output validate the original canonical source. */
+export function assertOutboundFileInHome(real: string, realHome: string): void {
+  const relative = path.relative(realHome, real);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("仅允许发送主目录内的文件");
 }

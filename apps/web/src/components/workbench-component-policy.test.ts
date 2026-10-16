@@ -182,10 +182,10 @@ describe("Workbench component policy", () => {
   });
 
   it("keeps page-level titles on the brand display font", () => {
-    // FE-TYPE-001: settings page title matches the panel title role
+    // FE-TYPE-001: settings uses the shared page heading role; panels retain their own smaller role.
     const settings = readFileSync(new URL("./settings-page.tsx", import.meta.url), "utf8");
 
-    expect(settings).toContain('font-brand text-lg font-normal tracking-[-0.035em]');
+    expect(settings).toContain('font-brand text-xl font-normal tracking-tight');
     const styles = readFileSync(new URL("../index.css", import.meta.url), "utf8");
 
     expect(styles).toContain('"PingFang SC"');

@@ -34,7 +34,7 @@ describe("buildInboundPromptPrefix", () => {
                         body: {
                           content: JSON.stringify({ text: "补充说明" }),
                         },
-                        sender: { sender_name: "维护者" },
+                        sender: { sender_name: "示例成员" },
                       },
                     ],
                   },
@@ -57,7 +57,7 @@ describe("buildInboundPromptPrefix", () => {
 
     expect(prefix).toContain("【话题根消息｜发送者：灯塔机器人】");
     expect(prefix).toContain("err: AddOrder fail");
-    expect(prefix).toContain("【用户引用的消息｜发送者：维护者】");
+    expect(prefix).toContain("【用户引用的消息｜发送者：示例成员】");
     expect(prefix).toContain("补充说明");
   });
 

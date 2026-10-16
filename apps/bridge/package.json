@@ -26,6 +26,7 @@
     "@codebridge/work-items": "workspace:*",
     "@hono/node-server": "^1.19.14",
     "commander": "^12.1.0",
+    "croner": "10.0.1",
     "hono": "^4.12.27",
     "yaml": "^2.9.0"
   },

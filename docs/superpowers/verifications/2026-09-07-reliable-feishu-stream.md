@@ -19,7 +19,7 @@ Production's existing scripts/start.sh edit is untouched. Deploy by switching th
 - Focused cross-surface/runtime suite: 41 files, 461 tests passed.
 - Two new replay races were observed failing before the fix: BA instead of AB, and terminal completion before pending history. Both now pass and were independently replayed by a reviewer.
 - CardKit writer tests cover per-element writes, two simulated window expirations, remote acknowledgement, missing/error codes, partial success retry, FIFO, terminal fences, attachment receipt reuse and UTF-8 limits.
-- Unpublished real CardKit probe starts 11:40. First boundary at 11:51: content 200850 -> settings 0 -> content 0, same card/element. Second boundary and deployment evidence will be appended after completion. Probe log: /Users/demo/outputs/codebridge-feishu-api-audit-20260907/live-window-probe.jsonl .
+- Unpublished real CardKit probe starts 11:40. First boundary at 11:51: content 200850 -> settings 0 -> content 0, same card/element. Second boundary and deployment evidence will be appended after completion. Probe log: /Users/example/outputs/codebridge-feishu-api-audit-20260907/live-window-probe.jsonl .
 - No diagnostic IM message sent. An unpublished card validates server behavior, not the client's visual animation.
 
 ## Surface matrix

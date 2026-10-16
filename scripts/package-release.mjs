@@ -82,9 +82,9 @@ export function packRelease(root = repositoryRoot) {
     stageRelease(root, stage);
     const destination = path.join(root, 'dist');
     fs.mkdirSync(destination, { recursive: true });
-    const result = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', destination], {
+    const result = Object.values(JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', destination], {
       cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
-    }));
+    })));
     const artifact = path.join(destination, result[0].filename);
     console.log(artifact);
     return artifact;

@@ -146,3 +146,26 @@ it("fcb alert status sends the current Run and a structured state without a call
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
   expect(received).toEqual({ path: "/outbound/alert-status", body: { runId: "run_current", status: "waiting", summary: "请确认补货计划" } });
 });
+
+it("fcb tasks uses the shared task client with the injected current Run identity", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "fcb-task-command-")); tmpDirs.push(dataDir);
+  const bin = await writeFcbScript(dataDir), received: Array<{ path: string; body: unknown; revision?: string; identity?: string; key?: string }> = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = []; request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      received.push({ path: request.url!, body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null, revision: request.headers["if-match"] as string | undefined,
+        identity: request.headers["x-codebridge-run-id"] as string | undefined, key: request.headers["idempotency-key"] as string | undefined });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(request.method === "GET" ? { revision: "fixture-revision", tasks: [] } : { file: { id: "taskfile_fixture" } }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("missing port");
+  try {
+    await executeFile(path.join(bin, "fcb"), ["tasks", "output", "fixture-report.md", "--key", "fixture-output"], { cwd: dataDir, env: { ...process.env,
+      FCB_API: `http://127.0.0.1:${address.port}`, FCB_TOKEN: "fixture-token", FCB_RUN_ID: "run-original", FCB_CHAT_ID: "untrusted-destination" } });
+    expect(received).toHaveLength(2);
+    expect(received[1]).toMatchObject({ path: "/v1/management/agent-task-output", body: { runId: "run-original", path: path.join(await fs.realpath(dataDir), "fixture-report.md") },
+      revision: "fixture-revision", identity: "run-original", key: "fixture-output" });
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});

@@ -26,11 +26,11 @@ describe("extractMessageText", () => {
           { tag: "text", text: "data: E2026" },
           { tag: "a", text: "详情", href: "https://x" },
         ],
-        [{ tag: "at", user_name: "维护者" }],
+        [{ tag: "at", user_name: "示例成员" }],
       ],
     });
     expect(extractMessageText("post", content)).toBe(
-      "发货单下发异常\ndata: E2026详情\n@维护者",
+      "发货单下发异常\ndata: E2026详情\n@示例成员",
     );
   });
 

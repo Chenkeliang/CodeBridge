@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SkillControlPlane,
 } from "./skill-control-plane.js";
@@ -62,6 +62,40 @@ function createControlPlane(root: string) {
 }
 
 describe("SkillControlPlane catalog", () => {
+  it("lists task metadata without reading payload bytes while retaining structural validity checks", () => {
+    const fixture = createControlPlane(temporaryRoot());
+    const skill = createSkill(fixture.sharedRoot, "task-metadata");
+    const payload = path.join(skill, "runtime.bin");
+    fs.writeFileSync(payload, "package content is irrelevant to selection");
+    const canonicalPayload = fs.realpathSync(payload);
+    const original = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
+      if (String(file) === canonicalPayload) throw new Error("task listing must not read package payload");
+      return (original as (...args: unknown[]) => unknown)(file, ...args);
+    }) as never);
+    try {
+      expect(fixture.service.scan(false).skills[0]).toMatchObject({ id: "task-metadata", global_state: "enabled" });
+      expect(() => fixture.service.scan()).toThrow("task listing must not read package payload");
+      fs.symlinkSync("../../outside", path.join(skill, "unsafe-link"));
+      expect(fixture.service.scan(false).skills[0]).toMatchObject({ global_state: "invalid" });
+    } finally { read.mockRestore(); }
+  });
+
+  it("does not traverse an already-invalid package identity for task selection", () => {
+    const fixture = createControlPlane(temporaryRoot());
+    const skill = createSkill(fixture.sharedRoot, "wrong-folder");
+    fs.writeFileSync(path.join(skill, "SKILL.md"), "---\nname: different-name\n---\n");
+    const canonical = fs.realpathSync(skill), original = fs.readdirSync.bind(fs);
+    const read = vi.spyOn(fs, "readdirSync").mockImplementation(((directory: unknown, ...args: unknown[]) => {
+      if (String(directory) === canonical) throw new Error("must not traverse an invalid identity");
+      return (original as (...args: unknown[]) => unknown)(directory, ...args);
+    }) as never);
+    try {
+      expect(fixture.service.scan(false).skills[0]).toMatchObject({ id: "wrong-folder", global_state: "invalid" });
+      expect(() => fixture.service.scan()).toThrow("must not traverse an invalid identity");
+    } finally { read.mockRestore(); }
+  });
+
   it("scans shared, adopted, and Agent-native sources with stable metadata", () => {
     const root = temporaryRoot();
     const fixture = createControlPlane(root);

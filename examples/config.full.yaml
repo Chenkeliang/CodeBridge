@@ -1,21 +1,27 @@
-# 密钥字段（appSecret / botToken / runner.token）可写引用，不必明文：
-#   keychain:<服务名>  macOS 钥匙串或 Linux Secret Service；`codebridge secrets migrate` 可一键迁移
-#   env:<变量名>       从环境变量读取
-# 应用保存配置时只写回引用，不会把解析后的密钥落盘。`codebridge secrets status` 查看来源。
+# Main configuration reference for current source; see docs/release-status.md.
+# Not a ready-to-run config: replace example IDs/paths and provide secret values.
+# Omitted backend command/args inherit the built-in, versioned defaults.
+# Secrets: keychain:<service> or env:<NAME>. Never commit resolved credentials.
+# Local candidate: channel/task settings reuse these fields; see docs/zh-CN/channel-automation-roadmap.md.
 feishu:
   domain: https://open.feishu.cn
-  appId: cli_xxxxxxxx
-  appSecret: keychain:codebridge.feishu.appSecret
+  appId: cli_example
+  appSecret: env:FEISHU_APP_SECRET
   policy:
-    requireMention: true
-    dmMode: open
+    requireMention: true # true: mention/reply mode; false: automatic replies
+    dmMode: allowlist
+    dmAllowlist: ["ou_example_admin"]
+    groupAllowlist: ["oc_example_group"]
     respondToMentionAll: false
-    scenarios:
-      - name: trusted_dev_group
-        chats: ["oc_xxxxxxxx"]
-        requireMention: false
+    # Optional trusted-group behavior; omit to require @ for new requests.
+    # scenarios:
+    #   - name: trusted_group
+    #     chats: ["oc_example_group"]
+    #     requireMention: false
+    #     enabled: true # false skips this exception and uses the remaining/global policy
 
-# 可选；配置后与飞书同时启动，也支持仅配置 Telegram token 的模式
+# Optional; supports Telegram-only mode when Feishu credentials are unconfigured.
+# If both restrictions are present, both apply. Never copy example IDs unchanged.
 # telegram:
 #   botToken: env:TELEGRAM_BOT_TOKEN
 #   allowedUsers: ["123456789"]
@@ -24,25 +30,36 @@ feishu:
 
 runner:
   url: http://127.0.0.1:19789
-  token: keychain:codebridge.runner.token
+  token: env:RUNNER_TOKEN # set a long random value for both Bridge and Runner
+
+web:
+  enabled: false # opt in; local access, no independent Web login
+  # staticDirectory: /absolute/path/to/CodeBridge/apps/web/dist
+
+bridge:
+  apiPort: 19790
+
+# Current Feishu group configuration commands accept these operator identities.
+# This is NOT a unified cross-channel role model. Telegram has its own allowlists.
+# Alert approval identities are separately scoped under alertMonitor.groups below.
+access:
+  admins: ["ou_example_admin"]
+  allowedUsers: ["ou_example_admin"]
+  allowedChats: ["oc_example_group"]
 
 defaultBackend: cursor
-
+# defaultAgent: codex # Web default preference, if configured
 backends:
   cursor:
     type: cursor-cli
-    acpCommand: cursor-agent
-    acpArgs: ["acp"]
   claude:
     type: claude-code
-    acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"]
-    # Claude 的 ACP mode 默认；也可在飞书用 /permission 实时查看和覆盖
-    claudePermissionMode: bypassPermissions
+    claudePermissionMode: bypassPermissions # trusted local host only
+    # strictModel: true # reject unavailable requested models instead of using the default
   codex:
     type: codex
-    acpCommand: npx
-    acpArgs: ["-y", "@agentclientprotocol/codex-acp@1.12.0"]
+    # Do not enable network_access on a stock adapter that does not advertise it.
+    # See docs/zh-CN/codex-acp-network.md for source-only integration requirements.
   pi:
     type: pi-sdk
   opencode:
@@ -53,37 +70,65 @@ backends:
 workspaces:
   root: ~/Projects
   default: ~/Projects
+  # named:
+  #   example: /absolute/path/to/project
 
-# 可选：把正式 Project Catalog 放在单独 Git 仓库或 CodeBridge 配置仓库中。
-# 提案只创建本地 feature branch/commit，不自动 merge 或 push。
-# orchestration:
-#   projectCatalog:
-#     repositoryPath: ~/Projects/codebridge-catalog
-#     baseRef: origin/main
-#     catalogPath: catalog/projects.yaml
-#   mcpServers:
-#     local-tools:
-#       transport: stdio
-#       command: npx
-#       args: [local-tools-mcp]
-#       env: [LOCAL_TOOLS_TOKEN] # 只声明变量名，不在配置中写 token
-#       revision: config:1
-#     shared-tools:
-#       transport: http
-#       url: https://mcp.example.com/api
-#   session:
-#     # 新消息到达时，若当前会话闲置太久或上下文太满，自动开新会话（等同 /new，可 /resume 找回）。
-#     # 有运行中或排队的任务时不轮换；飞书告警群不轮换。
-#     autoRotate:
-#       enabled: true        # 默认开启
-#       idleHours: 12        # 闲置超过该小时数即轮换；0 关闭
-#       maxContextRatio: 0.5 # 上下文用量达到模型窗口的该比例即轮换
+orchestration:
+  session:
+    maxQueuedTurns: 100
+    autoRotate:
+      enabled: true
+      idleHours: 12 # 0 disables idle rotation
+      maxContextRatio: 0.5
+      # Current-source Feishu group replies preserve idle sessions; alerts are exempt.
+  # Formal Project Catalog proposals stay local until explicitly merged/pushed.
+  # projectCatalog:
+  #   repositoryPath: /absolute/path/to/catalog-repository
+  #   baseRef: main
+  #   catalogPath: catalog/projects.yaml
+  # mcpServers:
+  #   local-tools:
+  #     transport: stdio
+  #     command: /absolute/path/to/tool
+  #     args: []
+  #     env: [LOCAL_TOOLS_TOKEN] # variable names only
+  #     revision: config:1
+  #   shared-tools:
+  #     transport: http
+  #     url: https://mcp.example.com/api
 
 runnerHost:
   listen: 127.0.0.1:19789
   maxConcurrentRuns: 4
-  acpPermissionPolicy: auto_allow
+  acpPermissionPolicy: auto_allow # trusted local use; alternatives: prompt_feishu, prompt_deny
+  # acpPromptTimeoutMs: 21600000
+  # acpNoOutputTimeoutMs: 600000
+  # acpStallTimeoutMs: 1800000
+  # acpDrainBackgroundWork: true
+  # acpPostStopProbeMs: 8000
+  # acpPostStopQuietMs: 75000
+  # acpPostStopMaxMs: 1200000
+  # acpSessionPool: true
+  # acpSessionIdleMs: 600000
+  # acpSessionPoolMax: 4
 
-# plugins:
-#   memory:
-#     enabled: false
+# Optional Feishu alert collection: merge this under the EXISTING feishu key.
+# Do not create a second feishu key; duplicate YAML keys are invalid.
+# alertMonitor:
+#   enabled: false # enable deliberately after channel/permissions verification
+#   pollIntervalMs: 30000
+#   lookbackMs: 600000
+#   dedupWindowMs: 1800000
+#   maxConcurrent: 2
+#   incidentRetentionMs: 604800000
+#   statusReactions:
+#     investigating: OnIt
+#     waiting: OneSecond
+#     resolved: DONE
+#     no_action: CrossMark
+#     blocked: Sigh
+#   groups:
+#     - chatId: oc_example_group
+#       senderAppIds: ["cli_example_alarm_sender"]
+#       approverOpenIds: ["ou_example_approver"]
+#       runbookPath: /absolute/path/to/runbook/SKILL.md

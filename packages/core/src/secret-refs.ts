@@ -40,7 +40,7 @@ export interface SecretOptions {
 const defaultRun: SecretCommand = (file, args, input) =>
   execFileSync(file, args, { encoding: "utf8", input, timeout: 10_000, stdio: ["pipe", "pipe", "pipe"] });
 
-export function secretPathName(path: SecretPath): string {
+export function secretPathName(path: readonly string[]): string {
   return path.join(".");
 }
 
@@ -48,7 +48,7 @@ export function secretPathName(path: SecretPath): string {
  * Keychain service for a field. Items are per data dir so a second install (e.g. a dev
  * data dir) can never overwrite the production secrets; the default dir keeps short names.
  */
-export function keychainServiceFor(secretPath: SecretPath, dataDir?: string): string {
+export function keychainServiceFor(secretPath: readonly string[], dataDir?: string): string {
   const name = secretPathName(secretPath);
   if (!dataDir) return `codebridge.${name}`;
   const real = fs.existsSync(dataDir) ? fs.realpathSync(dataDir) : path.resolve(dataDir);

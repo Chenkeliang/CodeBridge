@@ -109,9 +109,9 @@ Running、Needs approval、Offline、Failed 必须同时由文字以及圆点或
 | `agnet.accent` | `#CCFF00` | 主动作和活动标识 |
 | `agnet.accentInk` | `#171A11` | Accent 底色上的文字 |
 | `agnet.accentSoft` | `#E9F6AD` | 用户消息和轻强调 |
-| `agnet.success` | `#3B8659` | 成功 |
-| `agnet.warning` | `#C27B18` | 等待和审批 |
-| `agnet.danger` | `#D25D3D` | 失败和删除 |
+| `agnet.success` | `#2F7149` | 成功 |
+| `agnet.warning` | `#93600F` | 等待和审批 |
+| `agnet.danger` | `#AF452B` | 失败和删除 |
 | `agnet.dangerSoft` | `#FCEBE6` | 错误卡片与 Diff 删除行底色 |
 | `agnet.successSoft` | `#E2EEE7` | Diff 新增行底色 |
 | `agnet.controlAccent` | `#3B8659` | 高亮不足场景下的控件强调（Slider 等） |
@@ -371,3 +371,7 @@ Agent Rail (60) | Session Panel (286) | Conversation Workspace (minmax)
 - 磨砂表面只出现在 Composer 与获准浮层，其他结构表面保持不透明。
 - `1440 × 900` 无溢出，主要动作不落出视口。
 - `pnpm lint`、Web 测试和生产构建通过。
+
+### 整体工作台补充约束
+
+导航交互目标统一44px；页面标题使用20px的既有品牌字体层级，章节标题为14px半粗体。设置项优先分组行，状态只显示一次。手机会话列表使用原生dialog抽屉，提供关闭与Esc、遮罩退出；选中会话后回到对话，桌面继续使用原286px面板。浅色主题的成功/警告/错误文字使用更深的语义颜色，普通文字达到4.5:1；warningSoft补齐为Paper #F7EDD9、Carbon #382C1D。焦点、文本选择、光标及原生复选框均使用已有语义色。

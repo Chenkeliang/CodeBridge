@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isSecretRef, keychainServiceFor, resolveSecretRef, storeKeychainSecret } from "@codebridge/core";
 
 /** 出站路由名，与 /outbound/<name> 一一对应。 */
 export const OUTBOUND_ROUTES = ["file", "markdown", "mention"] as const;
@@ -17,7 +18,7 @@ export const DEFAULT_ROUTES: OutboundRoute[] = ["markdown", "mention"];
  * Agent 不会因为这条路径而被放行。
  *
  * 它不保证 Agent 永远拿不到该凭据：Agent 子进程与 Bridge 同一个系统用户，
- * 能读文件就能读到它。0600 只挡其他用户。真正的隔离要靠沙箱，这里没有。
+ * 同一系统用户的进程可能读取钥匙串。引用解决落盘，不替代沙箱隔离。
  */
 export interface OutboundPublisher {
   label: string;
@@ -80,14 +81,15 @@ export function loadOutboundPublishers(
     if (typeof entry.label !== "string" || !entry.label.trim()) {
       throw invalid(file, index, "缺少 label");
     }
-    if (typeof entry.token !== "string" || entry.token.length < MIN_TOKEN_LENGTH) {
+    const token = typeof entry.token === "string" && isSecretRef(entry.token) ? resolveSecretRef(entry.token) : entry.token;
+    if (typeof token !== "string" || token.length < MIN_TOKEN_LENGTH) {
       throw invalid(file, index, `的 token 少于 ${MIN_TOKEN_LENGTH} 位`);
     }
-    if (entry.token === runnerToken) {
+    if (token === runnerToken) {
       throw invalid(file, index, "不能复用 runner token，否则 Agent 也能拿到它");
     }
-    if (seen.has(entry.token)) throw invalid(file, index, "的 token 与前面的重复");
-    seen.add(entry.token);
+    if (seen.has(token)) throw invalid(file, index, "的 token 与前面的重复");
+    seen.add(token);
     if (typeof entry.chatId !== "string" || !CHAT_ID_PATTERN.test(entry.chatId)) {
       throw invalid(file, index, "的 chatId 不是有效的通道聊天 ID");
     }
@@ -96,7 +98,7 @@ export function loadOutboundPublishers(
     }
     return {
       label: entry.label,
-      token: entry.token,
+      token,
       chatId: entry.chatId,
       topicId: entry.topicId || undefined,
       routes: parseRoutes(file, index, entry.routes),
@@ -149,13 +151,20 @@ function writePublishers(dataDir: string, entries: OutboundPublisher[]): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   // 每个写入者用自己的临时名，免得并发写互相踩，也免得崩溃残留被下一个写入者接手。
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
-  const payload = entries.map((entry) => ({
+  const payload = entries.map((entry) => {
+    const suffix = crypto.createHash("sha256").update(`${entry.label}\0${entry.token}`).digest("hex").slice(0, 24);
+    const service = keychainServiceFor(["publisher", suffix], dataDir);
+    storeKeychainSecret(service, entry.token);
+    const ref = `keychain:${service}`;
+    if (resolveSecretRef(ref) !== entry.token) throw new Error("发布者密钥读回校验失败，配置未修改");
+    return {
     label: entry.label,
-    token: entry.token,
+    token: ref,
     chatId: entry.chatId,
     ...(entry.topicId ? { topicId: entry.topicId } : {}),
     routes: entry.routes,
-  }));
+  };
+  });
   fs.writeFileSync(temporary, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   fs.chmodSync(temporary, 0o600);
   fs.renameSync(temporary, file);
@@ -238,4 +247,15 @@ export class OutboundPublisherStore {
     }
     return this.cache;
   }
+}
+
+/** Edit delivery policy without rotating an already configured caller's credential. */
+export function updatePublisher(dataDir: string, runnerToken: string, label: string, input: { chatId: string; topicId?: string; routes: string[] }): void {
+  if (!CHAT_ID_PATTERN.test(input.chatId)) throw new Error("目标聊天 ID 无效");
+  const routes = parseRoutes(publishersPath(dataDir), 0, input.routes);
+  withPublisherLock(dataDir, () => {
+    const entries = loadOutboundPublishers(dataDir, runnerToken);
+    if (!entries.some((entry) => entry.label === label)) throw new Error("发布者不存在");
+    writePublishers(dataDir, entries.map((entry) => entry.label === label ? { ...entry, chatId: input.chatId, topicId: input.topicId || undefined, routes } : entry));
+  });
 }

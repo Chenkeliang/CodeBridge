@@ -12,6 +12,11 @@
     "./session-event-wire": {
       "types": "./dist/session-event-wire.d.ts",
       "import": "./dist/session-event-wire.js"
+    },
+    "./task-cli": {
+      "types": "./dist/task-cli-client.d.ts",
+      "import": "./dist/task-cli-client.js",
+      "default": "./dist/task-cli-client.js"
     }
   },
   "scripts": {

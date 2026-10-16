@@ -167,11 +167,15 @@ export const ConfigSchema = z.object({
       }).refine((mapping) => new Set(Object.values(mapping)).size === 5, "Alert statuses need distinct reactions").optional(),
       groups: z.array(z.object({
         chatId: z.string().regex(/^oc_/),
+        name: z.string().max(100).optional(),
+        enabled: z.boolean().optional(),
         senderAppIds: z.array(z.string().min(1)).min(1),
         /** Deprecated alias for a single approver; kept so existing configs load. */
         ownerOpenId: z.string().regex(/^ou_/).optional(),
         /** People who can authorize write actions. Anyone in the group can chat, close or reopen. */
         approverOpenIds: z.array(z.string().regex(/^ou_/)).optional(),
+        /** Failure notifications only; does not grant approval rights. Omitted legacy configs use approvers. */
+        responsibleOpenIds: z.array(z.string().regex(/^ou_[A-Za-z0-9_]+$/)).min(1).optional(),
         runbookPath: z.string().min(1).optional(),
       }).refine((group) => (group.approverOpenIds?.length ?? 0) > 0 || Boolean(group.ownerOpenId), "Alert group needs at least one approver")).min(1).refine((groups) => new Set(groups.map((group) => group.chatId)).size === groups.length, "Duplicate alert group"),
     }).optional(),
@@ -179,6 +183,7 @@ export const ConfigSchema = z.object({
   telegram: z
     .object({
       botToken: z.string().min(1),
+      admins: z.array(z.string()).optional(),
       allowedUsers: z.array(z.string()).optional(),
       allowedChats: z.array(z.string()).optional(),
       pollingTimeoutSec: z.number().int().min(1).max(50).default(25),
@@ -316,7 +321,7 @@ export function resolveRequireMention(
   if (!policy?.scenarios?.length) return base;
   for (const scenario of policy.scenarios) {
     if (!scenario.chats.includes(chatId)) continue;
-    if (scenario.enabled === false) return false;
+    if (scenario.enabled === false) continue;
     if (scenario.requireMention !== undefined) return scenario.requireMention;
   }
   return base;

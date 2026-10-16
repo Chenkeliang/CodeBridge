@@ -11,3 +11,5 @@ export { FEISHU_ALERT_STATUSES } from "./alert-types.js";
 export type { FeishuAlertStatus } from "./alert-types.js";
 
 export type { FeishuAlertReaction } from "./alert-types.js";
+
+export { assertOutboundFileInHome } from "./feishu-outbound-file.js";

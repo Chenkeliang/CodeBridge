@@ -296,6 +296,29 @@ class Tests(unittest.TestCase):
             server.server_close()
             worker.join()
 
+    def test_controller_auth_accepts_keychain_and_env_references(self):
+        server = m.create_server(self.d, port=0)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        base = "http://127.0.0.1:" + str(server.server_address[1])
+        try:
+            for reference in ["keychain:fixture.controller", "env:CB_TEST_CONTROLLER"]:
+                self.d.c["token"] = reference
+                with patch.object(self.fake, "read_secret", return_value="fixture-controller"), patch.dict(os.environ, {"CB_TEST_CONTROLLER": "fixture-controller"}):
+                    request = urllib.request.Request(base + "/health", headers={"Authorization": "Bearer fixture-controller"})
+                    with urllib.request.urlopen(request) as response:
+                        self.assertTrue(json.load(response)["ok"])
+            self.d.c["token"] = "keychain:fixture.missing"
+            with patch.object(self.fake, "read_secret", side_effect=m.DeployError("missing")):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(urllib.request.Request(base + "/health", headers={"Authorization": "Bearer fixture-controller"}))
+                self.assertEqual(error.exception.code, 403)
+                error.exception.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join()
+
     def test_shared_runtime_switch_restores_both_plists(self):
         self.d.prepare(self.job)
         runner_path = self.root / "runner.plist"
@@ -466,6 +489,54 @@ class Tests(unittest.TestCase):
             with patch.object(self.d, "git", return_value=name.encode()):
                 with self.assertRaisesRegex(m.DeployError, "请先单独安装控制器"):
                     self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+
+    def test_only_reviewed_fresh_database_initialization_can_pass_schema_gate(self):
+        store = "apps/bridge/src/new-store.ts"
+        caller = "apps/bridge/src/cli.ts"
+        sources = {store: b"reviewed create-only store", caller: b"reviewed distinct database path"}
+        patch_text = ("+++ b/" + store + "\n+ CREATE TABLE IF NOT EXISTS task_rows(id TEXT)\n").encode()
+        receipt = {"scope": "new-database-only", "baseline": "oldcommit", "commit": "newcommit",
+                   "database": "agent-tasks.sqlite", "reviewer": "local-maintainer", "reviewedAt": "2026-10-16T00:00:00Z",
+                   "sourceHashes": {name: m.hashlib.sha256(value).hexdigest() for name, value in sources.items()}}
+        review_path = self.d.root / "reviews" / "newcommit.json"
+        cases = ("valid", "missing", "baseline", "commit", "hash", "unreviewed", "existing-source",
+                 "existing-database", "symlink-database", "traversal", "permissions", "alter", "removed-ddl", "invalid-json")
+        for case in cases:
+            with self.subTest(case=case):
+                current = json.loads(json.dumps(receipt))
+                if case in ("baseline", "commit"): current[case] = "different"
+                if case == "hash": current["sourceHashes"][store] = "0" * 64
+                if case == "unreviewed": del current["sourceHashes"][store]
+                if case == "traversal": current["database"] = "../sessions.sqlite"
+                m.atomic(review_path, current)
+                if case == "missing": review_path.unlink()
+                if case == "permissions": review_path.chmod(0o644)
+                if case == "invalid-json": review_path.write_text("{")
+                database = self.data / receipt["database"]
+                if case == "existing-database": database.write_bytes(b"must remain unchanged")
+                if case == "symlink-database": database.symlink_to(self.data / "not-created.sqlite")
+                def git(*args):
+                    if args[:2] == ("diff", "--name-only"):
+                        if "--diff-filter=D" in args: return b""
+                        if "--diff-filter=A" in args: return b"" if case == "existing-source" else store.encode()
+                        return (store + "\n" + caller).encode()
+                    if args[:2] == ("diff", "--unified=0"):
+                        if case == "alter": return ("+++ b/" + store + "\n+ ALTER TABLE task_rows ADD COLUMN x TEXT\n").encode()
+                        if case == "removed-ddl": return patch_text.replace(b"+ CREATE", b"- CREATE")
+                        return patch_text
+                    if args[0] == "show": return sources[args[1].split(":", 1)[1]]
+                    return b""
+                job = dict(self.job, commit="newcommit")
+                with patch.object(self.d, "git", side_effect=git):
+                    if case == "valid":
+                        self.d.compatible(job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+                        self.assertEqual(job["reviewedDatabaseInitialization"]["database"], receipt["database"])
+                    else:
+                        with self.assertRaisesRegex(m.DeployError, "schema change"):
+                            self.d.compatible(job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+                        self.assertNotIn("reviewedDatabaseInitialization", job)
+                if case == "existing-database": self.assertEqual(database.read_bytes(), b"must remain unchanged")
+                if database.exists() or database.is_symlink(): database.unlink()
 
     def test_schema_ddl_in_modified_file_blocks_publish(self):
         self.job["commit"] = "newcommit"

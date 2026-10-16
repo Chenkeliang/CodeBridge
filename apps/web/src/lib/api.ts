@@ -1,3 +1,5 @@
+import type { AgentTaskDraft, AgentTaskDefinition, AgentTaskAttempt, AgentTaskAttemptDetail, AgentTaskOptions, TaskPreflight, TaskAttentionItem, AlertIncidentView } from "@codebridge/core";
+import type { ManagementSnapshot, ManagedRule, ManagedChat, ManagedAlertSource, ManagedChannel, ChannelVerification } from "@codebridge/core";
 import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
 import { parseSseFrames } from "./sse";
 import type {
@@ -217,6 +219,35 @@ async function submission(id: string, key: string): Promise<SessionMessageReceip
 }
 
 export const api = {
+  agentTasks: () => request<{ revision: string; tasks: AgentTaskDefinition[]; scheduler: { running: boolean; lastCheckAt: string | null; lastError: string | null; maintenance: boolean } }>("/v1/management/agent-tasks"),
+  agentTaskOptions: () => request<AgentTaskOptions>("/v1/management/agent-tasks/options"),
+  agentTask: (id: string, offset = 0) => request<{ revision: string; task: AgentTaskDefinition; runs: AgentTaskAttempt[]; total: number; nextOffset: number | null }>(`/v1/management/agent-tasks/${encodeURIComponent(id)}?offset=${offset}`),
+  preflightAgentTask: (draft: AgentTaskDraft, revision: string, taskId?: string) => request<TaskPreflight>(`/v1/management/agent-tasks/preflight${taskId ? `?taskId=${encodeURIComponent(taskId)}` : ""}`, { method: "POST", headers: { "if-match": revision }, body: JSON.stringify(draft) }),
+  saveAgentTask: (draft: AgentTaskDraft, revision: string, key: string, task?: AgentTaskDefinition) => request<{ revision: string; task: AgentTaskDefinition; preflight: TaskPreflight }>(`/v1/management/agent-tasks${task ? `/${encodeURIComponent(task.id)}` : ""}`, {
+    method: task ? "PUT" : "POST", headers: { "if-match": revision, "idempotency-key": key }, body: JSON.stringify(task ? { version: task.version, task: draft } : draft),
+  }),
+  agentTaskAction: (id: string, action: "pause" | "resume" | "run" | "retry" | "resend" | "acknowledge", revision: string, body: unknown, key: string, attemptId?: string) =>
+    request<{ revision: string; task?: AgentTaskDefinition; attempt?: AgentTaskAttempt }>(`/v1/management/agent-tasks/${encodeURIComponent(id)}${attemptId ? `/runs/${encodeURIComponent(attemptId)}` : ""}/${action}`, { method: "POST", headers: { "if-match": revision, "idempotency-key": key }, body: JSON.stringify(body) }),
+  agentTaskAttempt: (id: string, attemptId: string) => request<AgentTaskAttemptDetail & { revision: string }>(`/v1/management/agent-tasks/${encodeURIComponent(id)}/runs/${encodeURIComponent(attemptId)}`),
+  pendingTasks: (kind?: TaskAttentionItem["kind"], offset = 0) => request<{ items: TaskAttentionItem[]; total: number; nextOffset: number | null; issues: string[]; checkedAt: string }>(`/v1/management/pending?offset=${offset}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}`),
+  resolveAgentPermission: (runId: string, requestId: string, approve: boolean) => request<{ resolved: boolean }>(`/v1/runs/${encodeURIComponent(runId)}/permission`, { method: "POST", body: JSON.stringify({ approve, request_id: requestId }) }),
+  alertIncidents: (chatId: string, status = "", offset = 0) => request<{ items: AlertIncidentView[]; total: number; nextOffset: number | null }>(`/v1/management/alerts/${encodeURIComponent(chatId)}/incidents?offset=${offset}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
+  downloadTaskFile: async (id: string, name: string) => {
+    const response = await fetch(`/v1/management/agent-task-files/${encodeURIComponent(id)}`, { headers: mergeHeaders({}) });
+    if (!response.ok) throw new Error("结果文件下载失败，请检查服务后重试");
+    const url = URL.createObjectURL(await response.blob()), link = document.createElement("a");
+    link.href = url; link.download = name; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+  management: () => request<ManagementSnapshot>("/v1/management"),
+  changeManagement: (url: string, method: string, revision: string, body: unknown) => request<ManagementSnapshot>(`/v1/management${url}`, { method, headers: { "If-Match": revision }, body: JSON.stringify(body) }),
+  channelConnections: () => request<{ channels: Array<Pick<ManagedChannel, "channel" | "configured" | "connected" | "connection">> }>("/v1/management/connections"),
+  testChannelConnection: (channel: ManagedChannel["channel"], revision: string, body: unknown) => request<ChannelVerification>(`/v1/management/connections/${channel}/test`, { method: "POST", headers: { "If-Match": revision }, body: JSON.stringify(body) }),
+  managementChats: () => request<{ chats: ManagedChat[] }>("/v1/management/feishu/chats"),
+  managementAlertSources: (chat: string) => request<{ sources: ManagedAlertSource[] }>(`/v1/management/feishu/sources/${encodeURIComponent(chat)}`),
+  managementMembers: (chat: string) => request<{ members: Array<{ id: string; name: string }> }>(`/v1/management/feishu/members/${encodeURIComponent(chat)}`),
+  availableLocalTasks: () => request<{ tasks: Array<{ source: string; label: string }> }>("/v1/management/local/available"),
+  managedRule: (chat: string, file?: string) => request<ManagedRule>(`/v1/management/alerts/${encodeURIComponent(chat)}/rules${file ? `?file=${encodeURIComponent(file)}` : ""}`),
+  saveManagedRule: (chat: string, revision: string, body: unknown) => request<{ revision: string; backup: string }>(`/v1/management/alerts/${encodeURIComponent(chat)}/rules`, { method: "PUT", headers: { "If-Match": revision }, body: JSON.stringify(body) }),
   skills: () => request<SkillCatalogSnapshot>("/v1/skills"),
   pickSkillSource: () => request<SkillCatalogSnapshot | { cancelled: true }>(
     "/v1/skills/sources/pick",

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_ROUTES,
   OutboundPublisherStore,
@@ -12,6 +12,13 @@ import {
   publishersPath,
   revokePublisher,
 } from "./outbound-publishers.js";
+
+const keychain = vi.hoisted(() => new Map<string, string>());
+vi.mock("@codebridge/core", async (original) => ({
+  ...await original<typeof import("@codebridge/core")>(),
+  storeKeychainSecret: (service: string, value: string) => { keychain.set(service, value); },
+  resolveSecretRef: (ref: string) => { const value = keychain.get(ref.slice("keychain:".length)); if (!value) throw new Error("missing fixture key"); return value; },
+}));
 
 const RUNNER_TOKEN = "runner-token-0123456789abcdef";
 const directories: string[] = [];
@@ -33,7 +40,7 @@ afterEach(() => {
 });
 
 const VALID = {
-  label: "stock-daily-trade",
+  label: "daily-report",
   token: "publisher-token-abcdefghijklmnop",
   chatId: "oc_example1",
   topicId: "om_1",
@@ -105,6 +112,15 @@ describe("publisher administration", () => {
     expect(saved.map((row) => row.label)).toEqual(["backup", "stock"]);
     expect(saved.find((row) => row.label === "backup")!.token).toBe(other.token);
     expect(saved.find((row) => row.label === "stock")!.routes).toEqual(["file", "markdown"]);
+  });
+
+  it("stores issued credentials as keychain references, never plaintext", () => {
+    const directory = emptyDataDir();
+    const issued = addPublisher(directory, RUNNER_TOKEN, { label: "private", chatId: "oc_test" });
+    const raw = fs.readFileSync(publishersPath(directory), "utf8");
+    expect(raw).not.toContain(issued.token);
+    expect(JSON.parse(raw)[0].token).toMatch(/^keychain:/);
+    expect(loadOutboundPublishers(directory, RUNNER_TOKEN)[0]?.token).toBe(issued.token);
   });
 
   it("never lists the token itself", () => {
