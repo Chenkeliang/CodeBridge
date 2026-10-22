@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/agentclientprotocol/codex-acp",
+  "baseCommit": "202e66e63343ec4f5a5e35ab590251d813d129ca",
+  "configId": "network_access",
+  "status": "prepared-not-submitted",
+  "publishedVersion": null,
+  "files": [
+    "src/CodexAcpClient.ts",
+    "src/CodexAcpServer.ts",
+    "src/NetworkAccessConfig.ts",
+    "src/__tests__/NetworkAccessConfig.test.ts"
+  ]
+}

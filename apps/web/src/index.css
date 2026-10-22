@@ -1,0 +1,352 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Departure Mono";
+  src: url("/workbench/fonts/DepartureMono-Regular.woff2") format("woff2");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  src: url("/workbench/fonts/CommitMono-400-Regular.otf") format("opentype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  src: url("/workbench/fonts/CommitMono-700-Regular.otf") format("opentype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+/* Semantic design tokens — values defined in docs/orchestration/DESIGN.md §3.
+   Themes switch via data-theme on the app root; components only consume the
+   semantic utilities generated from the @theme inline block below. */
+:root, [data-theme="paper"] {
+  color-scheme: light;
+  --agnet-canvas: #F6F7F4;
+  --agnet-sidebar: #FBFCFA;
+  --agnet-surface: #FFFFFF;
+  --agnet-surface-soft: #EEF1EB;
+  --agnet-surface-tint: #F2F4EF;
+  --agnet-overlay: #FFFFFF;
+  --agnet-overlay-strength: 94%;
+  --agnet-ink: #191C16;
+  --agnet-ink-soft: #373C32;
+  --agnet-muted: #5C6255;
+  --agnet-faint: #656D5C;
+  --agnet-line: #E0E4DC;
+  --agnet-line-strong: #CDD3C8;
+  --agnet-accent: #CCFF00;
+  --agnet-accent-ink: #171A11;
+  --agnet-accent-soft: #E9F6AD;
+  --agnet-success: #2F7149;
+  --agnet-warning: #93600F;
+  --agnet-danger: #AF452B;
+  --agnet-danger-soft: #FCEBE6;
+  --agnet-warning-soft: #F7EDD9;
+  --agnet-success-soft: #E2EEE7;
+  --agnet-control-accent: #3B8659;
+  --agnet-shadow-panel: 0 20px 48px rgba(25, 28, 22, 0.08);
+  --agnet-shadow-card: 0 4px 16px rgba(25, 28, 22, 0.07);
+  --agnet-agent-codex: #10A37F;
+  --agnet-agent-claude: #D97757;
+  --agnet-agent-cursor: #525761;
+  --agnet-agent-pi: #7A6FF0;
+  --agnet-agent-opencode: #E8863C;
+}
+
+[data-theme="carbon"] {
+  color-scheme: dark;
+  --agnet-canvas: #121212;
+  --agnet-sidebar: #171717;
+  --agnet-surface: #1D1D1D;
+  --agnet-surface-soft: #292929;
+  --agnet-surface-tint: #232323;
+  --agnet-overlay: #1D1D1D;
+  --agnet-overlay-strength: 84%;
+  --agnet-ink: #F1F1ED;
+  --agnet-ink-soft: #D4D3CE;
+  --agnet-muted: #AAA9A3;
+  --agnet-faint: #92918B;
+  --agnet-line: #343434;
+  --agnet-line-strong: #4A4A48;
+  --agnet-accent: #FF683D;
+  --agnet-accent-ink: #211610;
+  --agnet-accent-soft: #4B281F;
+  --agnet-success: #74BF8F;
+  --agnet-warning: #E7AA4E;
+  --agnet-danger: #FF8063;
+  --agnet-danger-soft: #41231D;
+  --agnet-warning-soft: #382C1D;
+  --agnet-success-soft: #223128;
+  --agnet-control-accent: #FF683D;
+  --agnet-shadow-panel: 0 20px 56px rgba(0, 0, 0, 0.28);
+  --agnet-shadow-card: 0 5px 18px rgba(0, 0, 0, 0.22);
+  --agnet-agent-codex: #2FC79E;
+  --agnet-agent-claude: #E88A68;
+  --agnet-agent-cursor: #9AA0AA;
+  --agnet-agent-pi: #9A8FF7;
+  --agnet-agent-opencode: #F09A55;
+}
+
+/* Display preferences (user-controlled): density and reading mode.
+   These are preference dimensions, not page-level styling. */
+[data-density="comfortable"] .conversation-body {
+  font-size: 16px;
+  line-height: 2.1rem;
+}
+
+[data-reading="serif"] .conversation-body {
+  font-family: Georgia, "Songti SC", "Noto Serif CJK SC", ui-serif, serif;
+}
+
+@theme inline {
+  /* Brand/display font: Latin glyphs come from Departure Mono; CJK glyphs
+     fall straight through to the system sans (not a monospace fallback) so
+     Chinese titles stay visually consistent with the hierarchy. */
+  --font-brand: "Departure Mono", -apple-system, "PingFang SC", "Microsoft YaHei", ui-monospace, monospace;
+  --animate-march: march 1.2s linear infinite;
+  --animate-breathe: breathe 2.2s ease-in-out infinite;
+  --animate-chip-pop: chip-pop 0.3s cubic-bezier(0.2, 1.6, 0.4, 1) backwards;
+  --animate-caret-blink: caret-blink 0.85s steps(1) infinite;
+
+  @keyframes march {
+    to {
+      stroke-dashoffset: -16;
+    }
+  }
+
+  --font-mono: "Commit Mono", ui-monospace, monospace;
+  --color-canvas: var(--agnet-canvas);
+  --color-sidebar: var(--agnet-sidebar);
+  --color-surface: var(--agnet-surface);
+  --color-surface-soft: var(--agnet-surface-soft);
+  --color-surface-tint: var(--agnet-surface-tint);
+  --color-overlay: var(--agnet-overlay);
+  --color-ink: var(--agnet-ink);
+  --color-ink-soft: var(--agnet-ink-soft);
+  --color-muted: var(--agnet-muted);
+  --color-faint: var(--agnet-faint);
+  --color-line: var(--agnet-line);
+  --color-line-strong: var(--agnet-line-strong);
+  --color-accent: var(--agnet-accent);
+  --color-accent-ink: var(--agnet-accent-ink);
+  --color-accent-soft: var(--agnet-accent-soft);
+  --color-success: var(--agnet-success);
+  --color-warning: var(--agnet-warning);
+  --color-danger: var(--agnet-danger);
+  --color-danger-soft: var(--agnet-danger-soft);
+  --color-warning-soft: var(--agnet-warning-soft);
+  --color-success-soft: var(--agnet-success-soft);
+  --color-control-accent: var(--agnet-control-accent);
+  --color-agent-codex: var(--agnet-agent-codex);
+  --color-agent-claude: var(--agnet-agent-claude);
+  --color-agent-cursor: var(--agnet-agent-cursor);
+  --color-agent-pi: var(--agnet-agent-pi);
+  --color-agent-opencode: var(--agnet-agent-opencode);
+  --shadow-panel: var(--agnet-shadow-panel);
+  --shadow-card: var(--agnet-shadow-card);
+}
+
+@utility surface-frosted {
+  background: color-mix(in srgb, var(--agnet-overlay) var(--agnet-overlay-strength), transparent);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+}
+
+@keyframes breathe {
+  0%, 100% {
+    border-color: var(--agnet-line-strong);
+  }
+  50% {
+    border-color: color-mix(in oklab, var(--agnet-accent) 55%, transparent);
+  }
+}
+
+@keyframes chip-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.8) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.assistant-reveal > :where(p, ul, ol, blockquote, pre, table) {
+  animation: assistant-reveal 240ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+.assistant-reveal > :where(p, ul, ol, blockquote, pre, table):nth-child(2) {
+  animation-delay: 45ms;
+}
+
+.assistant-reveal > :where(p, ul, ol, blockquote, pre, table):nth-child(n + 3) {
+  animation-delay: 90ms;
+}
+
+[data-streaming-caret] > :last-child::after {
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 0.2rem;
+  background: var(--agnet-accent);
+  content: "";
+  vertical-align: -0.12em;
+  animation: caret-blink 0.85s steps(1) infinite;
+}
+
+@keyframes assistant-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-reveal > :where(p, ul, ol, blockquote, pre, table),
+  .composer-sweep.sent {
+    animation: none !important;
+  }
+
+  [data-streaming-caret] > :last-child::after {
+    display: none;
+    animation: none;
+  }
+}
+
+/* E5: submit sweep — a single accent line racing along the composer bottom edge. */
+.composer-sweep {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--agnet-accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.composer-sweep.sent {
+  animation: composer-sweep 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+
+@keyframes composer-sweep {
+  0% {
+    transform: scaleX(0);
+    opacity: 1;
+  }
+  70% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+
+/* Pixel-checker texture for skeleton blocks (brand pixel motif). */
+@utility skeleton-pixel {
+  background-image: repeating-conic-gradient(var(--agnet-line) 0% 25%, transparent 0% 50%);
+  background-size: 4px 4px;
+}
+
+.markdown-composer .tiptap {
+  min-height: 76px;
+  padding: 12px 14px;
+  color: var(--agnet-ink);
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+  outline: none;
+}
+
+.markdown-composer .tiptap > * + * {
+  margin-top: 0.5rem;
+}
+
+.markdown-composer .tiptap h1 {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+}
+
+.markdown-composer .tiptap h2 {
+  font-size: 1.125rem;
+  line-height: 1.625rem;
+}
+
+.markdown-composer .tiptap ul,
+.markdown-composer .tiptap ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-composer .tiptap ul[data-type="taskList"] {
+  padding-left: 0;
+  list-style: none;
+}
+
+.markdown-composer .tiptap li[data-type="taskItem"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.markdown-composer .tiptap blockquote {
+  border-left: 2px solid var(--agnet-line-strong);
+  padding-left: 0.75rem;
+  color: var(--agnet-ink-soft);
+}
+
+.markdown-composer .tiptap code {
+  border-radius: 0.25rem;
+  background: var(--agnet-surface-soft);
+  padding: 0.1rem 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.markdown-composer [data-markdown-source] {
+  overflow-x: auto;
+  border: 1px solid var(--agnet-line);
+  border-radius: 0.5rem;
+  background: var(--agnet-surface-tint);
+  padding: 0.75rem;
+  white-space: pre-wrap;
+}
+
+.markdown-composer .is-editor-empty:first-child::before {
+  float: left;
+  height: 0;
+  color: var(--agnet-faint);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
+/* Shared keyboard and native-control treatment across the local workbench. */
+[data-theme] :where(button, a, input, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--agnet-control-accent);
+  outline-offset: 3px;
+}
+[data-theme] :where(input, textarea, [contenteditable="true"]) { caret-color: var(--agnet-control-accent); }
+[data-theme] input[type="checkbox"] { accent-color: var(--agnet-control-accent); }
+[data-theme] ::selection { background: var(--agnet-accent-soft); color: var(--agnet-ink); }

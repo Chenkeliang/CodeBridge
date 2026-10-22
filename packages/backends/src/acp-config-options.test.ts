@@ -1,0 +1,478 @@
+import { describe, expect, it } from "vitest";
+import type { SessionConfigOption } from "@agentclientprotocol/sdk";
+import type { RunContext } from "@codebridge/core";
+import {
+  applySessionConfigOptions,
+  mapSessionConfigOptions,
+  matchConfigValue,
+  resolveDesiredConfig,
+} from "./acp/acp-config-options.js";
+
+const modelOption = {
+  id: "model",
+  name: "Model",
+  category: "model",
+  type: "select",
+  currentValue: "claude-fable-5[1m]",
+  options: [
+    { value: "default", name: "Default (recommended)" },
+    { value: "opus[1m]", name: "Opus" },
+    { value: "claude-fable-5[1m]", name: "Fable" },
+    { value: "sonnet", name: "Sonnet" },
+    { value: "haiku", name: "Haiku" },
+  ],
+} as unknown as SessionConfigOption;
+
+const effortOption = {
+  id: "effort",
+  name: "Effort",
+  category: "thought_level",
+  type: "select",
+  currentValue: "xhigh",
+  options: [
+    { value: "low", name: "Low" },
+    { value: "medium", name: "Medium" },
+    { value: "high", name: "High" },
+  ],
+} as unknown as SessionConfigOption;
+
+const modeOption = {
+  id: "mode",
+  name: "Mode",
+  category: "mode",
+  type: "select",
+  currentValue: "dontAsk",
+  options: [
+    { value: "default", name: "Default" },
+    { value: "dontAsk", name: "Don't Ask" },
+    { value: "bypassPermissions", name: "Bypass Permissions" },
+  ],
+} as unknown as SessionConfigOption;
+
+const ctx = (over: Partial<RunContext>): RunContext =>
+  ({
+    runId: "r",
+    cwd: "/x",
+    prompt: "p",
+    backendConfig: { type: "claude-code" },
+    ...over,
+  }) as unknown as RunContext;
+
+function fakeAgent(
+  responseOptions: SessionConfigOption[] = [modelOption, effortOption, modeOption],
+) {
+  const calls: Array<{ method: unknown; params: Record<string, unknown> }> = [];
+  const agent = {
+    request: async (method: unknown, params: Record<string, unknown>) => {
+      calls.push({ method, params });
+      return { configOptions: responseOptions };
+    },
+  } as unknown as Parameters<typeof applySessionConfigOptions>[0];
+  return { agent, calls };
+}
+
+describe("matchConfigValue", () => {
+  it("精确 value 命中", () => {
+    expect(matchConfigValue(modelOption, "sonnet")).toBe("sonnet");
+    expect(matchConfigValue(modelOption, "default")).toBe("default");
+  });
+  it("大小写不敏感 name 命中", () => {
+    expect(matchConfigValue(modelOption, "Sonnet")).toBe("sonnet");
+  });
+  it("value 前缀把 opus 映射到 opus[1m]", () => {
+    expect(matchConfigValue(modelOption, "opus")).toBe("opus[1m]");
+  });
+  it("匹配不到返回 undefined", () => {
+    expect(matchConfigValue(modelOption, "gpt-5")).toBeUndefined();
+  });
+  it("剥离末尾方括号提示后兜底匹配（如 claude-fable-5-1[1m] → claude-fable-5-1）", () => {
+    const option = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "claude-fable-5-1",
+      options: [
+        { value: "default", name: "Default" },
+        { value: "opus[1m]", name: "Opus" },
+        { value: "claude-fable-5-1", name: "Fable" },
+        { value: "sonnet", name: "Sonnet" },
+        { value: "haiku", name: "Haiku" },
+      ],
+    } as unknown as SessionConfigOption;
+    expect(matchConfigValue(option, "claude-fable-5-1[1m]")).toBe(
+      "claude-fable-5-1",
+    );
+  });
+
+  it("反过来：wanted 无 hint、offered 带 hint 仍靠原有前缀匹配命中", () => {
+    const option = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "claude-fable-5-1[1m]",
+      options: [{ value: "claude-fable-5-1[1m]", name: "Fable" }],
+    } as unknown as SessionConfigOption;
+    expect(matchConfigValue(option, "claude-fable-5-1")).toBe(
+      "claude-fable-5-1[1m]",
+    );
+  });
+
+  it("精确匹配优先于剥离 hint 的兜底匹配", () => {
+    const option = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "opus",
+      options: [
+        { value: "opus", name: "Opus" },
+        { value: "opus[1m]", name: "Opus 1M" },
+      ],
+    } as unknown as SessionConfigOption;
+    expect(matchConfigValue(option, "opus")).toBe("opus");
+    expect(matchConfigValue(option, "opus[1m]")).toBe("opus[1m]");
+  });
+
+  it("剥离 hint 后仍不匹配不同模型族，不做模糊匹配", () => {
+    const option = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "sonnet",
+      options: [
+        { value: "claude-fable-5[1m]", name: "Fable 5" },
+        { value: "sonnet", name: "Sonnet" },
+      ],
+    } as unknown as SessionConfigOption;
+    expect(
+      matchConfigValue(option, "claude-fable-5-1[1m]"),
+    ).toBeUndefined();
+  });
+
+  it("展平分组选项", () => {
+    const grouped = {
+      id: "model",
+      category: "model",
+      type: "select",
+      currentValue: "a",
+      options: [
+        {
+          group: "g1",
+          name: "Group 1",
+          options: [
+            { value: "a", name: "A" },
+            { value: "b", name: "B" },
+          ],
+        },
+      ],
+    } as unknown as SessionConfigOption;
+    expect(matchConfigValue(grouped, "b")).toBe("b");
+  });
+});
+
+describe("resolveDesiredConfig", () => {
+  it("ctx.model 优先，其次 backendConfig.model", () => {
+    expect(
+      resolveDesiredConfig(
+        ctx({
+          model: "sonnet",
+          backendConfig: { type: "claude-code", model: "opus" } as never,
+        }),
+        "auto_allow",
+      ).model,
+    ).toBe("sonnet");
+    expect(
+      resolveDesiredConfig(
+        ctx({ backendConfig: { type: "claude-code", model: "opus" } as never }),
+        "auto_allow",
+      ).model,
+    ).toBe("opus");
+  });
+
+  it("effort 同样 ctx 优先", () => {
+    expect(
+      resolveDesiredConfig(ctx({ effort: "high" }), "auto_allow").effort,
+    ).toBe("high");
+  });
+
+  it("permission：显式优先", () => {
+    expect(
+      resolveDesiredConfig(
+        ctx({ claudePermissionMode: "plan" }),
+        "auto_allow",
+      ).permissionMode,
+    ).toBe("plan");
+  });
+
+  it("permission 无显式：auto_allow→bypassPermissions，prompt_deny/prompt_feishu→default", () => {
+    expect(resolveDesiredConfig(ctx({}), "auto_allow").permissionMode).toBe(
+      "bypassPermissions",
+    );
+    expect(resolveDesiredConfig(ctx({}), "prompt_deny").permissionMode).toBe(
+      "default",
+    );
+    // prompt_feishu 必须让适配器真的发问，否则 /approve 流程永远触发不了
+    expect(resolveDesiredConfig(ctx({}), "prompt_feishu").permissionMode).toBe(
+      "default",
+    );
+  });
+
+  it("非 claude 后端不设 permissionMode", () => {
+    expect(
+      resolveDesiredConfig(
+        ctx({ backendConfig: { type: "cursor-cli" } as never }),
+        "auto_allow",
+      ).permissionMode,
+    ).toBeUndefined();
+  });
+
+  it("applies an explicit ACP mode for Cursor and Codex", () => {
+    expect(
+      resolveDesiredConfig(
+        ctx({
+          mode: "ask",
+          backendConfig: { type: "cursor-cli" } as never,
+        } as never),
+        "auto_allow",
+      ).permissionMode,
+    ).toBe("ask");
+    expect(
+      resolveDesiredConfig(
+        ctx({
+          mode: "agent-full-access",
+          backendConfig: { type: "codex" } as never,
+        } as never),
+        "auto_allow",
+      ).permissionMode,
+    ).toBe("agent-full-access");
+  });
+});
+
+describe("applySessionConfigOptions", () => {
+  const options = [modelOption, effortOption, modeOption];
+
+  it("按 category 发出正确的 set_config_option，无 warning", async () => {
+    const { agent, calls } = fakeAgent();
+    const { warnings } = await applySessionConfigOptions(agent, "s1", options, {
+      model: "sonnet",
+      effort: "medium",
+      permissionMode: "bypassPermissions",
+    });
+    expect(warnings).toEqual([]);
+    expect(calls.map((c) => c.params)).toEqual([
+      { sessionId: "s1", configId: "model", value: "sonnet" },
+      { sessionId: "s1", configId: "effort", value: "medium" },
+      { sessionId: "s1", configId: "mode", value: "bypassPermissions" },
+    ]);
+  });
+
+  it("未设的字段不发调用", async () => {
+    const { agent, calls } = fakeAgent();
+    await applySessionConfigOptions(agent, "s1", options, { model: "haiku" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params.value).toBe("haiku");
+  });
+
+  it("缺失 category 收 warning、不中断", async () => {
+    const { agent, calls } = fakeAgent([modelOption]);
+    const { warnings } = await applySessionConfigOptions(
+      agent,
+      "s1",
+      [modelOption], // 无 thought_level
+      { model: "sonnet", effort: "medium" },
+    );
+    expect(calls).toHaveLength(1); // 仅 model
+    expect(warnings.some((w) => w.includes("effort"))).toBe(true);
+  });
+
+  it("model 不在可选范围时，返回 effectiveModel 与 modelMismatch（strictModel=false）", async () => {
+    const { agent } = fakeAgent();
+    const result = await applySessionConfigOptions(agent, "s1", options, {
+      model: "gpt-5",
+    });
+    expect(result.warnings.some((w) => w.includes("gpt-5"))).toBe(true);
+    // 未被采纳，适配器仍停在 configOptions 快照里的 currentValue
+    expect(result.effectiveModel).toBe("claude-fable-5[1m]");
+    expect(result.modelMismatch).toEqual({
+      requested: "gpt-5",
+      effective: "claude-fable-5[1m]",
+      effectiveName: "Fable", // 带上适配器给的可读名，供上层说人话
+    });
+  });
+
+  it("适配器完全不提供 model 选项时，modelMismatch 不带 effective（不编造模型名）", async () => {
+    const { agent } = fakeAgent([]);
+    const result = await applySessionConfigOptions(agent, "s1", [], {
+      model: "claude-fable-5-1[1m]",
+    });
+    expect(result.modelMismatch).toEqual({ requested: "claude-fable-5-1[1m]" });
+    expect(result.modelMismatch?.effective).toBeUndefined();
+    expect(result.effectiveModel).toBeUndefined();
+  });
+
+  it("model 不在可选范围且 strictModel=true 时直接抛错，不静默继续", async () => {
+    const { agent, calls } = fakeAgent();
+    await expect(
+      applySessionConfigOptions(agent, "s1", options, {
+        model: "gpt-5",
+        strictModel: true,
+      }),
+    ).rejects.toThrow(/gpt-5/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("model 命中时不产生 modelMismatch，effectiveModel 取自 set_config_option 响应", async () => {
+    const { agent } = fakeAgent();
+    const result = await applySessionConfigOptions(agent, "s1", options, {
+      model: "sonnet",
+    });
+    expect(result.modelMismatch).toBeUndefined();
+    expect(result.effectiveModel).toBe("claude-fable-5[1m]");
+  });
+
+  it("model 仅通过剥离 hint 命中时：setConfigOption 用剥离后的值、视为同一模型：不收 warning、不设 modelMismatch", async () => {
+    const fableOption = {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "claude-fable-5-1",
+      options: [
+        { value: "default", name: "Default" },
+        { value: "opus[1m]", name: "Opus" },
+        { value: "claude-fable-5-1", name: "Fable" },
+        { value: "sonnet", name: "Sonnet" },
+        { value: "haiku", name: "Haiku" },
+      ],
+    } as unknown as SessionConfigOption;
+    const { agent, calls } = fakeAgent([fableOption]);
+    const result = await applySessionConfigOptions(agent, "s1", [fableOption], {
+      model: "claude-fable-5-1[1m]",
+    });
+    expect(calls.map((c) => c.params)).toEqual([
+      { sessionId: "s1", configId: "model", value: "claude-fable-5-1" },
+    ]);
+    expect(result.warnings).toEqual([]);
+    expect(result.modelMismatch).toBeUndefined();
+  });
+
+  it("值不在可选范围收 warning", async () => {
+    const { agent } = fakeAgent();
+    const { warnings } = await applySessionConfigOptions(agent, "s1", options, {
+      model: "gpt-5",
+    });
+    expect(warnings.some((w) => w.includes("gpt-5"))).toBe(true);
+    expect(warnings.some((w) => w.includes("适配器本次提供") && w.includes("sonnet"))).toBe(
+      true,
+    );
+  });
+
+  it("set 抛错收 warning、不抛出", async () => {
+    const calls: unknown[] = [];
+    const agent = {
+      request: async () => {
+        calls.push(1);
+        throw new Error("boom");
+      },
+    } as unknown as Parameters<typeof applySessionConfigOptions>[0];
+    const { warnings } = await applySessionConfigOptions(agent, "s1", options, {
+      model: "sonnet",
+    });
+    expect(warnings.some((w) => w.includes("失败"))).toBe(true);
+  });
+
+  it("returns the full config snapshot from set_config_option responses", async () => {
+    const updated = [{ ...modelOption, currentValue: "sonnet" }];
+    const agent = {
+      request: async () => ({ configOptions: updated }),
+    } as unknown as Parameters<typeof applySessionConfigOptions>[0];
+
+    const result = await applySessionConfigOptions(agent, "s1", [modelOption], {
+      model: "sonnet",
+    });
+
+    expect(result.configOptions).toEqual(updated);
+  });
+
+  it("applies arbitrary select and boolean config overrides", async () => {
+    const customOption = {
+      id: "verbose",
+      name: "Verbose",
+      type: "boolean",
+      currentValue: false,
+    } as unknown as SessionConfigOption;
+    const { agent, calls } = fakeAgent([customOption]);
+
+    const result = await applySessionConfigOptions(
+      agent,
+      "s1",
+      [customOption],
+      {},
+      { verbose: true },
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(calls.map((c) => c.params)).toEqual([
+      { sessionId: "s1", configId: "verbose", type: "boolean", value: true },
+    ]);
+  });
+});
+
+describe("mapSessionConfigOptions", () => {
+  it("映射 select 选项为共享精简形态（含 currentValue/描述）", () => {
+    const mapped = mapSessionConfigOptions([modelOption, effortOption]);
+    expect(mapped).toHaveLength(2);
+    expect(mapped[0]).toMatchObject({
+      id: "model",
+      category: "model",
+      currentValue: "claude-fable-5[1m]",
+    });
+    expect(mapped[0]!.values.map((v) => v.value)).toContain("sonnet");
+  });
+
+  it("展平分组 select", () => {
+    const grouped = {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "a",
+      options: [
+        {
+          group: "g1",
+          name: "Group 1",
+          options: [
+            { value: "a", name: "A" },
+            { value: "b", name: "B", description: "desc-b" },
+          ],
+        },
+      ],
+    } as unknown as Parameters<typeof mapSessionConfigOptions>[0][number];
+    const mapped = mapSessionConfigOptions([grouped]);
+    expect(mapped[0]!.values).toEqual([
+      { value: "a", name: "A", description: undefined },
+      { value: "b", name: "B", description: "desc-b" },
+    ]);
+  });
+
+  it("映射 boolean 型选项", () => {
+    const bool = {
+      id: "x",
+      name: "X",
+      type: "boolean",
+      currentValue: true,
+    } as unknown as Parameters<typeof mapSessionConfigOptions>[0][number];
+    expect(mapSessionConfigOptions([bool])).toEqual([
+      {
+        id: "x",
+        name: "X",
+        type: "boolean",
+        category: undefined,
+        currentValue: "true",
+        values: [
+          { value: "true", name: "On" },
+          { value: "false", name: "Off" },
+        ],
+      },
+    ]);
+  });
+});

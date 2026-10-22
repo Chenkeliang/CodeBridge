@@ -1,0 +1,33 @@
+{
+  "name": "@codebridge/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./session-event-wire": {
+      "types": "./dist/session-event-wire.d.ts",
+      "import": "./dist/session-event-wire.js"
+    },
+    "./task-cli": {
+      "types": "./dist/task-cli-client.d.ts",
+      "import": "./dist/task-cli-client.js",
+      "default": "./dist/task-cli-client.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

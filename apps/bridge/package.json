@@ -1,0 +1,36 @@
+{
+  "name": "@codebridge/bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "codebridge": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --watch dist/cli.js start",
+    "start": "node dist/cli.js start"
+  },
+  "dependencies": {
+    "@codebridge/channel-feishu": "workspace:*",
+    "@codebridge/channel-telegram": "workspace:*",
+    "@codebridge/core": "workspace:*",
+    "@codebridge/router": "workspace:*",
+    "@codebridge/policy": "workspace:*",
+    "@codebridge/mcp-runtime": "workspace:*",
+    "@codebridge/project-catalog": "workspace:*",
+    "@codebridge/agent-registry": "workspace:*",
+    "@codebridge/session-catalog": "workspace:*",
+    "@codebridge/run-executor": "workspace:*",
+    "@codebridge/runner-client": "workspace:*",
+    "@codebridge/session-coordinator": "workspace:*",
+    "@codebridge/work-items": "workspace:*",
+    "@hono/node-server": "^1.19.14",
+    "commander": "^12.1.0",
+    "croner": "10.0.1",
+    "hono": "^4.12.27",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

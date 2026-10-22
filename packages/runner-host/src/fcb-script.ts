@@ -1,0 +1,114 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+
+/**
+ * fcb — 注入到 Agent 子进程 PATH 的小命令，通过 Bridge 出站 API
+ * 把文件/消息发回当前飞书聊天。纯 node 实现，无外部依赖。
+ */
+const FCB_SCRIPT = `#!/usr/bin/env node
+// fcb — 在 CodeBridge Agent 任务里把文件/消息发回当前聊天
+// 任务: fcb tasks help；创建或修改计划必须由用户明确要求。
+// 用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb alert status <状态> <证据或待办> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]
+const path = require("node:path");
+const fs = require("node:fs");
+
+const api = process.env.FCB_API;
+const token = process.env.FCB_TOKEN;
+// Destination is resolved by Bridge from FCB_RUN_ID; never use FCB_CHAT_ID to send.
+const runId = process.env.FCB_RUN_ID;
+
+function fail(msg) {
+  console.error(msg);
+  process.exit(1);
+}
+
+async function post(route, body) {
+  const res = await fetch(api + route, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer " + token,
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) fail("fcb: " + res.status + " " + text);
+  console.log(text);
+}
+
+async function main() {
+  if (!api || !token || !runId) {
+    fail("fcb: 缺少 FCB_API/FCB_TOKEN/FCB_RUN_ID（仅在 CodeBridge 任务中可用）");
+  }
+  const [cmd, ...rest] = process.argv.slice(2);
+  if (cmd === "tasks") {
+    const { runTaskCommand } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("@codebridge/core/task-cli")).href)});
+    console.log(JSON.stringify(await runTaskCommand(rest, {api, token, runId}), null, 2));
+  } else if (cmd === "deploy") {
+    if (!runId) fail("fcb: 发布操作缺少当前任务身份，不能执行");
+    const actions = {prepare: "prepare", apply: "publish", status: "status", cancel: "cancel", rollback: "rollback"};
+    const action = actions[rest[0]];
+    if (!action) fail("fcb: 发布操作支持 prepare/apply/status/cancel/rollback");
+    const body = {runId, action};
+    const args = rest.slice(1);
+    if (action === "prepare") {
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === "--publish") body.publishAfterPrepare = true;
+        else if (args[i] === "--ref" && args[i + 1] && !args[i + 1].startsWith("-")) body.ref = args[++i];
+        else fail("fcb: 未识别的发布参数 " + args[i]);
+      }
+    } else {
+      if (args.length > 1 || (args[0] && args[0].startsWith("-"))) fail("fcb: 请只提供一个发布编号或省略");
+      if (args[0]) body.releaseId = args[0];
+    }
+    await post("/deploy/command", body);
+  } else if (cmd === "send" && rest[0]) {
+    await post("/outbound/file", {
+      runId,
+      path: path.resolve(rest[0]),
+    });
+  } else if (cmd === "say" && rest.length) {
+    await post("/outbound/markdown", {
+      runId,
+      markdown: rest.join(" "),
+    });
+  } else if (cmd === "mention" && rest[0] && rest.length > 1) {
+    await post("/outbound/mention", {
+      runId,
+      ref: rest[0],
+      text: rest.slice(1).join(" "),
+    });
+  } else if (cmd === "alert" && rest[0] === "status" && rest[1] && rest.length > 2) {
+    const parts = rest.slice(2);
+    let notify;
+    if (parts[0] === "--notify") {
+      notify = parts[1];
+      if (!notify || !notify.trim() || notify.length > 100 || Array.from(notify).some((c) => c.charCodeAt(0) < 32)) fail("fcb: --notify 需要本群矩阵指定的姓名");
+      parts.splice(0, 2);
+    }
+    if (!parts.length) fail("fcb: 告警状态必须包含证据或具体待办");
+    await post("/outbound/alert-status", {runId, status: rest[1], summary: parts.join(" "), ...(notify ? {notify} : {})});
+  } else {
+    fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb alert status <状态> <证据或待办> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]");
+  }
+}
+
+main().catch((err) => {
+  if (process.argv[2] === "deploy" && ["EPERM", "EACCES"].includes(err.cause?.code)) {
+    fail("fcb: 当前执行沙箱禁止本机网络，请使用 codebridge_deploy MCP 工具；不要关闭沙箱或重启服务。");
+  }
+  fail("fcb: " + (err instanceof Error ? err.message : String(err)));
+});
+`;
+
+/** 把 fcb 写入 <dataDir>/bin/fcb 并加执行位，返回 bin 目录 */
+export async function writeFcbScript(dataDir: string): Promise<string> {
+  const binDir = path.join(dataDir, "bin");
+  await fs.mkdir(binDir, { recursive: true });
+  const file = path.join(binDir, "fcb");
+  await fs.writeFile(file, FCB_SCRIPT, { mode: 0o755 });
+  await fs.chmod(file, 0o755);
+  return binDir;
+}

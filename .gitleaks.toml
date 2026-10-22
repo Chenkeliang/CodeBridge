@@ -1,0 +1,23 @@
+title = "CodeBridge secret scanning"
+[extend]
+useDefault = true
+
+# Generated dependencies/builds are not project source and may contain upstream fixtures.
+[[allowlists]]
+paths = ['''(^|/)(node_modules|dist|\.git|\.gitnexus|coverage|test-results)/''']
+
+# Exact dummy used to exercise keychain reads, never a live credential.
+[[allowlists]]
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^packages/core/src/secret-refs\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^Fs3cret-from-keychain$''']
+
+# Idempotency keys are public request identifiers, not authentication credentials.
+[[allowlists]]
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^apps/bridge/src/session-api\.test\.ts$''']
+regexTarget = "line"
+regexes = ['''"idempotency-key":''']

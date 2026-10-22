@@ -1,0 +1,73 @@
+import type { ManagedChannel } from "@codebridge/core";
+import type { ConversationProjection } from "@/lib/events";
+import type { AgentSession, ConfigOption } from "@/lib/types";
+
+export type Theme = "paper" | "carbon";
+export type Density = "compact" | "comfortable";
+export type PanelArea = "agents" | "skills" | "settings" | "channels" | "tasks" | "inbox";
+export type MenuView = "actions" | "rename" | "delete";
+
+export const DEFAULT_SELECT_VALUE = "__default__";
+
+export const statusLabel: Record<string, string> = {
+  healthy: "就绪",
+  unavailable: "不可用",
+  needs_setup: "需要配置",
+  active: "运行中",
+  idle: "就绪",
+  closed: "已关闭",
+};
+
+export function defaultModelLabel(option: ConfigOption): string {
+  const current = option.values.find((candidate) => candidate.value === option.currentValue);
+  return current ? current.name || current.value : "Agent 默认";
+}
+
+export function projectionKey(item: ConversationProjection, index: number): string {
+  if (item.kind === "work") return item.id;
+  if (item.kind === "user") return item.eventId;
+  if (item.kind === "approval") return item.requestId;
+  return `${item.kind}-${item.runId ?? "session"}-${index}`;
+}
+
+export function formatElapsed(startedAt: string, endedAt: string): string {
+  const seconds = Math.max(1, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${rest}s`;
+  if (minutes > 0) return `${minutes}m ${rest}s`;
+  return `${seconds}s`;
+}
+
+export function workspaceLabel(session: AgentSession | null): string {
+  if (!session) return "工作区";
+  const path = session.additional_directories.at(-1) ?? session.cwd;
+  if (!path) return "添加工作区";
+  return path.split("/").filter(Boolean).at(-1) ?? path;
+}
+
+export function relativeTime(value: string): string {
+  const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
+  if (elapsed < 60_000) return "now";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h`;
+  return `${Math.floor(elapsed / 86_400_000)}d`;
+}
+
+export function formatValue(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+
+export function messageOf(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
+
+/** Use the same vocabulary in the channel tab and the connection editor. */
+export function channelConnectionLabel(channel: ManagedChannel): string {
+  const labels = { unconfigured: "未配置", unknown: "状态未确认", connected: "已连接", disconnected: "未连接", pending: "待应用", applying: "正在应用", error: "连接异常" };
+  if (channel.connection) return labels[channel.connection.state];
+  return !channel.configured ? "未配置" : channel.connected === null ? "状态未确认" : channel.connected ? "已连接" : "未连接";
+}

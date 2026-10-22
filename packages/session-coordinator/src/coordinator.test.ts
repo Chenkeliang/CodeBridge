@@ -1,0 +1,568 @@
+import { describe, expect, it } from "vitest";
+import { SqliteEventStore } from "@codebridge/work-items";
+import { SessionCoordinator } from "./coordinator.js";
+
+const message = {
+  text: "检查项目",
+  attachmentIds: [],
+  executionKind: "agent" as const,
+  model: null,
+  effort: null,
+  permissionMode: null,
+  plan: null,
+};
+
+function setup(maxQueuedTurns = 100) {
+  const store = new SqliteEventStore(":memory:");
+  const coordinator = new SessionCoordinator(store, {
+    maxQueuedTurns,
+    now: () => new Date("2026-08-14T00:00:00.000Z"),
+  });
+  return { store, coordinator };
+}
+
+function submit(
+  coordinator: SessionCoordinator,
+  key: string,
+  text: string,
+) {
+  return coordinator.submitTurn({
+    sessionId: "sess_1",
+    idempotencyKey: key,
+    message: { ...message, text },
+    workItem: {
+      title: "Session",
+      mode: "auto",
+      conversationId: "conv_sess_1",
+      agentId: "pi",
+      workspaceScope: [],
+      riskLevel: "read_only",
+    },
+  });
+}
+
+describe("SessionCoordinator submit", () => {
+  it("keeps queued turns after stop and dispatches them once cancellation is acknowledged", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "running", "running");
+    store.withSessionTransaction(tx => tx.updateRun(first.run!.id, { status: "running" }));
+    const old = submit(coordinator, "old", "old");
+    coordinator.requestRunCancellation({ sessionId: "sess_1", runId: first.run!.id,
+      expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version, idempotencyKey: "stop" });
+    expect(store.withSessionTransaction(tx => tx.getTurn(old.turn.turnId))?.status).toBe("queued");
+    const fresh = submit(coordinator, "fresh", "fresh");
+    expect(fresh.acceptance).toBe("queued");
+    coordinator.requestRunCancellation({ sessionId: "sess_1", runId: first.run!.id,
+      expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version, idempotencyKey: "stop-again" });
+    const finished = coordinator.finishRun({ sessionId: "sess_1", runId: first.run!.id, status: "cancelled" });
+    expect(finished.dispatched?.turn.turnId).toBe(old.turn.turnId);
+    expect(finished.runtime.queueState).toBe("ready");
+    store.close();
+  });
+  it("user stop cancels only the running run and dispatches the queued turn automatically without resume", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "first");
+    const old = submit(coordinator, "old", "old");
+    const stopped = coordinator.requestRunCancellation({ sessionId: "sess_1", runId: first.run!.id,
+      expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version, idempotencyKey: "stop" });
+    expect(stopped.disposition).toBe("cancelled");
+    expect(stopped.runtime.queueState).toBe("ready");
+    expect(store.withSessionTransaction(tx => tx.getTurn(old.turn.turnId))?.status).toBe("dispatched");
+    const fresh = submit(coordinator, "fresh", "fresh");
+    expect(fresh.acceptance).toBe("queued");
+    store.close();
+  });
+  it("dispatches the first Turn and queues the second", () => {
+    const { store, coordinator } = setup();
+    const first = coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "message_1",
+      message,
+      workItem: {
+        title: "检查项目",
+        mode: "auto",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: ["/workspace"],
+        riskLevel: "read_only",
+      },
+    });
+    const second = coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "message_2",
+      message: { ...message, text: "继续检查" },
+      workItem: {
+        title: "检查项目",
+        mode: "auto",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: ["/workspace"],
+        riskLevel: "read_only",
+      },
+    });
+
+    expect(first.acceptance).toBe("dispatched");
+    expect(second.acceptance).toBe("queued");
+    expect(second.runtime.activeRunId).toBe(first.run?.id);
+    expect(
+      store.listQueuedTurns("sess_1", { limit: 100 }).turns,
+    ).toEqual([
+      expect.objectContaining({
+        turnId: second.turn.turnId,
+        status: "queued",
+      }),
+    ]);
+    store.close();
+  });
+
+  it("returns the first response for the same scoped idempotency key", () => {
+    const { store, coordinator } = setup();
+    const input = {
+      sessionId: "sess_1",
+      idempotencyKey: "message_1",
+      message,
+      workItem: {
+        title: "检查项目",
+        mode: "auto" as const,
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only" as const,
+      },
+    };
+    const first = coordinator.submitTurn(input);
+    const repeated = coordinator.submitTurn({
+      ...input,
+      message: { ...message, text: "different" },
+    });
+
+    expect(repeated).toEqual(first);
+    expect(store.listRunsByStatus(["queued"])).toHaveLength(1);
+    store.close();
+  });
+
+  it("enforces the configured queue limit", () => {
+    const { store, coordinator } = setup(1);
+    coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "first",
+      message,
+      workItem: {
+        title: "检查项目",
+        mode: "auto",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    });
+    coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "second",
+      message,
+      workItem: {
+        title: "检查项目",
+        mode: "auto",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    });
+    expect(() => coordinator.submitTurn({
+      sessionId: "sess_1",
+      idempotencyKey: "third",
+      message,
+      workItem: {
+        title: "检查项目",
+        mode: "auto",
+        conversationId: "conv_sess_1",
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    })).toThrow("queue_full");
+    store.close();
+  });
+
+  it("dispatches only the FIFO head after success", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    const second = submit(coordinator, "second", "二");
+    const third = submit(coordinator, "third", "三");
+
+    const result = coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "succeeded",
+    });
+
+    expect(result.dispatched?.turn.turnId).toBe(second.turn.turnId);
+    expect(result.runtime.activeRunId).toBe(result.dispatched?.run.id);
+    expect(store.getTurn(third.turn.turnId)?.status).toBe("queued");
+  });
+
+  it("releases the provider lease before dispatching the next Turn", () => {
+    const { store, coordinator } = setup();
+    store.withSessionTransaction((tx) => {
+      tx.ensureRuntime("sess_1");
+      tx.setSessionProviderSessionId("sess_1", "prov_1");
+    });
+    const first = submit(coordinator, "first", "一");
+    submit(coordinator, "second", "二");
+
+    // dispatchTurn 把 session_runtime.provider_session_id 写进 runs。
+    expect(store.getRun(first.run!.id)?.providerSessionId).toBe("prov_1");
+
+    // 模拟 executor resume 路径的 claim。
+    expect(
+      store.claimProviderSession({
+        agentId: "pi",
+        providerSessionId: "prov_1",
+        runId: first.run!.id,
+        now: "2026-08-14T00:00:00.000Z",
+        expiresAt: "2026-08-14T00:01:00.000Z",
+      }),
+    ).toBe(true);
+
+    const result = coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "succeeded",
+    });
+
+    // release 先于 dispatch：lease 已释放，下一 run 已带上 providerSessionId。
+    expect(
+      store.findLiveProviderLease(
+        "pi",
+        "prov_1",
+        "2026-08-14T00:00:30.000Z",
+      ),
+    ).toBeUndefined();
+    expect(result.dispatched?.run.providerSessionId).toBe("prov_1");
+    store.close();
+  });
+
+  it.each(["failed", "cancelled", "interrupted"] as const)(
+    "pauses the queue after %s",
+    (status) => {
+      const { store, coordinator } = setup();
+      const first = submit(coordinator, "first", "一");
+      submit(coordinator, "second", "二");
+
+      const result = coordinator.finishRun({
+        sessionId: "sess_1",
+        runId: first.run!.id,
+        status,
+        reason: "test_terminal",
+      });
+
+      expect(result.runtime).toMatchObject({
+        activeRunId: null,
+        queueState: "paused",
+        queuePauseReason: status,
+      });
+      expect(store.listRunsByStatus(["queued"])).toHaveLength(0);
+    },
+  );
+
+  it("cancels a queued Turn with its own version", () => {
+    const { store, coordinator } = setup();
+    submit(coordinator, "first", "一");
+    const second = submit(coordinator, "second", "二");
+    const third = submit(coordinator, "third", "三");
+
+    const cancelled = coordinator.cancelQueuedTurn({
+      sessionId: "sess_1",
+      turnId: second.turn.turnId,
+      expectedVersion: second.turn.version,
+      idempotencyKey: "cancel_second",
+    });
+
+    expect(cancelled.turn.status).toBe("cancelled");
+    expect(store.getTurn(third.turn.turnId)?.queuePosition)
+      .toBe(third.turn.queuePosition);
+    expect(() => coordinator.cancelQueuedTurn({
+      sessionId: "sess_1",
+      turnId: third.turn.turnId,
+      expectedVersion: 999,
+      idempotencyKey: "cancel_third",
+    })).toThrow("turn_version_conflict");
+  });
+
+  it("rejects queue cancellation after dispatch", () => {
+    const { coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    expect(() => coordinator.cancelQueuedTurn({
+      sessionId: "sess_1",
+      turnId: first.turn.turnId,
+      expectedVersion: first.turn.version,
+      idempotencyKey: "cancel_dispatched",
+    })).toThrow("turn_not_queued");
+  });
+
+  it("does not couple Turn cancellation to Runtime version", () => {
+    const { store, coordinator } = setup();
+    submit(coordinator, "first", "一");
+    const queued = submit(coordinator, "second", "二");
+    store.withSessionTransaction((tx) => {
+      tx.updateRuntime("sess_1", { queueState: "ready" });
+    });
+    expect(coordinator.cancelQueuedTurn({
+      sessionId: "sess_1",
+      turnId: queued.turn.turnId,
+      expectedVersion: queued.turn.version,
+      idempotencyKey: "cancel_second",
+    }).turn.status).toBe("cancelled");
+  });
+
+  it("resumes a paused queue and dispatches exactly one Turn", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    const second = submit(coordinator, "second", "二");
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "failed",
+      reason: "provider_failed",
+    });
+
+    const resumed = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion:
+        store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "resume_1",
+    });
+
+    expect(resumed.dispatched?.turn.turnId).toBe(second.turn.turnId);
+    expect(resumed.runtime.queueState).toBe("ready");
+  });
+
+  it("applies one resume command once without blocking a later resume command", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    const second = submit(coordinator, "second", "二");
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "failed",
+      reason: "provider_failed",
+    });
+
+    const resumedByA = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "resume:feishu:message-A",
+    });
+    expect(resumedByA.dispatched?.turn.turnId).toBe(second.turn.turnId);
+    expect(resumedByA.runtime.queueState).toBe("ready");
+
+    coordinator.pauseQueue({ sessionId: "sess_1", reason: "stale" });
+    const pausedVersion = store.getSessionRuntime("sess_1")!.version;
+    const replayedA = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion: pausedVersion,
+      idempotencyKey: "resume:feishu:message-A",
+    });
+    expect(replayedA).toEqual(resumedByA);
+    expect(store.getSessionRuntime("sess_1")).toMatchObject({
+      queueState: "paused",
+      version: pausedVersion,
+    });
+
+    const resumedByB = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion: pausedVersion,
+      idempotencyKey: "resume:feishu:message-B",
+    });
+    expect(resumedByB.runtime.queueState).toBe("ready");
+    expect(store.getSessionRuntime("sess_1")?.queueState).toBe("ready");
+    store.close();
+  });
+
+  it("auto-resumes an empty paused queue for the next submission", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "interrupted",
+      reason: "provider_disconnected",
+    });
+    const later = submit(coordinator, "later", "稍后继续");
+    expect(later.acceptance).toBe("dispatched");
+    expect(later.run?.turnId).toBe(later.turn.turnId);
+    expect(later.runtime).toMatchObject({
+      queueState: "ready",
+      queuePauseReason: null,
+      activeRunId: later.run!.id,
+    });
+    expect(store.listQueuedTurns("sess_1", { limit: 10 }).total).toBe(0);
+  });
+
+  it("keeps new submissions paused when an earlier Turn is queued", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    const waiting = submit(coordinator, "waiting", "二");
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "failed",
+      reason: "provider_failed",
+    });
+
+    const later = submit(coordinator, "later", "三");
+
+    expect(waiting.acceptance).toBe("queued");
+    expect(later.acceptance).toBe("queued");
+    expect(later.run).toBeNull();
+    expect(later.runtime.queueState).toBe("paused");
+    expect(store.listQueuedTurns("sess_1", { limit: 10 }).total).toBe(2);
+  });
+
+  it("scopes identical keys by Session", () => {
+    const { coordinator } = setup();
+    const first = submit(coordinator, "shared_key", "Session one");
+    const second = coordinator.submitTurn({
+      sessionId: "sess_2",
+      idempotencyKey: "shared_key",
+      message: { ...message, text: "Session two" },
+      workItem: {
+        title: "Session two",
+        mode: "auto",
+        conversationId: "conv_sess_2",
+        agentId: "pi",
+        workspaceScope: [],
+        riskLevel: "read_only",
+      },
+    });
+    expect(second.turn.turnId).not.toBe(first.turn.turnId);
+  });
+
+  it("returns interrupting for a running cancellation request", () => {
+    const { store, coordinator } = setup();
+    const submitted = submit(coordinator, "first", "一");
+    store.updateRunControl(submitted.run!.id, {
+      status: "running",
+      leaseOwner: "bridge:123",
+      leaseExpiresAt: "2026-08-14T00:01:00.000Z",
+    });
+
+    const result = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion:
+        store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "cancel_run_1",
+    });
+
+    expect(result).toMatchObject({
+      disposition: "interrupting",
+      run: {
+        cancelRequestedAt: "2026-08-14T00:00:00.000Z",
+        cancelDeadlineAt: "2026-08-14T00:00:10.000Z",
+      },
+    });
+  });
+
+  it("cancels an unclaimed queued Run immediately", () => {
+    const { store, coordinator } = setup();
+    const submitted = submit(coordinator, "first", "一");
+
+    const result = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion:
+        store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "cancel_run_1",
+    });
+
+    expect(result.disposition).toBe("cancelled");
+    expect(result.run.status).toBe("cancelled");
+  });
+
+  it("does not move an existing cancellation deadline", () => {
+    const clock = {
+      now: new Date("2026-08-14T00:00:00.000Z"),
+    };
+    const store = new SqliteEventStore(":memory:");
+    const coordinator = new SessionCoordinator(store, {
+      maxQueuedTurns: 100,
+      now: () => clock.now,
+    });
+    const submitted = submit(coordinator, "first", "一");
+    store.updateRunControl(submitted.run!.id, { status: "running" });
+    const version = store.getSessionRuntime("sess_1")!.version;
+    const first = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion: version,
+      idempotencyKey: "cancel_1",
+    });
+    clock.now = new Date("2026-08-14T00:00:05.000Z");
+    const second = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion: version,
+      idempotencyKey: "cancel_2",
+    });
+
+    expect(second.run.cancelDeadlineAt).toBe(first.run.cancelDeadlineAt);
+    store.close();
+  });
+
+  it("returns the authoritative terminal Run to a stale Stop", () => {
+    const { store, coordinator } = setup();
+    const submitted = submit(coordinator, "first", "一");
+    coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      status: "succeeded",
+    });
+
+    const result = coordinator.requestRunCancellation({
+      sessionId: "sess_1",
+      runId: submitted.run!.id,
+      expectedRuntimeVersion:
+        store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "stale_stop",
+    });
+
+    expect(result).toMatchObject({
+      disposition: "already_terminal",
+      run: { status: "succeeded" },
+    });
+  });
+
+  it("resumes a stale pause by returning the already-dispatched queued Run", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    coordinator.pauseQueue({ sessionId: "sess_1", reason: "stale" });
+    const resumed = coordinator.resumeQueue({
+      sessionId: "sess_1",
+      expectedRuntimeVersion: store.getSessionRuntime("sess_1")!.version,
+      idempotencyKey: "resume_stale",
+    });
+    expect(resumed.dispatched?.run.id).toBe(first.run!.id);
+    expect(resumed.dispatched?.run.status).toBe("queued");
+    expect(resumed.runtime.queueState).toBe("ready");
+  });
+
+  it("does not auto-dispatch the next turn when the queue was paused mid-run", () => {
+    const { store, coordinator } = setup();
+    const first = submit(coordinator, "first", "一");
+    submit(coordinator, "second", "二");
+    coordinator.pauseQueue({ sessionId: "sess_1", reason: "stale" });
+    const finished = coordinator.finishRun({
+      sessionId: "sess_1",
+      runId: first.run!.id,
+      status: "succeeded",
+    });
+    expect(finished.dispatched).toBeNull();
+    expect(store.getSessionRuntime("sess_1")).toMatchObject({
+      queueState: "paused",
+      queuePauseReason: "stale",
+      activeRunId: null,
+    });
+  });
+});

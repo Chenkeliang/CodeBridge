@@ -1,0 +1,134 @@
+# Main configuration reference for current source; see docs/release-status.md.
+# Not a ready-to-run config: replace example IDs/paths and provide secret values.
+# Omitted backend command/args inherit the built-in, versioned defaults.
+# Secrets: keychain:<service> or env:<NAME>. Never commit resolved credentials.
+# Local candidate: channel/task settings reuse these fields; see docs/zh-CN/channel-automation-roadmap.md.
+feishu:
+  domain: https://open.feishu.cn
+  appId: cli_example
+  appSecret: env:FEISHU_APP_SECRET
+  policy:
+    requireMention: true # true: mention/reply mode; false: automatic replies
+    dmMode: allowlist
+    dmAllowlist: ["ou_example_admin"]
+    groupAllowlist: ["oc_example_group"]
+    respondToMentionAll: false
+    # Optional trusted-group behavior; omit to require @ for new requests.
+    # scenarios:
+    #   - name: trusted_group
+    #     chats: ["oc_example_group"]
+    #     requireMention: false
+    #     enabled: true # false skips this exception and uses the remaining/global policy
+
+# Optional; supports Telegram-only mode when Feishu credentials are unconfigured.
+# If both restrictions are present, both apply. Never copy example IDs unchanged.
+# telegram:
+#   botToken: env:TELEGRAM_BOT_TOKEN
+#   allowedUsers: ["123456789"]
+#   allowedChats: ["-1001234567890"]
+#   pollingTimeoutSec: 25
+
+runner:
+  url: http://127.0.0.1:19789
+  token: env:RUNNER_TOKEN # set a long random value for both Bridge and Runner
+
+web:
+  enabled: false # opt in; local access, no independent Web login
+  # staticDirectory: /absolute/path/to/CodeBridge/apps/web/dist
+
+bridge:
+  apiPort: 19790
+
+# Current Feishu group configuration commands accept these operator identities.
+# This is NOT a unified cross-channel role model. Telegram has its own allowlists.
+# Alert approval identities are separately scoped under alertMonitor.groups below.
+access:
+  admins: ["ou_example_admin"]
+  allowedUsers: ["ou_example_admin"]
+  allowedChats: ["oc_example_group"]
+
+defaultBackend: cursor
+# defaultAgent: codex # Web default preference, if configured
+backends:
+  cursor:
+    type: cursor-cli
+  claude:
+    type: claude-code
+    claudePermissionMode: bypassPermissions # trusted local host only
+    # strictModel: true # reject unavailable requested models instead of using the default
+  codex:
+    type: codex
+    # Do not enable network_access on a stock adapter that does not advertise it.
+    # See docs/zh-CN/codex-acp-network.md for source-only integration requirements.
+  pi:
+    type: pi-sdk
+  opencode:
+    type: generic-spawn
+    acpCommand: opencode
+    acpArgs: ["acp"]
+
+workspaces:
+  root: ~/Projects
+  default: ~/Projects
+  # named:
+  #   example: /absolute/path/to/project
+
+orchestration:
+  session:
+    maxQueuedTurns: 100
+    autoRotate:
+      enabled: true
+      idleHours: 12 # 0 disables idle rotation
+      # Context usage stays in the same session; compaction is managed by the provider.
+      # Current-source Feishu group replies preserve idle sessions; alerts are exempt.
+  # Formal Project Catalog proposals stay local until explicitly merged/pushed.
+  # projectCatalog:
+  #   repositoryPath: /absolute/path/to/catalog-repository
+  #   baseRef: main
+  #   catalogPath: catalog/projects.yaml
+  # mcpServers:
+  #   local-tools:
+  #     transport: stdio
+  #     command: /absolute/path/to/tool
+  #     args: []
+  #     env: [LOCAL_TOOLS_TOKEN] # variable names only
+  #     revision: config:1
+  #   shared-tools:
+  #     transport: http
+  #     url: https://mcp.example.com/api
+
+runnerHost:
+  listen: 127.0.0.1:19789
+  maxConcurrentRuns: 4
+  acpPermissionPolicy: auto_allow # trusted local use; alternatives: prompt_feishu, prompt_deny
+  # acpPromptTimeoutMs: 21600000
+  # acpNoOutputTimeoutMs: 600000
+  # acpStallTimeoutMs: 1800000
+  # acpDrainBackgroundWork: true
+  # acpPostStopProbeMs: 8000
+  # acpPostStopQuietMs: 75000
+  # acpPostStopMaxMs: 1200000
+  # acpSessionPool: true
+  # acpSessionIdleMs: 600000
+  # acpSessionPoolMax: 4
+
+# Optional Feishu alert collection: merge this under the EXISTING feishu key.
+# Do not create a second feishu key; duplicate YAML keys are invalid.
+# alertMonitor:
+#   enabled: false # enable deliberately after channel/permissions verification
+#   pollIntervalMs: 30000
+#   lookbackMs: 600000
+#   dedupWindowMs: 1800000
+#   maxConcurrent: 2
+#   incidentRetentionMs: 604800000
+#   statusReactions:
+#     investigating: OnIt
+#     waiting: OneSecond
+#     resolved: DONE
+#     no_action: CrossMark
+#     blocked: Sigh
+#   groups:
+#     - chatId: oc_example_group
+#       senderAppIds: ["cli_example_alarm_sender"]
+#       approverOpenIds: ["ou_example_approver"]
+#       runbookPath: /absolute/path/to/runbook/SKILL.md

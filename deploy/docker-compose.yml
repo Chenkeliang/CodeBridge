@@ -1,0 +1,21 @@
+services:
+  bridge:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.bridge
+    environment:
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      FEISHU_DOMAIN: https://open.feishu.cn
+      RUNNER_URL: http://host.docker.internal:19789
+      RUNNER_TOKEN: ${RUNNER_TOKEN}
+      DATA_DIR: /data
+      DEFAULT_BACKEND: ${DEFAULT_BACKEND:-cursor}
+    volumes:
+      - bridge-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  bridge-data:

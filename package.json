@@ -1,0 +1,47 @@
+{
+  "name": "@graychennpm/codebridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "自托管多通道 ACP 网关：从飞书或 Telegram 远程驱动本机 Cursor、Claude Code、Codex",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev": "pnpm --filter @codebridge/bridge dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:acp-probe": "node scripts/acp-probe.mjs",
+    "check:codex-network": "node scripts/check-codex-network.mjs",
+    "verify:codex-network": "node scripts/verify-codex-network.mjs",
+    "lint": "tsc -b && eslint apps/web/src",
+    "doctor": "node apps/bridge/dist/cli.js doctor",
+    "start": "node apps/bridge/dist/cli.js start",
+    "runner": "node packages/runner-host/dist/cli.js",
+    "start:all": "bash scripts/start.sh",
+    "setup": "bash scripts/start.sh setup",
+    "design:qa": "node scripts/design-qa.mjs",
+    "version": "node scripts/sync-version.mjs",
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "package:release": "pnpm build && node scripts/package-release.mjs",
+    "test:package": "node scripts/package-smoke.mjs",
+    "secrets:check": "bash scripts/secret-check.sh"
+  },
+  "bin": {
+    "codebridge": "./apps/bridge/dist/cli.js",
+    "codebridge-runner": "./packages/runner-host/dist/cli.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.10.0",
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "playwright-core": "^1.62.1",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^2.1.8"
+  }
+}

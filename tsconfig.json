@@ -1,0 +1,20 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/backends" },
+    { "path": "./packages/runner-client" },
+    { "path": "./packages/runner-host" },
+    { "path": "./packages/router" },
+    { "path": "./packages/channel-feishu" },
+    { "path": "./packages/channel-telegram" },
+    { "path": "./packages/work-items" },
+    { "path": "./packages/session-coordinator" },
+    { "path": "./packages/policy" },
+    { "path": "./packages/run-executor" },
+    { "path": "./packages/project-catalog" },
+    { "path": "./packages/session-catalog" },
+    { "path": "./packages/agent-registry" },
+    { "path": "./apps/bridge" }
+  ]
+}

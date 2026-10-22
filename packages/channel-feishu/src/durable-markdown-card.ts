@@ -1,0 +1,99 @@
+import { createHash } from "node:crypto";
+import { runCardJson, type RunCardParts } from "./cardkit-writer.js";
+import type { ChannelReplyContext } from "@codebridge/core";
+import type { LarkChannel } from "@larksuiteoapi/node-sdk";
+
+export interface MarkdownCardController {
+  cardId: string;
+  messageId: string;
+  setContent(content: string): Promise<void>;
+  setSnapshot?(parts: RunCardParts): Promise<void>;
+}
+
+export interface MarkdownCardStream {
+  stream(
+    chatId: string,
+    input: { markdown(controller: MarkdownCardController): Promise<void> },
+    options: { replyTo: string; replyContext?: ChannelReplyContext },
+  ): Promise<void>;
+}
+
+/** Use explicit CardKit acknowledgements for both live and terminal snapshots. */
+export function durableMarkdownCard(
+  channel: LarkChannel,
+  update: (cardId: string, card: object, replyTo?: string) => Promise<void>,
+  isAlertMessage?: (chatId: string, messageId: string) => boolean,
+): MarkdownCardStream {
+  return {
+    async stream(_chatId, input, options) {
+      const created = await channel.rawClient.cardkit.v1.card.create({
+        data: {
+          type: "card_json",
+          data: JSON.stringify(runCardJson({ answer: "", progress: "", status: "正在启动任务…", terminal: false, recipientId: options.replyContext?.senderId })),
+        },
+      });
+      if (created.code !== 0 || !created.data?.card_id) {
+        throw new Error(`CardKit create failed (${created.code}): ${created.msg}`);
+      }
+      let cardId = created.data.card_id;
+      const sent = await channel.rawClient.im.v1.message.reply({
+        path: { message_id: options.replyTo },
+        data: {
+          msg_type: "interactive",
+          ...((options.replyContext?.threadId || isAlertMessage?.(_chatId, options.replyTo)) ? { reply_in_thread: true } : {}),
+          content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
+          uuid: createHash("sha256").update(`run-card:${options.replyTo}`).digest("hex").slice(0, 32),
+        },
+      });
+      if (sent.code !== 0 || !sent.data?.message_id) {
+        throw new Error(`Feishu card reply failed (${sent.code}): ${sent.msg}`);
+      }
+      const resolved = await convertCardId(channel, sent.data.message_id);
+      if (resolved.code !== 0 || !resolved.data?.card_id) {
+        throw new Error(`CardKit id conversion failed (${resolved.code}): ${resolved.msg}`);
+      }
+      // A retried, deduplicated reply may reference an earlier entity.
+      cardId = resolved.data.card_id;
+      // No SDK fire-and-forget queue: setContent resolves only after the API ack.
+      let lastWriteAt = 0;
+      await input.markdown({
+        cardId,
+        messageId: sent.data.message_id,
+        async setSnapshot(parts) {
+          await update(cardId, runCardJson({ ...parts, recipientId: options.replyContext?.senderId }), sent.data!.message_id!);
+        },
+        async setContent(content) {
+          const delay = Math.max(0, 350 - (Date.now() - lastWriteAt));
+          if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+          lastWriteAt = Date.now();
+          await update(cardId, markdownCard(content));
+        },
+      });
+    },
+  };
+}
+
+/** Feishu indexes a just-sent card message asynchronously; 200740 means "not indexed yet". */
+const ID_CONVERT_NOT_READY = 200740;
+const ID_CONVERT_RETRY_DELAYS_MS = [300, 700, 1500, 3000];
+
+async function convertCardId(channel: LarkChannel, messageId: string) {
+  for (let attempt = 0; ; attempt++) {
+    const resolved = await channel.rawClient.cardkit.v1.card.idConvert({ data: { message_id: messageId } });
+    if (resolved.code !== ID_CONVERT_NOT_READY) return resolved;
+    const delay = ID_CONVERT_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined) {
+      throw new Error(`CardKit id conversion failed (${resolved.code}) after ${attempt + 1} attempts: ${resolved.msg}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+}
+
+export function markdownCard(content: string): object {
+  const summary = content.split("\n").find((line) => line.startsWith("任务状态：")) ?? "任务进度";
+  return {
+    schema: "2.0",
+    config: { streaming_mode: false, summary: { content: summary } },
+    body: { elements: [{ tag: "markdown", content }] },
+  };
+}

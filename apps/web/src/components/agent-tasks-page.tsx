@@ -1,0 +1,151 @@
+import { useCallback, useRef, useState } from "react";
+import { ArrowLeft, ArrowUpRight, CalendarClock, Check, ChevronRight, Download, FileText, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Save, Send } from "lucide-react";
+import type { AgentTaskDefinition, AgentTaskDraft, AgentTaskOptions, AgentTaskTarget, TaskPreflight } from "@codebridge/core";
+import { api } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Markdown } from "@/components/conversation";
+import { TaskError, TaskField, TaskSelect, taskDate, taskDeliveryLabels, taskInputClass, taskStatusLabels, useTaskResource } from "@/components/task-ui";
+
+type View = { kind: "list" } | { kind: "new" } | { kind: "edit"; task: AgentTaskDefinition; revision: string } | { kind: "task"; id: string } | { kind: "attempt"; id: string; attemptId: string };
+export interface TaskLocation { taskId: string; attemptId?: string }
+type Notify = (message: string, kind?: "info" | "error") => void;
+const targetKey = (target: AgentTaskTarget) => `${target.channel}:${target.chatId ?? ""}`;
+const taskState = (task: AgentTaskDefinition) => task.pausedReason?.startsWith("执行结果不明") ? "需要核对结果" : task.activeAttemptId ? "本轮尚未结束" : !task.enabled ? "已暂停" : task.nextRunAt ? "按计划执行" : "一次性计划已触发";
+function useTaskMutation() {
+  const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
+  const running = useRef(false), intent = useRef<{ signature: string; key: string } | null>(null);
+  async function perform<T>(signature: string, action: (key: string) => Promise<T>): Promise<T | null> {
+    if (running.current) return null;
+    running.current = true; setBusy(true); setError(null);
+    if (intent.current?.signature !== signature) intent.current = { signature, key: crypto.randomUUID() };
+    try { const result = await action(intent.current.key); intent.current = null; return result; }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "操作未完成，请刷新状态后重试"); return null; }
+    finally { running.current = false; setBusy(false); }
+  }
+  return { busy, error, perform };
+}
+function draftFor(options: AgentTaskOptions, task?: AgentTaskDefinition): AgentTaskDraft {
+  return { name: task?.name ?? "", prompt: task?.prompt ?? "", agentId: task?.agentId ?? options.agents.find((agent) => agent.ready)?.id ?? options.agents[0]?.id ?? "",
+    cwd: task?.cwd ?? options.defaultCwd, skills: task?.skills ?? [], model: task?.model ?? null, effort: task?.effort ?? null, permissionMode: task?.permissionMode ?? null,
+    schedule: task?.schedule ?? "每天09:00", timezone: task?.timezone ?? options.timezone, catchUp: task?.catchUp ?? "once", notification: task?.notification ?? "result",
+    target: task?.target ?? { channel: "local" }, enabled: task?.enabled ?? false };
+}
+export function AgentTasksPage({ initial, onNotify, onOpenSession }: { initial?: TaskLocation | null; onNotify: Notify; onOpenSession: (id: string) => Promise<void> }) {
+  const list = useTaskResource(api.agentTasks), choices = useTaskResource(api.agentTaskOptions, false);
+  const [view, setView] = useState<View>(() => initial ? initial.attemptId ? { kind: "attempt", id: initial.taskId, attemptId: initial.attemptId } : { kind: "task", id: initial.taskId } : { kind: "list" });
+  const openAttempt = (id: string, attemptId: string) => setView({ kind: "attempt", id, attemptId });
+  if ((view.kind === "new" || view.kind === "edit") && choices.data && list.data) return <AgentTaskEditor
+    key={view.kind === "edit" ? view.task.id : "new"} options={choices.data} revision={view.kind === "edit" ? view.revision : list.data.revision}
+    task={view.kind === "edit" ? view.task : undefined} onCancel={() => setView(view.kind === "edit" ? { kind: "task", id: view.task.id } : { kind: "list" })}
+    onSaved={(task) => { void list.reload(); setView({ kind: "task", id: task.id }); onNotify(task.enabled ? "任务已保存，将按计划执行" : "任务已保存为暂停状态"); }} />;
+  if (view.kind === "task") return <AgentTaskDetail key={view.id} id={view.id} onBack={() => setView({ kind: "list" })} onEdit={(task, revision) => setView({ kind: "edit", task, revision })}
+    canEdit={Boolean(choices.data)} onNotify={onNotify} onAttempt={openAttempt} />;
+  if (view.kind === "attempt") return <AgentTaskRun key={view.attemptId} id={view.id} attemptId={view.attemptId} onBack={() => setView({ kind: "task", id: view.id })}
+    onNotify={onNotify} onAttempt={openAttempt} onOpenSession={onOpenSession} />;
+  return <section aria-label="Agent定时任务" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <header className="flex flex-wrap items-start justify-between gap-4 border-b border-line bg-sidebar px-5 py-5 md:px-8"><div><h1 className="font-brand text-xl font-normal tracking-tight text-ink">任务</h1><p className="mt-1 text-sm leading-6 text-muted">让Agent按时间执行，保留每次运行和结果。</p></div>
+      <div className="flex gap-2"><Button aria-label="刷新定时任务" onClick={() => { void list.reload(); void choices.reload(); }} size="sm" variant="outline"><RefreshCw className="mr-1.5 size-3.5" />刷新</Button><Button disabled={!choices.data || !list.data} onClick={() => setView({ kind: "new" })} size="sm" variant="secondary"><Plus className="mr-1.5 size-4" />新建定时任务</Button></div></header>
+    <div className="mx-auto grid w-full max-w-5xl gap-5 px-5 py-6 md:px-8"><TaskError message={list.error} /><TaskError message={choices.error ? `任务列表仍可查看；新建和编辑所需的可选项未读到：${choices.error}` : null} />
+      {list.data && <div className="text-xs leading-6 text-muted" role="status"><p>{list.data.scheduler.maintenance ? "服务正在维护，暂不触发新任务。" : list.data.scheduler.running ? "调度器已启动，每15秒检查计划。" : "调度器尚未启动，当前不会自动执行。"}{list.data.scheduler.lastCheckAt ? ` 上次检查：${taskDate(list.data.scheduler.lastCheckAt)}` : " 等待首次调度检查。"}</p>{list.data.scheduler.lastError && <p className="text-danger">最近调度检查未完成：{list.data.scheduler.lastError}</p>}</div>}
+      {!list.data ? <p className="py-10 text-sm text-muted" role="status">{list.loading ? "正在读取定时任务…" : "定时任务尚未读到，请刷新后重试。"}</p> : !list.data.tasks.length ? <div className="grid justify-items-start gap-3 border-y border-line py-12"><CalendarClock className="size-6 text-muted" /><h2 className="text-base font-medium text-ink">还没有Agent定时任务</h2><p className="max-w-prose text-sm leading-6 text-muted">从一句清楚的指令开始，选择Agent、项目目录和执行时间。新任务默认暂停，可先检查并手动运行一次。</p><Button disabled={!choices.data} onClick={() => setView({ kind: "new" })} variant="outline">创建第一个任务</Button></div>
+        : <div className="divide-y divide-line border-y border-line">{list.data.tasks.map((task) => <button className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-4 py-4 text-left transition-colors hover:bg-surface-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-muted" key={task.id} onClick={() => setView({ kind: "task", id: task.id })} type="button">
+          <span className="min-w-0"><span className="block break-words text-sm font-medium text-ink">{task.name}</span><span className="mt-1 block text-xs leading-5 text-muted">{task.agentId} · {taskState(task)}<span className="block sm:inline">{task.nextRunAt ? ` · 下次 ${taskDate(task.nextRunAt, task.timezone)}（${task.timezone}）` : ""}</span></span></span><ChevronRight className="size-4 text-muted" /></button>)}</div>}
+      <p className="text-xs leading-5 text-muted">Bridge运行期间检查计划。暂停只停止未来触发，进行中的任务仍可在会话中查看或取消。</p>
+    </div>
+  </section>;
+}
+export function AgentTaskEditor({ options, revision, task, onCancel, onSaved }: { options: AgentTaskOptions; revision: string; task?: AgentTaskDefinition; onCancel: () => void; onSaved: (task: AgentTaskDefinition) => void }) {
+  const [draft, setDraft] = useState(() => draftFor(options, task)), [preview, setPreview] = useState<TaskPreflight | null>(null);
+  const [openedRevision] = useState(revision), [openedTask] = useState(task);
+  const mutation = useTaskMutation();
+  const change = (patch: Partial<AgentTaskDraft>) => { setDraft((current) => ({ ...current, ...patch })); setPreview(null); };
+  const targetOptions = options.targets.map((choice) => ({ value: targetKey(choice.target), label: choice.label }));
+  if (!targetOptions.some((choice) => choice.value === targetKey(draft.target))) targetOptions.push({ value: targetKey(draft.target), label: `${draft.target.channel} · ${draft.target.chatId ?? ""}（当前不可用）` });
+  async function check() {
+    const result = await mutation.perform(`check:${JSON.stringify(draft)}`, () => api.preflightAgentTask(draft, openedRevision, openedTask?.id)); if (result) setPreview(result);
+  }
+  async function save() {
+    const result = await mutation.perform(`save:${JSON.stringify(draft)}`, (key) => api.saveAgentTask(draft, openedRevision, key, openedTask)); if (result) onSaved(result.task);
+  }
+  return <section aria-label="编辑Agent定时任务" className="min-h-0 flex-1 overflow-y-auto"><div className="mx-auto grid w-full min-w-0 grid-cols-1 max-w-4xl gap-6 px-5 py-6 md:px-8">
+    <div><Button className="mb-4" disabled={mutation.busy} onClick={onCancel} size="sm" variant="ghost"><ArrowLeft className="mr-1.5 size-4" />返回</Button><h1 className="font-brand text-xl font-normal text-ink">{task ? "编辑定时任务" : "新建定时任务"}</h1><p className="mt-2 text-sm leading-6 text-muted">每次使用独立会话执行，沿用所选Agent的权限设置。保存后按计划触发，运行一次是独立操作。</p></div>
+    <TaskError message={mutation.error} />
+    <form aria-label="定时任务设置" className="grid min-w-0 grid-cols-1 gap-5" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <TaskField label="任务名称"><input aria-label="任务名称" className={taskInputClass} disabled={mutation.busy} maxLength={100} onChange={(event) => change({ name: event.target.value })} required value={draft.name} /></TaskField>
+      <TaskField hint="写清输入、要做的事和完成标准。业务规则继续引用现有Skill。" label="执行指令"><textarea aria-label="执行指令" className={`${taskInputClass} min-h-32 resize-y leading-6`} disabled={mutation.busy} maxLength={64000} onChange={(event) => change({ prompt: event.target.value })} required value={draft.prompt} /></TaskField>
+      <div className="grid min-w-0 grid-cols-1 gap-5 sm:grid-cols-2"><TaskField label="执行Agent"><TaskSelect disabled={mutation.busy} label="执行Agent" onChange={(agentId) => change({ agentId })} options={options.agents.map((agent) => ({ value: agent.id, label: `${agent.name}${agent.ready ? "" : "（尚未就绪）"}` }))} value={draft.agentId} /></TaskField>
+        <TaskField hint="须为Runner可以访问的绝对目录。" label="项目目录"><input aria-label="项目目录" className={taskInputClass} disabled={mutation.busy} onChange={(event) => change({ cwd: event.target.value })} required spellCheck={false} value={draft.cwd} /></TaskField></div>
+      {options.skills.length > 0 && <fieldset className="grid gap-2"><legend className="mb-2 text-sm font-medium text-ink">本次使用的已有Skill（可选）</legend><div className="grid max-h-52 auto-rows-max gap-2 overflow-y-auto">{options.skills.filter((skill) => skill.agentIds.includes(draft.agentId) || draft.skills.includes(skill.id)).map((skill) => <label className="flex min-h-10 items-start gap-3 text-sm text-ink" key={skill.id}><input aria-label={`使用Skill ${skill.name}`} checked={draft.skills.includes(skill.id)} className="mt-1" disabled={mutation.busy} onChange={(event) => change({ skills: event.target.checked ? [...draft.skills, skill.id] : draft.skills.filter((id) => id !== skill.id) })} type="checkbox" /><span className="min-w-0"><span className="block font-medium">{skill.name}{!skill.agentIds.includes(draft.agentId) ? "（未对当前Agent启用）" : ""}</span><span className="mt-1 block text-xs leading-5 text-muted">{skill.description}</span></span></label>)}</div></fieldset>}
+      <div className="grid min-w-0 grid-cols-1 gap-5 sm:grid-cols-2"><TaskField hint="例如：每天09:00、工作日09:30、每30分钟、30分钟后、2026-12-01T09:00:00，或五段Cron。" label="执行时间"><input aria-label="执行时间" className={taskInputClass} disabled={mutation.busy} onChange={(event) => change({ schedule: event.target.value })} required spellCheck={false} value={draft.schedule} /></TaskField>
+        <TaskField hint="使用IANA时区，例如Asia/Shanghai。预览和执行使用同一时区。" label="时区"><input aria-label="时区" className={taskInputClass} disabled={mutation.busy} onChange={(event) => change({ timezone: event.target.value })} required spellCheck={false} value={draft.timezone} /></TaskField></div>
+      <div className="grid min-w-0 grid-cols-1 gap-5 sm:grid-cols-2"><TaskField hint="只决定服务停止期间错过的时间；多个错过周期不会逐个积压执行。" label="错过执行时间"><TaskSelect disabled={mutation.busy} label="错过执行时间" onChange={(catchUp) => change({ catchUp: catchUp as "once" | "skip" })} options={[{ value: "once", label: "恢复后合并补一次" }, { value: "skip", label: "跳过错过的计划" }]} value={draft.catchUp} /></TaskField>
+        <TaskField hint="控制网关自动发送的运行反馈；Skill或脚本主动发送的业务内容仍按其原规则执行。" label="通知方式"><TaskSelect disabled={mutation.busy} label="通知方式" onChange={(notification) => change({ notification: notification as AgentTaskDraft["notification"] })} options={[{ value: "result", label: "仅最终结果" }, { value: "errors", label: "仅异常通知" }, { value: "progress", label: "开始、关键进度与结果" }]} value={draft.notification} /></TaskField></div>
+      <TaskField hint="审批请求始终可见。发送失败可补发已保存结果，无需重新调用Agent。" label="结果发送到"><TaskSelect disabled={mutation.busy} label="结果发送到" onChange={(value) => { const selected = options.targets.find((choice) => targetKey(choice.target) === value); if (selected) change({ target: selected.target }); }} options={targetOptions} value={targetKey(draft.target)} /></TaskField>
+      <details className="border-t border-line pt-4"><summary className="cursor-pointer text-sm font-medium text-ink">模型、权限和话题设置（可选）</summary><div className="mt-4 grid gap-5 sm:grid-cols-2">
+        <TaskField hint="留空沿用Agent配置；不会更改其他会话。" label="模型"><input aria-label="任务模型" className={taskInputClass} disabled={mutation.busy} onChange={(event) => change({ model: event.target.value || null })} value={draft.model ?? ""} /></TaskField>
+        <TaskField label="推理强度"><TaskSelect disabled={mutation.busy} label="推理强度" onChange={(effort) => change({ effort: effort || null })} options={[{ value: "", label: "沿用Agent配置" }, ...["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map((value) => ({ value, label: value }))]} value={draft.effort ?? ""} /></TaskField>
+        <TaskField hint="留空沿用Agent配置。填写当前Agent实际支持的模式，任务不会自动批准权限请求。" label="权限模式"><input aria-label="任务权限模式" className={taskInputClass} disabled={mutation.busy} onChange={(event) => change({ permissionMode: event.target.value || null })} value={draft.permissionMode ?? ""} /></TaskField>
+        {draft.target.channel !== "local" && <TaskField hint={draft.target.channel === "feishu" ? "可填写已有飞书话题根消息ID，留空发送到群。" : "可填写已有Telegram话题编号，留空发送到聊天。"} label="目标话题"><input aria-label="目标话题" className={taskInputClass} disabled={mutation.busy} onChange={(event) => change({ target: { ...draft.target, topicId: event.target.value || undefined } })} value={draft.target.topicId ?? ""} /></TaskField>}
+      </div></details>
+      <label className="flex min-h-11 items-start gap-3 border-t border-line pt-4 text-sm text-ink"><input aria-label="启用未来调度" checked={draft.enabled} className="mt-1" disabled={mutation.busy} onChange={(event) => change({ enabled: event.target.checked })} type="checkbox" /><span>保存后启用未来调度<span className="mt-1 block text-xs leading-5 text-muted">新任务默认暂停，可保存后先运行一次验证。</span></span></label>
+      {preview && <section aria-label="运行前检查" className="grid gap-3 border-y border-line py-4"><h2 className="text-sm font-medium text-ink">{preview.valid ? "运行前检查通过" : "还有项目需要处理"}</h2><ul className="grid gap-2">{preview.checks.map((check) => <li className={`flex items-start gap-2 text-sm leading-6 ${check.ok ? "text-ink-soft" : "text-danger"}`} key={check.name}>{check.ok && <Check className="mt-1 size-4 shrink-0 text-success" />}<span>{check.name}：{check.message}</span></li>)}</ul><div className="grid gap-1 text-xs leading-6 text-muted"><p>接下来{preview.nextRuns.length}次计划时间 · {draft.timezone}</p>{preview.nextRuns.map((at) => <time dateTime={at} key={at}>{taskDate(at, draft.timezone)}</time>)}</div><p className="text-xs text-muted">本次检查没有运行Agent或发送消息。执行时会再次检查。</p></section>}
+      <div className="flex flex-wrap gap-2 border-t border-line pt-4"><Button disabled={mutation.busy || !draft.agentId} type="submit" variant="secondary"><Save className="mr-1.5 size-4" />{mutation.busy ? "处理中…" : "保存定时任务"}</Button><Button disabled={mutation.busy || !draft.name.trim() || !draft.prompt.trim() || !draft.cwd.trim()} onClick={() => void check()} type="button" variant="outline"><Check className="mr-1.5 size-4" />检查并预览</Button><Button disabled={mutation.busy} onClick={onCancel} type="button" variant="ghost">取消</Button></div>
+    </form>
+  </div></section>;
+}
+function AgentTaskDetail({ id, onBack, onEdit, onAttempt, onNotify, canEdit }: { id: string; onBack: () => void; onEdit: (task: AgentTaskDefinition, revision: string) => void; onAttempt: (id: string, attemptId: string) => void; onNotify: Notify; canEdit: boolean }) {
+  const [offset, setOffset] = useState(0), [acknowledged, setAcknowledged] = useState(false);
+  const loader = useCallback(() => api.agentTask(id, offset), [id, offset]), resource = useTaskResource(loader), mutation = useTaskMutation();
+  const data = resource.data, task = data?.task;
+  async function act(action: "pause" | "resume" | "run") {
+    if (!data) return;
+    const result = await mutation.perform(`${action}:${data.task.version}`, (key) => api.agentTaskAction(id, action, data.revision, { version: data.task.version, acknowledgeUnknown: acknowledged }, key));
+    if (!result) return;
+    if (result.attempt) onAttempt(id, result.attempt.id); else { await resource.reload(); onNotify(action === "pause" ? "未来调度已暂停，进行中的任务继续运行" : "未来调度已恢复"); }
+  }
+  const unknown = task?.pausedReason?.startsWith("执行结果不明");
+  return <section aria-label="定时任务详情" className="min-h-0 flex-1 overflow-y-auto"><div className="mx-auto grid w-full max-w-5xl gap-5 px-5 py-6 md:px-8"><div><Button className="mb-4" onClick={onBack} size="sm" variant="ghost"><ArrowLeft className="mr-1.5 size-4" />所有定时任务</Button><h1 className="break-words font-brand text-xl font-normal text-ink">{task?.name ?? "定时任务详情"}</h1></div><TaskError message={resource.error ?? mutation.error} />
+    {!data ? <p className="text-sm text-muted" role="status">{resource.loading ? "正在读取任务…" : "任务尚未读到，请刷新后重试。"}</p> : <>
+      <div className="flex flex-wrap items-center gap-2"><span className="mr-2 text-sm font-medium text-ink">{taskState(data.task)}</span><Button disabled={mutation.busy || Boolean(data.task.activeAttemptId) || Boolean(unknown && !acknowledged)} onClick={() => void act("run")} size="sm" variant="secondary"><Play className="mr-1.5 size-4" />运行一次</Button><Button disabled={mutation.busy || Boolean(!data.task.enabled && unknown && !acknowledged)} onClick={() => void act(data.task.enabled ? "pause" : "resume")} size="sm" variant="outline">{data.task.enabled ? <Pause className="mr-1.5 size-4" /> : <Play className="mr-1.5 size-4" />}{data.task.enabled ? "暂停未来调度" : "恢复未来调度"}</Button><Button disabled={mutation.busy || !canEdit} onClick={() => onEdit(data.task, data.revision)} size="sm" variant="outline"><Pencil className="mr-1.5 size-4" />编辑任务</Button><Button aria-label="刷新任务详情" onClick={() => void resource.reload()} size="sm" variant="ghost"><RefreshCw className="size-4" /></Button></div>
+      {data.task.pausedReason && <p className="text-sm leading-6 text-muted">{data.task.pausedReason}</p>}
+      {unknown && <label className="flex min-h-11 items-start gap-3 text-sm text-ink"><input aria-label="已核对上次执行结果" checked={acknowledged} className="mt-1" onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" />我已核对上次实际执行结果，仍要恢复或重新执行。</label>}
+      <dl className="grid gap-4 border-y border-line py-5 text-sm sm:grid-cols-2"><div><dt className="text-muted">执行计划</dt><dd className="mt-1 text-ink">{data.task.parsedSchedule.kind === "once" ? `仅一次：${taskDate(data.task.parsedSchedule.at, data.task.timezone)}` : data.task.parsedSchedule.label} · {data.task.timezone}</dd></div><div><dt className="text-muted">下次执行</dt><dd className="mt-1 text-ink">{taskDate(data.task.nextRunAt, data.task.timezone)}</dd></div><div><dt className="text-muted">执行Agent</dt><dd className="mt-1 text-ink">{data.task.agentId}{data.task.model ? ` · ${data.task.model}` : ""}</dd></div><div><dt className="text-muted">结果目标</dt><dd className="mt-1 break-words text-ink">{data.task.target.channel === "local" ? "仅本地" : `${data.task.target.channel} · ${data.task.target.chatId}`}</dd></div><div className="sm:col-span-2"><dt className="text-muted">项目目录</dt><dd className="mt-1 break-all font-mono text-xs text-ink">{data.task.cwd}</dd></div></dl>
+      <details><summary className="cursor-pointer text-sm font-medium text-ink">执行指令与运行设置</summary><p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">{data.task.prompt}</p><p className="mt-3 text-xs leading-6 text-muted">通知：{{ result: "仅最终结果", errors: "仅异常通知", progress: "开始、关键进度与结果" }[data.task.notification]}；错过时间：{data.task.catchUp === "once" ? "合并补一次" : "跳过"}；Skill：{data.task.skills.join("、") || "未额外指定"}</p></details>
+      <div className="mt-2 flex items-center justify-between gap-3"><h2 className="text-base font-medium text-ink">运行记录</h2><span className="text-xs text-muted">共{data.total}次</span></div>
+      <div className="divide-y divide-line border-y border-line">{data.runs.map((run) => <button className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-4 py-4 text-left hover:bg-surface-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-muted" key={run.id} onClick={() => onAttempt(id, run.id)} type="button"><span className="min-w-0"><span className="block text-sm font-medium text-ink">{taskStatusLabels[run.status]} · {taskDate(run.startedAt, data.task.timezone)}</span><span className="mt-1 block text-xs leading-5 text-muted">{{ scheduled: "按计划触发", manual: "手动运行", retry: "重新执行" }[run.trigger]} · {taskDeliveryLabels[run.deliveryState]}{run.reason && <span className="mt-1 block break-words">{run.reason}</span>}</span></span><ChevronRight className="size-4 text-muted" /></button>)}{!data.runs.length && <p className="py-10 text-sm text-muted">还没有运行记录。可以先运行一次，查看实际结果后再启用调度。</p>}</div>
+      {(offset > 0 || data.nextOffset !== null) && <div className="flex gap-2"><Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 20))} size="sm" variant="outline">上一页</Button><Button disabled={data.nextOffset === null} onClick={() => setOffset(data.nextOffset!)} size="sm" variant="outline">下一页</Button></div>}
+    </>}
+  </div></section>;
+}
+function AgentTaskRun({ id, attemptId, onBack, onAttempt, onOpenSession, onNotify }: { id: string; attemptId: string; onBack: () => void; onAttempt: (id: string, attemptId: string) => void; onOpenSession: (id: string) => Promise<void>; onNotify: Notify }) {
+  const loader = useCallback(async () => { const [detail, task] = await Promise.all([api.agentTaskAttempt(id, attemptId), api.agentTask(id)]); return { ...detail, currentTask: task.task }; }, [id, attemptId]);
+  const resource = useTaskResource(loader), mutation = useTaskMutation(), [acknowledged, setAcknowledged] = useState(false);
+  const data = resource.data, run = data?.attempt;
+  const terminal = Boolean(run && ["succeeded", "failed", "cancelled", "interrupted"].includes(run.status));
+  const unknown = run?.outcomeUncertain || run?.status === "interrupted" || data?.currentTask.pausedReason?.startsWith("执行结果不明");
+  async function recover(action: "retry" | "resend" | "acknowledge") {
+    if (!data) return;
+    const result = await mutation.perform(`${action}:${attemptId}:${data.currentTask.version}`, (key) => api.agentTaskAction(id, action, data.revision, { version: data.currentTask.version, acknowledgeUnknown: acknowledged }, key, attemptId));
+    if (!result) return;
+    if (action === "retry" && result.attempt) onAttempt(id, result.attempt.id); else { await resource.reload(); onNotify(action === "acknowledge" ? "已确认无需补发，没有发送消息或重新执行" : "补发请求已处理，请查看通知状态；没有重新执行任务"); }
+  }
+  async function download(fileId: string, name: string) {
+    const result = await mutation.perform(`download:${fileId}`, async () => { await api.downloadTaskFile(fileId, name); return true; });
+    if (result) onNotify("结果文件已交给浏览器下载");
+  }
+  return <section aria-label="任务运行详情" className="min-h-0 flex-1 overflow-y-auto"><div className="mx-auto grid w-full max-w-5xl gap-5 px-5 py-6 md:px-8"><div><Button className="mb-4" onClick={onBack} size="sm" variant="ghost"><ArrowLeft className="mr-1.5 size-4" />返回任务</Button><h1 className="break-words font-brand text-xl font-normal text-ink">{run?.definition.name ?? "运行详情"}</h1><p className="mt-2 text-sm text-muted">{run ? taskStatusLabels[run.status] : "正在读取运行记录…"}</p></div><TaskError message={resource.error ?? mutation.error} />
+    {data && <>
+      <div className="flex flex-wrap gap-2">{data.sessionAvailable && <Button disabled={mutation.busy} onClick={() => void onOpenSession(data.attempt.sessionId)} size="sm" variant="secondary"><ArrowUpRight className="mr-1.5 size-4" />进入会话处理</Button>}
+        <Button disabled={mutation.busy || !terminal || Boolean(data.currentTask.activeAttemptId) || Boolean(unknown && !acknowledged)} onClick={() => void recover("retry")} size="sm" variant="outline"><RotateCcw className="mr-1.5 size-4" />重新执行这次</Button>
+        <Button disabled={mutation.busy || !terminal || data.attempt.deliveryState === "pending" || data.attempt.definition.target.channel === "local"} onClick={() => void recover("resend")} size="sm" variant="outline"><Send className="mr-1.5 size-4" />仅补发已有结果</Button>{data.attempt.deliveryState === "unknown" && <Button disabled={mutation.busy} onClick={() => void recover("acknowledge")} size="sm" variant="outline"><Check className="mr-1.5 size-4" />确认无需补发</Button>}<Button aria-label="刷新运行详情" onClick={() => void resource.reload()} size="sm" variant="ghost"><RefreshCw className="size-4" /></Button></div>
+      <p className="text-xs leading-5 text-muted">重新执行会使用本次记录的参数创建新会话；仅补发发送已保存的结论和文件，不调用Agent。确认无需补发只关闭这次发送问题，原通知记录仍保留。取消执行、审批和继续队列在原会话中处理。</p>
+      {unknown && <label className="flex min-h-11 items-start gap-3 text-sm text-ink"><input aria-label="已核对中断执行结果" checked={acknowledged} className="mt-1" onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" />我已核对本次实际执行结果，仍要重新执行。</label>}
+      <dl className="grid gap-4 border-y border-line py-5 text-sm sm:grid-cols-2"><div><dt className="text-muted">计划时间</dt><dd className="mt-1 text-ink">{taskDate(data.attempt.scheduledAt, data.attempt.definition.timezone)}</dd></div><div><dt className="text-muted">实际开始</dt><dd className="mt-1 text-ink">{taskDate(data.attempt.startedAt, data.attempt.definition.timezone)}</dd></div><div><dt className="text-muted">结束时间</dt><dd className="mt-1 text-ink">{taskDate(data.attempt.finishedAt, data.attempt.definition.timezone)}</dd></div><div><dt className="text-muted">结果通知状态</dt><dd className="mt-1 text-ink">{taskDeliveryLabels[data.attempt.deliveryState]}</dd></div></dl>
+      {data.attempt.reason && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">{data.attempt.reason}</p>}
+      <section aria-label="本次执行结果" className="grid gap-3"><h2 className="text-base font-medium text-ink">执行结果</h2>{data.attempt.result ? <div className="min-w-0 break-words text-sm leading-7 text-ink"><Markdown content={data.attempt.result} /></div> : <p className="text-sm text-muted">{terminal ? "本次没有返回正文，详情见运行状态与原会话。" : "结果会在本次执行结束后保存。"}</p>}</section>
+      <section aria-label="结果文件" className="grid gap-3 border-t border-line pt-5"><h2 className="text-base font-medium text-ink">结果文件</h2>{data.files.length ? data.files.map((file) => <div className="flex min-w-0 flex-wrap items-center justify-between gap-3" key={file.id}><span className="flex min-w-0 items-start gap-2 text-sm text-ink"><FileText className="mt-0.5 size-4 shrink-0 text-muted" /><span className="break-all">{file.name}<span className="mt-1 block text-xs text-muted">{file.size.toLocaleString()}字节 · 已保存本次文件副本</span></span></span><Button aria-label={`下载 ${file.name}`} disabled={mutation.busy} onClick={() => void download(file.id, file.name)} size="sm" variant="outline"><Download className="mr-1.5 size-4" />下载</Button></div>) : <p className="text-sm text-muted">本次尚未登记结果文件。Agent可通过fcb tasks output登记项目内文件，已发送文件也会留档。</p>}</section>
+      <section aria-label="通知记录" className="grid gap-3 border-t border-line pt-5"><h2 className="text-base font-medium text-ink">通知记录</h2>{data.notices.length ? data.notices.map((notice) => <div className="grid gap-1 text-sm" key={notice.id}><p className="text-ink">{{ start: "开始通知", progress: "执行进度", approval: "审批提醒", result: "最终结果", resend: "手动补发", acknowledgement: "人工确认无需补发" }[notice.kind]} · {taskDeliveryLabels[notice.state]}</p><p className="text-xs text-muted">{taskDate(notice.createdAt, data.attempt.definition.timezone)}</p>{notice.error && <p className="break-words text-sm leading-6 text-danger">{notice.error}</p>}</div>) : <p className="text-sm text-muted">{data.attempt.definition.target.channel === "local" ? "本次结果仅保存本地，没有发送到聊天。" : "暂时没有通知记录。"}</p>}</section>
+      <details className="border-t border-line pt-4"><summary className="cursor-pointer text-sm font-medium text-ink">运行事件与本次参数</summary><p className="mt-3 break-all font-mono text-xs text-muted">{data.attempt.id}{data.attempt.runId ? ` · ${data.attempt.runId}` : ""}</p><p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">{data.attempt.definition.prompt}</p><ol className="mt-4 grid gap-2 text-xs leading-5 text-muted">{data.events.map((event) => <li className="break-words" key={event.sequence}>{taskDate(event.at)} · {event.type} {event.summary}</li>)}</ol>{data.eventsTruncated && <p className="mt-3 text-xs text-muted">这里只显示最近100条事件，完整内容请进入原会话。</p>}</details>
+    </>}
+  </div></section>;
+}

@@ -1,0 +1,244 @@
+import type { ChildProcess } from "node:child_process";
+import type {
+  ActiveSession,
+  ActiveSessionMessage,
+  ClientConnection,
+  SessionConfigOption,
+} from "@agentclientprotocol/sdk";
+import { methods } from "@agentclientprotocol/sdk";
+import { killProcessTree } from "./acp-kill.js";
+import { raceWithAbort } from "./acp-race.js";
+
+const ACP_SESSION_CLOSE_TIMEOUT_MS = 30_000;
+
+/** 每轮由 runner 重绑的会话运行时：per-run 闭包绝不能跨轮沿用（否则第二轮权限请求会调到第一轮的死闭包） */
+export interface AcpSessionRuntime {
+  requestDecision?: (info: { title: string }) => Promise<boolean>;
+}
+
+/**
+ * 一个长驻 ACP 会话的全部资源。池命中时整个对象跨轮复用——尤其 `active` 与 `carrier`：
+ * 同一连接上对同一 sessionId 再 attach 会造成双队列重复投递（SDK SessionUpdateRouter 是
+ * Set 追加），被抛弃的 nextUpdate waiter 会吞掉下一条消息（FIFO 且无注销 API），
+ * 所以 ActiveSession 对象与挂起的 waiter 都必须原样接力，绝不能重建或丢弃。
+ */
+export interface AcpSessionResources {
+  sessionId: string;
+  child: ChildProcess;
+  connection: ClientConnection;
+  active: ActiveSession;
+  /** 复用匹配键：cwd/spawn 命令/env 任一变了都不能复用（进程启动时已冻结） */
+  cwd: string;
+  spawnKey: string;
+  envKey: string;
+  additionalDirectoriesKey: string;
+  mcpServersKey: string;
+  supportsSteering: boolean;
+  supportsClose: boolean;
+  configOptions: SessionConfigOption[];
+  /** stderr 尾部缓冲，跨轮累积 */
+  readStderr: () => string;
+  /** 跨轮接力的 nextUpdate waiter */
+  carrier: { pending: Promise<ActiveSessionMessage> | null };
+  runtime: AcpSessionRuntime;
+}
+
+export interface AcpSessionPoolOptions {
+  enabled: boolean;
+  /** 空闲这么久后回收（ms） */
+  idleMs: number;
+  /** 池内最多保留多少个空闲会话进程 */
+  maxPooled: number;
+}
+
+const SWEEP_INTERVAL_MS = 60_000;
+
+export function resourcesAlive(r: AcpSessionResources): boolean {
+  return r.child.exitCode === null && r.child.signalCode === null;
+}
+
+/**
+ * 完整拆除一个会话：dispose 路由、关连接、杀整棵进程树。默认 SIGTERM + 2s SIGKILL
+ * 兜底；shutdown 路径传 SIGKILL 直杀——runner 马上 process.exit，unref 的兜底定时器
+ * 活不到触发，等宽限毫无意义。
+ */
+export function teardownResources(
+  r: AcpSessionResources,
+  signal: NodeJS.Signals = "SIGTERM",
+): void {
+  try {
+    r.active.dispose();
+  } catch {
+    // 已 dispose / 连接已死
+  }
+  try {
+    r.connection.close();
+  } catch {
+    // 已关闭
+  }
+  killProcessTree(r.child, signal);
+  if (signal !== "SIGKILL") {
+    const child = r.child;
+    setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        killProcessTree(child, "SIGKILL");
+      }
+    }, 2000).unref();
+  }
+}
+
+/**
+ * 长驻 ACP 会话池（check-out/check-in 模型）：
+ * - acquire 命中即把条目从池里取走（运行期不在池内）——同一 sessionId 的并发第二个
+ *   认领者（/resume 可让两个会话绑同一 id）自然 miss、走独立冷启动，无需 busy 锁；
+ * - release 在健康轮末把资源放回（池满先淘汰最久未用的）；
+ * - 出错/中断/超时一律不归还（由调用方 teardown），池只保留干净收尾的会话；
+ * - idle sweep 回收长时间没人用的进程；shutdown 必须在 runner 退出前调用
+ *  （子进程 detached，不会随 runner 死）。
+ */
+export class AcpSessionPool {
+  private readonly idle = new Map<
+    string,
+    { resources: AcpSessionResources; lastUsedAt: number }
+  >();
+  private readonly sweepTimer?: NodeJS.Timeout;
+
+  constructor(private readonly options: AcpSessionPoolOptions) {
+    if (options.enabled) {
+      this.sweepTimer = setInterval(() => this.sweep(), SWEEP_INTERVAL_MS);
+      this.sweepTimer.unref();
+    }
+  }
+
+  get enabled(): boolean {
+    return this.options.enabled;
+  }
+
+  size(): number {
+    return this.idle.size;
+  }
+
+  /** detached ACP 进程是进程组组长；用于识别其 Codex 子进程是否属于本 Runner。 */
+  ownerProcessGroupId(sessionId: string): number | undefined {
+    return this.idle.get(sessionId)?.resources.child.pid;
+  }
+
+  acquire(
+    sessionId: string,
+    match: {
+      cwd: string;
+      spawnKey: string;
+      envKey: string;
+      additionalDirectoriesKey: string;
+      mcpServersKey: string;
+    },
+  ): AcpSessionResources | null {
+    if (!this.options.enabled) return null;
+    const entry = this.idle.get(sessionId);
+    if (!entry) return null;
+    this.idle.delete(sessionId);
+    const r = entry.resources;
+    if (
+      !resourcesAlive(r) ||
+      r.cwd !== match.cwd ||
+      r.spawnKey !== match.spawnKey ||
+      r.envKey !== match.envKey ||
+      r.additionalDirectoriesKey !== match.additionalDirectoriesKey
+      || r.mcpServersKey !== match.mcpServersKey
+    ) {
+      teardownResources(r);
+      return null;
+    }
+    return r;
+  }
+
+  release(r: AcpSessionResources): void {
+    if (!this.options.enabled || !resourcesAlive(r)) {
+      teardownResources(r);
+      return;
+    }
+    // 并发认领的旁路进程后到：同 id 已有空闲条目时不覆盖（否则先到者被泄漏），拆掉后来的
+    if (this.idle.has(r.sessionId)) {
+      teardownResources(r);
+      return;
+    }
+    while (this.idle.size >= this.options.maxPooled) {
+      let oldestId: string | undefined;
+      let oldestAt = Infinity;
+      for (const [id, entry] of this.idle) {
+        if (entry.lastUsedAt < oldestAt) {
+          oldestAt = entry.lastUsedAt;
+          oldestId = id;
+        }
+      }
+      if (oldestId === undefined) break;
+      const evicted = this.idle.get(oldestId)!;
+      this.idle.delete(oldestId);
+      teardownResources(evicted.resources);
+    }
+    this.idle.set(r.sessionId, { resources: r, lastUsedAt: Date.now() });
+  }
+
+  remove(sessionId: string): boolean {
+    const entry = this.idle.get(sessionId);
+    if (!entry) return false;
+    this.idle.delete(sessionId);
+    teardownResources(entry.resources);
+    return true;
+  }
+
+  async close(
+    sessionId: string,
+    timeoutMs = ACP_SESSION_CLOSE_TIMEOUT_MS,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const entry = this.idle.get(sessionId);
+    if (!entry) return { ok: false, error: "not_owned" };
+    this.idle.delete(sessionId);
+    try {
+      if (!entry.resources.supportsClose) {
+        return {
+          ok: false,
+          error: "ACP agent 未声明 session/close 支持",
+        };
+      }
+      await raceWithAbort(
+        entry.resources.connection.agent.request(
+          methods.agent.session.close,
+          { sessionId },
+        ),
+        () => false,
+        timeoutMs,
+        "ACP session/close 超时",
+      );
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      teardownResources(entry.resources);
+    }
+  }
+
+  sweep(now = Date.now()): void {
+    for (const [id, entry] of [...this.idle.entries()]) {
+      if (
+        !resourcesAlive(entry.resources) ||
+        now - entry.lastUsedAt >= this.options.idleMs
+      ) {
+        this.idle.delete(id);
+        teardownResources(entry.resources);
+      }
+    }
+  }
+
+  shutdown(): void {
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    for (const [id, entry] of [...this.idle.entries()]) {
+      this.idle.delete(id);
+      // runner 即将退出：直接 SIGKILL（空闲进程无在途工作，宽限期定时器也活不到）
+      teardownResources(entry.resources, "SIGKILL");
+    }
+  }
+}

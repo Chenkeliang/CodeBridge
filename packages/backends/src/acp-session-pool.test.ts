@@ -1,0 +1,333 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ChildProcess } from "node:child_process";
+import { defaultConfig, type RunContext } from "@codebridge/core";
+import {
+  AcpSessionPool,
+  resourcesAlive,
+  type AcpSessionResources,
+} from "./acp/acp-session-pool.js";
+import { buildSessionMatchKeys } from "./acp/acp-session-runner.js";
+
+interface FakeHandles {
+  resources: AcpSessionResources;
+  disposed: () => boolean;
+  closed: () => boolean;
+  markDead: () => void;
+}
+
+const MCP_KEY_UNAVAILABLE = `sha256:${"0".repeat(64)}`;
+const MCP_KEY_AVAILABLE = `sha256:${"1".repeat(64)}`;
+
+function fakeResources(sessionId: string, over?: Partial<AcpSessionResources>): FakeHandles {
+  let disposed = false;
+  let closed = false;
+  const state = { exitCode: null as number | null, signalCode: null as string | null };
+  // pid undefined → killProcessTree 直接返回，测试里不真发信号
+  const child = {
+    get exitCode() {
+      return state.exitCode;
+    },
+    get signalCode() {
+      return state.signalCode;
+    },
+    pid: undefined,
+    kill: () => true,
+  } as unknown as ChildProcess;
+  const resources: AcpSessionResources = {
+    sessionId,
+    child,
+    connection: {
+      close: () => {
+        closed = true;
+      },
+    } as unknown as AcpSessionResources["connection"],
+    active: {
+      dispose: () => {
+        disposed = true;
+      },
+    } as unknown as AcpSessionResources["active"],
+    cwd: "/w",
+    spawnKey: "npx adapter",
+    envKey: "chat|topic",
+    additionalDirectoriesKey: "",
+    mcpServersKey: MCP_KEY_UNAVAILABLE,
+    supportsSteering: false,
+    supportsClose: false,
+    configOptions: [],
+    readStderr: () => "",
+    carrier: { pending: null },
+    runtime: {},
+    ...over,
+  };
+  return {
+    resources,
+    disposed: () => disposed,
+    closed: () => closed,
+    markDead: () => {
+      state.exitCode = 0;
+    },
+  };
+}
+
+const MATCH = {
+  cwd: "/w",
+  spawnKey: "npx adapter",
+  envKey: "chat|topic",
+  additionalDirectoriesKey: "",
+  mcpServersKey: MCP_KEY_UNAVAILABLE,
+};
+
+describe("AcpSessionPool", () => {
+  it("derives a stable MCP reuse key that changes with the availability snapshot", () => {
+    const base: RunContext = {
+      runId: "run-1",
+      cwd: "/w",
+      prompt: "hi",
+      backendConfig: defaultConfig().backends.cursor!,
+    };
+    const server = {
+      name: "codebridge-internal",
+      command: "/usr/bin/node",
+      args: ["/opt/codebridge/sample-mcp-server.js"],
+    };
+    const unavailable = buildSessionMatchKeys({
+      ...base,
+      mcpServers: [{
+        ...server,
+        env: { SECOND: "stable", CODEBRIDGE_SAMPLE_FLAG: "false" },
+      }],
+    }).mcpServersKey;
+    const sameUnavailable = buildSessionMatchKeys({
+      ...base,
+      mcpServers: [{
+        ...server,
+        env: { CODEBRIDGE_SAMPLE_FLAG: "false", SECOND: "stable" },
+      }],
+    }).mcpServersKey;
+    const available = buildSessionMatchKeys({
+      ...base,
+      mcpServers: [{
+        ...server,
+        env: { SECOND: "stable", CODEBRIDGE_SAMPLE_FLAG: "true" },
+      }],
+    }).mcpServersKey;
+
+    expect(sameUnavailable).toBe(unavailable);
+    expect(available).not.toBe(unavailable);
+    expect(unavailable).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(unavailable).not.toContain("sample-mcp-server.js");
+    expect(unavailable).not.toContain("stable");
+    expect(unavailable).not.toContain("false");
+  });
+
+  it("treats equivalent MCP server sets as the same configuration regardless of list order", () => {
+    const base: RunContext = {
+      runId: "run-1",
+      cwd: "/w",
+      prompt: "hi",
+      backendConfig: defaultConfig().backends.cursor!,
+    };
+    const servers = [
+      { name: "alpha", command: "/a", args: ["one"], env: { TOKEN: "secret-a" } },
+      { name: "beta", command: "/b", args: ["two"], env: { TOKEN: "secret-b" } },
+    ];
+
+    const forward = buildSessionMatchKeys({ ...base, mcpServers: servers }).mcpServersKey;
+    const reversed = buildSessionMatchKeys({
+      ...base,
+      mcpServers: [...servers].reverse(),
+    }).mcpServersKey;
+
+    expect(reversed).toBe(forward);
+    expect(forward).not.toContain("secret-a");
+    expect(forward).not.toContain("secret-b");
+  });
+
+  it("release 后 acquire 命中同一对象；检出期间再 acquire 落空（并发认领走旁路）", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1");
+    pool.release(a.resources);
+    expect(pool.size()).toBe(1);
+    const hit = pool.acquire("s1", MATCH);
+    expect(hit).toBe(a.resources);
+    expect(pool.size()).toBe(0);
+    expect(pool.acquire("s1", MATCH)).toBeNull(); // 已检出
+    pool.shutdown();
+  });
+
+  it("匹配键不一致（cwd/spawnKey/envKey）→ 拆掉旧条目并返回 null", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1");
+    pool.release(a.resources);
+    expect(pool.acquire("s1", { ...MATCH, cwd: "/other" })).toBeNull();
+    expect(a.disposed()).toBe(true);
+    expect(a.closed()).toBe(true);
+    expect(pool.size()).toBe(0);
+    pool.shutdown();
+  });
+
+  it("additionalDirectories 变化时不复用旧会话进程", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1", { additionalDirectoriesKey: "/shared" });
+    pool.release(a.resources);
+    expect(pool.acquire("s1", MATCH)).toBeNull();
+    expect(a.disposed()).toBe(true);
+  });
+
+  it("MCP env false→true 时不复用旧 MCP 进程", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const unavailable = fakeResources("s1", { mcpServersKey: MCP_KEY_UNAVAILABLE });
+    pool.release(unavailable.resources);
+
+    expect(pool.acquire("s1", { ...MATCH, mcpServersKey: MCP_KEY_AVAILABLE })).toBeNull();
+    expect(unavailable.disposed()).toBe(true);
+    expect(unavailable.closed()).toBe(true);
+  });
+
+  it("相同 MCP 配置与 availability snapshot 仍复用旧进程", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const current = fakeResources("s1", { mcpServersKey: MCP_KEY_AVAILABLE });
+    pool.release(current.resources);
+
+    expect(pool.acquire("s1", { ...MATCH, mcpServersKey: MCP_KEY_AVAILABLE }))
+      .toBe(current.resources);
+    expect(current.disposed()).toBe(false);
+  });
+
+  it("死进程条目 acquire 时被剔除", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1");
+    pool.release(a.resources);
+    a.markDead();
+    expect(resourcesAlive(a.resources)).toBe(false);
+    expect(pool.acquire("s1", MATCH)).toBeNull();
+    expect(a.disposed()).toBe(true);
+    pool.shutdown();
+  });
+
+  it("池满 LRU 淘汰最久未用的", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 2 });
+    const a = fakeResources("s1");
+    const b = fakeResources("s2");
+    const c = fakeResources("s3");
+    pool.release(a.resources);
+    pool.release(b.resources);
+    pool.release(c.resources);
+    expect(pool.size()).toBe(2);
+    expect(a.disposed()).toBe(true); // 最老的被淘汰
+    expect(b.disposed()).toBe(false);
+    expect(c.disposed()).toBe(false);
+    pool.shutdown();
+  });
+
+  it("同 id 重复 release：后到的被拆掉，先到的保留（旁路进程不覆盖）", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const first = fakeResources("s1");
+    const second = fakeResources("s1");
+    pool.release(first.resources);
+    pool.release(second.resources);
+    expect(pool.size()).toBe(1);
+    expect(second.disposed()).toBe(true);
+    expect(first.disposed()).toBe(false);
+    expect(pool.acquire("s1", MATCH)).toBe(first.resources);
+    pool.shutdown();
+  });
+
+  it("idle sweep 回收超时条目，保留新鲜条目", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 1_000, maxPooled: 4 });
+    const a = fakeResources("s1");
+    pool.release(a.resources);
+    pool.sweep(Date.now() + 500);
+    expect(pool.size()).toBe(1);
+    pool.sweep(Date.now() + 2_000);
+    expect(pool.size()).toBe(0);
+    expect(a.disposed()).toBe(true);
+    pool.shutdown();
+  });
+
+  it("shutdown 清空并拆除全部条目", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1");
+    const b = fakeResources("s2");
+    pool.release(a.resources);
+    pool.release(b.resources);
+    pool.shutdown();
+    expect(pool.size()).toBe(0);
+    expect(a.disposed()).toBe(true);
+    expect(b.disposed()).toBe(true);
+  });
+
+  it("remove 拆除指定的空闲 session", () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1");
+    pool.release(a.resources);
+    expect(pool.remove("s1")).toBe(true);
+    expect(pool.size()).toBe(0);
+    expect(a.disposed()).toBe(true);
+    pool.shutdown();
+  });
+
+  it("close 在拥有会话的池内 ACP 连接上执行并拆除资源", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1", {
+      supportsClose: true,
+      connection: { agent: { request } } as unknown as AcpSessionResources["connection"],
+    });
+    pool.release(a.resources);
+
+    await expect(pool.close("s1")).resolves.toEqual({ ok: true });
+    expect(request).toHaveBeenCalledWith(
+      expect.anything(),
+      { sessionId: "s1" },
+    );
+    expect(pool.size()).toBe(0);
+    expect(a.disposed()).toBe(true);
+    pool.shutdown();
+  });
+
+  it("close 超时后拆除池内资源而不是永久挂起", async () => {
+    const pool = new AcpSessionPool({ enabled: true, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1", {
+      supportsClose: true,
+      connection: {
+        agent: { request: () => new Promise(() => {}) },
+      } as unknown as AcpSessionResources["connection"],
+    });
+    pool.release(a.resources);
+
+    await expect(pool.close("s1", 20)).resolves.toEqual({
+      ok: false,
+      error: "ACP session/close 超时",
+    });
+    expect(pool.size()).toBe(0);
+    expect(a.disposed()).toBe(true);
+    pool.shutdown();
+  });
+
+  it("disabled：acquire 恒 null，release 直接拆除（kill switch 行为=旧版）", () => {
+    const pool = new AcpSessionPool({ enabled: false, idleMs: 60_000, maxPooled: 4 });
+    const a = fakeResources("s1");
+    pool.release(a.resources);
+    expect(a.disposed()).toBe(true);
+    expect(pool.size()).toBe(0);
+    expect(pool.acquire("s1", MATCH)).toBeNull();
+    pool.shutdown();
+  });
+});
+
+
+it("does not reuse MCP identity across deployment runs", () => {
+  const base: RunContext = { runId: "run_one", cwd: "/tmp", prompt: "test", backendConfig: defaultConfig().backends.codex! };
+  const key = (runId: string) => buildSessionMatchKeys({ ...base, mcpServers: [{ name: "codebridge-internal", command: "/usr/bin/node", args: ["/server.js"], env: { FCB_RUN_ID: runId, FCB_API: "http://127.0.0.1:19790", FCB_TOKEN: "private" } }] }).mcpServersKey;
+  expect(key("run_one")).not.toBe(key("run_two"));
+  expect(key("run_one")).toBe(key("run_one"));
+});
+
+
+it("does not reuse an ACP process with a previous Run's outbound identity", () => {
+  const base: RunContext = { runId: "run-1", cwd: "/w", prompt: "hi", backendConfig: defaultConfig().backends.cursor! };
+  const key = (runId: string) => buildSessionMatchKeys({ ...base, extraEnv: { FCB_CHAT_ID: "conv_same", FCB_RUN_ID: runId } }).envKey;
+  expect(key("run-1")).not.toBe(key("run-2"));
+  expect(key("run-1")).toBe(key("run-1"));
+});

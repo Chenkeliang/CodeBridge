@@ -1,0 +1,26 @@
+{
+  "name": "@codebridge/channel-feishu",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@codebridge/core": "workspace:*",
+    "@codebridge/router": "workspace:*",
+    "@larksuite/cli": "1.0.98",
+    "@larksuiteoapi/node-sdk": "^1.54.0",
+    "mdast-util-from-markdown": "2.0.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

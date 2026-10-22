@@ -1,0 +1,32 @@
+{
+  "name": "@codebridge/runner-host",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "codebridge-runner": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@codebridge/backends": "workspace:*",
+    "@codebridge/agent-registry": "workspace:*",
+    "@codebridge/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "hono": "^4.6.14",
+    "@hono/node-server": "^1.13.7",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@codebridge/runner-client": "workspace:*",
+    "typescript": "^5.7.2"
+  }
+}

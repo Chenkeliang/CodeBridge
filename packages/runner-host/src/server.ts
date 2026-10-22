@@ -1,0 +1,1619 @@
+import { supportedAgentSetupManifests } from "@codebridge/agent-registry";
+import {
+  AcpSessionPool,
+  AgentSetupService,
+  BackendRegistry,
+  closePiSession,
+  deleteAcpSession,
+  deletePiSession,
+  forkPiSession,
+  listAcpConfigOptions,
+  listAcpSessions,
+  listCodexSkillCommands,
+  listPiCommands,
+  listPiConfigOptions,
+  listPiSessions,
+  loadAcpSessionHistory,
+  loadClaudeSessionHistory,
+  loadCodexSessionHistory,
+  loadPiSessionHistory,
+  PI_PROVIDER_PRESETS,
+  readPiProviders,
+  runAcpSession,
+  runPiSession,
+  SKILL_AGENT_IDS,
+  SkillControlPlane,
+  testProviderConnection,
+  validateProviders,
+  writePiProviders,
+  type AgentAuthProbe,
+  type AgentSetupInstallResult,
+  type AgentSetupRecord,
+  type CliSessionSummary,
+  type PiProvidersFile,
+  type PiRunHandleRef,
+  type PiSession,
+  type PiSessionLifecycleResult,
+  type ProviderSessionHistoryEvent,
+  type SkillAgentId,
+  type SkillCatalogSnapshot,
+  type SkillMutationPlan,
+  type SkillMutationResult,
+} from "@codebridge/backends";
+import type {
+  AcpPermissionPolicy,
+  AgentAvailableCommand,
+  AgentEvent,
+  AppConfig,
+  BackendConfigOption,
+  BackendProfile,
+  LocalMediaPath,
+  RunContext,
+  RunRequest,
+} from "@codebridge/core";
+import { DEFAULT_DATA_DIR, VERSION } from "@codebridge/core";
+import { Hono } from "hono";
+import { execFile } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { inspectForeignCodexSessionOwners } from "./codex-session-ownership.js";
+import { restoreArchivedCodexSession } from "./codex-session-archive.js";
+import { createDeploymentMcpServerConfig } from "./deployment-mcp-server.js";
+import { writeFcbScript } from "./fcb-script.js";
+import { cleanupAttachments, materializeAttachments } from "./materialize-attachments.js";
+import { SessionLeaseStore, type SessionLease } from "./session-lease.js";
+
+/** doctor 的认证探测：BackendProfile.type → AgentSetupService 的 agentId 命名空间 */
+const AGENT_ID_BY_BACKEND_TYPE: Partial<Record<BackendProfile["type"], string>> = {
+  "claude-code": "claude",
+  codex: "codex",
+  "cursor-cli": "cursor",
+  "generic-spawn": "opencode",
+};
+
+export interface RunnerHostOptions {
+  token: string;
+  config: AppConfig;
+  maxConcurrentRuns?: number;
+  dataDir?: string;
+  agentSetupService?: AgentSetupService;
+  /** Test/embedding hook; production uses the native Pi Node SDK factory. */
+  piSessionFactory?: (ctx: RunContext) => Promise<PiSession>;
+  /** Test/embedding hook for provider-native session fork. */
+  piSessionForker?: typeof forkPiSession;
+  inspectSessionOwners?: (
+    sessionId: string,
+    allowedProcessGroups: ReadonlySet<number>,
+  ) => Promise<number[]>;
+  /** Host-native directory chooser. Production uses the macOS folder panel. */
+  directoryPicker?: () => Promise<string | null>;
+  /** Test/embedding hook for Codex app-server Skill discovery. */
+  codexSkillLister?: (cwd: string) => Promise<AgentAvailableCommand[]>;
+  /** Test/embedding hook; production restores archived sessions through Codex. */
+  codexSessionRestorer?: typeof restoreArchivedCodexSession;
+  /** Absolute built entrypoint for the Bridge-owned read-only MCP server. */
+  deploymentMcpServerPath?: string;
+  /** Test/embedding hook; production owns local Skill filesystem projection here. */
+  skillControlPlane?: Pick<
+    SkillControlPlane,
+    "scan" | "addSource" | "previewAdopt" | "previewAssignment"
+    | "previewGlobalState" | "previewUnmanage" | "applyPlan"
+  >;
+}
+
+interface ActiveRun {
+  runId: string;
+  sessionId?: string;
+  aborted: boolean;
+  cancel: () => void;
+  steer?: (prompt: string) => Promise<unknown>;
+}
+
+interface RunLifecycle {
+  started: boolean;
+  completed: boolean;
+  cancelRequested: boolean;
+  finished: Promise<void>;
+  finish: () => void;
+  expiry?: ReturnType<typeof setTimeout>;
+}
+
+/** prompt_feishu：权限请求等待用户回复的超时（到点自动拒绝）。需小于 noOutput 超时。 */
+const PERMISSION_PROMPT_TIMEOUT_MS = 8 * 60 * 1000;
+const execFileAsync = promisify(execFile);
+const CODEX_BUILTIN_COMMANDS: AgentAvailableCommand[] = [
+  { name: "plan", description: "Turn plan mode on." },
+  { name: "mcp", description: "List configured Model Context Protocol (MCP) tools." },
+  { name: "skills", description: "List available skills." },
+  { name: "status", description: "Display session configuration and token usage." },
+  { name: "review", description: "Review uncommitted changes, or review with custom instructions.", input: { hint: "optional review instructions" } },
+  { name: "review-branch", description: "Review changes relative to a base branch.", input: { hint: "branch name" } },
+  { name: "review-commit", description: "Review a specific commit.", input: { hint: "commit sha" } },
+  { name: "compact", description: "Summarize conversation to avoid hitting the context limit." },
+  { name: "goal", description: "Set a goal to keep pursuing.", input: { hint: "[<objective>|clear|pause|resume]" } },
+  { name: "logout", description: "Sign out of Codex. This option is available when you are logged in via ChatGPT." },
+];
+
+async function pickNativeDirectory(): Promise<string | null> {
+  if (process.platform !== "darwin") {
+    throw new Error("当前系统不支持原生目录选择器");
+  }
+  try {
+    const { stdout } = await execFileAsync("/usr/bin/osascript", [
+      "-e",
+      'POSIX path of (choose folder with prompt "选择要加入当前 Session 的目录")',
+    ]);
+    return stdout.trim() || null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("User canceled") || message.includes("-128")) return null;
+    throw error;
+  }
+}
+
+function resolveDoctorCwd(config: AppConfig): string {
+  const home = os.homedir();
+  const raw =
+    config.workspaces?.default ??
+    config.workspaces?.root ??
+    path.join(home, "Projects");
+  return raw.startsWith("~") ? path.join(home, raw.slice(1)) : raw;
+}
+
+function resolveRunCwd(raw: string): { cwd: string } | { error: string } {
+  if (!path.isAbsolute(raw)) {
+    return { error: `工作目录必须使用绝对路径: ${raw}` };
+  }
+  try {
+    const cwd = fs.realpathSync(raw);
+    if (!fs.statSync(cwd).isDirectory()) {
+      return { error: `工作目录不是目录: ${raw}` };
+    }
+    return { cwd };
+  } catch {
+    return { error: `工作目录不存在或无法访问: ${raw}` };
+  }
+}
+
+function resolveAdditionalDirectories(
+  raw: string[] | undefined,
+  cwd: string,
+): { directories?: string[] } | { error: string } {
+  if (!raw?.length) return {};
+  const directories: string[] = [];
+  for (const value of raw) {
+    if (!path.isAbsolute(value)) {
+      return { error: `附加目录必须使用绝对路径: ${value}` };
+    }
+    const resolved = resolveRunCwd(value);
+    if ("error" in resolved) {
+      return { error: `附加目录 ${value} 无效：${resolved.error}` };
+    }
+    if (resolved.cwd !== cwd && !directories.includes(resolved.cwd)) {
+      directories.push(resolved.cwd);
+    }
+  }
+  return directories.length ? { directories } : {};
+}
+
+export class RunnerHost {
+  private readonly registry = new BackendRegistry();
+  private readonly active = new Map<string, ActiveRun>();
+  private readonly runLifecycles = new Map<string, RunLifecycle>();
+  private readonly maxConcurrent: number;
+  private readonly dataDir: string;
+  private readonly acpPermissionPolicy: AcpPermissionPolicy;
+  private readonly acpRunOptions: {
+    promptTimeoutMs?: number;
+    noOutputTimeoutMs?: number;
+    stallTimeoutMs?: number;
+    drainBackgroundWork?: boolean;
+    postStopProbeMs?: number;
+    postStopQuietMs?: number;
+    postStopMaxMs?: number;
+  };
+  private readonly fcbBinDir: Promise<string | undefined>;
+  private readonly sessionLeases: SessionLeaseStore;
+  private readonly inspectSessionOwners: NonNullable<
+    RunnerHostOptions["inspectSessionOwners"]
+  >;
+  /** 长驻 ACP 会话池：同会话消息复用适配器进程（kill switch: runnerHost.acpSessionPool） */
+  private readonly sessionPool: AcpSessionPool;
+  private readonly agentSetup: AgentSetupService;
+  private readonly skillControlPlane: Pick<
+    SkillControlPlane,
+    "scan" | "addSource" | "previewAdopt" | "previewAssignment"
+    | "previewGlobalState" | "previewUnmanage" | "applyPlan"
+  >;
+  /**
+   * prompt_feishu：每个 run 的挂起权限请求队列（FIFO）。claude 通常一次只挂一个，
+   * 但并行工具可能并发请求——用队列而非单槽，避免互相覆盖、/approve 只回给最早的那个。
+   */
+  private readonly pendingPermissions = new Map<
+    string,
+    Array<{ requestId: string; title: string; resolve: (approve: boolean) => void }>
+  >();
+
+  private readonly deploymentMcpServerPath: string;
+
+  constructor(private readonly options: RunnerHostOptions) {
+    this.maxConcurrent = options.maxConcurrentRuns ?? 4;
+    this.dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
+    this.deploymentMcpServerPath = options.deploymentMcpServerPath
+      ?? fileURLToPath(new URL("./deployment-mcp-server.js", import.meta.url));
+    this.skillControlPlane = options.skillControlPlane ?? new SkillControlPlane({
+      dataDir: this.dataDir,
+    });
+    this.acpPermissionPolicy =
+      options.config.runnerHost?.acpPermissionPolicy ?? "auto_allow";
+    const rh = options.config.runnerHost;
+    this.acpRunOptions = {
+      promptTimeoutMs: rh?.acpPromptTimeoutMs,
+      noOutputTimeoutMs: rh?.acpNoOutputTimeoutMs,
+      stallTimeoutMs: rh?.acpStallTimeoutMs,
+      drainBackgroundWork: rh?.acpDrainBackgroundWork,
+      postStopProbeMs: rh?.acpPostStopProbeMs,
+      postStopQuietMs: rh?.acpPostStopQuietMs,
+      postStopMaxMs: rh?.acpPostStopMaxMs,
+    };
+    this.sessionPool = new AcpSessionPool({
+      enabled: rh?.acpSessionPool ?? true,
+      idleMs: rh?.acpSessionIdleMs ?? 10 * 60_000,
+      maxPooled: rh?.acpSessionPoolMax ?? 4,
+    });
+    this.agentSetup = options.agentSetupService ?? new AgentSetupService({
+      manifests: supportedAgentSetupManifests,
+    });
+    this.sessionLeases = new SessionLeaseStore(this.dataDir);
+    this.inspectSessionOwners =
+      options.inspectSessionOwners ?? inspectForeignCodexSessionOwners;
+    for (const [id, profile] of Object.entries(options.config.backends)) {
+      this.registry.register(id, profile);
+    }
+    // fcb 写失败不阻塞 Runner 启动，只是 Agent 内没有 fcb 可用
+    this.fcbBinDir = writeFcbScript(this.dataDir).catch(() => undefined);
+  }
+
+  /** Agent 子进程环境：fcb 出站 API 凭据 + 把 fcb 挂到 PATH */
+  private async buildAgentEnv(
+    request: RunRequest,
+  ): Promise<Record<string, string>> {
+    const env: Record<string, string> = {
+      FCB_CHAT_ID: request.sessionKey.chatId,
+      FCB_API: `http://127.0.0.1:${this.options.config.bridge?.apiPort ?? 19790}`,
+      FCB_RUN_ID: request.runId,
+      FCB_TOKEN: this.options.token,
+    };
+    if (request.sessionKey.topicId) {
+      env.FCB_TOPIC_ID = request.sessionKey.topicId;
+    }
+    const binDir = await this.fcbBinDir;
+    if (binDir) {
+      env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+    }
+    return env;
+  }
+
+  get registryIds(): string[] {
+    return this.registry.ids();
+  }
+
+  async doctor() {
+    const backend = await this.registry.doctor(resolveDoctorCwd(this.options.config));
+    const authProbes = await this.probeConfiguredBackendAuth();
+    return {
+      version: VERSION,
+      backends: this.registry.ids(),
+      authProbes,
+      ...backend,
+    };
+  }
+
+  /**
+   * 每个已配置的 ACP 后端各探一次登录状态，纯展示用：探测失败/未知也照样返回，绝不让
+   * doctor 整体失败，调用方也绝不能拿这个当拦截运行的硬门槛（见 AgentAuthProbe 注释）。
+   */
+  private async probeConfiguredBackendAuth(): Promise<
+    Record<string, AgentAuthProbe>
+  > {
+    const results: Record<string, AgentAuthProbe> = {};
+    for (const [backendId, profile] of Object.entries(this.options.config.backends)) {
+      const agentId = AGENT_ID_BY_BACKEND_TYPE[profile.type];
+      if (!agentId) continue;
+      try {
+        results[backendId] = await this.agentSetup.probeAuth(agentId);
+      } catch (err) {
+        results[backendId] = {
+          ok: false,
+          advisory: true,
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+    return results;
+  }
+
+  async listAgentSetup(): Promise<AgentSetupRecord[]> {
+    return this.agentSetup.list();
+  }
+
+  async detectAgent(agentId: string): Promise<AgentSetupRecord> {
+    const setup = await this.agentSetup.detect(agentId);
+    return { agentId, ...setup };
+  }
+
+  async installAgent(
+    agentId: string,
+    strategyId: string,
+  ): Promise<AgentSetupInstallResult> {
+    return this.agentSetup.install(agentId, strategyId);
+  }
+
+  cancel(runId: string): boolean {
+    const run = this.active.get(runId);
+    if (!run) return false;
+    const lifecycle = this.runLifecycles.get(runId);
+    if (lifecycle) lifecycle.cancelRequested = true;
+    run.aborted = true;
+    run.cancel();
+    return true;
+  }
+
+  async cancelAndWait(runId: string): Promise<boolean> {
+    const lifecycle = this.runLifecycles.get(runId) ?? this.createRunLifecycle(runId);
+    if (lifecycle.completed) return true;
+    lifecycle.cancelRequested = true;
+    this.cancel(runId);
+    if (!lifecycle.started) {
+      lifecycle.expiry = setTimeout(() => {
+        if (this.runLifecycles.get(runId) === lifecycle && !lifecycle.started) {
+          this.runLifecycles.delete(runId);
+        }
+      }, 60_000);
+      lifecycle.expiry.unref();
+      return true;
+    }
+    await lifecycle.finished;
+    return true;
+  }
+
+  private createRunLifecycle(runId: string): RunLifecycle {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const lifecycle: RunLifecycle = {
+      started: false,
+      completed: false,
+      cancelRequested: false,
+      finished,
+      finish,
+    };
+    this.runLifecycles.set(runId, lifecycle);
+    return lifecycle;
+  }
+
+  async steer(
+    runId: string,
+    prompt: string,
+  ): Promise<{ ok: boolean; outcome?: string; error?: string }> {
+    const run = this.active.get(runId);
+    if (!run) return { ok: false, error: "当前没有正在运行的任务" };
+    if (!run.steer) return { ok: false, error: "当前 ACP Agent 未声明 steering 支持" };
+    try {
+      const response = await run.steer(prompt);
+      const outcome =
+        response &&
+        typeof response === "object" &&
+        "outcome" in response &&
+        typeof response.outcome === "string"
+          ? response.outcome
+          : "accepted";
+      return { ok: true, outcome };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  async listSessions(
+    backendId: string,
+    cwd: string,
+    options?: { limit?: number; all?: boolean },
+  ): Promise<{ sessions: CliSessionSummary[]; error?: string }> {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) {
+      return { sessions: [], error: `Unknown backend: ${backendId}` };
+    }
+
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) {
+      return { sessions: [], error: resolvedCwd.error };
+    }
+    cwd = resolvedCwd.cwd;
+
+    try {
+      const sessions = profile.type === "pi-sdk"
+        ? await listPiSessions(backendId, cwd, {
+            limit: options?.limit ?? 20,
+          })
+        : await listAcpSessions(backendId, profile, cwd, {
+            limit: options?.limit ?? 20,
+            all: options?.all ?? false,
+          });
+      return { sessions };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        sessions: [],
+        error: `${profile.type === "pi-sdk" ? "Pi session/list" : "ACP session/list"} failed for ${backendId}: ${message}`,
+      };
+    }
+  }
+
+  async loadSessionHistory(
+    backendId: string,
+    rawCwd: string,
+    sessionId: string,
+    additionalDirectories?: string[],
+  ): Promise<ProviderSessionHistoryEvent[]> {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) throw new Error(`Unknown backend: ${backendId}`);
+    const resolvedCwd = resolveRunCwd(rawCwd);
+    if ("error" in resolvedCwd) throw new Error(resolvedCwd.error);
+    const resolvedDirectories = resolveAdditionalDirectories(additionalDirectories, resolvedCwd.cwd);
+    if ("error" in resolvedDirectories) throw new Error(resolvedDirectories.error);
+    if (profile.type === "pi-sdk") {
+      return loadPiSessionHistory(resolvedCwd.cwd, sessionId);
+    }
+    if (profile.type === "codex") {
+      return loadCodexSessionHistory(sessionId);
+    }
+    try {
+      const history = await loadAcpSessionHistory(backendId, profile, resolvedCwd.cwd, sessionId, {
+        additionalDirectories: resolvedDirectories.directories,
+      });
+      if (history.length || profile.type !== "claude-code") return history;
+    } catch (error) {
+      if (profile.type !== "claude-code") throw error;
+    }
+    return loadClaudeSessionHistory(resolvedCwd.cwd, sessionId);
+  }
+
+  async authorizeDirectory(
+    rawPath: string,
+  ): Promise<{ ok: boolean; path?: string; error?: string }> {
+    if (!path.isAbsolute(rawPath)) {
+      return { ok: false, error: `工作目录必须使用绝对路径: ${rawPath}` };
+    }
+    const candidate = path.resolve(rawPath);
+    try {
+      const handle = await fs.promises.opendir(candidate);
+      await handle.close();
+      return { ok: true, path: await fs.promises.realpath(candidate) };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EACCES" || code === "EPERM") {
+        return {
+          ok: false,
+          path: candidate,
+          error: `Runner 尚未获得目录访问权限：${candidate}`,
+        };
+      }
+      return {
+        ok: false,
+        error: `Runner 无法访问目录 ${candidate}：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  async listDirectory(
+    rawRoot: string,
+    relativePath = "",
+  ): Promise<{
+    ok: boolean;
+    root?: string;
+    path?: string;
+    relativePath?: string;
+    entries?: Array<{ name: string; path: string; absolutePath: string; kind: "directory" | "file" }>;
+    error?: string;
+  }> {
+    const resolvedRoot = resolveRunCwd(rawRoot);
+    if ("error" in resolvedRoot) return { ok: false, error: resolvedRoot.error };
+    const target = path.resolve(resolvedRoot.cwd, relativePath || ".");
+    const relativeTarget = path.relative(resolvedRoot.cwd, target);
+    if (relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget)) {
+      return { ok: false, error: "目录必须位于当前 Workspace 内" };
+    }
+    try {
+      const canonicalTarget = await fs.promises.realpath(target);
+      const canonicalRelative = path.relative(resolvedRoot.cwd, canonicalTarget);
+      if (canonicalRelative === ".." || canonicalRelative.startsWith(`..${path.sep}`) || path.isAbsolute(canonicalRelative)) {
+        return { ok: false, error: "目录必须位于当前 Workspace 内" };
+      }
+      const entries = (await fs.promises.readdir(canonicalTarget, { withFileTypes: true }))
+        .filter((entry) => entry.name !== ".git" && !entry.isSymbolicLink())
+        .map((entry) => {
+          const absolutePath = path.join(canonicalTarget, entry.name);
+          return {
+            name: entry.name,
+            path: path.relative(resolvedRoot.cwd, absolutePath),
+            absolutePath,
+            kind: entry.isDirectory() ? "directory" as const : "file" as const,
+          };
+        })
+        .sort((left, right) => left.kind === right.kind
+          ? left.name.localeCompare(right.name)
+          : left.kind === "directory" ? -1 : 1)
+        .slice(0, 200);
+      return {
+        ok: true,
+        root: resolvedRoot.cwd,
+        path: canonicalTarget,
+        relativePath: canonicalRelative,
+        entries,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: `Runner 无法读取目录：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  async pickDirectory(): Promise<{
+    ok: boolean;
+    path?: string;
+    cancelled?: boolean;
+    error?: string;
+  }> {
+    try {
+      const selected = await (this.options.directoryPicker ?? pickNativeDirectory)();
+      if (!selected) return { ok: true, cancelled: true };
+      return this.authorizeDirectory(selected);
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async closeSession(
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.manageSession("close", backendId, cwd, sessionId);
+  }
+
+  async deleteSession(
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.manageSession("delete", backendId, cwd, sessionId);
+  }
+
+  async forkSession(
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+    targetCwd: string,
+  ): Promise<PiSessionLifecycleResult> {
+    if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+      return { ok: false, error: `Session ${sessionId} 正在运行，请先停止后重试` };
+    }
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { ok: false, error: `Unknown backend: ${backendId}` };
+    const source = resolveRunCwd(cwd);
+    if ("error" in source) return { ok: false, error: source.error };
+    const target = resolveRunCwd(targetCwd);
+    if ("error" in target) return { ok: false, error: target.error };
+    if (profile.type !== "pi-sdk") {
+      return { ok: false, error: `${backendId} 未声明 Session fork 能力` };
+    }
+    try {
+      return await (this.options.piSessionForker ?? forkPiSession)(
+        source.cwd,
+        sessionId,
+        target.cwd,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        error: `Pi session/fork failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  private async manageSession(
+    action: "close" | "delete",
+    backendId: string,
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+      return {
+        ok: false,
+        error: `ACP session ${sessionId} 正在运行，请先 /stop 后重试`,
+      };
+    }
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { ok: false, error: `Unknown backend: ${backendId}` };
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) return { ok: false, error: resolvedCwd.error };
+    try {
+      if (action === "close") {
+        if (profile.type === "pi-sdk") {
+          return closePiSession(resolvedCwd.cwd, sessionId);
+        }
+        const result = await this.sessionPool.close(sessionId);
+        if (result.error === "not_owned") {
+          return {
+            ok: false,
+            error: "Runner 当前未持有该 ACP session；历史 session 请使用 /session delete",
+          };
+        }
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: `ACP session/close failed for ${backendId}: ${result.error ?? "未知错误"}`,
+          };
+        }
+        return result;
+      }
+      if (profile.type === "pi-sdk") {
+        return deletePiSession(resolvedCwd.cwd, sessionId);
+      }
+      await deleteAcpSession(profile, resolvedCwd.cwd, sessionId);
+      this.sessionPool.remove(sessionId);
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        error: `${profile.type === "pi-sdk" ? "Pi session" : "ACP session"}/${action} failed for ${backendId}: ${message}`,
+      };
+    }
+  }
+
+  /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项 */
+  async listConfigOptions(
+    backendId: string,
+    cwd: string,
+    model?: string | null,
+  ): Promise<{ options: BackendConfigOption[]; error?: string }> {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) {
+      return { options: [], error: `Unknown backend: ${backendId}` };
+    }
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) {
+      return { options: [], error: resolvedCwd.error };
+    }
+    cwd = resolvedCwd.cwd;
+    try {
+      if (profile.type === "pi-sdk") {
+        return { options: await listPiConfigOptions(undefined, model) };
+      }
+      return { options: await listAcpConfigOptions(profile, cwd) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        options: [],
+        error: `ACP config options failed for ${backendId}: ${message}`,
+      };
+    }
+  }
+
+  async listCommands(
+    backendId: string,
+    cwd: string,
+  ): Promise<{ commands: AgentAvailableCommand[]; error?: string }> {
+    const profile = this.options.config.backends[backendId];
+    if (!profile) return { commands: [], error: `Unknown backend: ${backendId}` };
+    const resolvedCwd = resolveRunCwd(cwd);
+    if ("error" in resolvedCwd) return { commands: [], error: resolvedCwd.error };
+    if (profile.type === "codex") {
+      try {
+        const skills = await (this.options.codexSkillLister ?? listCodexSkillCommands)(resolvedCwd.cwd);
+        const commands = new Map(CODEX_BUILTIN_COMMANDS.map((command) => [command.name, command]));
+        for (const command of skills) commands.set(command.name, command);
+        return { commands: [...commands.values()] };
+      } catch (error) {
+        return {
+          commands: CODEX_BUILTIN_COMMANDS,
+          error: `Codex skills failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
+    if (profile.type !== "pi-sdk") return { commands: [] };
+    try {
+      return { commands: await listPiCommands(resolvedCwd.cwd) };
+    } catch (error) {
+      return {
+        commands: [],
+        error: `Pi commands failed for ${backendId}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  scanSkills(withRevision = true): SkillCatalogSnapshot {
+    return this.skillControlPlane.scan(withRevision);
+  }
+
+  addSkillSource(sourcePath: string): SkillCatalogSnapshot {
+    return this.skillControlPlane.addSource(sourcePath);
+  }
+
+  previewSkillAdopt(skillId: string, actorId: string): SkillMutationPlan {
+    return this.skillControlPlane.previewAdopt({ skill_id: skillId, actor_id: actorId });
+  }
+
+  previewSkillAssignment(input: {
+    skill_id: string;
+    agent_id: SkillAgentId;
+    enabled: boolean;
+    actor_id: string;
+  }): SkillMutationPlan {
+    return this.skillControlPlane.previewAssignment(input);
+  }
+
+  previewSkillGlobalState(
+    skillId: string,
+    enabled: boolean,
+    actorId: string,
+  ): SkillMutationPlan {
+    return this.skillControlPlane.previewGlobalState({
+      skill_id: skillId,
+      enabled,
+      actor_id: actorId,
+    });
+  }
+
+  previewSkillUnmanage(skillId: string, actorId: string): SkillMutationPlan {
+    return this.skillControlPlane.previewUnmanage({ skill_id: skillId, actor_id: actorId });
+  }
+
+  applySkillPlan(planId: string, actorId: string): SkillMutationResult {
+    return this.skillControlPlane.applyPlan({ plan_id: planId, actor_id: actorId });
+  }
+
+  async *executeRun(request: RunRequest): AsyncGenerator<AgentEvent> {
+    const previous = this.runLifecycles.get(request.runId);
+    if (previous?.expiry) clearTimeout(previous.expiry);
+    const lifecycle =
+      previous && !previous.completed ? previous : this.createRunLifecycle(request.runId);
+    lifecycle.started = true;
+    if (lifecycle.expiry) clearTimeout(lifecycle.expiry);
+    try {
+      if (lifecycle.cancelRequested) return;
+      yield* this.executeRunInner(request, lifecycle);
+    } finally {
+      lifecycle.completed = true;
+      lifecycle.finish();
+      // A consumer may reject a fatal event after this attempt already ended.
+      // Remember that completion so its late cancel cannot create a pre-start
+      // cancellation tombstone that suppresses a retry with the same Run ID.
+      lifecycle.expiry = setTimeout(() => {
+        if (this.runLifecycles.get(request.runId) === lifecycle) {
+          this.runLifecycles.delete(request.runId);
+        }
+      }, 60_000);
+      lifecycle.expiry.unref();
+    }
+  }
+
+  private async *executeRunInner(
+    request: RunRequest,
+    lifecycle: RunLifecycle,
+  ): AsyncGenerator<AgentEvent> {
+    while (this.active.size >= this.maxConcurrent) {
+      if (lifecycle.cancelRequested) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (lifecycle.cancelRequested) return;
+
+    const backendId = request.sessionKey.backendId;
+    const profile = this.options.config.backends[backendId];
+    if (!profile) {
+      yield {
+        type: "error",
+        message: `Unknown backend: ${backendId}`,
+        fatal: true,
+      };
+      yield { type: "done", exitCode: 1 };
+      return;
+    }
+
+    const resolvedCwd = resolveRunCwd(request.sessionKey.cwd);
+    if ("error" in resolvedCwd) {
+      yield { type: "error", message: resolvedCwd.error, fatal: true };
+      yield { type: "done", exitCode: 1 };
+      return;
+    }
+
+    const resolvedAdditional = resolveAdditionalDirectories(
+      request.additionalDirectories,
+      resolvedCwd.cwd,
+    );
+    if ("error" in resolvedAdditional) {
+      yield { type: "error", message: resolvedAdditional.error, fatal: true };
+      yield { type: "done", exitCode: 1 };
+      return;
+    }
+
+    let sessionLease: SessionLease | null = null;
+    if (request.resumeSessionId) {
+      const sessionId = request.resumeSessionId;
+      if ([...this.active.values()].some((run) => run.sessionId === sessionId)) {
+        yield {
+          type: "error",
+          message: `ACP session ${sessionId} 正在运行；请等待当前任务结束或先 /stop`,
+          fatal: true,
+        };
+        yield { type: "done", exitCode: 1 };
+        return;
+      }
+      sessionLease = await this.sessionLeases.acquire(sessionId, request.runId);
+      if (!sessionLease) {
+        yield {
+          type: "error",
+          message: `ACP session ${sessionId} 已被另一个 Runner 任务占用`,
+          fatal: true,
+        };
+        yield { type: "done", exitCode: 1 };
+        return;
+      }
+    }
+
+    let localAttachments: LocalMediaPath[] = [];
+    try {
+      if (lifecycle.cancelRequested) return;
+      if (profile.type === "codex" && request.resumeSessionId) {
+        const ownerGroup = this.sessionPool.ownerProcessGroupId(
+          request.resumeSessionId,
+        );
+        const owners = await this.inspectSessionOwners(
+          request.resumeSessionId,
+          new Set(ownerGroup === undefined ? [] : [ownerGroup]),
+        );
+        if (owners.length > 0) {
+          yield {
+            type: "error",
+            message: `Codex session ${request.resumeSessionId} 正被桌面端/TUI 占用（PID: ${owners.join(", ")}）；请先在原客户端停止该任务`,
+            fatal: true,
+          };
+          yield { type: "done", exitCode: 1 };
+          return;
+        }
+        if (lifecycle.cancelRequested) return;
+        try {
+          await (this.options.codexSessionRestorer ?? restoreArchivedCodexSession)(
+            request.resumeSessionId,
+            resolvedCwd.cwd,
+          );
+        } catch (error) {
+          yield {
+            type: "error",
+            message: `无法恢复 Codex 归档会话 ${request.resumeSessionId}：${error instanceof Error ? error.message : String(error)}`,
+            fatal: true,
+          };
+          yield { type: "done", exitCode: 1 };
+          return;
+        }
+      }
+      if (lifecycle.cancelRequested) return;
+
+      localAttachments = await materializeAttachments(
+        this.dataDir,
+        request.runId,
+        request.attachments,
+      );
+      if (lifecycle.cancelRequested) return;
+      const ctx: RunContext = {
+        runId: request.runId,
+        cwd: resolvedCwd.cwd,
+        prompt: request.prompt,
+        additionalDirectories: resolvedAdditional.directories,
+        attachments: localAttachments.length ? localAttachments : undefined,
+        resumeSessionId: request.resumeSessionId,
+        backendConfig: profile,
+        model: request.model,
+        effort: request.effort,
+        mode: request.mode,
+        claudePermissionMode: request.claudePermissionMode,
+        acpConfig: request.acpConfig,
+        mcpServers: [createDeploymentMcpServerConfig(
+          this.deploymentMcpServerPath,
+          {
+            api: `http://127.0.0.1:${this.options.config.bridge?.apiPort ?? 19790}`,
+            token: this.options.token,
+            runId: request.runId,
+          },
+        )],
+        extraEnv: await this.buildAgentEnv(request),
+      };
+      if (lifecycle.cancelRequested) return;
+      if (profile.type === "pi-sdk") {
+        yield* this.executePiRun(request.runId, ctx);
+      } else {
+        yield* this.executeAcpRun(request.runId, ctx, sessionLease?.lost);
+      }
+    } finally {
+      if (localAttachments.length > 0) {
+        await cleanupAttachments(this.dataDir, request.runId);
+      }
+      await sessionLease?.release();
+    }
+  }
+
+  private async *executeAcpRun(
+    runId: string,
+    ctx: RunContext,
+    sessionLockLost?: Promise<Error>,
+  ): AsyncGenerator<AgentEvent> {
+    const handleRef: Parameters<typeof runAcpSession>[2] = {};
+    const activeRun: ActiveRun = {
+      runId,
+      sessionId: ctx.resumeSessionId,
+      aborted: false,
+      // handleRef 在 runAcpSession 生成器体起始处赋值（首次 next() 即可用）
+      cancel: () => handleRef.current?.cancel(),
+      steer: async (prompt: string) => {
+        const steer = handleRef.current?.steer;
+        if (!steer) throw new Error("当前 ACP Agent 未声明 steering 支持或仍在初始化");
+        return steer(prompt);
+      },
+    };
+    this.active.set(runId, activeRun);
+    let lockLostError: Error | undefined;
+    let runFinished = false;
+    void sessionLockLost?.then((error) => {
+      if (runFinished) return;
+      lockLostError = error;
+      activeRun.aborted = true;
+      activeRun.cancel();
+    });
+
+    // prompt_feishu 权限模式：权限请求经带外队列进 SSE，等 /approve /deny 或超时拒绝
+    const oobEvents: AgentEvent[] = [];
+    const removePending = (requestId: string) => {
+      const queue = this.pendingPermissions.get(runId);
+      if (!queue) return;
+      const idx = queue.findIndex((p) => p.requestId === requestId);
+      if (idx >= 0) queue.splice(idx, 1);
+      if (queue.length === 0) this.pendingPermissions.delete(runId);
+    };
+    const requestDecision =
+      this.acpPermissionPolicy === "prompt_feishu"
+        ? (info: { title: string }) =>
+            new Promise<boolean>((resolve) => {
+              const requestId = crypto.randomUUID();
+              const timer = setTimeout(() => {
+                removePending(requestId); // 只摘自己，不动同 run 的其它挂起请求
+                oobEvents.push({
+                  type: "error",
+                  message: `权限请求「${info.title}」超过 ${Math.round(PERMISSION_PROMPT_TIMEOUT_MS / 60000)} 分钟未回复，已自动拒绝。`,
+                  fatal: false,
+                });
+                resolve(false);
+              }, PERMISSION_PROMPT_TIMEOUT_MS);
+              timer.unref();
+              const queue = this.pendingPermissions.get(runId) ?? [];
+              queue.push({
+                requestId,
+                title: info.title,
+                resolve: (approve: boolean) => {
+                  clearTimeout(timer);
+                  removePending(requestId);
+                  resolve(approve);
+                },
+              });
+              this.pendingPermissions.set(runId, queue);
+              oobEvents.push({
+                type: "permission_request",
+                requestId,
+                title: info.title,
+              });
+            })
+        : undefined;
+
+    let exitCode = 0;
+    try {
+      for await (const event of runAcpSession(
+        ctx,
+        {
+          permissionPolicy: this.acpPermissionPolicy,
+          isAborted: () => activeRun.aborted,
+          ...this.acpRunOptions,
+          sessionPool: this.sessionPool,
+          requestDecision,
+          pollOutOfBandEvents: () => oobEvents.splice(0),
+        },
+        handleRef,
+      )) {
+        if (event.type === "session") activeRun.sessionId = event.sessionId;
+        if (event.type === "error" && event.fatal) exitCode = 1;
+        yield event;
+      }
+    } catch (err) {
+      yield {
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+        fatal: true,
+      };
+      exitCode = 1;
+    } finally {
+      runFinished = true;
+      // run 结束仍挂着的权限请求：全部解除阻塞（按拒绝处理），避免 handler 悬挂
+      for (const pending of [...(this.pendingPermissions.get(runId) ?? [])]) {
+        pending.resolve(false);
+      }
+      this.pendingPermissions.delete(runId);
+      this.active.delete(runId);
+      if (lockLostError) {
+        yield {
+          type: "error",
+          message: `ACP session 锁异常丢失，任务已立即停止：${lockLostError.message}`,
+          fatal: true,
+        };
+        exitCode = 1;
+      }
+      yield { type: "done", exitCode };
+    }
+  }
+
+  private async *executePiRun(
+    runId: string,
+    ctx: RunContext,
+  ): AsyncGenerator<AgentEvent> {
+    const handleRef: PiRunHandleRef = {};
+    const activeRun: ActiveRun = {
+      runId,
+      sessionId: ctx.resumeSessionId,
+      aborted: false,
+      cancel: () => {
+        void handleRef.current?.cancel();
+      },
+      steer: async (prompt: string) => {
+        const steer = handleRef.current?.steer;
+        if (!steer) throw new Error("当前 Pi Agent 尚未初始化或不支持 steering");
+        return steer(prompt);
+      },
+    };
+    this.active.set(runId, activeRun);
+    let exitCode = 0;
+    try {
+      for await (const event of runPiSession(ctx, {
+        isAborted: () => activeRun.aborted,
+        handleRef,
+        ...(this.options.piSessionFactory
+          ? { createSession: this.options.piSessionFactory }
+          : {}),
+      })) {
+        if (event.type === "session") activeRun.sessionId = event.sessionId;
+        if (event.type === "error" && event.fatal) exitCode = 1;
+        yield event;
+      }
+    } catch (err) {
+      yield {
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+        fatal: true,
+      };
+      exitCode = 1;
+    } finally {
+      this.active.delete(runId);
+      yield { type: "done", exitCode };
+    }
+  }
+
+  /** runner 退出前清场：杀池内空闲进程 + 取消在飞 run（子进程 detached，不清就孤儿） */
+  shutdown(): void {
+    this.sessionPool.shutdown();
+    for (const run of [...this.active.values()]) {
+      run.aborted = true;
+      try {
+        run.cancel();
+      } catch {
+        // 尽力而为
+      }
+    }
+    this.active.clear();
+    for (const lifecycle of this.runLifecycles.values()) {
+      if (lifecycle.expiry) clearTimeout(lifecycle.expiry);
+    }
+    this.runLifecycles.clear();
+  }
+
+  /** /approve /deny：回应当前 run 最早挂起的权限请求（FIFO） */
+  listPendingPermissions(): Array<{ runId: string; requestId: string; title: string }> {
+    return [...this.pendingPermissions].flatMap(([runId, requests]) => requests.map(({ requestId, title }) => ({ runId, requestId, title })));
+  }
+
+  resolvePermission(runId: string, approve: boolean, expectedRequestId?: string): boolean {
+    const pending = this.pendingPermissions.get(runId)?.[0];
+    if (!pending || expectedRequestId !== undefined && pending.requestId !== expectedRequestId) return false;
+    pending.resolve(approve);
+    return true;
+  }
+
+}
+
+export function createRunnerApp(host: RunnerHost, token: string) {
+  const app = new Hono();
+
+  app.use("*", async (c, next) => {
+    const auth = c.req.header("authorization");
+    if (auth !== `Bearer ${token}`) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    await next();
+  });
+
+  app.get("/health", (c) =>
+    c.json({ ok: true, version: VERSION, backends: host.registryIds }),
+  );
+
+  app.get("/doctor", async (c) => c.json(await host.doctor()));
+
+  app.get("/agents/setup", async (c) => {
+    return c.json({ agents: await host.listAgentSetup() });
+  });
+
+  app.post("/agents/detect", async (c) => {
+    const agents = await host.listAgentSetup();
+    const results = await Promise.all(
+      agents.map(async (agent) => {
+        try {
+          return await host.detectAgent(agent.agentId);
+        } catch (error) {
+          return {
+            ...agent,
+            runtime: "unavailable" as const,
+            diagnostic: {
+              stage: "detect" as const,
+              code: "detect_failed",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+      }),
+    );
+    return c.json({ agents: results });
+  });
+
+  app.post("/agents/:agentId/detect", async (c) => {
+    try {
+      return c.json(await host.detectAgent(c.req.param("agentId")));
+    } catch (error) {
+      return agentSetupErrorResponse(c, error, 404);
+    }
+  });
+
+  app.post("/agents/:agentId/install", async (c) => {
+    const body = await c.req.json().catch(() => null) as { strategy_id?: unknown } | null;
+    if (!body || typeof body.strategy_id !== "string" || !body.strategy_id.trim()) {
+      return c.json({ error: "install_strategy_not_found" }, 400);
+    }
+    try {
+      return c.json(await host.installAgent(c.req.param("agentId"), body.strategy_id.trim()));
+    } catch (error) {
+      return agentSetupErrorResponse(c, error, 404, 400);
+    }
+  });
+
+  app.get("/skills", (c) => {
+    try {
+      return c.json(host.scanSkills());
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.get("/skills/selection", (c) => {
+    try {
+      const snapshot = host.scanSkills(false);
+      return c.json({ skills: snapshot.skills.map(({ id, name, description, source_path, global_state, targets }) => ({
+        id, name, description, source_path, global_state,
+        targets: targets.map(({ agent_id, state }) => ({ agent_id, state })),
+      })) });
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/sources", async (c) => {
+    const body = await c.req.json().catch(() => null) as { path?: unknown } | null;
+    if (!body || typeof body.path !== "string" || !body.path.trim()) {
+      return c.json({ error: "invalid_skill_source", message: "path is required" }, 400);
+    }
+    try {
+      return c.json(host.addSkillSource(body.path.trim()));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/:skillId/adopt/preview", async (c) => {
+    const actorId = await readSkillActor(c);
+    if (!actorId) return c.json({ error: "invalid_skill_actor" }, 400);
+    try {
+      return c.json(host.previewSkillAdopt(c.req.param("skillId"), actorId));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/:skillId/global-state/preview", async (c) => {
+    const body = await c.req.json().catch(() => null) as { actor_id?: unknown; enabled?: unknown } | null;
+    if (!body || typeof body.actor_id !== "string" || !body.actor_id.trim() || typeof body.enabled !== "boolean") {
+      return c.json({ error: "invalid_skill_global_state" }, 400);
+    }
+    try {
+      return c.json(host.previewSkillGlobalState(
+        c.req.param("skillId"),
+        body.enabled,
+        body.actor_id.trim(),
+      ));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/assignments/preview", async (c) => {
+    const input = await readSkillAssignment(c);
+    if (!input) {
+      return c.json({ error: "invalid_skill_assignment" }, 400);
+    }
+    try {
+      return c.json(host.previewSkillAssignment(input));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  app.post("/skills/:skillId/unmanage/preview", async (c) => {
+    const actorId = await readSkillActor(c);
+    if (!actorId) return c.json({ error: "invalid_skill_actor" }, 400);
+    try {
+      return c.json(host.previewSkillUnmanage(c.req.param("skillId"), actorId));
+    } catch (error) {
+      return skillControlPlaneErrorResponse(c, error);
+    }
+  });
+
+  for (const kind of ["adopt", "global-state", "assignment", "unmanage"] as const) {
+    app.post(`/skills/${kind}-plans/:planId/apply`, async (c) => {
+      const actorId = await readSkillActor(c);
+      if (!actorId) return c.json({ error: "invalid_skill_actor" }, 400);
+      try {
+        return c.json(host.applySkillPlan(c.req.param("planId"), actorId));
+      } catch (error) {
+        return skillControlPlaneErrorResponse(c, error);
+      }
+    });
+  }
+
+  // Pi provider management (docs/orchestration/agent-providers.md).
+  // models.json lives on this host; bridge proxies and never persists it.
+  app.get("/pi/providers/presets", (c) => c.json({ presets: PI_PROVIDER_PRESETS }));
+
+  app.get("/pi/providers", (c) => {
+    try {
+      return c.json(readPiProviders());
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  });
+
+  app.put("/pi/providers", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as PiProvidersFile | null;
+    if (!body) return c.json({ error: "invalid_json" }, 400);
+    const issues = validateProviders(body);
+    if (issues.length) return c.json({ error: "invalid_providers", issues }, 400);
+    try {
+      writePiProviders(body);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  });
+
+  app.post("/pi/providers/test", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { baseUrl?: string; apiKey?: string; authHeader?: boolean; api?: string; model?: string } | null;
+    if (!body || typeof body.baseUrl !== "string" || !/^https?:\/\//.test(body.baseUrl)) {
+      return c.json({ error: "baseUrl (http/https) is required" }, 400);
+    }
+    return c.json(await testProviderConnection({
+      baseUrl: body.baseUrl,
+      apiKey: body.apiKey,
+      authHeader: body.authHeader,
+      api: typeof body.api === "string" ? body.api : undefined,
+      model: typeof body.model === "string" ? body.model : undefined,
+    }));
+  });
+
+  app.get("/permissions", (c) => c.json({ permissions: host.listPendingPermissions() }));
+
+  app.post("/runs/:id/permission", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      approve?: boolean;
+      request_id?: string;
+    };
+    if (typeof body.approve !== "boolean" || body.request_id !== undefined && (typeof body.request_id !== "string" || !body.request_id)) {
+      return c.json({ error: "approve (boolean) is required" }, 400);
+    }
+    const resolved = host.resolvePermission(c.req.param("id"), body.approve, body.request_id);
+    return c.json({ resolved });
+  });
+
+  app.post("/runs/:id/cancel", async (c) => {
+    const ok = await host.cancelAndWait(c.req.param("id"));
+    return c.json({ ok });
+  });
+
+  app.post("/runs/:id/steer", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { prompt?: string };
+    if (!body.prompt?.trim()) {
+      return c.json({ error: "prompt is required" }, 400);
+    }
+    const result = await host.steer(c.req.param("id"), body.prompt.trim());
+    return c.json(result, result.ok ? 200 : 409);
+  });
+
+  app.post("/runs", async (c) => {
+    const body = (await c.req.json()) as RunRequest;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const keepalive = encoder.encode(": keepalive\n\n");
+        controller.enqueue(keepalive);
+        const timer = setInterval(() => {
+          try {
+            controller.enqueue(keepalive);
+          } catch {
+            clearInterval(timer);
+          }
+        }, 15_000);
+
+        const send = (event: AgentEvent) => {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+          );
+        };
+        try {
+          for await (const event of host.executeRun(body)) {
+            send(event);
+          }
+        } catch (err) {
+          send({
+            type: "error",
+            message: err instanceof Error ? err.message : String(err),
+            fatal: true,
+          });
+          send({ type: "done", exitCode: 1 });
+        } finally {
+          clearInterval(timer);
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
+  });
+
+  app.get("/sessions", async (c) => {
+    const backend = c.req.query("backend");
+    const cwd = c.req.query("cwd");
+    const all = c.req.query("all") === "true";
+    const limit = Number(c.req.query("limit") ?? "20");
+    if (!backend || !cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    const result = await host.listSessions(backend, cwd, {
+      all,
+      limit: Number.isFinite(limit) ? limit : 20,
+    });
+    return c.json(result);
+  });
+
+  app.get("/sessions/:id/history", async (c) => {
+    const backend = c.req.query("backend");
+    const cwd = c.req.query("cwd");
+    if (!backend || !cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    try {
+      const encodedDirectories = c.req.query("additional_directories");
+      const additionalDirectories = encodedDirectories
+        ? JSON.parse(encodedDirectories) as unknown
+        : undefined;
+      if (additionalDirectories !== undefined && (
+        !Array.isArray(additionalDirectories) ||
+        !additionalDirectories.every((directory) => typeof directory === "string")
+      )) {
+        return c.json({ error: "additional_directories must be a string array" }, 400);
+      }
+      const events = await host.loadSessionHistory(
+        backend,
+        cwd,
+        c.req.param("id"),
+        additionalDirectories,
+      );
+      return c.json({ events });
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : String(error) },
+        409,
+      );
+    }
+  });
+
+  app.post("/directories/authorize", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { path?: string } | null;
+    if (!body?.path) return c.json({ ok: false, error: "path 必填" }, 400);
+    const result = await host.authorizeDirectory(body.path);
+    return c.json(result, result.ok ? 200 : 403);
+  });
+
+  app.get("/directories/list", async (c) => {
+    const root = c.req.query("root");
+    if (!root) return c.json({ ok: false, error: "root is required" }, 400);
+    const result = await host.listDirectory(root, c.req.query("path") ?? "");
+    return c.json(result, result.ok ? 200 : 400);
+  });
+
+  app.post("/directories/pick", async (c) => {
+    const result = await host.pickDirectory();
+    return c.json(result, result.ok ? 200 : 503);
+  });
+
+  app.post("/sessions/:id/close", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      backend?: string;
+      cwd?: string;
+    };
+    if (!body.backend || !body.cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    const result = await host.closeSession(body.backend, body.cwd, c.req.param("id"));
+    return c.json(result, result.ok ? 200 : 409);
+  });
+
+  app.post("/sessions/:id/fork", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      backend?: string;
+      cwd?: string;
+      targetCwd?: string;
+    };
+    if (!body.backend || !body.cwd || !body.targetCwd) {
+      return c.json({ error: "backend, cwd and targetCwd are required" }, 400);
+    }
+    const result = await host.forkSession(
+      body.backend,
+      body.cwd,
+      c.req.param("id"),
+      body.targetCwd,
+    );
+    return c.json(result, result.ok ? 201 : 409);
+  });
+
+  app.delete("/sessions/:id", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      backend?: string;
+      cwd?: string;
+    };
+    if (!body.backend || !body.cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    const result = await host.deleteSession(body.backend, body.cwd, c.req.param("id"));
+    return c.json(result, result.ok ? 200 : 409);
+  });
+
+  app.get("/config-options", async (c) => {
+    const backend = c.req.query("backend");
+    const cwd = c.req.query("cwd");
+    if (!backend || !cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    const result = await host.listConfigOptions(backend, cwd, c.req.query("model") || null);
+    return c.json(result);
+  });
+
+  app.get("/commands", async (c) => {
+    const backend = c.req.query("backend");
+    const cwd = c.req.query("cwd");
+    if (!backend || !cwd) {
+      return c.json({ error: "backend and cwd are required" }, 400);
+    }
+    return c.json(await host.listCommands(backend, cwd));
+  });
+
+  return app;
+}
+
+function agentSetupErrorResponse(
+  c: { json: (body: unknown, status?: number) => Response },
+  error: unknown,
+  agentStatus = 404,
+  strategyStatus = 400,
+) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("Unknown agent:")) {
+    return c.json({ error: "agent_not_found" }, agentStatus);
+  }
+  if (message.startsWith("Unknown install strategy:")) {
+    return c.json({ error: "install_strategy_not_found" }, strategyStatus);
+  }
+  return c.json({ error: "agent_setup_failed", message }, 500);
+}
+
+async function readSkillAssignment(c: {
+  req: { json: () => Promise<unknown> };
+}): Promise<{
+  skill_id: string;
+  agent_id: SkillAgentId;
+  enabled: boolean;
+  actor_id: string;
+} | null> {
+  const body = await c.req.json().catch(() => null) as {
+    skill_id?: unknown;
+    agent_id?: unknown;
+    enabled?: unknown;
+    actor_id?: unknown;
+  } | null;
+  if (
+    !body
+    || typeof body.skill_id !== "string"
+    || !body.skill_id.trim()
+    || typeof body.agent_id !== "string"
+    || !SKILL_AGENT_IDS.includes(body.agent_id as SkillAgentId)
+    || typeof body.enabled !== "boolean"
+    || typeof body.actor_id !== "string"
+    || !body.actor_id.trim()
+  ) {
+    return null;
+  }
+  return {
+    skill_id: body.skill_id.trim(),
+    agent_id: body.agent_id as SkillAgentId,
+    enabled: body.enabled,
+    actor_id: body.actor_id.trim(),
+  };
+}
+
+async function readSkillActor(c: {
+  req: { json: () => Promise<unknown> };
+}): Promise<string | null> {
+  const body = await c.req.json().catch(() => null) as { actor_id?: unknown } | null;
+  return body && typeof body.actor_id === "string" && body.actor_id.trim()
+    ? body.actor_id.trim()
+    : null;
+}
+
+function skillControlPlaneErrorResponse(
+  c: { json: (body: unknown, status?: number) => Response },
+  error: unknown,
+) {
+  const value = error as { code?: unknown; status?: unknown; message?: unknown };
+  const code = typeof value?.code === "string" ? value.code : "skill_control_plane_failed";
+  const status = value?.status === 400 || value?.status === 404 || value?.status === 409 || value?.status === 422
+    ? value.status
+    : 500;
+  const message = typeof value?.message === "string" ? value.message : String(error);
+  return c.json({ error: code, message }, status);
+}

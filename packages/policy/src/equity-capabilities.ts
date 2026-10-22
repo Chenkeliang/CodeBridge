@@ -1,0 +1,40 @@
+import type { CapabilityRegistry } from "./index.js";
+import { FunctionCapabilityAdapter, type CapabilityRuntime } from "./capability-runtime.js";
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+/**
+ * 合成示例：模拟权益余额，不查询真实账户，也不在默认启动时注册。演示 registry+runtime 都注册的
+ * adapter：capability 有定义、有可执行 adapter、非 forwardToAgent。
+ */
+export function registerEquityCapabilities(
+  registry: CapabilityRegistry,
+  runtime: CapabilityRuntime,
+): void {
+  const source = { kind: "function" as const, ref: "equity", version: "1" };
+  registry.register({
+    id: "equity.balance",
+    risk: "read_only",
+    adapter: "equity.balance",
+    side_effects: false,
+    description: "查询用户权益余额（只读）",
+    source,
+  });
+  runtime.register(new FunctionCapabilityAdapter("equity.balance", ({ input }) => {
+    const userId = String(input.user_id ?? "");
+    const prior = asRecord(asRecord(input.step_outputs).lookup);
+    const balance = typeof prior.balance === "number" ? prior.balance : 0;
+    return {
+      output: {
+        user_id: userId,
+        balance,
+        currency: "CNY",
+        updated_at: new Date().toISOString(),
+      },
+    };
+  }));
+}

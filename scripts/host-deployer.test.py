@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+import importlib.util
+import contextlib
+import io
+import json
+import os
+from pathlib import Path
+import plistlib
+import sqlite3
+import tarfile
+import tempfile
+import threading
+import urllib.request
+import urllib.error
+import unittest
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("host_deployer", Path(__file__).with_name("host-deployer.py"))
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+
+class Fake(m.Adapter):
+    def __init__(self):
+        self.calls = []
+        self.fail = None
+        self.loaded = True
+        self.bootout_polls = 0
+        self.archive = b""
+        self.notifications = []
+
+    def command(self, args, cwd=None, timeout=1200):
+        self.calls.append(args)
+        if self.fail and self.fail in args:
+            raise m.DeployError("simulated command failure")
+        if "launchctl" in args[0]:
+            if "bootout" in args:
+                self.loaded = False
+                self.bootout_polls = 2
+            elif "bootstrap" in args:
+                if self.bootout_polls:
+                    raise AssertionError("bootstrap raced bootout")
+                self.loaded = True
+            elif "print" in args:
+                if self.bootout_polls:
+                    self.bootout_polls -= 1
+                    return b"state = stopping"
+                if not self.loaded:
+                    raise m.DeployError("not found")
+                return b"state = running\npid = 123"
+        if "rev-parse" in args:
+            return b"abc123"
+        if "archive" in args:
+            return self.archive
+        if "run" in args and "build" in args:
+            output = Path(cwd) / "apps/bridge/dist/cli.js"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text("built")
+        return b""
+
+    def sleep(self, seconds):
+        pass
+
+    def read_secret(self, service):
+        self.calls.append(["read_secret", service])
+        return {"codebridge.feishu.appSecret": "kc-feishu", "codebridge.runner.token": "kc-runner"}[service]
+
+    def http(self, url, token, data=None):
+        self.notifications.append((url, data))
+        if "tenant_access_token" in url:
+            return {"code": 0, "tenant_access_token": "secret"}
+        return {"code": 0, "ok": True, "feishuConnected": True, "releaseId": "release", "commit": "abc123"}
+
+
+class Tests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.source = self.root / "source"
+        self.source.mkdir()
+        self.data = self.root / "data"
+        self.data.mkdir()
+        self.plist = self.root / "bridge.plist"
+        self.plist.write_bytes(plistlib.dumps({"ProgramArguments": ["/usr/bin/node", "old.js", "start"], "WorkingDirectory": str(self.source)}))
+        self.config = {"rootDir": str(self.root / "deploy"), "sourceRepo": str(self.source),
+                       "dataDir": str(self.data), "bridgePlist": str(self.plist), "nodePath": "/bin/sh", "pnpmPath": "/bin/sh",
+                       "token": "secret", "ownerOpenId": "owner", "runnerToken": "othersecret", "stabilitySec": 0,
+                       "feishu": {"appId": "app", "appSecret": "secret"}}
+        self.fake = Fake()
+        self.d = m.Deployer(self.config, self.fake)
+        self.job = {"id": "release", "state": "preparing", "requestedAt": 0, "actorId": "owner", "chatId": "chat",
+                    "messageId": "om_original", "ref": "HEAD", "publishAfterPrepare": False}
+        self.d.state["jobs"]["release"] = self.job
+        with contextlib.closing(sqlite3.connect(self.data / "orchestration.sqlite")) as db:
+            db.execute("CREATE TABLE runs (status TEXT, id TEXT)")
+            db.execute("CREATE TABLE channel_turn_delivery (status TEXT, created_at TEXT, run_id TEXT)")
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            for name, value in {"package.json": json.dumps({"scripts": {"build": "build", "test": "test", "check:codex-network": "node scripts/check-codex-network.mjs"}}), "pnpm-lock.yaml": "lock"}.items():
+                info = tarfile.TarInfo(name)
+                raw = value.encode()
+                info.size = len(raw)
+                tar.addfile(info, io.BytesIO(raw))
+        self.fake.archive = archive.getvalue()
+
+    def tearDown(self):
+        self.d.lock_file.close()
+        self.tmp.cleanup()
+
+    def test_prepare_build_and_hashes(self):
+        self.d.prepare(self.job)
+        self.assertEqual(self.job["state"], "prepared")
+        self.assertIn("apps/bridge/dist/cli.js", self.job["hashes"])
+        self.assertTrue((Path(self.job["app"]).parent / "manifest.json").exists())
+
+    def test_missing_executable(self):
+        self.config["pnpmPath"] = "/does/not/exist"
+        self.d.prepare(self.job)
+        self.assertEqual(self.job["state"], "failed")
+        self.assertEqual(self.fake.calls, [])
+
+    def test_network_check_runs_after_tests_with_the_shared_config(self):
+        self.d.prepare(self.job)
+        commands = [c for c in self.fake.calls if "run" in c]
+        self.assertEqual(commands[-2][2], "test")
+        self.assertEqual(commands[-1], ["/bin/sh", "run", "check:codex-network", "--config", str(self.d.data / "config.yaml")])
+
+    def test_network_check_failure_never_drains_or_switches(self):
+        self.fake.fail = "check:codex-network"
+        self.d.prepare(self.job)
+        self.assertEqual(self.job["state"], "failed")
+        self.assertIn("check:codex-network", self.job["error"])
+        self.assertFalse((self.d.root / "maintenance.json").exists())
+        self.assertFalse(any("launchctl" in c[0] for c in self.fake.calls))
+
+    def test_network_check_is_repeated_before_publishing_a_prepared_release(self):
+        self.d.prepare(self.job)
+        self.assertEqual(self.job["state"], "prepared")
+        self.fake.fail = "check:codex-network"
+        original = self.plist.read_bytes()
+        self.d.publish(self.job)
+        self.assertEqual(self.job["state"], "failed")
+        self.assertEqual(self.plist.read_bytes(), original)
+        self.assertFalse((self.d.root / "maintenance.json").exists())
+        self.assertFalse(any("launchctl" in c[0] for c in self.fake.calls))
+
+    def test_build_failure_never_switches(self):
+        self.fake.fail = "build"
+        self.d.prepare(self.job)
+        self.assertEqual(self.job["state"], "failed")
+        self.assertFalse(any("launchctl" in c[0] for c in self.fake.calls))
+
+    def test_cancel_prepare(self):
+        self.job["cancelRequested"] = True
+        self.d.prepare(self.job)
+        self.assertEqual(self.job["state"], "cancelled")
+
+    def test_bootout_waits_until_service_disappears(self):
+        self.d.restart()
+        self.assertEqual(sum("print" in c for c in self.fake.calls), 3)
+        self.assertEqual(sum("bootstrap" in c for c in self.fake.calls), 1)
+
+    def test_readiness_timeout(self):
+        self.config["readinessTimeoutSec"] = 0
+        with self.assertRaisesRegex(m.DeployError, "timed out"):
+            self.d.verify("wrong", "wrong")
+
+    def test_rollback_failure_keeps_maintenance(self):
+        m.atomic(self.d.root / "maintenance.json", {"releaseId": "release"})
+        self.job["previousPlist"] = str(self.root / "missing")
+        self.d.rollback(self.job)
+        self.assertEqual(self.job["state"], "recovery_failed")
+        self.assertTrue((self.d.root / "maintenance.json").exists())
+
+    def test_owner_rejection(self):
+        with self.assertRaisesRegex(m.DeployError, "owner"):
+            self.d.command({"actorId": "attacker", "action": "status"})
+
+    def test_message_idempotency(self):
+        self.job["state"] = "prepared"
+        req = {"actorId": "owner", "chatId": "chat", "messageId": "om_cancel", "action": "cancel"}
+        first = self.d.command(req)
+        self.job["state"] = "published"
+        self.assertEqual(first, self.d.command(req))
+
+    def test_notification_delivery_deduplicates(self):
+        self.d.notify(self.job)
+        self.d.notify(self.job)
+        self.d.flush_notifications()
+        self.d.flush_notifications()
+        self.assertEqual(len(self.d.state["notifications"]), 1)
+        self.assertEqual(sum("/reply" in url for url, _ in self.fake.notifications), 1)
+
+    def test_keychain_refs_resolve_without_touching_stage_logs(self):
+        self.d.c["feishu"]["appSecret"] = "keychain:codebridge.feishu.appSecret"
+        self.d.c["runnerToken"] = "keychain:codebridge.runner.token"
+        self.d.notify(self.job)
+        self.d.flush_notifications()
+        token_request = next(data for url, data in self.fake.notifications if "tenant_access_token" in url)
+        self.assertEqual(token_request["app_secret"], "kc-feishu")
+        with patch.object(self.fake, "http", wraps=self.fake.http) as http:
+            self.d.health()
+        self.assertEqual(http.call_args[0][1], "kc-runner")
+        self.assertNotIn("security", json.dumps([c for c in self.fake.calls if c[0] != "read_secret"]))
+
+    def test_real_read_secret_handles_helper_failures(self):
+        ok = m.subprocess.CompletedProcess([], 0, stdout=b"tok-1\n")
+        with patch.object(m.subprocess, "run", return_value=ok) as run:
+            self.assertEqual(m.Adapter().read_secret("svc"), "tok-1")
+        self.assertEqual(run.call_args[0][0][:2], ["/usr/bin/security", "find-generic-password"])
+        self.assertEqual(run.call_args.kwargs["stderr"], m.subprocess.DEVNULL)
+        for outcome in (m.subprocess.CompletedProcess([], 44, stdout=b""), m.subprocess.TimeoutExpired("security", 10), OSError("no binary")):
+            kwargs = {"side_effect": outcome} if isinstance(outcome, BaseException) else {"return_value": outcome}
+            with patch.object(m.subprocess, "run", **kwargs), self.assertRaises(m.DeployError):
+                m.Adapter().read_secret("svc")
+
+    def test_recovery_rolls_back_without_reapplying(self):
+        self.job["state"] = "switching"
+        self.job["previousPlist"] = str(self.plist)
+        with patch.object(self.d, "rollback") as rollback:
+            self.d.recover()
+        rollback.assert_called_once_with(self.job)
+        self.assertEqual(self.fake.calls, [])
+
+    def test_stale_deliveries_do_not_block(self):
+        self.job["requestedAt"] = 1700000000
+        with contextlib.closing(sqlite3.connect(self.data / "orchestration.sqlite")) as db:
+            db.execute("INSERT INTO channel_turn_delivery (status, created_at) VALUES (?, ?)", ("pending", "2000-01-01T00:00:00Z"))
+            db.commit()
+        self.d.drain(self.job)
+        self.assertTrue((self.d.root / "maintenance.json").exists())
+
+    def test_exclusive_daemon_lock(self):
+        with self.assertRaisesRegex(m.DeployError, "already running"):
+            m.Deployer(self.config, self.fake)
+
+    def test_unhealthy_controller_preflight_never_enters_maintenance(self):
+        self.d.prepare(self.job)
+        with patch.object(self.d, "verify", side_effect=m.DeployError("keychain unavailable")), patch.object(self.d, "drain") as drain:
+            self.d.publish(self.job)
+        drain.assert_not_called()
+        self.assertEqual(self.job["state"], "failed")
+        self.assertIn("keychain unavailable", self.job["error"])
+        self.assertFalse((self.d.root / "maintenance.json").exists())
+
+    def test_readiness_timeout_preserves_last_failure(self):
+        self.config["readinessTimeoutSec"] = 1
+        with patch.object(m.time, "monotonic", side_effect=[0, 0, 2]), patch.object(self.d, "health", side_effect=m.DeployError("Runner not ready")):
+            with self.assertRaisesRegex(m.DeployError, "release readiness timed out.*Runner not ready"):
+                self.d.verify()
+
+    def test_http_error_identifies_endpoint_without_token_or_query(self):
+        url = "http://127.0.0.1:19790/deploy/readiness?secret=hidden-query"
+        with patch.object(urllib.request, "urlopen", side_effect=urllib.error.HTTPError(url, 401, "unauthorized", {}, None)):
+            with self.assertRaises(m.DeployError) as caught:
+                m.Adapter().http(url, "hidden-token")
+        self.assertIn("127.0.0.1:19790/deploy/readiness", str(caught.exception))
+        self.assertIn("401", str(caught.exception))
+        self.assertNotIn("hidden", str(caught.exception))
+
+    def test_publish_failure_restores_original_plist(self):
+        self.d.prepare(self.job)
+        original = self.plist.read_bytes()
+        with patch.object(self.d, "verify", side_effect=[None, m.DeployError("timeout"), None]):
+            self.d.publish(self.job)
+        self.assertEqual(self.job["state"], "rolled_back")
+        self.assertEqual(self.plist.read_bytes(), original)
+        self.assertFalse((self.d.root / "maintenance.json").exists())
+
+    def test_missing_database_does_not_switch(self):
+        self.d.prepare(self.job)
+        (self.data / "orchestration.sqlite").unlink()
+        original = self.plist.read_bytes()
+        self.d.publish(self.job)
+        self.assertEqual(self.job["state"], "failed")
+        self.assertEqual(self.plist.read_bytes(), original)
+        self.assertFalse(any("bootout" in c or "bootstrap" in c for c in self.fake.calls))
+
+    def test_drain_timeout_does_not_switch(self):
+        self.d.prepare(self.job)
+        with contextlib.closing(sqlite3.connect(self.data / "orchestration.sqlite")) as db:
+            db.execute("INSERT INTO runs (status) VALUES (?)", ("running",))
+            db.commit()
+        self.config["drainTimeoutSec"] = 0
+        self.d.publish(self.job)
+        self.assertEqual(self.job["state"], "failed")
+        self.assertFalse(any("bootout" in c or "bootstrap" in c for c in self.fake.calls))
+
+    def test_health_exposes_busy(self):
+        self.assertTrue(self.d.health_status()["active"])
+        self.job["state"] = "prepared"
+        self.assertFalse(self.d.health_status()["active"])
+
+    def test_failed_recovery_blocks_mutation(self):
+        self.job["state"] = "recovery_failed"
+        with self.assertRaisesRegex(m.DeployError, "recovery failed"):
+            self.d.command({"actorId": "owner", "chatId": "chat", "messageId": "om_new", "action": "prepare"})
+
+    def test_http_auth_and_command_contract(self):
+        server = m.create_server(self.d, port=0)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        base = "http://127.0.0.1:" + str(server.server_address[1])
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(base + "/health")
+            self.assertEqual(error.exception.code, 403)
+            error.exception.close()
+            request = urllib.request.Request(base + "/health", headers={"Authorization": "Bearer secret"})
+            with urllib.request.urlopen(request) as response:
+                result = json.load(response)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["active"])
+            request = urllib.request.Request(base + "/command", data=json.dumps({"action": "status", "actorId": "owner", "chatId": "chat", "messageId": "om_http"}).encode(), headers={"Authorization": "Bearer secret"})
+            with urllib.request.urlopen(request) as response:
+                result = json.load(response)
+            self.assertEqual(result["releaseId"], "release")
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join()
+
+    def test_controller_auth_accepts_keychain_and_env_references(self):
+        server = m.create_server(self.d, port=0)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        base = "http://127.0.0.1:" + str(server.server_address[1])
+        try:
+            for reference in ["keychain:fixture.controller", "env:CB_TEST_CONTROLLER"]:
+                self.d.c["token"] = reference
+                with patch.object(self.fake, "read_secret", return_value="fixture-controller"), patch.dict(os.environ, {"CB_TEST_CONTROLLER": "fixture-controller"}):
+                    request = urllib.request.Request(base + "/health", headers={"Authorization": "Bearer fixture-controller"})
+                    with urllib.request.urlopen(request) as response:
+                        self.assertTrue(json.load(response)["ok"])
+            self.d.c["token"] = "keychain:fixture.missing"
+            with patch.object(self.fake, "read_secret", side_effect=m.DeployError("missing")):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(urllib.request.Request(base + "/health", headers={"Authorization": "Bearer fixture-controller"}))
+                self.assertEqual(error.exception.code, 403)
+                error.exception.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join()
+
+    def test_shared_runtime_switch_restores_both_plists(self):
+        self.d.prepare(self.job)
+        runner_path = self.root / "runner.plist"
+        runner_path.write_bytes(plistlib.dumps({"ProgramArguments": ["/bin/sh", "old-runner.js", "--port", "19789"]}))
+        self.config["runnerPlist"] = str(runner_path)
+        output = Path(self.job["app"]) / "packages/runner-host/dist/cli.js"
+        output.parent.mkdir(parents=True)
+        output.write_text("runner")
+        self.job["hashes"] = self.d.hashes(Path(self.job["app"]))
+        bridge_before, runner_before = self.plist.read_bytes(), runner_path.read_bytes()
+        original_git = self.d.git
+        def git(*args):
+            if args[:2] == ("diff", "--name-only"):
+                return b"packages/runner-host/src/main.ts"
+            return original_git(*args)
+        with patch.object(self.d, "git", side_effect=git), patch.object(self.d, "verify", side_effect=[None, m.DeployError("timeout"), None]):
+            self.d.publish(self.job)
+        self.assertEqual(self.job["state"], "rolled_back")
+        self.assertEqual(self.plist.read_bytes(), bridge_before)
+        self.assertEqual(runner_path.read_bytes(), runner_before)
+        self.assertEqual(sum("bootstrap" in c for c in self.fake.calls), 4)
+
+    def test_old_active_run_delivery_still_blocks_after_run_finishes(self):
+        self.job["requestedAt"] = 1700000000
+        with contextlib.closing(sqlite3.connect(self.data / "orchestration.sqlite")) as db:
+            db.execute("INSERT INTO runs VALUES (?, ?)", ("running", "old-active"))
+            db.execute("INSERT INTO channel_turn_delivery VALUES (?, ?, ?)", ("pending", "2000-01-01T00:00:00Z", "old-active"))
+            db.commit()
+        def finish_run(seconds):
+            with contextlib.closing(sqlite3.connect(self.data / "orchestration.sqlite")) as db:
+                db.execute("UPDATE runs SET status = ?", ("completed",))
+                db.commit()
+        self.config["drainTimeoutSec"] = 0
+        with patch.object(self.fake, "sleep", side_effect=finish_run):
+            with self.assertRaisesRegex(m.DeployError, "drain timed out"):
+                self.d.drain(self.job)
+
+    def test_recover_published_marker_checks_health_before_clear(self):
+        self.job.update(state="published", commit="abc123")
+        m.atomic(self.d.root / "maintenance.json", {"releaseId": "release"})
+        with patch.object(self.d, "verify") as verify:
+            self.d.recover()
+        verify.assert_called_once_with("release", "abc123")
+        self.assertFalse((self.d.root / "maintenance.json").exists())
+
+    def test_recover_terminal_marker_preserved_if_unhealthy(self):
+        self.job.update(state="rolled_back", previousReleaseId="old", previousCommit="oldcommit")
+        m.atomic(self.d.root / "maintenance.json", {"releaseId": "release"})
+        with patch.object(self.d, "verify", side_effect=m.DeployError("unhealthy")):
+            self.d.recover()
+        self.assertTrue((self.d.root / "maintenance.json").exists())
+
+    def test_recent_queued_intake_without_run_does_not_block(self):
+        self.job["requestedAt"] = 1700000000
+        with contextlib.closing(sqlite3.connect(self.data / "orchestration.sqlite")) as db:
+            db.execute("INSERT INTO channel_turn_delivery VALUES (?, ?, ?)", ("pending", "2023-11-15T00:00:00Z", None))
+            db.execute("INSERT INTO runs VALUES (?, ?)", ("queued", "queued-run"))
+            db.execute("INSERT INTO channel_turn_delivery VALUES (?, ?, ?)", ("pending", "2023-11-15T00:00:00Z", "queued-run"))
+            db.commit()
+        self.config["drainTimeoutSec"] = 0
+        self.d.drain(self.job)
+
+    def test_automatic_prepare_never_exposes_prepared_state(self):
+        self.job["publishAfterPrepare"] = True
+        observed = []
+        original_change = self.d.change
+        def change(job, state):
+            observed.append(state)
+            original_change(job, state)
+            if state == "draining":
+                with self.assertRaisesRegex(m.DeployError, "another release"):
+                    self.d.command({"action": "publish", "actorId": "owner", "chatId": "chat", "messageId": "om_race"})
+        with patch.object(self.d, "change", side_effect=change), patch.object(self.d, "publish") as publish:
+            self.d.prepare(self.job)
+        self.assertNotIn("prepared", observed)
+        self.assertEqual(observed, ["draining"])
+        publish.assert_called_once_with(self.job)
+
+    def test_manual_rollback_does_not_hold_command_mutex(self):
+        self.job["manualRollback"] = True
+        observed = []
+        def rollback(job):
+            def inspect_health():
+                observed.append(self.d.health_status()["active"])
+            worker = threading.Thread(target=inspect_health, daemon=True)
+            worker.start()
+            worker.join(timeout=1)
+            self.assertFalse(worker.is_alive(), "rollback held command mutex")
+        with patch.object(self.d, "drain"), patch.object(self.d, "rollback", side_effect=rollback):
+            self.d.publish(self.job)
+        self.assertEqual(observed, [True])
+
+    def test_failed_and_cancelled_marker_recovery_checks_current(self):
+        for state in ("failed", "cancelled"):
+            self.job["state"] = state
+            m.atomic(self.d.root / "maintenance.json", {"releaseId": "release"})
+            with patch.object(self.d, "verify") as verify:
+                self.d.recover()
+            verify.assert_called_once_with(None, None)
+            self.assertFalse((self.d.root / "maintenance.json").exists())
+
+    def test_terminal_notification_recovery_is_idempotent_without_marker(self):
+        self.job["state"] = "published"
+        self.d.recover()
+        self.d.recover()
+        self.assertEqual(len(self.d.state["notifications"]), 1)
+
+    def test_health_responds_while_notification_network_blocks(self):
+        server = m.create_server(self.d, port=0)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        entered, unblock, stop = threading.Event(), threading.Event(), threading.Event()
+        self.d.notify(self.job)
+        original_http = self.fake.http
+        def blocked_http(*args, **kwargs):
+            entered.set()
+            unblock.wait(timeout=3)
+            return original_http(*args, **kwargs)
+        notifier = threading.Thread(target=m.notification_loop, args=(self.d, stop), daemon=True)
+        try:
+            with patch.object(self.fake, "http", side_effect=blocked_http):
+                notifier.start()
+                self.assertTrue(entered.wait(timeout=1))
+                url = "http://127.0.0.1:" + str(server.server_address[1]) + "/health"
+                request = urllib.request.Request(url, headers={"Authorization": "Bearer secret"})
+                with urllib.request.urlopen(request, timeout=1) as response:
+                    self.assertTrue(json.load(response)["ok"])
+                unblock.set()
+                stop.set()
+                notifier.join(timeout=2)
+        finally:
+            unblock.set()
+            stop.set()
+            server.shutdown()
+            server.server_close()
+            worker.join()
+
+    def test_runner_health_false_is_not_ready(self):
+        original = self.fake.http
+        def http(url, token, data=None):
+            return {"ok": False} if url.endswith("/health") else original(url, token, data)
+        with patch.object(self.fake, "http", side_effect=http):
+            with self.assertRaisesRegex(m.DeployError, "Runner not ready"):
+                self.d.health()
+
+    def test_pid_requires_running_launchd_state(self):
+        with patch.object(self.fake, "command", return_value=b"state = stopping\npid = 123"):
+            self.assertIsNone(self.d.pid())
+
+    def test_latest_failed_prepare_blocks_older_prepared_fallback(self):
+        self.job["state"] = "prepared"
+        newer = dict(self.job, id="newer", state="failed", requestedAt=1)
+        self.d.state["jobs"]["newer"] = newer
+        request = {"action": "publish", "actorId": "owner", "chatId": "chat", "messageId": "om_latest"}
+        with patch.object(threading.Thread, "start") as start:
+            with self.assertRaisesRegex(m.DeployError, "最新发布 newer"):
+                self.d.command(request)
+        start.assert_not_called()
+        self.assertEqual(self.job["state"], "prepared")
+        with patch.object(threading.Thread, "start") as start:
+            result = self.d.command(dict(request, releaseId="release"))
+        self.assertEqual(result["releaseId"], "release")
+        start.assert_called_once()
+
+    def test_controller_changes_require_separate_install(self):
+        self.job["commit"] = "newcommit"
+        for name in ("scripts/host-deployer.py", "scripts/install-host-deployer.mjs"):
+            with patch.object(self.d, "git", return_value=name.encode()):
+                with self.assertRaisesRegex(m.DeployError, "请先单独安装控制器"):
+                    self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+
+    def test_only_reviewed_fresh_database_initialization_can_pass_schema_gate(self):
+        store = "apps/bridge/src/new-store.ts"
+        caller = "apps/bridge/src/cli.ts"
+        sources = {store: b"reviewed create-only store", caller: b"reviewed distinct database path"}
+        patch_text = ("+++ b/" + store + "\n+ CREATE TABLE IF NOT EXISTS task_rows(id TEXT)\n").encode()
+        receipt = {"scope": "new-database-only", "baseline": "oldcommit", "commit": "newcommit",
+                   "database": "agent-tasks.sqlite", "reviewer": "local-maintainer", "reviewedAt": "2026-10-16T00:00:00Z",
+                   "sourceHashes": {name: m.hashlib.sha256(value).hexdigest() for name, value in sources.items()}}
+        review_path = self.d.root / "reviews" / "newcommit.json"
+        cases = ("valid", "missing", "baseline", "commit", "hash", "unreviewed", "existing-source",
+                 "existing-database", "symlink-database", "traversal", "permissions", "alter", "removed-ddl", "invalid-json")
+        for case in cases:
+            with self.subTest(case=case):
+                current = json.loads(json.dumps(receipt))
+                if case in ("baseline", "commit"): current[case] = "different"
+                if case == "hash": current["sourceHashes"][store] = "0" * 64
+                if case == "unreviewed": del current["sourceHashes"][store]
+                if case == "traversal": current["database"] = "../sessions.sqlite"
+                m.atomic(review_path, current)
+                if case == "missing": review_path.unlink()
+                if case == "permissions": review_path.chmod(0o644)
+                if case == "invalid-json": review_path.write_text("{")
+                database = self.data / receipt["database"]
+                if case == "existing-database": database.write_bytes(b"must remain unchanged")
+                if case == "symlink-database": database.symlink_to(self.data / "not-created.sqlite")
+                def git(*args):
+                    if args[:2] == ("diff", "--name-only"):
+                        if "--diff-filter=D" in args: return b""
+                        if "--diff-filter=A" in args: return b"" if case == "existing-source" else store.encode()
+                        return (store + "\n" + caller).encode()
+                    if args[:2] == ("diff", "--unified=0"):
+                        if case == "alter": return ("+++ b/" + store + "\n+ ALTER TABLE task_rows ADD COLUMN x TEXT\n").encode()
+                        if case == "removed-ddl": return patch_text.replace(b"+ CREATE", b"- CREATE")
+                        return patch_text
+                    if args[0] == "show": return sources[args[1].split(":", 1)[1]]
+                    return b""
+                job = dict(self.job, commit="newcommit")
+                with patch.object(self.d, "git", side_effect=git):
+                    if case == "valid":
+                        self.d.compatible(job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+                        self.assertEqual(job["reviewedDatabaseInitialization"]["database"], receipt["database"])
+                    else:
+                        with self.assertRaisesRegex(m.DeployError, "schema change"):
+                            self.d.compatible(job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+                        self.assertNotIn("reviewedDatabaseInitialization", job)
+                if case == "existing-database": self.assertEqual(database.read_bytes(), b"must remain unchanged")
+                if database.exists() or database.is_symlink(): database.unlink()
+
+    def test_schema_ddl_in_modified_file_blocks_publish(self):
+        self.job["commit"] = "newcommit"
+        def git(*args):
+            if args[:2] == ("diff", "--name-only"):
+                return b"" if "--diff-filter=D" in args else b"apps/bridge/src/store.ts"
+            if args[:2] == ("diff", "--unified=0"):
+                return b"--- a/apps/bridge/src/store.ts\n+++ b/apps/bridge/src/store.ts\n@@ -1 +1 @@\n+  ALTER TABLE runs ADD COLUMN extra TEXT\n"
+            return b""
+        with patch.object(self.d, "git", side_effect=git):
+            with self.assertRaisesRegex(m.DeployError, "schema change"):
+                self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+
+    def test_schema_ddl_only_in_deleted_files_is_not_a_migration(self):
+        self.job["commit"] = "newcommit"
+        def git(*args):
+            if args[:2] == ("diff", "--name-only"):
+                return b"apps/bridge/src/old-store.ts" if "--diff-filter=D" in args else b"apps/bridge/src/old-store.ts\napps/bridge/src/cli.ts"
+            if args[:2] == ("diff", "--unified=0"):
+                self.assertIn(":(exclude)apps/bridge/src/old-store.ts", args)
+                return b"--- a/apps/bridge/src/cli.ts\n+++ b/apps/bridge/src/cli.ts\n@@ -1 +1 @@\n-import { OldStore } from \"./old-store.js\";\n"
+            return b""
+        with patch.object(self.d, "git", side_effect=git):
+            self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+        self.assertFalse(self.job["restartRunner"])
+
+    def test_matching_separately_installed_controller_changes_allowed(self):
+        self.job["commit"] = "newcommit"
+        payload = b"installed bytes"
+        self.config["installedControllerHash"] = m.hashlib.sha256(payload).hexdigest()
+        self.config["installerHash"] = m.hashlib.sha256(payload).hexdigest()
+        def git(*args):
+            if args[:2] == ("diff", "--name-only"):
+                return b"scripts/host-deployer.py\nscripts/install-host-deployer.mjs"
+            return payload if args[0] == "show" else b""
+        with patch.object(self.d, "git", side_effect=git):
+            self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
+
+    def test_mutable_runner_is_frozen_even_without_code_diff(self):
+        self.job["commit"] = "abc123"
+        runner = self.root / "runner.plist"
+        self.config["runnerPlist"] = str(runner)
+        runner.write_bytes(plistlib.dumps({"WorkingDirectory": str(self.source), "ProgramArguments": ["/bin/sh", str(self.source / "packages/runner-host/dist/cli.js")]}))
+        old = {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "abc123"}}
+        self.d.compatible(self.job, old)
+        self.assertTrue(self.job["restartRunner"])
+        frozen = self.d.root / "releases" / "older" / "app"
+        runner.write_bytes(plistlib.dumps({"WorkingDirectory": str(frozen), "ProgramArguments": ["/bin/sh", str(frozen / "packages/runner-host/dist/cli.js")]}))
+        self.d.compatible(self.job, old)
+        self.assertFalse(self.job["restartRunner"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,16 @@
+export { FeishuBridge, runDoctor } from "./bridge.js";
+export type {
+  FeishuBridgeOptions,
+  FeishuMention,
+  FeishuMessage,
+} from "./bridge.js";
+
+export type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply } from "./alert-types.js";
+
+export { FEISHU_ALERT_STATUSES } from "./alert-types.js";
+export type { FeishuAlertStatus } from "./alert-types.js";
+
+export type { FeishuAlertReaction } from "./alert-types.js";
+
+export { assertOutboundFileInHome } from "./feishu-outbound-file.js";
+export { FeishuCli, FEISHU_CLI_VERSION } from "./feishu-cli.js";

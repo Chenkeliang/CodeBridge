@@ -1,0 +1,190 @@
+diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
+--- a/src/CodexAcpClient.ts
++++ b/src/CodexAcpClient.ts
+@@ -57,6 +57,7 @@
+     UserInput,
+ } from "./app-server/v2";
+ import packageJson from "../package.json";
++import {initialNetworkAccess, sandboxWithNetworkAccess} from "./NetworkAccessConfig";
+ import type {AuthenticationStatusResponse} from "./AcpExtensions";
+ import {createCodexCollaborationMode} from "./CollaborationModeConfig";
+ import type {ModeKind} from "./app-server/ModeKind";
+@@ -1149,6 +1150,10 @@
+         });
+     }
+
++    getInitialNetworkAccess(): boolean {
++        return initialNetworkAccess(this.config);
++    }
++
+     async sendPrompt(
+         request: acp.PromptRequest,
+         agentMode: AgentMode,
+@@ -1159,6 +1164,7 @@
+         additionalDirectories: string[],
+         onTurnStarted?: (turnId: string) => void,
+         shouldCancel?: () => boolean,
++        networkAccess: boolean = this.getInitialNetworkAccess(),
+     ): Promise<TurnCompletedNotification | null> {
+         const input = buildPromptItems(request.prompt);
+         const effort = modelId.effort as ReasoningEffort | null; //TODO remove unsafe conversion
+@@ -1171,7 +1177,7 @@
+             input: input,
+             approvalPolicy: agentMode.approvalPolicy,
+             approvalsReviewer: agentMode.approvalsReviewer,
+-            sandboxPolicy: addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy, additionalDirectories),
++            sandboxPolicy: sandboxWithNetworkAccess(addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy, additionalDirectories), networkAccess),
+             summary: disableSummary ? "none" : "auto",
+             effort: effort,
+             model: modelId.model,
+diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
+--- a/src/CodexAcpServer.ts
++++ b/src/CodexAcpServer.ts
+@@ -52,6 +52,7 @@
+ import {ModelId} from "./ModelId";
+ import {normalizeSessionTitle} from "./SessionTitle";
+ import {AgentMode, MODE_CONFIG_ID} from "./AgentMode";
++import {createNetworkAccessConfigOption, NETWORK_ACCESS_CONFIG_ID, networkAccessValue} from "./NetworkAccessConfig";
+ import {
+     COLLABORATION_MODE_CONFIG_ID,
+     createCollaborationModeConfigOption,
+@@ -198,6 +199,7 @@
+     supportedReasoningEfforts: Array<ReasoningEffortOption>,
+     supportedInputModalities: Array<InputModality>,
+     agentMode: AgentMode,
++    networkAccess: boolean,
+     collaborationMode: ModeKind,
+     currentTurnId: string | null;
+     lastTokenUsage: TokenCount | null;
+@@ -913,6 +915,7 @@
+             supportedReasoningEfforts: currentModel?.supportedReasoningEfforts ?? [],
+             supportedInputModalities: currentModel?.inputModalities ?? ["text", "image"],
+             agentMode: AgentMode.getInitialAgentMode(),
++            networkAccess: this.codexAcpClient.getInitialNetworkAccess(),
+             collaborationMode: sessionMetadata.collaborationMode,
+             currentTurnId: null,
+             lastTokenUsage: null,
+@@ -1872,6 +1875,10 @@
+
+     private async applySessionConfigOption(sessionState: SessionState, params: acp.SetSessionConfigOptionRequest): Promise<void> {
+         switch (params.configId) {
++            case NETWORK_ACCESS_CONFIG_ID:
++                if (sessionState.agentMode.sandboxPolicy.type === "dangerFullAccess") throw RequestError.invalidParams("network_access is unavailable in full-access mode");
++                sessionState.networkAccess = networkAccessValue(params, this.booleanConfigOptionsSupported);
++                break;
+             case FAST_MODE_CONFIG_ID:
+                 this.applyFastModeChange(sessionState, params);
+                 break;
+@@ -2284,6 +2291,8 @@
+             createCollaborationModeConfigOption(sessionState.collaborationMode),
+             createModelConfigOption(sessionState.availableModels, currentModelId.model, recommendedModelId),
+         ];
++        const networkOption = createNetworkAccessConfigOption(sessionState.networkAccess, sessionState.agentMode, this.booleanConfigOptionsSupported);
++        if (networkOption) configOptions.splice(1, 0, networkOption);
+         if (sessionState.supportedReasoningEfforts.length > 0) {
+             configOptions.push(
+                 createReasoningEffortConfigOption(
+@@ -2493,6 +2502,7 @@
+             supportedReasoningEfforts: currentModel?.supportedReasoningEfforts ?? [],
+             supportedInputModalities: currentModel?.inputModalities ?? ["text", "image"],
+             agentMode: AgentMode.getInitialAgentMode(),
++            networkAccess: this.codexAcpClient.getInitialNetworkAccess(),
+             collaborationMode: sessionMetadata.collaborationMode,
+             currentTurnId: null,
+             lastTokenUsage: null,
+@@ -3533,6 +3543,7 @@
+                         onTurnStarted?.();
+                     },
+                     () => this.promptShouldStop(params.sessionId, activePrompt),
++                    sessionState.networkAccess,
+                 ));
+             void sendPromptPromise.catch((err) => {
+                 if (this.activePrompts.get(params.sessionId) !== activePrompt) {
+@@ -3637,6 +3648,7 @@
+                                 promptNotificationsActive = true;
+                             },
+                             () => this.promptShouldStop(params.sessionId, activePrompt),
++                            sessionState.networkAccess,
+                         ),
+                     );
+                     void implementationPromise.catch((err) => {
+diff --git a/src/NetworkAccessConfig.ts b/src/NetworkAccessConfig.ts
+new file mode 100644
+--- /dev/null
++++ b/src/NetworkAccessConfig.ts
+@@ -0,0 +1,38 @@
++import {RequestError, type SessionConfigOption, type SetSessionConfigOptionRequest} from "@agentclientprotocol/sdk";
++import type {AgentMode} from "./AgentMode";
++import type {SandboxPolicy} from "./app-server/v2";
++
++export const NETWORK_ACCESS_CONFIG_ID = "network_access";
++
++export function initialNetworkAccess(config: Record<string, unknown>): boolean {
++    const sandbox = config["sandbox_workspace_write"];
++    return sandbox !== null && typeof sandbox === "object"
++        && (sandbox as Record<string, unknown>)["network_access"] === true;
++}
++
++export function createNetworkAccessConfigOption(
++    value: boolean,
++    mode: AgentMode,
++    booleanSupported: boolean,
++): SessionConfigOption | undefined {
++    if (!booleanSupported || mode.sandboxPolicy.type === "dangerFullAccess") return undefined;
++    return {
++        id: NETWORK_ACCESS_CONFIG_ID,
++        name: "Allow network access",
++        description: "Allow sandboxed commands to access the network without changing filesystem access. Applies to subsequent turns.",
++        type: "boolean",
++        currentValue: value,
++    };
++}
++
++export function networkAccessValue(params: SetSessionConfigOptionRequest, booleanSupported: boolean): boolean {
++    if (!booleanSupported || params.type !== "boolean" || typeof params.value !== "boolean") {
++        throw RequestError.invalidParams("network_access requires the boolean config capability and a boolean value");
++    }
++    return params.value;
++}
++
++export function sandboxWithNetworkAccess(policy: SandboxPolicy, networkAccess: boolean): SandboxPolicy {
++    if (policy.type !== "workspaceWrite" && policy.type !== "readOnly") return policy;
++    return {...policy, networkAccess};
++}
+diff --git a/src/__tests__/NetworkAccessConfig.test.ts b/src/__tests__/NetworkAccessConfig.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/__tests__/NetworkAccessConfig.test.ts
+@@ -0,0 +1,32 @@
++import {describe, expect, it} from "vitest";
++import {AgentMode} from "../AgentMode";
++import {createNetworkAccessConfigOption, initialNetworkAccess, networkAccessValue, sandboxWithNetworkAccess} from "../NetworkAccessConfig";
++
++describe("ACP network_access configuration", () => {
++    it("defaults to network isolation and accepts only explicit boolean true", () => {
++        expect(initialNetworkAccess({})).toBe(false);
++        expect(initialNetworkAccess({sandbox_workspace_write:{network_access:"true"}})).toBe(false);
++        expect(initialNetworkAccess({sandbox_workspace_write:{network_access:true}})).toBe(true);
++    });
++    it("advertises only after boolean capability negotiation", () => {
++        expect(createNetworkAccessConfigOption(false, AgentMode.Agent, false)).toBeUndefined();
++        expect(createNetworkAccessConfigOption(false, AgentMode.Agent, true)).toMatchObject({id:"network_access",type:"boolean",currentValue:false});
++        expect(createNetworkAccessConfigOption(false, AgentMode.AgentFullAccess, true)).toBeUndefined();
++    });
++    it("validates ACP boolean requests including false", () => {
++        expect(networkAccessValue({sessionId:"session",configId:"network_access",type:"boolean",value:false},true)).toBe(false);
++        expect(() => networkAccessValue({sessionId:"session",configId:"network_access",value:"true"},true)).toThrow();
++        expect(() => networkAccessValue({sessionId:"session",configId:"network_access",type:"boolean",value:true},false)).toThrow();
++    });
++    it("preserves filesystem policy and isolates session settings", () => {
++        const base = AgentMode.Agent.sandboxPolicy;
++        expect(sandboxWithNetworkAccess(base,true)).toEqual({...base,networkAccess:true});
++        expect(sandboxWithNetworkAccess(base,false)).toEqual({...base,networkAccess:false});
++        expect(base).toEqual(AgentMode.Agent.sandboxPolicy);
++        expect(base).toHaveProperty("networkAccess",false);
++    });
++    it("does not alter full access or change read-only filesystem restrictions", () => {
++        expect(sandboxWithNetworkAccess(AgentMode.AgentFullAccess.sandboxPolicy,true)).toBe(AgentMode.AgentFullAccess.sandboxPolicy);
++        expect(sandboxWithNetworkAccess(AgentMode.ReadOnly.sandboxPolicy,true)).toEqual({...AgentMode.ReadOnly.sandboxPolicy,networkAccess:true});
++    });
++});

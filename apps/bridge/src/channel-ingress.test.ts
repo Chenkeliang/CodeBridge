@@ -1,0 +1,498 @@
+import { Hono } from "hono";
+import { describe, expect, it } from "vitest";
+import { createChannelSessionIngress } from "./channel-ingress.js";
+
+function sse(events: string[]): Response {
+  return new Response(
+    events.map((data) => `data: ${data}\n\n`).join(""),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+function sessionEventWire(
+  sequence: number,
+  type: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    event_id: `evt_${sequence}`,
+    sequence,
+    work_item_id: "work_1",
+    run_id: "run_1",
+    execution_kind: "agent",
+    type,
+    occurred_at: `2026-08-24T03:17:${String(sequence % 60).padStart(2, "0")}.000Z`,
+    actor: "runtime",
+    target: null,
+    input_hash: null,
+    result_ref: null,
+    payload: {},
+    ...overrides,
+  };
+}
+
+describe("channel session ingress", () => {
+
+  it("submits a channel message and returns a receipt", async () => {
+    const app = new Hono();
+    app.post("/v1/channels/:channel/conversations/:conversation/messages", async (c) => {
+      expect(c.req.param("channel")).toBe("feishu");
+      const body = await c.req.json() as Record<string, unknown>;
+      expect(body).toMatchObject({
+        message: "hello",
+        agent_id: "pi",
+        generation: 0,
+        reply_to_message_id: "msg_1",
+        show_thinking: false,
+      });
+      return c.json({
+        session_id: "sess_1",
+        turn_id: "turn_1",
+        run_id: "run_1",
+        acceptance: "dispatched",
+        queue_state: "ready",
+        event_sequence: 3,
+      }, 202);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    const receipt = await ingress.submit({
+      channel: "feishu",
+      conversationId: "chat|topic",
+      message: "hello",
+      agentId: "pi",
+      generation: 0,
+      replyToMessageId: "msg_1",
+      showThinking: false,
+    });
+    expect(receipt).toEqual({
+      sessionId: "sess_1",
+      turnId: "turn_1",
+      runId: "run_1",
+      acceptance: "dispatched",
+      queueState: "ready",
+      eventSequence: 3,
+    });
+  });
+
+  it.each([
+    { replyToMessageId: "msg_1" },
+    { showThinking: false },
+  ])("rejects an incomplete channel delivery snapshot", async (partial) => {
+    const ingress = createChannelSessionIngress(new Hono(), "token");
+    await expect(ingress.submit({
+      channel: "feishu",
+      conversationId: "chat|topic",
+      message: "hello",
+      ...partial,
+    })).rejects.toThrow("channel_delivery_incomplete");
+  });
+
+  it("lists and resolves Runtime step approvals through the existing APIs", async () => {
+    const app = new Hono();
+    app.get("/v1/runs/:run/approvals", (c) => {
+      expect(c.req.param("run")).toBe("run_1");
+      return c.json({
+        approvals: [{
+          id: "approval_1",
+          run_id: "run_1",
+          step_id: "deploy",
+          capability_id: "deploy.release",
+          status: "requested",
+          environment: "production",
+          target_resource: "service:bridge",
+          expires_at: "2026-08-21T15:00:00.000Z",
+        }],
+      });
+    });
+    app.post("/v1/runs/:run/approve", async (c) => {
+      expect(c.req.param("run")).toBe("run_1");
+      expect(await c.req.json()).toEqual({ approval_id: "approval_1" });
+      return c.json({
+        approval_id: "approval_1",
+        status: "granted",
+        granted_at: "2026-08-21T14:30:00.000Z",
+      });
+    });
+    app.post("/v1/runs/:run/reject", async (c) => {
+      expect(await c.req.json()).toEqual({ approval_id: "approval_1" });
+      return c.json({ approval_id: "approval_1", status: "revoked" });
+    });
+
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.listRuntimeApprovals?.("run_1")).resolves.toEqual([{
+      id: "approval_1",
+      runId: "run_1",
+      stepId: "deploy",
+      capabilityId: "deploy.release",
+      status: "requested",
+      environment: "production",
+      targetResource: "service:bridge",
+      expiresAt: "2026-08-21T15:00:00.000Z",
+    }]);
+    await expect(
+      ingress.resolveRuntimeApproval?.("run_1", "approval_1", "approve"),
+    ).resolves.toMatchObject({ id: "approval_1", status: "granted" });
+    await expect(
+      ingress.resolveRuntimeApproval?.("run_1", "approval_1", "reject"),
+    ).resolves.toMatchObject({ id: "approval_1", status: "revoked" });
+  });
+
+  it("resumes a provider session into a slot", async () => {
+    const app = new Hono();
+    app.post("/v1/channels/:channel/conversations/:conversation/resume", async (c) => {
+      expect(c.req.param("channel")).toBe("feishu");
+      expect(c.req.param("conversation")).toBe("chat|topic");
+      expect(await c.req.json()).toEqual({
+        agent_id: "pi",
+        workspace_key: "ws_1",
+        generation: 3,
+        provider_session_id: "provider_old",
+      });
+      return c.json({ session_id: "sess_9" }, 200);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    const result = await ingress.resumeProviderSession({
+      channel: "feishu",
+      conversationId: "chat|topic",
+      agentId: "pi",
+      workspaceKey: "ws_1",
+      generation: 3,
+    }, "provider_old");
+    expect(result).toEqual({ sessionId: "sess_9" });
+  });
+
+  it("scopes queue resume idempotency to the channel command", async () => {
+    const app = new Hono();
+    app.post("/v1/sessions/:session/queue/resume", (c) => {
+      expect(c.req.header("idempotency-key")).toBe(
+        "resume:feishu:message-A",
+      );
+      expect(c.req.header("if-match")).toBe("7");
+      return c.json({ runtime: { queue_state: "ready" } });
+    });
+    app.get("/v1/sessions/:session", (c) => c.json({
+      runtime: { version: 7 },
+    }));
+    const ingress = createChannelSessionIngress(app, "token");
+
+    await expect(
+      ingress.resumeQueue("sess_1", "feishu:message-A"),
+    ).resolves.toEqual({ queueState: "ready" });
+  });
+
+  it("throws the provider_session_busy code with detail on the error", async () => {
+    const app = new Hono();
+    app.post("/v1/channels/:channel/conversations/:conversation/resume", async (c) => {
+      return c.json({
+        error: "provider_session_busy",
+        detail: "provider session p 正被 run r 使用",
+      }, 409);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    let thrown: Error & { detail?: string } | undefined;
+    try {
+      await ingress.resumeProviderSession({
+        channel: "feishu",
+        conversationId: "chat|topic",
+        agentId: "pi",
+        workspaceKey: "ws_1",
+        generation: 0,
+      }, "p");
+    } catch (err) {
+      thrown = err as Error & { detail?: string };
+    }
+    // 只 throw 错误码（bridge 精确匹配依赖 message === "provider_session_busy"）。
+    expect(thrown?.message).toBe("provider_session_busy");
+    expect(thrown?.detail).toContain("正被 run r 使用");
+  });
+
+  it("normalizes production SSE fields into channel session events", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", (c) => {
+      expect(c.req.query("after_sequence")).toBe("3");
+      expect(c.req.query("live")).toBe("true");
+      return sse([
+        JSON.stringify(sessionEventWire(4, "ARTIFACT_CREATED", {
+          occurred_at: "2026-08-21T10:00:00.000Z",
+          target: "artifact_1",
+          result_ref: "artifact://artifact_1",
+          payload: {
+            artifact_id: "artifact_1",
+            step_id: "deploy",
+            name: "deploy.output.json",
+            mime_type: "application/json",
+          },
+        })),
+        JSON.stringify(sessionEventWire(5, "RUN_SUCCEEDED", {
+          occurred_at: "2026-08-21T10:00:01.000Z",
+        })),
+      ]);
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    const events = [];
+    for await (const event of ingress.events("sess_1", {
+      afterSequence: 3,
+      signal: new AbortController().signal,
+    })) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      {
+        type: "ARTIFACT_CREATED",
+        sequence: 4,
+        runId: "run_1",
+        executionKind: "agent",
+        occurredAt: "2026-08-21T10:00:00.000Z",
+        target: "artifact_1",
+        resultRef: "artifact://artifact_1",
+        payload: {
+          artifact_id: "artifact_1",
+          step_id: "deploy",
+          name: "deploy.output.json",
+          mime_type: "application/json",
+        },
+      },
+      {
+        type: "RUN_SUCCEEDED",
+        sequence: 5,
+        runId: "run_1",
+        executionKind: "agent",
+        occurredAt: "2026-08-21T10:00:01.000Z",
+        target: null,
+        resultRef: null,
+        payload: {},
+      },
+    ]);
+  });
+
+  it("replays a finite persisted event history without opening a live stream", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", (c) => {
+      expect(c.req.param("session")).toBe("sess_1");
+      expect(c.req.query("limit")).toBe("500");
+      expect(c.req.query("live")).toBeUndefined();
+      if (c.req.query("after_sequence") === "625") {
+        return c.json({
+          events: [
+            sessionEventWire(626, "AGENT_EVENT", {
+              occurred_at: "2026-08-24T03:17:11.000Z",
+              payload: { event: { type: "text_delta", text: "final answer" } },
+            }),
+          ],
+          next_sequence: 626,
+          has_more: true,
+        });
+      }
+      expect(c.req.query("after_sequence")).toBe("626");
+      return c.json({
+        events: [
+          sessionEventWire(627, "RUN_SUCCEEDED", {
+            occurred_at: "2026-08-24T03:17:12.000Z",
+          }),
+        ],
+        next_sequence: 627,
+        has_more: false,
+      });
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+
+    const events = await ingress.replayEvents!("sess_1", {
+      afterSequence: 625,
+    });
+
+    expect(events.map((event) => event.sequence)).toEqual([626, 627]);
+    expect(events[0]).toMatchObject({
+      type: "AGENT_EVENT",
+      runId: "run_1",
+      payload: { event: { type: "text_delta", text: "final answer" } },
+    });
+  });
+
+  it("rejects an SSE response for finite replay", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", () => sse([]));
+    const ingress = createChannelSessionIngress(app, "token");
+
+    await expect(ingress.replayEvents!("sess_1", {
+      afterSequence: 625,
+    })).rejects.toThrow("session_event_transport_mismatch");
+  });
+
+  it("rejects a JSON response for the live event stream", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", (c) => c.json({ events: [] }));
+    const ingress = createChannelSessionIngress(app, "token");
+    const read = async () => {
+      for await (const event of ingress.events("sess_1", {
+        afterSequence: 0,
+        signal: new AbortController().signal,
+      })) {
+        void event;
+      }
+    };
+
+    await expect(read()).rejects.toThrow("session_event_transport_mismatch");
+  });
+
+  it("cancels the live SSE body when its consumer stops", async () => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", () => new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify(sessionEventWire(1, "RUN_SUCCEEDED"))}\n\n`,
+          ));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    ));
+    const ingress = createChannelSessionIngress(app, "token");
+    const iterator = ingress.events("sess_1", {
+      afterSequence: 0,
+      signal: new AbortController().signal,
+    })[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: "RUN_SUCCEEDED", runId: "run_1" },
+    });
+    await iterator.return?.(undefined);
+
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels the live SSE body when its abort signal fires", async () => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", () => new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify(sessionEventWire(1, "AGENT_EVENT"))}\n\n`,
+          ));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    ));
+    const ingress = createChannelSessionIngress(app, "token");
+    const abortController = new AbortController();
+    const iterator = ingress.events("sess_1", {
+      afterSequence: 0,
+      signal: abortController.signal,
+    })[Symbol.asyncIterator]();
+
+    await iterator.next();
+    const next = iterator.next();
+    abortController.abort();
+
+    await expect(Promise.race([
+      next,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error("abort did not stop SSE reader")),
+        250,
+      )),
+    ])).resolves.toMatchObject({ done: true });
+    expect(cancelled).toBe(true);
+  });
+
+  it("reports a finite event replay transport failure", async () => {
+    const app = new Hono();
+    app.get("/v1/sessions/:session/events", () =>
+      new Response("unavailable", { status: 503 }),
+    );
+    const ingress = createChannelSessionIngress(app, "token");
+
+    await expect(ingress.replayEvents!("sess_1", {
+      afterSequence: 625,
+    })).rejects.toThrow("Channel event replay failed (503)");
+  });
+
+  it("claims, acks and completes a delivery through the delivery routes", async () => {
+    const app = new Hono();
+    app.post("/v1/deliveries/:turn/claim", async (c) => {
+      expect(c.req.param("turn")).toBe("turn_1");
+      expect(await c.req.json()).toEqual({ owner: "owner-1" });
+      return c.json({ claimed: true });
+    });
+    app.post("/v1/deliveries/:turn/ack", async (c) => {
+      expect(await c.req.json()).toEqual({
+        owner: "owner-1",
+        surface_message_id: "message-1",
+        surface_card_id: "cardkit-1",
+      });
+      return c.json({ acked: true });
+    });
+    app.post("/v1/deliveries/:turn/complete", async (c) => {
+      expect(await c.req.json()).toEqual({ owner: "owner-1" });
+      return c.json({ completed: true });
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    expect(await ingress.claimDelivery("turn_1", "owner-1")).toBe(true);
+    expect(await ingress.ackDelivery(
+      "turn_1",
+      "owner-1",
+      "message-1",
+      "cardkit-1",
+    )).toBe(true);
+    expect(await ingress.completeDelivery("turn_1", "owner-1")).toBe(true);
+  });
+
+  it("lists deliveries by channel", async () => {
+    const app = new Hono();
+    app.get("/v1/deliveries", (c) => {
+      expect(c.req.query("channel")).toBe("feishu");
+      return c.json({
+        deliveries: [{
+          turnId: "turn_1",
+          showThinking: false,
+          status: "delivering",
+          runSnapshot: {
+            status: "succeeded",
+            createdAt: "2026-08-21T00:00:00.000Z",
+            updatedAt: "2026-08-21T00:00:05.000Z",
+            leaseExpiresAt: null,
+            terminalReason: null,
+            sessionActiveRunId: null,
+            sessionQueueState: "ready",
+          },
+        }],
+      });
+    });
+    const ingress = createChannelSessionIngress(app, "token");
+    const deliveries = await ingress.listDeliveries("feishu");
+    expect(deliveries).toEqual([{
+      turnId: "turn_1",
+      showThinking: false,
+      status: "delivering",
+      runSnapshot: {
+        status: "succeeded",
+        createdAt: "2026-08-21T00:00:00.000Z",
+        updatedAt: "2026-08-21T00:00:05.000Z",
+        leaseExpiresAt: null,
+        terminalReason: null,
+        sessionActiveRunId: null,
+        sessionQueueState: "ready",
+      },
+    }]);
+  });
+
+  it("throws on a non-2xx delivery claim instead of returning false", async () => {
+    const app = new Hono();
+    app.post("/v1/deliveries/:turn/claim", () =>
+      new Response("service unavailable", { status: 503 }),
+    );
+    const ingress = createChannelSessionIngress(app, "token");
+    await expect(ingress.claimDelivery("turn_1", "owner-1")).rejects.toThrow(
+      /claim delivery failed \(503\)/,
+    );
+  });
+});

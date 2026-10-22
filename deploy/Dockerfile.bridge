@@ -1,0 +1,17 @@
+FROM node:22-alpine AS build
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@10.34.1 --activate
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* tsconfig.base.json tsconfig.json ./
+COPY packages ./packages
+COPY apps ./apps
+RUN pnpm install --frozen-lockfile || pnpm install
+RUN pnpm -r run build
+
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+ENV DATA_DIR=/data
+COPY --from=build /app /app
+RUN npm install -g pnpm && cd /app && pnpm install --prod --ignore-scripts 2>/dev/null || true
+ENTRYPOINT ["node", "/app/apps/bridge/dist/cli.js"]
+CMD ["start"]
