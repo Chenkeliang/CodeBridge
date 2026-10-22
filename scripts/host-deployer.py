@@ -396,6 +396,17 @@ class Deployer:
             if not directory:
                 raise DeployError("running source baseline unknown")
             baseline = self.a.command([self.c.get("gitPath", "/usr/bin/git"), "-C", directory, "rev-parse", "HEAD"]).decode().strip()
+        source_baseline = self.c.get("sourceBaseline")
+        if source_baseline is not None:
+            if (not isinstance(source_baseline, dict) or set(source_baseline) != {"deployedCommit", "sourceCommit"}
+                    or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value)
+                           for value in source_baseline.values())):
+                raise DeployError("invalid source baseline mapping")
+            # An operator may attest equivalent source after rebuilding repository history.
+            # Keep the running release identity intact; only its comparison baseline changes.
+            if baseline == source_baseline["deployedCommit"]:
+                baseline = source_baseline["sourceCommit"]
+                job["sourceBaseline"] = dict(source_baseline)
         changes = self.git("diff", "--name-only", baseline, job["commit"]).decode().splitlines()
         for name, config_key in (("scripts/host-deployer.py", "installedControllerHash"),
                                  ("scripts/install-host-deployer.mjs", "installerHash")):

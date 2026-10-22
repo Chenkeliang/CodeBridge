@@ -514,6 +514,46 @@ class Tests(unittest.TestCase):
                 with self.assertRaisesRegex(m.DeployError, "请先单独安装控制器"):
                     self.d.compatible(self.job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "oldcommit"}})
 
+    def test_source_baseline_mapping_only_applies_to_its_deployed_commit(self):
+        deployed, source = "d" * 40, "e" * 40
+        self.config["sourceBaseline"] = {"deployedCommit": deployed, "sourceCommit": source}
+        job = {"commit": "newcommit"}
+        self.d.compatible(job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": deployed}})
+        diffs = [args for args in self.fake.calls if "diff" in args]
+        self.assertEqual(diffs[0][-2:], [source, "newcommit"])
+        self.assertEqual(job["sourceBaseline"], self.config["sourceBaseline"])
+        self.fake.calls.clear()
+        job = {"commit": "newcommit"}
+        self.d.compatible(job, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "f" * 40}})
+        diffs = [args for args in self.fake.calls if "diff" in args]
+        self.assertEqual(diffs[0][-2:], ["f" * 40, "newcommit"])
+        self.assertNotIn("sourceBaseline", job)
+
+    def test_invalid_source_baseline_mapping_fails_before_diff(self):
+        for mapping in ({}, "invalid", {"deployedCommit": "d" * 40, "sourceCommit": "origin/main"},
+                        {"deployedCommit": "g" * 40, "sourceCommit": "e" * 40}):
+            with self.subTest(mapping=mapping):
+                self.config["sourceBaseline"] = mapping
+                self.fake.calls.clear()
+                with self.assertRaisesRegex(m.DeployError, "invalid source baseline"):
+                    self.d.compatible({"commit": "newcommit"}, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "d" * 40}})
+                self.assertEqual(self.fake.calls, [])
+
+    def test_source_baseline_mapping_does_not_bypass_schema_review(self):
+        self.config["sourceBaseline"] = {"deployedCommit": "d" * 40, "sourceCommit": "e" * 40}
+        original = self.d.git
+
+        def git(*args):
+            if "--name-only" in args:
+                return b"apps/bridge/src/store.ts" if "--diff-filter=D" not in args else b""
+            if "--unified=0" in args:
+                return b"+++ b/apps/bridge/src/store.ts\n+ALTER TABLE runs ADD COLUMN unsafe TEXT\n"
+            return original(*args)
+
+        with patch.object(self.d, "git", side_effect=git):
+            with self.assertRaisesRegex(m.DeployError, "separately reviewed migration"):
+                self.d.compatible({"commit": "newcommit"}, {"EnvironmentVariables": {"CODEBRIDGE_RELEASE_COMMIT": "d" * 40}})
+
     def test_only_reviewed_fresh_database_initialization_can_pass_schema_gate(self):
         store = "apps/bridge/src/new-store.ts"
         caller = "apps/bridge/src/cli.ts"
