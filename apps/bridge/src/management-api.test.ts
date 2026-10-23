@@ -184,13 +184,13 @@ it("saves responsible people independently and uses current recipients for exist
     readAlertMessages: vi.fn(), investigateAlert: vi.fn(), isAlertActive: vi.fn(), notifyAlertOwner,
   }, log: vi.fn() });
   await monitor.setStatus("oc_fixture", "om_fixture", "blocked", "Synthetic failure");
-  expect(notifyAlertOwner).toHaveBeenLastCalledWith("oc_fixture", "om_fixture", ["ou_responsible"], expect.any(String));
+  expect(notifyAlertOwner).toHaveBeenLastCalledWith("oc_fixture", "om_fixture", ["ou_responsible"], expect.any(String), "om_fixture", expect.any(Function));
   const next = await f.snapshot();
   await f.request("/alerts/oc_fixture", "PUT", { ...next.alerts[0], responsibleOpenIds: ["ou_next"] }, next.revision);
   await monitor.setStatus("oc_fixture", "om_fixture", "blocked", "Synthetic failure");
-  expect(notifyAlertOwner).toHaveBeenLastCalledWith("oc_fixture", "om_fixture", ["ou_next"], expect.any(String));
+  expect(notifyAlertOwner).toHaveBeenLastCalledWith("oc_fixture", "om_fixture", ["ou_next"], expect.any(String), "om_fixture", expect.any(Function));
   await monitor.setStatus("oc_fixture", "om_fixture", "waiting", "Synthetic decision");
-  expect(notifyAlertOwner).toHaveBeenLastCalledWith("oc_fixture", "om_fixture", ["ou_fixture_old"], expect.any(String));
+  expect(notifyAlertOwner).toHaveBeenLastCalledWith("oc_fixture", "om_fixture", ["ou_fixture_old"], expect.any(String), "om_fixture", expect.any(Function));
   expect((await monitor.prepareReply({ messageId: "om_answer", chatId: "oc_fixture", chatType: "group", senderId: "ou_next", content: "/approve" }, "om_fixture"))?.allowed).toBe(false);
   const last = await f.snapshot();
   expect((await f.request("/alerts/oc_fixture", "PUT", { ...last.alerts[0], responsibleOpenIds: [] }, last.revision)).status).toBe(400);

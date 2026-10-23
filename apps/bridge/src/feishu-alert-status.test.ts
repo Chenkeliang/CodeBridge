@@ -38,7 +38,7 @@ describe("alert status and runbook", () => {
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "请确认补货计划");
     expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_root", "OneSecond", expect.any(Array));
     expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith("om_duplicate", "OneSecond", expect.any(Array));
-    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], "**需要你确认**\n请确认补货计划");
+    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], "**需要你确认**\n请确认补货计划", "om_root", expect.any(Function));
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "请确认补货计划");
     expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(1);
     await f.monitor.prepareReply({ messageId: "om_reply", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "继续查" }, "om_root");
@@ -56,7 +56,7 @@ describe("alert status and runbook", () => {
   it("does not turn an ended Agent run into a business success automatically", async () => {
     const f = await fixture(); f.advance(); await f.monitor.tick();
     expect(f.transport.setAlertMessageReaction).toHaveBeenLastCalledWith("om_root", "Sigh", expect.any(Array));
-    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], expect.stringMatching(/^\*\*排查受阻\*\*\n.*未提交可核验/su));
+    expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_owner"], expect.stringMatching(/^\*\*排查受阻\*\*\n.*未提交可核验/su), "om_root", expect.any(Function));
     expect(f.transport.setAlertMessageReaction.mock.calls.some((call) => (call as unknown[])[1] === "DONE")).toBe(false);
   });
   it("loads the configured skill for every alert and owner follow-up", async () => {
@@ -266,10 +266,10 @@ it("resolves a matrix name from this group's members and persists only that reci
   f.transport.notifyAlertOwner.mockRejectedValueOnce(new Error("temporary delivery failure"));
   await expect(f.monitor.setStatus("oc_alert", "om_root", "waiting", "请核对退款到账", "示例成员甲")).rejects.toThrow("temporary");
   expect(members).toHaveBeenCalledWith("oc_alert");
-  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_finance"], "**需要你跟进**\n请核对退款到账");
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_finance"], "**需要你跟进**\n请核对退款到账", "om_root", expect.any(Function));
   f.config.enabled = false;
   await new FeishuAlertMonitor(f.options).tick();
-  expect(f.transport.notifyAlertOwner).toHaveBeenLastCalledWith("oc_alert", "om_root", ["ou_finance"], expect.any(String));
+  expect(f.transport.notifyAlertOwner).toHaveBeenLastCalledWith("oc_alert", "om_root", ["ou_finance"], expect.any(String), "om_root", expect.any(Function));
   expect(f.transport.notifyAlertOwner.mock.calls.every(call => !(call as unknown as [string,string,string[]])[2].includes("ou_owner"))).toBe(true);
   expect(f.config.groups[0]!.ownerOpenId).toBe("ou_owner");
   expect(f.config.groups[0]!.approverOpenIds).toBeUndefined();
@@ -284,7 +284,7 @@ it("reports absent and ambiguous names once in the original thread without menti
   const members = vi.fn(async (): Promise<Array<{id: string; name: string}>> => []);
   Object.assign(f.transport, { listManagedChatMembers: members });
   await expect(f.monitor.setStatus("oc_alert", "om_root", "waiting", "核账", "示例成员甲")).rejects.toThrow("未找到");
-  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", [], expect.stringContaining("未找到"));
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", [], expect.stringContaining("未找到"), "om_root", expect.any(Function));
   expect(f.transport.postAlertThreadNotice).not.toHaveBeenCalled();
   f.config.enabled = false;
   await new FeishuAlertMonitor(f.options).tick();
@@ -292,10 +292,10 @@ it("reports absent and ambiguous names once in the original thread without menti
   members.mockResolvedValue([{id:"ou_a",name:"示例成员甲"},{id:"ou_b",name:"示例成员甲"}]);
   await new FeishuAlertMonitor(f.options).tick();
   expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(2);
-  expect(f.transport.notifyAlertOwner).toHaveBeenLastCalledWith("oc_alert", "om_root", [], expect.stringContaining("同名"));
+  expect(f.transport.notifyAlertOwner).toHaveBeenLastCalledWith("oc_alert", "om_root", [], expect.stringContaining("同名"), "om_root", expect.any(Function));
   members.mockResolvedValue([{id:"ou_finance",name:"示例成员甲"}]);
   await new FeishuAlertMonitor(f.options).tick();
-  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_finance"], expect.any(String));
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_finance"], expect.any(String), "om_root", expect.any(Function));
 });
 
 it("reports member lookup failures without falling back, and deduplicates a repeated member ID", async () => {
@@ -304,10 +304,10 @@ it("reports member lookup failures without falling back, and deduplicates a repe
   members.mockRejectedValueOnce(new Error("permission denied"));
   Object.assign(f.transport, { listManagedChatMembers: members });
   await expect(f.monitor.setStatus("oc_alert", "om_root", "waiting", "核账", "示例成员甲")).rejects.toThrow("读取群成员失败");
-  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", [], expect.stringContaining("读取群成员失败"));
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", [], expect.stringContaining("读取群成员失败"), "om_root", expect.any(Function));
   f.config.enabled = false;
   await new FeishuAlertMonitor(f.options).tick();
-  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_finance"], expect.any(String));
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_finance"], expect.any(String), "om_root", expect.any(Function));
   await f.monitor.setStatus("oc_alert", "om_root", "waiting", "核账", "示例成员甲");
   expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(2);
 });

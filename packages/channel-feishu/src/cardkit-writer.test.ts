@@ -116,6 +116,46 @@ describe("acknowledged CardKit element writes", () => {
     expect(f.reply).not.toHaveBeenCalled();
   });
 
+  it("does not add a notice when human closure happens during the card read", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    let current = true;
+    (f.channel.rawClient.im.v1.message as any).get = vi.fn(async () => {
+      current = false;
+      return { code: 0, data: { items: [{ message_id: "om_result", body: { content: JSON.stringify(card("原结果")) } }] } };
+    });
+    await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "请确认", () => current));
+    expect(f.update).not.toHaveBeenCalled();
+    expect(f.receipts.read()["notice:c1"]).toBeUndefined();
+  });
+
+  it("rechecks human closure after the write throttle and before sending the at", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await settle(f.writer.write("c1", card("原结果")));
+    let current = true;
+    const pending = f.writer.notify("c1", "om_result", ["ou_example_member"], "请确认", () => current);
+    await vi.advanceTimersByTimeAsync(0);
+    current = false;
+    await settle(pending);
+    expect(f.update).toHaveBeenCalledTimes(1);
+    expect(f.receipts.read()["notice:c1"]).toBeUndefined();
+    await settle(f.writer.write("c1", card("正常最终输出", "已完成", true)));
+    expect(JSON.stringify(f.calls)).not.toContain("ou_example_member");
+  });
+
+  it("does not let a final stream write deliver a notice whose API acknowledgement failed", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await settle(f.writer.write("c1", card("原结果")));
+    f.update.mockResolvedValueOnce({ code: 300307, msg: "temporary failure" });
+    await expect(settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "请确认"))).rejects.toThrow("300307");
+    expect(f.receipts.read()["notice:c1"]).toBeUndefined();
+    await settle(f.writer.write("c1", card("正常最终输出", "已完成", true)));
+    expect(f.update).toHaveBeenCalledTimes(2);
+    expect(f.element.mock.calls.every(([r]) => r.path.element_id !== "recipient")).toBe(true);
+  });
+
   it("updates only status while keeping the confirmed answer untouched", async () => {
     vi.useFakeTimers();
     const f = fixture();

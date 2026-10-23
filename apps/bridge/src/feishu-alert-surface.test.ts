@@ -73,6 +73,26 @@ function fixture() {
 }
 
 describe("alert polling through the active Feishu adapter", () => {
+  it("does not notify after human closure while the Run card destination is loading", async () => {
+    const f = fixture();
+    await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    let release!: () => void;
+    let loading = false;
+    f.deliveries.mockImplementationOnce(async () => {
+      loading = true;
+      await new Promise<void>((resolve) => { release = resolve; });
+      return [{ conversationId: "oc_alerts|om_alert", replyToMessageId: "om_alert", surfaceMessageId: "om_card", surfaceCardId: "card1" }];
+    });
+    const waiting = f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "请确认", undefined, "om_alert");
+    await vi.waitFor(() => expect(loading).toBe(true));
+    const closing = f.monitor.prepareReply({ messageId: "om_close", chatId: "oc_alerts", chatType: "group", senderId: "ou_owner", content: "无需处理" }, "om_alert");
+    await vi.waitFor(() => expect(JSON.parse(fs.readFileSync(path.join(f.root, "alerts.json"), "utf8")).oc_alerts.incidents.om_alert.status).toBe("dismissed"));
+    release();
+    await Promise.all([waiting, closing]);
+    expect(f.cardUpdate).not.toHaveBeenCalled();
+    expect(f.elementUpdate).not.toHaveBeenCalled();
+  });
+
   it("puts an ambiguous recipient error on the existing reply without mentioning an approver", async () => {
     const f = fixture();
     await f.monitor.tick(); f.advance(); await f.monitor.tick();

@@ -57,7 +57,7 @@ export interface FeishuAlertTransport {
   isAlertActive(chatId: string, rootId: string): Promise<boolean>;
   cancelAlertInvestigation?(chatId: string, rootId: string): Promise<void>;
   setAlertMessageReaction?(messageId: string, emojiType: string, managed: string[]): Promise<string>;
-  notifyAlertOwner?(chatId: string, rootId: string, recipientOpenIds: string[], text: string, sourceMessageId?: string): Promise<void>;
+  notifyAlertOwner?(chatId: string, rootId: string, recipientOpenIds: string[], text: string, sourceMessageId?: string, isCurrent?: () => boolean): Promise<void>;
   clearAlertOwnerNotice?(chatId: string, rootId: string, sourceMessageId?: string): Promise<void>;
   /** Plain reply in the alert thread, no mentions. */
   postAlertThreadNotice?(chatId: string, rootId: string, text: string): Promise<void>;
@@ -581,6 +581,10 @@ export class FeishuAlertMonitor {
   private async projectStatus(chatId: string, rootId: string): Promise<void> {
     const incident = this.store.read()[chatId]?.incidents[rootId];
     if (!incident?.status) return;
+    const isCurrent = (key: string): boolean => {
+      const latest = this.store.read()[chatId]?.incidents[rootId];
+      return Boolean(latest && !latest.dismissal && this.noticeKey(latest) === key);
+    };
     const mapping = this.options.config()?.statusReactions;
     const emoji = this.statusEmoji(incident.status);
     const noticeKey = this.noticeKey(incident);
@@ -620,14 +624,16 @@ export class FeishuAlertMonitor {
             problem = `读取群成员失败，暂时无法确认“${incident.notificationName}”的唯一身份。`;
           }
           const current = this.store.read()[chatId]?.incidents[rootId];
-          if (!current || current.dismissal || current.status !== incident.status || current.summary !== incident.summary || current.notificationName !== incident.notificationName) return;
+          if (!current || current.dismissal || current.status !== incident.status || current.summary !== incident.summary || current.notificationName !== incident.notificationName
+            || current.notificationSourceMessageId !== incident.notificationSourceMessageId) return;
           if (problem) {
             const feedbackKey = JSON.stringify([incident.status, incident.summary, incident.notificationName, problem]);
             this.updateIncident(incident.alert, (item) => { delete item.notificationOpenId; });
             if (current.notificationFeedback !== feedbackKey) {
+              const pendingKey = this.noticeKey({ ...current, notificationOpenId: undefined });
               await this.options.transport.notifyAlertOwner(chatId, rootId, [], `未发送定向提醒：${problem}告警仍待跟进；未转发给其他人。`,
-                ...(current.notificationSourceMessageId ? [current.notificationSourceMessageId] : []));
-              this.updateIncident(incident.alert, (item) => { item.notificationFeedback = feedbackKey; });
+                current.notificationSourceMessageId ?? rootId, () => isCurrent(pendingKey));
+              if (isCurrent(pendingKey)) this.updateIncident(incident.alert, (item) => { item.notificationFeedback = feedbackKey; });
             }
             throw new Error(problem);
           }
@@ -642,7 +648,7 @@ export class FeishuAlertMonitor {
         if (current.ownerNotice === deliveredKey) return;
         const heading = current.status === "waiting" ? current.notificationName ? "**需要你跟进**" : "**需要你确认**" : "**排查受阻**";
         await this.options.transport.notifyAlertOwner(chatId, rootId, recipients, `${heading}\n${current.summary ?? "告警排查需要你查看"}`,
-          ...(current.notificationSourceMessageId ? [current.notificationSourceMessageId] : []));
+          current.notificationSourceMessageId ?? rootId, () => isCurrent(deliveredKey));
         this.updateIncident(incident.alert, (item) => {
           if (!item.dismissal && this.noticeKey(item) === deliveredKey) item.ownerNotice = deliveredKey;
         });

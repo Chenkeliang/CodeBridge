@@ -11,6 +11,7 @@ export interface RunCardParts {
 }
 
 type Element = { tag: "markdown"; element_id: string; content: string };
+type CardNotice = { recipients: string[]; text: string };
 export interface RunCardJson {
   /** Local delivery metadata; never part of the CardKit DSL. */
   overflowText?: string;
@@ -98,28 +99,19 @@ export class CardKitWriter {
     },
   ) {}
 
-  write(cardId: string, card: object | (() => Promise<RunCardJson>), replyTo?: string): Promise<void> {
+  write(cardId: string, card: object, replyTo?: string): Promise<void> {
     // Freeze a queued snapshot: callers may continue projecting Agent events.
-    const snapshot = typeof card === "function" ? card as () => Promise<RunCardJson> : JSON.parse(JSON.stringify(card)) as RunCardJson;
-    const task = (this.queues.get(cardId) ?? Promise.resolve())
-      .catch(() => {})
-      .then(async () => {
-        const { overflowText, ...dsl } = typeof snapshot === "function" ? await snapshot() : snapshot;
-        const notice = this.receipts?.read()[`notice:${cardId}`];
-        if (notice) {
-          const { recipients, text } = JSON.parse(notice) as { recipients: string[]; text: string };
-          // The status summary is the actionable result; a later Agent final must not duplicate it.
-          dsl.body = { ...dsl.body, elements: [
-            { tag: "markdown", element_id: "recipient", content: recipients.map((id) => `<at id="${id}"></at>`).join(" ") || " " },
-            ...dsl.body.elements.filter((element) => element.element_id !== "recipient").map((element) =>
-              element.element_id === "answer" ? { ...element, content: text } : element),
-          ] };
-        }
-        if (overflowText && !dsl.config.streaming_mode) {
-          await this.deliverOverflow(cardId, replyTo, overflowText);
-        }
-        await this.writeSnapshot(cardId, dsl);
-      });
+    const snapshot = JSON.parse(JSON.stringify(card)) as RunCardJson;
+    return this.enqueue(cardId, async () => {
+      const notice = this.receipts?.read()[`notice:${cardId}`];
+      const { overflowText, ...dsl } = this.withNotice(snapshot, notice ? JSON.parse(notice) as CardNotice : undefined);
+      if (overflowText && !dsl.config.streaming_mode) await this.deliverOverflow(cardId, replyTo, overflowText);
+      await this.writeSnapshot(cardId, dsl);
+    });
+  }
+
+  private enqueue(cardId: string, write: () => Promise<void>): Promise<void> {
+    const task = (this.queues.get(cardId) ?? Promise.resolve()).catch(() => {}).then(write);
     this.queues.set(cardId, task);
     void task.finally(() => {
       if (this.queues.get(cardId) === task) this.queues.delete(cardId);
@@ -127,27 +119,45 @@ export class CardKitWriter {
     return task;
   }
 
+  private withNotice(card: RunCardJson, notice?: CardNotice): RunCardJson {
+    if (!notice) return card;
+    return { ...card, body: { ...card.body, elements: [
+      { tag: "markdown", element_id: "recipient", content: notice.recipients.map((id) => `<at id="${id}"></at>`).join(" ") || " " },
+      ...card.body.elements.filter((element) => element.element_id !== "recipient").map((element) =>
+        element.element_id === "answer" ? { ...element, content: notice.text } : element),
+    ] } };
+  }
+
   /** Update the Run's existing reply, sharing the same FIFO as streaming and recovery. */
-  async notify(cardId: string, messageId: string, recipientIds: string[], text: string): Promise<void> {
+  async notify(cardId: string, messageId: string, recipientIds: string[], text: string, isCurrent = () => true): Promise<void> {
     if (!this.receipts) throw new Error("Card notification needs durable receipts");
     const recipients = [...new Set(recipientIds)];
     if (recipients.some((id) => !/^ou_[A-Za-z0-9_]+$/.test(id))) throw new Error("Invalid card notification recipient");
     const content = cardMarkdown(text).replace(/<\/?at\b[^>]*>/giu, "");
-    this.receipts.update((all) => ({ ...all, [`notice:${cardId}`]: JSON.stringify({ recipients, text: content }) }));
-    await this.write(cardId, async () => {
-      const confirmed = this.confirmed.get(cardId);
-      if (confirmed) return JSON.parse(JSON.stringify(confirmed)) as RunCardJson;
-      const response = await this.channel.rawClient.im.v1.message.get({
-        path: { message_id: messageId }, params: { card_msg_content_type: "user_card_content" },
-      });
-      if (response.code !== 0) throw new Error(`Card notification read failed (${response.code})`);
-      const message = response.data?.items?.find((item) => item.message_id === messageId);
-      const card = JSON.parse(message?.body?.content ?? "null") as RunCardJson | null;
-      if (card?.schema !== "2.0" || !card.body?.elements?.some((element) => element.element_id === "answer")) {
-        throw new Error("Run reply card content unavailable; notification remains pending");
+    const notice = { recipients, text: content };
+    await this.enqueue(cardId, async () => {
+      if (!isCurrent()) return;
+      try {
+        let card = this.confirmed.get(cardId);
+        if (!card) {
+          const response = await this.channel.rawClient.im.v1.message.get({
+            path: { message_id: messageId }, params: { card_msg_content_type: "user_card_content" },
+          });
+          if (!isCurrent()) return;
+          if (response.code !== 0) throw new Error(`Card notification read failed (${response.code})`);
+          const message = response.data?.items?.find((item) => item.message_id === messageId);
+          card = JSON.parse(message?.body?.content ?? "null") as RunCardJson | undefined;
+          if (card?.schema !== "2.0" || !card.body?.elements?.some((element) => element.element_id === "answer")) {
+            throw new Error("Run reply card content unavailable; notification remains pending");
+          }
+        }
+        await this.writeSnapshot(cardId, this.withNotice(card, notice), isCurrent);
+        // Persist only acknowledged delivery: ordinary stream writes must never send a pending notice.
+        if (isCurrent()) this.receipts!.update((all) => ({ ...all, [`notice:${cardId}`]: JSON.stringify(notice) }));
+      } catch (error) {
+        if (isCurrent()) throw error;
       }
-      return card;
-    }, messageId);
+    });
   }
 
   clearNotice(cardId: string): void {
@@ -178,9 +188,10 @@ export class CardKitWriter {
     this.receipts.update((all) => ({ ...all, [`${key}:sent`]: response.data!.message_id! }));
   }
 
-  private async request(cardId: string, body: object, send: (sequence: number, uuid: string) => Promise<{ code?: number; msg?: string }>): Promise<void> {
+  private async request(cardId: string, body: object, send: (sequence: number, uuid: string) => Promise<{ code?: number; msg?: string }>, isCurrent?: () => boolean): Promise<void> {
     const delay = Math.max(0, 150 - (Date.now() - (this.writtenAt.get(cardId) ?? 0)));
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (isCurrent && !isCurrent()) throw new Error("Card notice superseded before write");
     this.writtenAt.set(cardId, Date.now());
     const response = await send(this.nextSequence(cardId), randomUUID());
     if (response?.code !== 0) {
@@ -189,13 +200,13 @@ export class CardKitWriter {
     }
   }
 
-  private async settings(cardId: string, card: RunCardJson): Promise<void> {
+  private async settings(cardId: string, card: RunCardJson, isCurrent?: () => boolean): Promise<void> {
     const settings = JSON.stringify({ config: card.config });
     await this.request(cardId, { settings }, (sequence, uuid) =>
-      this.channel.rawClient.cardkit.v1.card.settings({ path: { card_id: cardId }, data: { settings, sequence, uuid } }));
+      this.channel.rawClient.cardkit.v1.card.settings({ path: { card_id: cardId }, data: { settings, sequence, uuid } }), isCurrent);
   }
 
-  private async writeSnapshot(cardId: string, card: RunCardJson): Promise<void> {
+  private async writeSnapshot(cardId: string, card: RunCardJson, isCurrent?: () => boolean): Promise<void> {
     const json = JSON.stringify(card);
     if (Buffer.byteLength(json) > 30_000) {
       throw new Error("CardKit card exceeds 30000 UTF-8 bytes; delivery remains pending");
@@ -209,7 +220,7 @@ export class CardKitWriter {
     if (!previous || !structured || recipientChanged || JSON.stringify(previous.body.elements.map((e) => e.element_id)) !== JSON.stringify(card.body.elements.map((e) => e.element_id))) {
       // Also migrates legacy single-element cards once after a restart.
       await this.request(cardId, card, (sequence, uuid) =>
-        this.channel.rawClient.cardkit.v1.card.update({ path: { card_id: cardId }, data: { card: { type: "card_json", data: json }, sequence, uuid } }));
+        this.channel.rawClient.cardkit.v1.card.update({ path: { card_id: cardId }, data: { card: { type: "card_json", data: json }, sequence, uuid } }), isCurrent);
     } else {
       for (const element of card.body.elements) {
         const old = previous.body.elements.find((e) => e.element_id === element.element_id);
@@ -218,20 +229,20 @@ export class CardKitWriter {
         const stream = element.element_id === "answer" && card.config.streaming_mode;
         const send = () => this.request(cardId, element, (sequence, uuid) => stream
           ? this.channel.rawClient.cardkit.v1.cardElement.content({ path, data: { content: element.content, sequence, uuid } })
-          : this.channel.rawClient.cardkit.v1.cardElement.update({ path, data: { element: JSON.stringify(element), sequence, uuid } }));
+          : this.channel.rawClient.cardkit.v1.cardElement.update({ path, data: { element: JSON.stringify(element), sequence, uuid } }), isCurrent);
         try {
           await send();
         } catch (error) {
           if (!stream || !/\((200850|300309)\)/.test(String(error))) throw error;
           // Never replace or clear the element when the ten-minute window closes.
-          await this.settings(cardId, card);
+          await this.settings(cardId, card, isCurrent);
           await send();
         }
         // Preserve partial acknowledgements so retry cannot replay older content.
         if (old) old.content = element.content;
       }
       if (JSON.stringify(previous.config) !== JSON.stringify(card.config)) {
-        await this.settings(cardId, card);
+        await this.settings(cardId, card, isCurrent);
       }
     }
     this.confirmed.set(cardId, card);
