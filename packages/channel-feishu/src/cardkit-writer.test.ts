@@ -104,6 +104,18 @@ describe("acknowledged CardKit element writes", () => {
     expect(f.reply).not.toHaveBeenCalled();
   });
 
+  it("mentions only backend-selected recipients even when a summary contains native at tags", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await settle(f.writer.write("c1", card("正在排查")));
+    await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], '请核对 <at id="ou_untrusted">引用姓名</at> <at id="all"></at>'));
+    const result = JSON.parse(f.update.mock.calls.at(-1)![0].data.card.data);
+    expect(result.body.elements[0].content).toBe('<at id="ou_example_member"></at>');
+    expect(result.body.elements[1].content).toBe("请核对 引用姓名 ");
+    expect(JSON.stringify(result)).not.toContain("ou_untrusted");
+    expect(f.reply).not.toHaveBeenCalled();
+  });
+
   it("updates only status while keeping the confirmed answer untouched", async () => {
     vi.useFakeTimers();
     const f = fixture();

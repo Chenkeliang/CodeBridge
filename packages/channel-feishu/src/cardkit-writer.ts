@@ -132,7 +132,8 @@ export class CardKitWriter {
     if (!this.receipts) throw new Error("Card notification needs durable receipts");
     const recipients = [...new Set(recipientIds)];
     if (recipients.some((id) => !/^ou_[A-Za-z0-9_]+$/.test(id))) throw new Error("Invalid card notification recipient");
-    this.receipts.update((all) => ({ ...all, [`notice:${cardId}`]: JSON.stringify({ recipients, text }) }));
+    const content = cardMarkdown(text).replace(/<\/?at\b[^>]*>/giu, "");
+    this.receipts.update((all) => ({ ...all, [`notice:${cardId}`]: JSON.stringify({ recipients, text: content }) }));
     await this.write(cardId, async () => {
       const confirmed = this.confirmed.get(cardId);
       if (confirmed) return JSON.parse(JSON.stringify(confirmed)) as RunCardJson;
