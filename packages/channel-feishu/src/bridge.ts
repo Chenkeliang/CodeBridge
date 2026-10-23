@@ -896,17 +896,7 @@ export class FeishuBridge {
         return cardId;
       },
       updateCard: async (cardId, card, replyTo) => {
-        if (!this.channel) throw new Error("Feishu channel is unavailable");
-        this.cardKitWriter ??= new CardKitWriter(this.channel, (id) => {
-          const sequence = Math.max(
-            Math.floor(Date.now() / 1000),
-            (this.cardUpdateSequences.read()[id] ?? 0) + 1,
-          );
-          if (sequence > 2_147_483_647) throw new Error("CardKit update sequence exceeds int32 range");
-          this.cardUpdateSequences.update((all) => ({ ...all, [id]: sequence }));
-          return sequence;
-        }, new JsonMapStore<string>(path.join(this.options.dataDir, "feishu-result-receipts.json")));
-        await this.cardKitWriter.write(cardId, card, replyTo);
+        await this.getCardKitWriter().write(cardId, card, replyTo);
       },
       registerPendingStream: (messageId, entry) => {
         this.pendingStreams.update((all) => ({ ...all, [messageId]: entry }));
@@ -925,6 +915,16 @@ export class FeishuBridge {
       ? durableMarkdownCard(this.channel, host.updateCard, this.options.isAlertMessage)
       : undefined;
     return host;
+  }
+
+  private getCardKitWriter(): CardKitWriter {
+    if (!this.channel) throw new Error("Feishu channel is unavailable");
+    return this.cardKitWriter ??= new CardKitWriter(this.channel, (id) => {
+      const sequence = Math.max(Math.floor(Date.now() / 1000), (this.cardUpdateSequences.read()[id] ?? 0) + 1);
+      if (sequence > 2_147_483_647) throw new Error("CardKit update sequence exceeds int32 range");
+      this.cardUpdateSequences.update((all) => ({ ...all, [id]: sequence }));
+      return sequence;
+    }, new JsonMapStore<string>(path.join(this.options.dataDir, "feishu-result-receipts.json")));
   }
 
   /**
@@ -1439,15 +1439,22 @@ export class FeishuBridge {
     return setAlertReaction(this.channel.rawClient, this.config.feishu.appId, messageId, emojiType, managed);
   }
 
-  async notifyAlertOwner(chatId: string, rootId: string, recipientOpenIds: string[], text: string): Promise<void> {
+  async notifyAlertOwner(chatId: string, rootId: string, recipientOpenIds: string[], text: string, sourceMessageId = rootId): Promise<void> {
     if (!this.channel) throw new Error("飞书通道未连接");
-    const recipients = recipientOpenIds.map((openId) => ({ openId, target: this.mentionRegistry.register({ chatId, topicId: rootId }, {
-      channel: "feishu", kind: "user", id: openId,
-    }) }));
-    await this.channel.send(chatId, { markdown: text }, {
-      replyTo: rootId, replyInThread: true,
-      mentions: recipients.map(({ openId, target }) => ({ key: target.ref, openId, name: target.name ?? "告警联系人", isBot: false })),
-    });
+    const delivery = (await this.sessionIngress?.listDeliveries("feishu", undefined, sourceMessageId) ?? [])
+      .filter((item) => item.conversationId === this.chatKey(chatId, rootId)).at(-1);
+    if (!delivery?.surfaceMessageId) throw new Error("告警排查回复卡片尚未就绪，提醒保持待投递");
+    const cardId = delivery.surfaceCardId ?? await this.cardHost().resolveCardId!(delivery.surfaceMessageId);
+    for (const id of recipientOpenIds) this.mentionRegistry.register({ chatId, topicId: rootId }, { channel: "feishu", kind: "user", id });
+    await this.getCardKitWriter().notify(cardId, delivery.surfaceMessageId, recipientOpenIds, text);
+  }
+
+  async clearAlertOwnerNotice(chatId: string, rootId: string, sourceMessageId = rootId): Promise<void> {
+    const delivery = (await this.sessionIngress?.listDeliveries("feishu", undefined, sourceMessageId) ?? [])
+      .find((item) => item.conversationId === this.chatKey(chatId, rootId));
+    if (!delivery?.surfaceMessageId) return;
+    const cardId = delivery.surfaceCardId ?? await this.cardHost().resolveCardId!(delivery.surfaceMessageId);
+    this.getCardKitWriter().clearNotice(cardId);
   }
 
   async postAlertThreadNotice(chatId: string, rootId: string, text: string): Promise<void> {

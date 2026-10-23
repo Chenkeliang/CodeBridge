@@ -8,6 +8,7 @@ import { FeishuAlertMonitor } from "./feishu-alert-monitor.js";
 import { createOutboundApp } from "./outbound-api.js";
 import type { SqliteEventStore } from "@codebridge/work-items";
 import type { FeishuCardHost } from "../../../packages/channel-feishu/src/session-watcher.js";
+import { runCardJson } from "../../../packages/channel-feishu/src/cardkit-writer.js";
 
 const roots: string[] = [];
 afterEach(() => { roots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true })); });
@@ -20,8 +21,11 @@ function fixture() {
   let now = 1_000_000;
   const submit = vi.fn(async () => ({ sessionId: "session-1", turnId: "turn-1", runId: "run-1", acceptance: "dispatched", queueState: "ready", eventSequence: 1 }));
   const getSlotCommandContext = vi.fn(async () => ({ sessionId: "session-1", activeRunId: null, providerSessionId: null }));
+  const deliveries = vi.fn(async (_channel?: string, _surface?: string, source = "om_alert") => [{
+    conversationId: "oc_alerts|om_alert", replyToMessageId: source, surfaceMessageId: "om_card", surfaceCardId: "card1",
+  }]);
   const bridge = new FeishuBridge({ config, dataDir: root,
-    sessionIngress: { submit, getSlotCommandContext, listDeliveries: async () => [] } as unknown as ChannelSessionIngress,
+    sessionIngress: { submit, getSlotCommandContext, listDeliveries: deliveries } as unknown as ChannelSessionIngress,
     prepareAlertReply: (message, topic) => monitor.prepareReply(message, topic),
     isAlertMessage: (chat, id) => monitor.isAlertMessage(chat, id),
     isAlertChat: (chat) => chat === "oc_alerts",
@@ -32,7 +36,10 @@ function fixture() {
   const send = vi.fn(async () => ({ messageId: "sent" }));
   const reply = vi.fn(async () => ({ code: 0, data: { message_id: "om_card" } }));
   const list = vi.fn(async () => ({ code: 0, data: { items: [message], has_more: false } }));
-  const get = vi.fn(async () => ({ code: 0, data: { items: [message] } }));
+  const get = vi.fn(async (request?: { path: { message_id: string } }) => ({ code: 0, data: { items: [request?.path.message_id === "om_card"
+    ? { ...message, message_id: "om_card", body: { content: JSON.stringify(runCardJson({ answer: "当前进度", progress: "", status: "执行中", terminal: false })) } } : message] } }));
+  const cardUpdate = vi.fn(async (_request: any) => ({ code: 0 }));
+  const elementUpdate = vi.fn(async (_request: any) => ({ code: 0 }));
   let reactions: Array<{ reaction_id: string; operator: { operator_id: string; operator_type: "app" }; reaction_type: { emoji_type: string } }> = [];
   const reactionCreate = vi.fn(async (request: { data: { reaction_type: { emoji_type: string } } }) => {
     const item = { reaction_id: `r${reactions.length}`, operator: { operator_id: config.feishu.appId, operator_type: "app" as const }, reaction_type: request.data.reaction_type };
@@ -47,7 +54,8 @@ function fixture() {
       create: reactionCreate, delete: reactionDelete,
     }, chatMembers: { get: vi.fn(async () => ({ code: 0, data: { items: [{ member_id: "ou_owner", name: "示例成员" }], has_more: false } })) } } },
     cardkit: { v1: { card: { create: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })),
-      idConvert: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })) } } },
+      idConvert: vi.fn(async () => ({ code: 0, data: { card_id: "card1" } })), update: cardUpdate,
+      settings: vi.fn(async () => ({ code: 0 })) }, cardElement: { update: elementUpdate, content: elementUpdate } } },
   } };
   const internal = bridge as unknown as {
     channel: unknown;
@@ -61,10 +69,59 @@ function fixture() {
   internal.ensureSessionWatcher = () => watcher;
   monitor = new FeishuAlertMonitor({ statePath: path.join(root, "alerts.json"), config: () => config.feishu.alertMonitor,
     transport: bridge, now: () => now, log: vi.fn() });
-  return { root, config, bridge, monitor, internal, submit, watcher, send, reply, list, get, reactionCreate, reactionDelete, message, advance: () => { now += 1000; } };
+  return { root, config, bridge, monitor, internal, submit, watcher, send, reply, list, get, cardUpdate, elementUpdate, deliveries, reactionCreate, reactionDelete, message, advance: () => { now += 1000; } };
 }
 
 describe("alert polling through the active Feishu adapter", () => {
+  it("puts an ambiguous recipient error on the existing reply without mentioning an approver", async () => {
+    const f = fixture();
+    await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    const channel = f.internal.channel as any;
+    channel.rawClient.im.v1.chatMembers.get.mockResolvedValue({ code: 0, data: { items: [
+      { member_id: "ou_example_first", name: "示例成员甲" }, { member_id: "ou_example_second", name: "示例成员甲" },
+    ], has_more: false } });
+    await expect(f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "核对本单", "示例成员甲")).rejects.toThrow("同名");
+    const result = JSON.parse(f.cardUpdate.mock.calls.at(-1)![0].data.card.data);
+    expect(JSON.stringify(result)).not.toContain("<at");
+    expect(result.body.elements[1].content).toContain("同名");
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.reply).not.toHaveBeenCalled();
+  });
+
+  it("adds a native mention to the first reply and keeps it when the Agent finishes", async () => {
+    const f = fixture();
+    await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    await f.internal.cardHost().channel!.stream("oc_alerts", { markdown: async (controller) => {
+      await controller.setSnapshot!({ answer: "正在排查", progress: "", status: "执行中", terminal: false });
+      await f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "请核对本单", undefined, "om_alert");
+      await controller.setSnapshot!({ answer: "Agent 最终输出", progress: "", status: "已完成", terminal: true });
+    } }, { replyTo: "om_alert" });
+    expect(f.reply).toHaveBeenCalledTimes(1);
+    expect(f.send).not.toHaveBeenCalled();
+    const update = JSON.parse(f.cardUpdate.mock.calls.at(-1)![0].data.card.data);
+    expect(update.body.elements.slice(0, 2)).toMatchObject([{ content: '<at id="ou_owner"></at>' }, { content: "**需要你确认**\n请核对本单" }]);
+    expect(f.elementUpdate.mock.calls.some(([request]) => JSON.stringify(request).includes("Agent 最终输出"))).toBe(false);
+  });
+
+  it("retains an undelivered follow-up notice and retries only its Run-bound card", async () => {
+    const f = fixture();
+    await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    f.deliveries.mockResolvedValueOnce([]);
+    await expect(f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "请确认本次跟进", undefined, "om_followup")).rejects.toThrow("尚未就绪");
+    expect(f.send).not.toHaveBeenCalled();
+    const before = JSON.parse(fs.readFileSync(path.join(f.root, "alerts.json"), "utf8")).oc_alerts.incidents.om_alert;
+    expect(before.notificationSourceMessageId).toBe("om_followup");
+    expect(before.ownerNotice).toBeUndefined();
+    await f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "请确认本次跟进", undefined, "om_followup");
+    expect(f.deliveries).toHaveBeenLastCalledWith("feishu", undefined, "om_followup");
+    expect(f.cardUpdate).toHaveBeenCalledTimes(1);
+    expect(f.send).not.toHaveBeenCalled();
+    await f.monitor.prepareReply({ messageId: "om_close", chatId: "oc_alerts", chatType: "group", senderId: "ou_owner", content: "无需处理" }, "om_alert");
+    await f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "迟到的确认请求", undefined, "om_followup");
+    expect(f.cardUpdate).toHaveBeenCalledTimes(1);
+    expect(f.elementUpdate).not.toHaveBeenCalled();
+  });
+
   it("reads webhook posts, submits an isolated investigation with owner mention, and opens an in-thread card", async () => {
     const f = fixture(); await f.monitor.tick(); f.advance(); await f.monitor.tick();
     expect(f.list).toHaveBeenCalledWith({ params: expect.objectContaining({ container_id: "oc_alerts", sort_type: "ByCreateTimeAsc" }) });
@@ -142,10 +199,10 @@ describe("alert polling through the active Feishu adapter", () => {
     f.config.feishu.alertMonitor!.statusReactions = { investigating: "OnIt", waiting: "OneSecond", resolved: "DONE", no_action: "CrossMark", blocked: "Sigh" };
     await f.monitor.tick(); f.advance(); await f.monitor.tick();
     await f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "请确认是否重试 TT123");
-    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "**需要你确认**\n请确认是否重试 TT123" }, expect.objectContaining({
-      replyTo: "om_alert", replyInThread: true,
-      mentions: [expect.objectContaining({ openId: "ou_owner" }), expect.objectContaining({ openId: "ou_second" })],
-    }));
+    const result = JSON.parse(f.cardUpdate.mock.calls.at(-1)![0].data.card.data);
+    expect(result.body.elements[0].content).toBe('<at id="ou_owner"></at> <at id="ou_second"></at>');
+    expect(result.body.elements[1].content).toBe("**需要你确认**\n请确认是否重试 TT123");
+    expect(f.send).not.toHaveBeenCalled();
   });
 
   it("does not feed a watched bot's event into the normal chat path, but keeps other bots that address it", async () => {
@@ -169,15 +226,16 @@ describe("alert polling through the active Feishu adapter", () => {
     const store = { getRun: () => ({ id: "run-1", status: "running", turnId: "turn-1" }),
       listDeliveries: (channel: string) => channel === "feishu" ? [{ runId: "run-1", turnId: "turn-1", conversationId: "oc_alerts|om_alert" }] : [] } as unknown as SqliteEventStore;
     const app = createOutboundApp({ sendOutboundFile: vi.fn(), sendOutboundMarkdown: vi.fn(), sendOutboundMention: vi.fn(),
-      setOutboundAlertStatus: (chat, topic, status, summary) => f.monitor.setStatus(chat, topic, status, summary) }, "test-token", { workItemStore: store });
+      setOutboundAlertStatus: (chat, topic, status, summary, notify, source) => f.monitor.setStatus(chat, topic, status, summary, notify, source) }, "test-token", { workItemStore: store });
     const response = await app.request("/outbound/alert-status", { method: "POST", headers: { authorization: "Bearer test-token", "content-type": "application/json" },
       body: JSON.stringify({ runId: "run-1", status: "waiting", summary: "请确认补货计划", chatId: "oc_wrong", topicId: "wrong" }) });
     expect(response.status).toBe(200);
     expect(f.reactionCreate).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: { reaction_type: { emoji_type: "OneSecond" } } }));
     expect(f.reactionDelete).toHaveBeenCalledWith({ path: { message_id: "om_alert", reaction_id: "r0" } });
-    expect(f.send).toHaveBeenCalledTimes(1);
-    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "**需要你确认**\n请确认补货计划" }, expect.objectContaining({ replyTo: "om_alert", replyInThread: true,
-      mentions: [expect.objectContaining({ openId: "ou_owner" })] }));
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.cardUpdate.mock.calls.at(-1)![0].path.card_id).toBe("card1");
+    const card = JSON.parse(f.cardUpdate.mock.calls.at(-1)![0].data.card.data);
+    expect(card.body.elements.slice(0, 2)).toMatchObject([{ content: '<at id="ou_owner"></at>' }, { content: "**需要你确认**\n请确认补货计划" }]);
   });
 
   it("handles the owner's no-action reply by marking the original card DONE without starting another Agent turn", async () => {
@@ -210,11 +268,10 @@ it("mentions configured responsible people on failure through the actual Feishu 
   Object.assign(f.config.feishu.alertMonitor!.groups[0]!, { responsibleOpenIds: ["ou_responsible", "ou_second"] });
   await f.monitor.tick(); f.advance(); await f.monitor.tick();
   f.advance(); await f.monitor.tick();
-  expect(f.send).toHaveBeenLastCalledWith("oc_alerts", { markdown: expect.stringMatching(/^\*\*排查受阻\*\*/u) }, expect.objectContaining({
-    replyTo: "om_alert", replyInThread: true, mentions: [expect.objectContaining({ openId: "ou_responsible", name: "告警联系人" }), expect.objectContaining({ openId: "ou_second", name: "告警联系人" })],
-  }));
+  const failure = JSON.parse(f.cardUpdate.mock.calls.at(-1)![0].data.card.data);
+  expect(failure.body.elements.slice(0, 2)).toMatchObject([{ content: '<at id="ou_responsible"></at> <at id="ou_second"></at>' }, { content: expect.stringMatching(/^\*\*排查受阻\*\*/u) }]);
   await f.monitor.setStatus("oc_alerts", "om_alert", "waiting", "Synthetic decision");
-  expect(f.send).toHaveBeenLastCalledWith("oc_alerts", expect.any(Object), expect.objectContaining({ mentions: [expect.objectContaining({ openId: "ou_owner" })] }));
+  expect(JSON.parse(f.cardUpdate.mock.calls.at(-1)![0].data.card.data).body.elements[0].content).toBe('<at id="ou_owner"></at>');
   const count = f.send.mock.calls.length;
   await f.monitor.setStatus("oc_alerts", "om_alert", "resolved", "Synthetic verification complete");
   expect(f.send).toHaveBeenCalledTimes(count);
@@ -230,13 +287,14 @@ it("projects a run-bound targeted waiting state in the original thread without n
   const store = { getRun: () => ({ id: "run-1", status: "running", turnId: "turn-1" }),
     listDeliveries: (channel: string) => channel === "feishu" ? [{ runId: "run-1", turnId: "turn-1", conversationId: "oc_alerts|om_alert" }] : [] } as unknown as SqliteEventStore;
   const app = createOutboundApp({ sendOutboundFile: vi.fn(), sendOutboundMarkdown: vi.fn(), sendOutboundMention: vi.fn(),
-    setOutboundAlertStatus: (chat, topic, state, summary, notify) => f.monitor.setStatus(chat, topic, state, summary, notify) }, "test-token", { workItemStore: store });
+    setOutboundAlertStatus: (chat, topic, state, summary, notify, source) => f.monitor.setStatus(chat, topic, state, summary, notify, source) }, "test-token", { workItemStore: store });
   const response = await app.request("/outbound/alert-status", { method: "POST", headers: { authorization: "Bearer test-token", "content-type": "application/json" },
     body: JSON.stringify({ runId: "run-1", chatId: "oc_wrong", status: "waiting", summary: "请核对重复退款", notify: "示例成员甲" }) });
   expect(response.status).toBe(200);
-  expect(f.send).toHaveBeenCalledTimes(1);
-  expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: "**需要你跟进**\n请核对重复退款" }, expect.objectContaining({ replyTo: "om_alert", replyInThread: true,
-    mentions: [expect.objectContaining({ openId: "ou_finance" })] }));
+  expect(f.send).not.toHaveBeenCalled();
+  const result = JSON.parse(f.cardUpdate.mock.calls.at(-1)![0].data.card.data);
+  expect(result.body.elements.slice(0, 2)).toMatchObject([{ content: '<at id="ou_finance"></at>' }, { content: "**需要你跟进**\n请核对重复退款" }]);
+  expect(JSON.stringify(result)).not.toContain("ou_owner");
   expect(f.reactionCreate).toHaveBeenLastCalledWith(expect.objectContaining({ path: { message_id: "om_alert" }, data: { reaction_type: { emoji_type: "OneSecond" } } }));
   const member = await f.monitor.prepareReply({ messageId: "om_finance_reply", chatId: "oc_alerts", chatType: "group", senderId: "ou_finance", content: "/approve", rootId: "om_alert" }, "om_alert");
   expect(member?.allowed).toBe(false);

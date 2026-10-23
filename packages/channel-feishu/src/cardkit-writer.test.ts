@@ -58,6 +58,52 @@ async function settle<T>(promise: Promise<T>): Promise<T> {
 describe("acknowledged CardKit element writes", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("keeps an alert mention and decision body on the same card through final writes and restart", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await settle(f.writer.write("c1", card("排查进度")));
+    await settle(f.writer.notify("c1", "om_result", ["ou_example_member", "ou_example_second"], "**需要确认**\n请核对本单"));
+    await settle(f.writer.write("c1", card("重复的 Agent 最终回复", "任务状态：已完成", true)));
+    const final = JSON.parse(f.update.mock.calls.at(-1)![0].data.card.data);
+    expect(final.body.elements.find((e: any) => e.element_id === "recipient").content).toBe('<at id="ou_example_member"></at> <at id="ou_example_second"></at>');
+    expect(final.body.elements.find((e: any) => e.element_id === "answer").content).toBe("**需要确认**\n请核对本单");
+    const restarted = new CardKitWriter(f.channel, () => 100, f.receipts);
+    await settle(restarted.write("c1", card("重放结果", "任务状态：已完成", true)));
+    const replay = JSON.parse(f.update.mock.calls.at(-1)![0].data.card.data);
+    expect(replay.body.elements.slice(0, 2)).toEqual(final.body.elements.slice(0, 2));
+    expect(f.reply).not.toHaveBeenCalled();
+  });
+
+  it("retries an unacknowledged notice on the same card and stops overlaying it after resolution", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await settle(f.writer.write("c1", card("原进度")));
+    f.update.mockResolvedValueOnce({ code: 300307, msg: "temporary failure" });
+    await expect(settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "请确认"))).rejects.toThrow("300307");
+    await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "请确认"));
+    const count = f.calls.length;
+    await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "请确认"));
+    expect(f.calls).toHaveLength(count);
+    f.writer.clearNotice("c1");
+    await settle(f.writer.write("c1", card("已复查恢复", "任务状态：已完成", true)));
+    const final = JSON.parse(f.update.mock.calls.at(-1)![0].data.card.data);
+    expect(JSON.stringify(final)).not.toContain("<at");
+    expect(final.body.elements[0].content).toBe("已复查恢复");
+    expect(f.reply).not.toHaveBeenCalled();
+  });
+
+  it("reads the original user card after restart without creating a second reply", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const get = vi.fn(async () => ({ code: 0, data: { items: [{ message_id: "om_result", body: { content: JSON.stringify(card("重启前结果", "已完成", true)) } }] } }));
+    (f.channel.rawClient.im.v1.message as any).get = get;
+    await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "需要核对"));
+    expect(get).toHaveBeenCalledWith({ path: { message_id: "om_result" }, params: { card_msg_content_type: "user_card_content" } });
+    expect(f.update.mock.calls[0][0].path.card_id).toBe("c1");
+    expect(JSON.parse(f.update.mock.calls[0][0].data.card.data).body.elements[1].content).toBe("需要核对");
+    expect(f.reply).not.toHaveBeenCalled();
+  });
+
   it("updates only status while keeping the confirmed answer untouched", async () => {
     vi.useFakeTimers();
     const f = fixture();

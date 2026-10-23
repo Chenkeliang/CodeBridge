@@ -8,7 +8,7 @@ import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
-  setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string, notify?: string): Promise<void>;
+  setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string, notify?: string, sourceMessageId?: string): Promise<void>;
   sendOutboundFile(
     chatId: string,
     rawPath: string,
@@ -183,7 +183,8 @@ export function createOutboundApp(
     if (body.notify !== undefined && typeof body.notify !== "string") return c.json({ error: "notify must be a recipient name" }, 400);
     try {
       if (!bridge.setOutboundAlertStatus) throw new Error("alert_status_unavailable");
-      await bridge.setOutboundAlertStatus(target.chatId, target.topicId, body.status, body.summary, ...(typeof body.notify === "string" ? [body.notify] : []));
+      await bridge.setOutboundAlertStatus(target.chatId, target.topicId, body.status, body.summary,
+        typeof body.notify === "string" ? body.notify : undefined, target.sourceMessageId);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);

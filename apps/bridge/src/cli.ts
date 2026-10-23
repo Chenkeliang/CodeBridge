@@ -556,8 +556,8 @@ program
     });
     const apiApp = createBridgeApp(
         {
-          setOutboundAlertStatus: (chatId, topicId, status, summary, notify) => alertMonitor
-            ? alertMonitor.setStatus(chatId, topicId, status, summary, notify)
+          setOutboundAlertStatus: (chatId, topicId, status, summary, notify, sourceMessageId) => alertMonitor
+            ? alertMonitor.setStatus(chatId, topicId, status, summary, notify, sourceMessageId)
             : Promise.reject(new Error("告警监控未配置")),
           sendOutboundFile: (chatId, rawPath, topicId, sourceMessageId) =>
             chatId.startsWith("telegram:")

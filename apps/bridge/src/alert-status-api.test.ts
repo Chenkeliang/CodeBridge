@@ -4,7 +4,7 @@ import { createOutboundApp } from "./outbound-api.js";
 function fixture() {
   const set = vi.fn(async () => {});
   const store = { getRun: (id: string) => id === "run1" ? { id, status: "running", turnId: "turn1" } : undefined,
-    listDeliveries: (channel: string) => channel === "feishu" ? [{ runId: "run1", turnId: "turn1", conversationId: "oc_alert|om_original" }] : [] } as unknown as SqliteEventStore;
+    listDeliveries: (channel: string) => channel === "feishu" ? [{ runId: "run1", turnId: "turn1", conversationId: "oc_alert|om_original", replyToMessageId: "om_run_source" }] : [] } as unknown as SqliteEventStore;
   const app = createOutboundApp({ sendOutboundFile: vi.fn(), sendOutboundMarkdown: vi.fn(), sendOutboundMention: vi.fn(), setOutboundAlertStatus: set }, "runner-secret", {
     workItemStore: store,
     publishers: () => [{ label: "publisher", token: "publisher-token", chatId: "oc_alert", routes: ["markdown", "mention"] }],
@@ -17,7 +17,7 @@ describe("run-bound alert status API", () => {
     const f = fixture();
     const response = await f.request({ runId: "run1", chatId: "oc_wrong", topicId: "om_wrong", messageId: "om_wrong", status: "waiting", summary: "请确认补货" });
     expect(response.status).toBe(200);
-    expect(f.set).toHaveBeenCalledWith("oc_alert", "om_original", "waiting", "请确认补货");
+    expect(f.set).toHaveBeenCalledWith("oc_alert", "om_original", "waiting", "请确认补货", undefined, "om_run_source");
   });
   it("rejects publishers, missing runs and inactive runs", async () => {
     const f = fixture();
@@ -33,7 +33,7 @@ it("passes only a recipient name while keeping the run-bound original thread", a
   const f = fixture();
   const r = await f.request({ runId: "run1", chatId: "oc_wrong", topicId: "om_wrong", status: "waiting", summary: "请核账", notify: "示例成员甲" });
   expect(r.status).toBe(200);
-  expect(f.set).toHaveBeenCalledWith("oc_alert", "om_original", "waiting", "请核账", "示例成员甲");
+  expect(f.set).toHaveBeenCalledWith("oc_alert", "om_original", "waiting", "请核账", "示例成员甲", "om_run_source");
   f.set.mockClear();
   expect((await f.request({ runId: "run1", status: "waiting", summary: "x", notify: ["ou_forged"] })).status).toBe(400);
   expect(f.set).not.toHaveBeenCalled();

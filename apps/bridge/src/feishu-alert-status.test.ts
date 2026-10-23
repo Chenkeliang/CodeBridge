@@ -284,17 +284,15 @@ it("reports absent and ambiguous names once in the original thread without menti
   const members = vi.fn(async (): Promise<Array<{id: string; name: string}>> => []);
   Object.assign(f.transport, { listManagedChatMembers: members });
   await expect(f.monitor.setStatus("oc_alert", "om_root", "waiting", "核账", "示例成员甲")).rejects.toThrow("未找到");
-  expect(f.transport.notifyAlertOwner).not.toHaveBeenCalled();
-  expect(f.transport.postAlertThreadNotice).toHaveBeenCalledTimes(1);
-  expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_root", expect.stringContaining("未找到"));
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", [], expect.stringContaining("未找到"));
+  expect(f.transport.postAlertThreadNotice).not.toHaveBeenCalled();
   f.config.enabled = false;
   await new FeishuAlertMonitor(f.options).tick();
-  expect(f.transport.postAlertThreadNotice).toHaveBeenCalledTimes(1);
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(1);
   members.mockResolvedValue([{id:"ou_a",name:"示例成员甲"},{id:"ou_b",name:"示例成员甲"}]);
   await new FeishuAlertMonitor(f.options).tick();
-  expect(f.transport.postAlertThreadNotice).toHaveBeenCalledTimes(2);
-  expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_root", expect.stringContaining("同名"));
-  expect(f.transport.notifyAlertOwner).not.toHaveBeenCalled();
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(2);
+  expect(f.transport.notifyAlertOwner).toHaveBeenLastCalledWith("oc_alert", "om_root", [], expect.stringContaining("同名"));
   members.mockResolvedValue([{id:"ou_finance",name:"示例成员甲"}]);
   await new FeishuAlertMonitor(f.options).tick();
   expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_finance"], expect.any(String));
@@ -306,12 +304,12 @@ it("reports member lookup failures without falling back, and deduplicates a repe
   members.mockRejectedValueOnce(new Error("permission denied"));
   Object.assign(f.transport, { listManagedChatMembers: members });
   await expect(f.monitor.setStatus("oc_alert", "om_root", "waiting", "核账", "示例成员甲")).rejects.toThrow("读取群成员失败");
-  expect(f.transport.notifyAlertOwner).not.toHaveBeenCalled();
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", [], expect.stringContaining("读取群成员失败"));
   f.config.enabled = false;
   await new FeishuAlertMonitor(f.options).tick();
   expect(f.transport.notifyAlertOwner).toHaveBeenCalledWith("oc_alert", "om_root", ["ou_finance"], expect.any(String));
   await f.monitor.setStatus("oc_alert", "om_root", "waiting", "核账", "示例成员甲");
-  expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(1);
+  expect(f.transport.notifyAlertOwner).toHaveBeenCalledTimes(2);
 });
 
 it("does not send a late reminder when human closure occurs during member lookup", async () => {

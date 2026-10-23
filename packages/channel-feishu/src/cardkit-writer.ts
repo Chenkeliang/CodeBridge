@@ -98,13 +98,23 @@ export class CardKitWriter {
     },
   ) {}
 
-  write(cardId: string, card: object, replyTo?: string): Promise<void> {
+  write(cardId: string, card: object | (() => Promise<RunCardJson>), replyTo?: string): Promise<void> {
     // Freeze a queued snapshot: callers may continue projecting Agent events.
-    const snapshot = JSON.parse(JSON.stringify(card)) as RunCardJson;
+    const snapshot = typeof card === "function" ? card as () => Promise<RunCardJson> : JSON.parse(JSON.stringify(card)) as RunCardJson;
     const task = (this.queues.get(cardId) ?? Promise.resolve())
       .catch(() => {})
       .then(async () => {
-        const { overflowText, ...dsl } = snapshot;
+        const { overflowText, ...dsl } = typeof snapshot === "function" ? await snapshot() : snapshot;
+        const notice = this.receipts?.read()[`notice:${cardId}`];
+        if (notice) {
+          const { recipients, text } = JSON.parse(notice) as { recipients: string[]; text: string };
+          // The status summary is the actionable result; a later Agent final must not duplicate it.
+          dsl.body = { ...dsl.body, elements: [
+            { tag: "markdown", element_id: "recipient", content: recipients.map((id) => `<at id="${id}"></at>`).join(" ") || " " },
+            ...dsl.body.elements.filter((element) => element.element_id !== "recipient").map((element) =>
+              element.element_id === "answer" ? { ...element, content: text } : element),
+          ] };
+        }
         if (overflowText && !dsl.config.streaming_mode) {
           await this.deliverOverflow(cardId, replyTo, overflowText);
         }
@@ -115,6 +125,33 @@ export class CardKitWriter {
       if (this.queues.get(cardId) === task) this.queues.delete(cardId);
     }).catch(() => {});
     return task;
+  }
+
+  /** Update the Run's existing reply, sharing the same FIFO as streaming and recovery. */
+  async notify(cardId: string, messageId: string, recipientIds: string[], text: string): Promise<void> {
+    if (!this.receipts) throw new Error("Card notification needs durable receipts");
+    const recipients = [...new Set(recipientIds)];
+    if (recipients.some((id) => !/^ou_[A-Za-z0-9_]+$/.test(id))) throw new Error("Invalid card notification recipient");
+    this.receipts.update((all) => ({ ...all, [`notice:${cardId}`]: JSON.stringify({ recipients, text }) }));
+    await this.write(cardId, async () => {
+      const confirmed = this.confirmed.get(cardId);
+      if (confirmed) return JSON.parse(JSON.stringify(confirmed)) as RunCardJson;
+      const response = await this.channel.rawClient.im.v1.message.get({
+        path: { message_id: messageId }, params: { card_msg_content_type: "user_card_content" },
+      });
+      if (response.code !== 0) throw new Error(`Card notification read failed (${response.code})`);
+      const message = response.data?.items?.find((item) => item.message_id === messageId);
+      const card = JSON.parse(message?.body?.content ?? "null") as RunCardJson | null;
+      if (card?.schema !== "2.0" || !card.body?.elements?.some((element) => element.element_id === "answer")) {
+        throw new Error("Run reply card content unavailable; notification remains pending");
+      }
+      return card;
+    }, messageId);
+  }
+
+  clearNotice(cardId: string): void {
+    if (!this.receipts?.read()[`notice:${cardId}`]) return;
+    this.receipts.update((all) => { const next = { ...all }; delete next[`notice:${cardId}`]; return next; });
   }
 
   private async deliverOverflow(cardId: string, replyTo: string | undefined, text: string): Promise<void> {
@@ -166,7 +203,9 @@ export class CardKitWriter {
     // A terminal acknowledgement fences delayed live snapshots.
     if (previous && previous.config?.streaming_mode === false && card.config?.streaming_mode) return;
     const structured = card.body?.elements?.every((e) => ["recipient", "answer", "progress", "status"].includes(e.element_id));
-    if (!previous || !structured) {
+    const recipientChanged = previous?.body?.elements?.find((e) => e.element_id === "recipient")?.content
+      !== card.body?.elements?.find((e) => e.element_id === "recipient")?.content;
+    if (!previous || !structured || recipientChanged || JSON.stringify(previous.body.elements.map((e) => e.element_id)) !== JSON.stringify(card.body.elements.map((e) => e.element_id))) {
       // Also migrates legacy single-element cards once after a restart.
       await this.request(cardId, card, (sequence, uuid) =>
         this.channel.rawClient.cardkit.v1.card.update({ path: { card_id: cardId }, data: { card: { type: "card_json", data: json }, sequence, uuid } }));
