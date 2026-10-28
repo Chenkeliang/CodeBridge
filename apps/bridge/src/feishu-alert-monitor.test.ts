@@ -266,14 +266,73 @@ describe("FeishuAlertMonitor", () => {
     await Promise.all([first, second]); expect(f.transport.investigateAlert).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps duplicate-card replies under the same owner and canonical incident", async () => {
+  it("keeps duplicate-card replies in their own topic under the same owner and canonical incident", async () => {
     const f = fixture(); await f.monitor.tick(); f.advance();
     f.transport.readAlertMessages.mockResolvedValue({ messages: [f.message(), f.message("om_duplicate")], hasMore: false });
     await f.monitor.tick();
     const reply = { messageId: "om_answer", chatId: "oc_alerts", chatType: "group" as const,
       senderId: "ou_other", content: "/approve", rootId: "om_duplicate", threadId: "omt_native" };
-    expect(await f.monitor.prepareReply(reply, "omt_native")).toMatchObject({ allowed: false, topicId: "om_alert", notice: expect.stringContaining("只认审批人") });
-    expect((await f.monitor.prepareReply({ ...reply, senderId: "ou_owner" }, "omt_native"))?.topicId).toBe("om_alert");
+    expect(await f.monitor.prepareReply(reply, "omt_native")).toMatchObject({ allowed: false, topicId: "om_duplicate", notice: expect.stringContaining("只认审批人") });
+    expect((await f.monitor.prepareReply({ ...reply, senderId: "ou_owner" }, "omt_native"))?.topicId).toBe("om_duplicate");
+    expect((await f.monitor.prepareReply({ ...reply, senderId: "ou_owner" }, "om_alert"))?.topicId).toBe("om_duplicate");
+    expect(f.monitor.listIncidents("oc_alerts")).toHaveLength(1);
+  });
+
+  it("checks every source topic before marking a shared investigation blocked", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValue({ messages: [f.message(), f.message("om_duplicate")], hasMore: false });
+    await f.monitor.tick();
+    await f.monitor.prepareReply({ messageId: "om_followup", chatId: "oc_alerts", chatType: "group",
+      senderId: "ou_owner", content: "继续核对", rootId: "om_duplicate" }, "omt_native");
+    f.transport.isAlertActive.mockImplementation(async (_chat, root) => root === "om_duplicate");
+    f.advance(61_000); await f.monitor.tick();
+    expect(f.transport.isAlertActive).toHaveBeenCalledWith("oc_alerts", "om_duplicate");
+    expect(f.monitor.listIncidents("oc_alerts")[0]?.status).toBe("investigating");
+  });
+
+  it("resolves duplicate-topic status to the canonical case and cancels every topic on DONE", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValue({ messages: [f.message(), f.message("om_duplicate")], hasMore: false });
+    await f.monitor.tick();
+    const cancelAlertInvestigation = vi.fn().mockResolvedValue(undefined);
+    const postAlertThreadNotice = vi.fn().mockResolvedValue(undefined);
+    const monitor = new FeishuAlertMonitor({ ...f.options, transport: { ...f.transport, cancelAlertInvestigation, postAlertThreadNotice } });
+    await monitor.setStatus("oc_alerts", "om_duplicate", "no_action", "已核实无需操作");
+    expect(monitor.listIncidents("oc_alerts")[0]).toMatchObject({ id: "om_alert", status: "no_action", repeatCount: 2 });
+    await expect(monitor.setStatus("oc_other", "om_duplicate", "no_action", "wrong group")).rejects.toThrow("not found");
+    await monitor.prepareReaction({ messageId: "om_duplicate", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added" });
+    expect(cancelAlertInvestigation.mock.calls).toEqual([["oc_alerts", "om_alert"], ["oc_alerts", "om_duplicate"]]);
+    expect(postAlertThreadNotice).toHaveBeenCalledWith("oc_alerts", "om_duplicate", expect.stringContaining("点 DONE"));
+    await monitor.setStatus("oc_alerts", "om_duplicate", "waiting", "迟到的结果");
+    expect(monitor.listIncidents("oc_alerts")[0]?.status).toBe("dismissed");
+  });
+
+  it("still cancels other source topics when one cancellation fails", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValue({ messages: [f.message(), f.message("om_duplicate")], hasMore: false });
+    await f.monitor.tick();
+    const cancelAlertInvestigation = vi.fn().mockRejectedValueOnce(new Error("fixture cancellation failed")).mockResolvedValue(undefined);
+    const monitor = new FeishuAlertMonitor({ ...f.options, transport: { ...f.transport, cancelAlertInvestigation } });
+    await monitor.prepareReaction({ messageId: "om_duplicate", operatorOpenId: "ou_owner", emojiType: "DONE", action: "added" });
+    expect(cancelAlertInvestigation.mock.calls).toEqual([["oc_alerts", "om_alert"], ["oc_alerts", "om_duplicate"]]);
+    expect(monitor.listIncidents("oc_alerts")[0]?.status).toBe("dismissed");
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining("fixture cancellation failed"));
+  });
+
+  it("does not let an older topic's result supersede the latest accepted reply", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValue({ messages: [f.message(), f.message("om_duplicate")], hasMore: false });
+    await f.monitor.tick();
+    const notifyAlertOwner = vi.fn().mockResolvedValue(undefined);
+    const monitor = new FeishuAlertMonitor({ ...f.options, transport: { ...f.transport, notifyAlertOwner } });
+    const reply = { chatId: "oc_alerts", chatType: "group" as const, senderId: "ou_owner", content: "继续核对" };
+    await monitor.prepareReply({ ...reply, messageId: "om_first_reply", rootId: "om_alert" }, "om_alert");
+    await monitor.prepareReply({ ...reply, messageId: "om_latest_reply", rootId: "om_duplicate" }, "om_duplicate");
+    await monitor.setStatus("oc_alerts", "om_duplicate", "investigating", "本轮仍在核对", undefined, "om_latest_reply");
+    await monitor.setStatus("oc_alerts", "om_alert", "waiting", "旧轮迟到的待办", undefined, "om_first_reply");
+    await monitor.setStatus("oc_alerts", "om_alert", "resolved", "旧轮迟到的结论", undefined, "om_first_reply");
+    expect(monitor.listIncidents("oc_alerts")[0]).toMatchObject({ status: "investigating", summary: "本轮仍在核对" });
+    expect(notifyAlertOwner).not.toHaveBeenCalled();
   });
 
   it("honors disable while a history request is in flight", async () => {

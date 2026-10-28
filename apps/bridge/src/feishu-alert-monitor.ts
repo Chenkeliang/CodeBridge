@@ -208,7 +208,11 @@ export class FeishuAlertMonitor {
     let active = 0;
     for (const state of Object.values(this.store.read())) {
       for (const incident of Object.values(state.incidents).filter((item) => item.active)) {
-        if (await this.options.transport.isAlertActive(incident.alert.chatId, incident.alert.messageId)) {
+        let hasActiveRun = false;
+        for (const rootId of incident.sourceMessageIds ?? [incident.alert.messageId]) {
+          if (await this.options.transport.isAlertActive(incident.alert.chatId, rootId)) { hasActiveRun = true; break; }
+        }
+        if (hasActiveRun) {
           active++;
           if (incident.awaitingReplyDispatch) this.updateIncident(incident.alert, (item) => { delete item.awaitingReplyDispatch; });
         }
@@ -329,7 +333,7 @@ export class FeishuAlertMonitor {
           || message.createdAt - item.lastSeen <= (this.options.config()?.dedupWindowMs ?? 1_800_000))) : undefined;
       if (duplicate) {
         duplicate.lastSeen = Math.max(duplicate.lastSeen, message.createdAt);
-        // Replies to repeated alert cards must retain the first incident's owner and Session.
+        // Repeated cards share the incident and owner; each source topic keeps its own Session.
         if (!duplicate.replies.includes(message.messageId)) duplicate.replies.push(message.messageId);
         duplicate.sourceMessageIds ??= [duplicate.alert.messageId];
         if (!duplicate.sourceMessageIds.includes(message.messageId)) duplicate.sourceMessageIds.push(message.messageId);
@@ -365,19 +369,22 @@ export class FeishuAlertMonitor {
     const incident = [message.rootId, topicId, message.replyToMessageId]
       .map((id) => id ? incidents[id] ?? Object.values(incidents).find((item) => item.replies.includes(id)) : undefined).find(Boolean);
     if (!incident) return undefined;
+    const sourceRoots = incident.sourceMessageIds ?? [incident.alert.messageId];
+    const replyTopicId = [message.rootId, topicId, message.replyToMessageId]
+      .find((id) => id !== undefined && sourceRoots.includes(id)) ?? incident.alert.messageId;
     const isApprover = this.currentApprovers(incident).includes(message.senderId);
     const speaker = isApprover ? "审批人" : "群成员";
     const decision = message.content.trim().replace(/[。！!]+$/u, "").trim();
     // Permission commands are a deterministic write path; only approvers may resolve them.
     if (!isApprover && /^\/(?:approve|a|deny|d)(?:\s|$)/iu.test(message.content.trim())) {
-      return { allowed: false, topicId: incident.alert.messageId, instructions: "",
+      return { allowed: false, topicId: replyTopicId, instructions: "",
         notice: "本告警的操作审批只认审批人的回复；你的意见已在话题里，需要执行时请审批人确认。" };
     }
     if (["无需处理", "不用处理", "不需要处理", "不用再处理", "不用处理了", "这条无需处理", "这个无需处理", "这条不用处理", "这几条无需处理"].includes(decision)) {
-      return this.dismissIncident(incident, message).then(() => ({ allowed: true, handled: true, topicId: incident.alert.messageId, instructions: "" }));
+      return this.dismissIncident(incident, { ...message, rootId: replyTopicId }).then(() => ({ allowed: true, handled: true, topicId: replyTopicId, instructions: "" }));
     }
     if (incident.dismissal && !["重新排查", "重新处理", "继续排查"].includes(decision)) {
-      return { allowed: true, topicId: incident.alert.messageId, instructions: `本告警已由${speaker}确认无需处理并结案。仅答复当前问题，不重新排查或改变状态；需要重新开启时请明确回复“重新排查”。` };
+      return { allowed: true, topicId: replyTopicId, instructions: `本告警已由${speaker}确认无需处理并结案。仅答复当前问题，不重新排查或改变状态；需要重新开启时请明确回复“重新排查”。` };
     }
     this.updateIncident(incident.alert, (item) => {
       if (!item.replies.includes(message.messageId)) item.replies.push(message.messageId);
@@ -394,7 +401,7 @@ export class FeishuAlertMonitor {
       : "【本次回复者：群成员（非审批人）】正常回答其问题并采纳其提供的信息，但这条回复不构成新的写操作授权，也不能扩大既有授权；已记录流程级授权内的安全动作仍可执行，超出范围时用 fcb alert status waiting 原生 @ 审批人。";
     return {
       allowed: true,
-      topicId: incident.alert.messageId,
+      topicId: replyTopicId,
       instructions: ALERT_INVESTIGATION_INSTRUCTIONS + this.runbookInstructions(incident.runbookPath) + this.reactionInstructions(incident) + "\n" + authority,
     };
   }
@@ -516,22 +523,25 @@ export class FeishuAlertMonitor {
     });
     await this.syncStatus(incident.alert.chatId, incident.alert.messageId)
       .catch((error) => this.options.log(`结案已记录，表情待重试：${error instanceof Error ? error.message : String(error)}`));
-    await this.options.transport.cancelAlertInvestigation?.(incident.alert.chatId, incident.alert.messageId)
-      .catch((error) => this.options.log(`停止已结案排查待确认：${error instanceof Error ? error.message : String(error)}`));
-    if (!alreadyDismissed) await this.postDismissalReceipt(incident, message.senderId, via)
+    for (const rootId of incident.sourceMessageIds ?? [incident.alert.messageId]) {
+      await this.options.transport.cancelAlertInvestigation?.(incident.alert.chatId, rootId)
+        .catch((error) => this.options.log(`停止已结案排查待确认：${error instanceof Error ? error.message : String(error)}`));
+    }
+    if (!alreadyDismissed) await this.postDismissalReceipt(incident, message, via)
       .catch((error) => this.options.log(`结案回执发送失败：${error instanceof Error ? error.message : String(error)}`));
   }
 
-  private async postDismissalReceipt(incident: Incident, closerOpenId: string, via: "message" | "reaction"): Promise<void> {
+  private async postDismissalReceipt(incident: Incident, message: FeishuMessage, via: "message" | "reaction"): Promise<void> {
     const transport = this.options.transport;
     if (!transport.postAlertThreadNotice) return;
-    const { chatId, messageId } = incident.alert;
+    const { chatId } = incident.alert;
+    const closerOpenId = message.senderId;
     // Display names are user-controlled; strip markup so a name can't inject <at> mentions or formatting.
     const name = (await transport.alertMemberName?.(chatId, closerOpenId).catch(() => undefined))
       ?.replace(/[<>*_`~#|[\]()\\]/gu, "").trim().slice(0, 32);
     const who = name || (this.currentApprovers(incident).includes(closerOpenId) ? "审批人" : "群成员");
     const how = via === "reaction" ? "点 DONE" : "回复无需处理";
-    await transport.postAlertThreadNotice(chatId, messageId, `已结案：由 ${who} ${how}确认。仅表示人工确认无需处理，不代表故障已修复；需要时回复“重新排查”。`);
+    await transport.postAlertThreadNotice(chatId, message.rootId ?? message.messageId, `已结案：由 ${who} ${how}确认。仅表示人工确认无需处理，不代表故障已修复；需要时回复“重新排查”。`);
   }
 
   private runbookInstructions(runbookPath: string | undefined): string {
@@ -545,13 +555,18 @@ export class FeishuAlertMonitor {
     if (!(FEISHU_ALERT_STATUSES as readonly string[]).includes(status) || !summary.trim() || summary.length > 2000) {
       throw new Error("Invalid alert status or summary");
     }
-    const incident = this.store.read()[chatId]?.incidents[rootId];
+    const incidents = this.store.read()[chatId]?.incidents ?? {};
+    const incident = incidents[rootId] ?? Object.values(incidents).find((item) => item.sourceMessageIds?.includes(rootId));
     if (!incident) throw new Error("Alert conversation not found");
     if (status === "dismissed") throw new Error("Dismissal must come from a verified inbound message or reaction");
     if (incident.dismissal && status !== "dismissed") return;
     if (notify !== undefined && (!notify.trim() || notify.trim().length > 100 || /[\x00-\x1f<>@]/u.test(notify) || !["waiting", "blocked"].includes(status))) {
       throw new Error("notify must be the recipient's name from this group's matrix");
     }
+    // Independent topic Sessions can finish out of order; the latest accepted reply owns the case projection.
+    if (sourceMessageId !== undefined && incident.notificationSourceMessageId !== undefined
+      && sourceMessageId !== incident.notificationSourceMessageId
+      && incident.replies.includes(incident.notificationSourceMessageId)) return;
     this.updateIncident(incident.alert, (item) => {
       if (item.dismissal) return;
       if (item.status !== status || notify !== undefined && item.notificationName !== notify?.trim()
@@ -565,7 +580,7 @@ export class FeishuAlertMonitor {
       item.status = status as FeishuAlertStatus; item.summary = summary.trim(); item.statusAt = (this.options.now ?? Date.now)();
       if (status !== "investigating") delete item.awaitingReplyDispatch;
     });
-    await this.syncStatus(chatId, rootId);
+    await this.syncStatus(chatId, incident.alert.messageId);
   }
 
   private syncStatus(chatId: string, rootId: string): Promise<void> {

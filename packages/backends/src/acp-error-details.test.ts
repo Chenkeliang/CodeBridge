@@ -44,6 +44,10 @@ describe("Codex workspace discovery recovery", () => {
     { detail: "workspace routing discovery unauthorized (401)", failures: 99, starts: 1, prompts: 0, fatal: 1 },
     { detail: "selected workspace missing from routing discovery", failures: 99, starts: 1, prompts: 0, fatal: 1 },
     { detail: "unclassified internal error", failures: 99, starts: 1, prompts: 0, fatal: 1 },
+    { detail: "no rollout found for thread id original-provider", failures: 99, starts: 1, prompts: 0, fatal: 1, missingRollout: true },
+    { detail: "no rollout found for thread id different-provider", failures: 99, starts: 1, prompts: 0, fatal: 1 },
+    { detail: "no rollout found for thread id original-provider", failures: 99, starts: 1, prompts: 0, fatal: 1, backend: "claude-code" as const },
+    { detail: "no rollout found for thread id original-provider", failures: 99, starts: 1, prompts: 1, fatal: 1, duringPrompt: true },
     { detail: "workspace routing discovery failed", failures: 99, starts: 1, prompts: 1, fatal: 1, duringPrompt: true },
     { detail: "workspace routing discovery failed", failures: 99, starts: 1, prompts: 0, fatal: 0, cancelOnRetry: true },
   ])("bounds initialization only: $detail, failures=$failures, duringPrompt=$duringPrompt, cancel=$cancelOnRetry", async (test) => {
@@ -77,7 +81,7 @@ describe("Codex workspace discovery recovery", () => {
     try {
       for await (const event of runAcpSession({
         runId: "routing-fixture", cwd, prompt: "one original user message", resumeSessionId: "original-provider",
-        backendConfig: { type: "codex", acpCommand: process.execPath, acpArgs: ["-e", fixture] },
+        backendConfig: { type: test.backend ?? "codex", acpCommand: process.execPath, acpArgs: ["-e", fixture] },
       }, {permissionPolicy: "prompt_deny", isAborted: () => aborted, drainBackgroundWork: false}, {})) {
         events.push(event);
         if (test.cancelOnRetry && event.type === "text_delta" && event.phase === "commentary") aborted = true;
@@ -89,6 +93,14 @@ describe("Codex workspace discovery recovery", () => {
       expect(calls.filter((c) => c.method === "session/resume").every((c) => c.sessionId === "original-provider")).toBe(true);
       expect(events.filter((e) => e.type === "error" && e.fatal)).toHaveLength(test.fatal);
       if (test.fatal) expect(events.find((e) => e.type === "error" && e.fatal)).toMatchObject({message: expect.stringContaining(test.detail)});
+      const failure = events.find((e) => e.type === "error" && e.fatal);
+      if (test.missingRollout) {
+        expect(failure).toMatchObject({message: expect.stringContaining("Codex 原会话的历史记录不可用，无法续聊")});
+        expect(failure).toMatchObject({message: expect.stringContaining("本轮尚未向模型发送任务")});
+        expect(failure).toMatchObject({message: expect.stringContaining("/new")});
+      } else if (failure) {
+        expect(failure).not.toMatchObject({message: expect.stringContaining("本轮尚未向模型发送任务")});
+      }
       if (test.duringPrompt) expect(events.filter((e) => e.type === "tool_start")).toHaveLength(1);
       if (test.cancelOnRetry) expect(aborted).toBe(true);
     } finally {

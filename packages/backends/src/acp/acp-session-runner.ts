@@ -592,7 +592,11 @@ async function openAcpSessionResources(
       // 已关闭
     }
     killChild();
-    throw new Error(message);
+    const missingRollout = ctx.backendConfig.type === "codex" && ctx.resumeSessionId
+      && message.includes(`no rollout found for thread id ${ctx.resumeSessionId}`);
+    throw new Error(missingRollout
+      ? `Codex 原会话的历史记录不可用，无法续聊。本轮尚未向模型发送任务，未自动创建新会话或重放请求。请先恢复原会话记录；无法恢复时，在当前话题发送 /new 后补充必要上下文并重新发送请求。\n\n原始错误：${message}`
+      : message);
   }
 }
 

@@ -1442,17 +1442,18 @@ export class FeishuBridge {
   async notifyAlertOwner(chatId: string, rootId: string, recipientOpenIds: string[], text: string, sourceMessageId = rootId, isCurrent = () => true): Promise<void> {
     if (!this.channel) throw new Error("飞书通道未连接");
     const delivery = (await this.sessionIngress?.listDeliveries("feishu", undefined, sourceMessageId) ?? [])
-      .filter((item) => item.conversationId === this.chatKey(chatId, rootId)).at(-1);
+      .filter((item) => item.replyToMessageId === sourceMessageId && item.conversationId.startsWith(`${chatId}|`)).at(-1);
     if (!delivery?.surfaceMessageId) throw new Error("告警排查回复卡片尚未就绪，提醒保持待投递");
     const cardId = delivery.surfaceCardId ?? await this.cardHost().resolveCardId!(delivery.surfaceMessageId);
     if (!isCurrent()) return;
-    for (const id of recipientOpenIds) this.mentionRegistry.register({ chatId, topicId: rootId }, { channel: "feishu", kind: "user", id });
+    const topicId = delivery.conversationId.slice(chatId.length + 1) || undefined;
+    for (const id of recipientOpenIds) this.mentionRegistry.register({ chatId, topicId }, { channel: "feishu", kind: "user", id });
     await this.getCardKitWriter().notify(cardId, delivery.surfaceMessageId, recipientOpenIds, text, isCurrent);
   }
 
   async clearAlertOwnerNotice(chatId: string, rootId: string, sourceMessageId = rootId): Promise<void> {
     const delivery = (await this.sessionIngress?.listDeliveries("feishu", undefined, sourceMessageId) ?? [])
-      .find((item) => item.conversationId === this.chatKey(chatId, rootId));
+      .find((item) => item.replyToMessageId === sourceMessageId && item.conversationId.startsWith(`${chatId}|`));
     if (!delivery?.surfaceMessageId) return;
     const cardId = delivery.surfaceCardId ?? await this.cardHost().resolveCardId!(delivery.surfaceMessageId);
     this.getCardKitWriter().clearNotice(cardId);

@@ -89,7 +89,7 @@ describe("alert status and runbook", () => {
   it("closes every duplicate card as owner-dismissed and ignores late Agent status reports", async () => {
     const f = await fixture(true);
     const response = await f.monitor.prepareReply({ messageId: "om_owner_close", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", rootId: "om_duplicate", content: "无需处理" }, "omt_native");
-    expect(response).toMatchObject({ allowed: true, handled: true, topicId: "om_root" });
+    expect(response).toMatchObject({ allowed: true, handled: true, topicId: "om_duplicate" });
     for (const id of ["om_root", "om_duplicate"]) expect(f.transport.setAlertMessageReaction).toHaveBeenCalledWith(id, "DONE", expect.any(Array));
     await f.monitor.setStatus("oc_alert", "om_root", "waiting", "late result");
     const state = JSON.parse(fs.readFileSync(f.options.statePath, "utf8"));
@@ -189,8 +189,8 @@ describe("alert status and runbook", () => {
     await f.monitor.prepareReaction({ messageId: "om_duplicate", operatorOpenId: "ou_other", emojiType: "DONE", action: "added", actionTime: f.options.now() });
     expect(f.transport.alertMemberName).toHaveBeenCalledWith("oc_alert", "ou_other");
     expect(f.transport.postAlertThreadNotice).toHaveBeenCalledTimes(1);
-    expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_root", expect.stringContaining("已结案：由 张三 点 DONE确认"));
-    expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_root", expect.stringContaining("不代表故障已修复"));
+    expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_duplicate", expect.stringContaining("已结案：由 张三 点 DONE确认"));
+    expect(f.transport.postAlertThreadNotice).toHaveBeenLastCalledWith("oc_alert", "om_duplicate", expect.stringContaining("不代表故障已修复"));
     // A second close on an already-closed case records nothing new in the thread.
     await f.monitor.prepareReply({ messageId: "om_again", chatId: "oc_alert", chatType: "group", senderId: "ou_owner", content: "无需处理" }, "om_root");
     expect(f.transport.postAlertThreadNotice).toHaveBeenCalledTimes(1);

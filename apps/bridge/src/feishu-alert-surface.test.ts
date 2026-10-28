@@ -9,6 +9,11 @@ import { createOutboundApp } from "./outbound-api.js";
 import type { SqliteEventStore } from "@codebridge/work-items";
 import type { FeishuCardHost } from "../../../packages/channel-feishu/src/session-watcher.js";
 import { runCardJson, type RunCardJson } from "../../../packages/channel-feishu/src/cardkit-writer.js";
+import { SessionCatalogStore } from "@codebridge/session-catalog";
+import { SessionCoordinator } from "@codebridge/session-coordinator";
+import { SqliteEventStore as EventStore } from "@codebridge/work-items";
+import { createSessionApp } from "./session-api.js";
+import { createChannelSessionIngress } from "./channel-ingress.js";
 
 const roots: string[] = [];
 afterEach(() => { roots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true })); });
@@ -65,6 +70,7 @@ function fixture() {
   } };
   const internal = bridge as unknown as {
     channel: unknown;
+    sessionIngress: ChannelSessionIngress;
     ensureSessionWatcher: () => { openCardForRun: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn> };
     handleMessage: (message: FeishuMessage) => Promise<void>;
     dispatchInboundMessage: (message: FeishuMessage) => Promise<void>;
@@ -80,6 +86,80 @@ function fixture() {
 }
 
 describe("alert polling through the active Feishu adapter", () => {
+  it("uses a new Session for a repeated alert's new topic and resumes it on the next reply", async () => {
+    const f = fixture();
+    const catalog = new SessionCatalogStore(":memory:");
+    const workItems = new EventStore(":memory:");
+    const coordinator = new SessionCoordinator(workItems, { maxQueuedTurns: 8 });
+    const app = createSessionApp({ catalog, workItems, coordinator, agents: [{
+      agentId: f.config.defaultBackend, displayName: "Example Agent", adapter: "sdk", status: "healthy",
+      capabilities: ["session"], models: [], sessionFeatures: ["resume"],
+    }] }, "test-token");
+    const ingress = createChannelSessionIngress(app, "test-token");
+    f.internal.sessionIngress = ingress;
+    try {
+      await f.monitor.tick(); f.advance(); await f.monitor.tick();
+      const original = (await ingress.listDeliveries("feishu", undefined, "om_alert"))[0]!;
+      catalog.updateSession(original.sessionId, { providerSessionId: "provider_missing" });
+      coordinator.finishRun({ sessionId: original.sessionId, runId: original.runId!, status: "succeeded" });
+      await f.monitor.setStatus("oc_alerts", "om_alert", "no_action", "此前已核实");
+      const duplicate = { ...f.message, message_id: "om_duplicate", create_time: "1001500" };
+      f.list.mockResolvedValueOnce({ code: 0, data: { items: [duplicate], has_more: false } });
+      f.advance(); await f.monitor.tick();
+      const reply = { messageId: "om_new_reply", chatId: "oc_alerts", chatType: "group" as const,
+        senderId: "ou_owner", rootId: "om_duplicate", threadId: "omt_new_topic", content: "核对这次告警", mentionedBot: true };
+      await f.internal.handleMessage(reply);
+      await vi.waitFor(async () => expect(await ingress.listDeliveries("feishu", undefined, reply.messageId)).toHaveLength(1));
+      const current = (await ingress.listDeliveries("feishu", undefined, reply.messageId))[0]!;
+      expect(current.conversationId).toBe("oc_alerts|om_duplicate");
+      expect(current.sessionId).not.toBe(original.sessionId);
+      expect(catalog.getSession(current.sessionId)?.providerSessionId).toBeNull();
+      expect(workItems.getRun(current.runId!)?.providerSessionId).toBeNull();
+      expect(catalog.getSession(original.sessionId)?.providerSessionId).toBe("provider_missing");
+      for (let i = 0; i < 61; i++) f.advance();
+      await f.monitor.tick();
+      expect(f.monitor.listIncidents("oc_alerts")[0]?.status).toBe("investigating");
+      workItems.updateRunStatus(current.runId!, "running");
+      expect(await ingress.claimDelivery(current.turnId, "test-owner")).toBe(true);
+      expect(await ingress.ackDelivery(current.turnId, "test-owner", "om_card", "card1")).toBe(true);
+      const outbound = createOutboundApp({ sendOutboundFile: vi.fn(), sendOutboundMarkdown: vi.fn(), sendOutboundMention: vi.fn(),
+        setOutboundAlertStatus: (chat, topic, status, summary, notify, source) => f.monitor.setStatus(chat, topic, status, summary, notify, source),
+      }, "test-token", { workItemStore: workItems });
+      const request = () => outbound.request("/outbound/alert-status", { method: "POST",
+        headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+        body: JSON.stringify({ runId: current.runId, status: "waiting", summary: "请核对本次结果" }),
+      });
+      expect((await request()).status).toBe(200);
+      expect(f.renderedCard().body.elements[0]?.content).toBe('<at id="ou_owner"></at>');
+      const writes = f.cardUpdate.mock.calls.length + f.elementUpdate.mock.calls.length;
+      expect((await request()).status).toBe(200);
+      expect(f.cardUpdate.mock.calls.length + f.elementUpdate.mock.calls.length).toBe(writes);
+      expect(f.reply).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+      await f.monitor.setStatus("oc_alerts", "om_duplicate", "resolved", "本次已复查恢复");
+      expect(JSON.parse(fs.readFileSync(path.join(f.root, "feishu-result-receipts.json"), "utf8"))["notice:card1"]).toBeUndefined();
+      catalog.updateSession(current.sessionId, { providerSessionId: "provider_new_topic" });
+      coordinator.finishRun({ sessionId: current.sessionId, runId: current.runId!, status: "succeeded" });
+      await f.internal.handleMessage({ ...reply, messageId: "om_next_reply", content: "继续看", mentionedBot: false });
+      await vi.waitFor(async () => expect(await ingress.listDeliveries("feishu", undefined, "om_next_reply")).toHaveLength(1));
+      const next = (await ingress.listDeliveries("feishu", undefined, "om_next_reply"))[0]!;
+      expect(next.sessionId).toBe(current.sessionId);
+      expect(catalog.getSession(next.sessionId)?.providerSessionId).toBe("provider_new_topic");
+      expect(workItems.getRun(next.runId!)?.providerSessionId).toBe("provider_new_topic");
+      expect(f.monitor.listIncidents("oc_alerts")).toHaveLength(1);
+    } finally { catalog.close(); workItems.close(); }
+  });
+
+  it.each([
+    { conversationId: "oc_other|om_duplicate", replyToMessageId: "om_request" },
+    { conversationId: "oc_alerts|om_duplicate", replyToMessageId: "om_other_request" },
+  ])("rejects an unrelated notification delivery: $conversationId / $replyToMessageId", async (destination) => {
+    const f = fixture();
+    f.deliveries.mockResolvedValue([{ ...destination, surfaceMessageId: "om_card", surfaceCardId: "card1" }]);
+    await expect(f.bridge.notifyAlertOwner("oc_alerts", "om_alert", ["ou_owner"], "请核对", "om_request")).rejects.toThrow("尚未就绪");
+    expect(f.cardUpdate).not.toHaveBeenCalled(); expect(f.elementUpdate).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled(); expect(f.reply).not.toHaveBeenCalled();
+  });
+
   it("does not notify after human closure while the Run card destination is loading", async () => {
     const f = fixture();
     await f.monitor.tick(); f.advance(); await f.monitor.tick();
