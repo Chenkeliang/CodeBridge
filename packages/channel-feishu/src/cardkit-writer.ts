@@ -123,8 +123,8 @@ export class CardKitWriter {
     if (!notice) return card;
     return { ...card, body: { ...card.body, elements: [
       { tag: "markdown", element_id: "recipient", content: notice.recipients.map((id) => `<at id="${id}"></at>`).join(" ") || " " },
-      ...card.body.elements.filter((element) => element.element_id !== "recipient").map((element) =>
-        element.element_id === "answer" ? { ...element, content: notice.text } : element),
+      ...(notice.recipients.length ? [] : [{ tag: "markdown" as const, element_id: "notice", content: notice.text || " " }]),
+      ...card.body.elements.filter((element) => element.element_id !== "recipient" && element.element_id !== "notice"),
     ] } };
   }
 
@@ -214,7 +214,7 @@ export class CardKitWriter {
     const previous = this.confirmed.get(cardId);
     // A terminal acknowledgement fences delayed live snapshots.
     if (previous && previous.config?.streaming_mode === false && card.config?.streaming_mode) return;
-    const structured = card.body?.elements?.every((e) => ["recipient", "answer", "progress", "status"].includes(e.element_id));
+    const structured = card.body?.elements?.every((e) => ["recipient", "notice", "answer", "progress", "status"].includes(e.element_id));
     const recipientChanged = previous?.body?.elements?.find((e) => e.element_id === "recipient")?.content
       !== card.body?.elements?.find((e) => e.element_id === "recipient")?.content;
     if (!previous || !structured || recipientChanged || JSON.stringify(previous.body.elements.map((e) => e.element_id)) !== JSON.stringify(card.body.elements.map((e) => e.element_id))) {

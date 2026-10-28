@@ -44,7 +44,8 @@ describe("FeishuAlertMonitor", () => {
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("未记录流程级授权或条件不满足时，不自行执行写操作");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("幂等性");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("fcb alert status waiting");
-    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("**需要你**");
+    expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("完整最终回复");
+    expect(ALERT_INVESTIGATION_INSTRUCTIONS).not.toContain("最多 3 条");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).toContain("必须先自己只读查清原因");
     expect(ALERT_INVESTIGATION_INSTRUCTIONS).not.toContain("拿不准先用 waiting");
   });

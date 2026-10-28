@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LarkChannel } from "@larksuiteoapi/node-sdk";
-import { CardKitWriter, runCardJson } from "./cardkit-writer.js";
+import { CardKitWriter, runCardJson, type RunCardJson } from "./cardkit-writer.js";
 
 function fixture() {
   let sequence = 0;
@@ -26,6 +26,22 @@ function fixture() {
 
 const card = (answer: string, status = "任务状态：执行中", terminal = false) =>
   runCardJson({ answer, progress: "工具执行", status, terminal });
+
+/** Apply acknowledged SDK requests as Feishu does, including component updates. */
+function renderedCard(f: ReturnType<typeof fixture>): RunCardJson {
+  let result: RunCardJson | undefined;
+  for (const { kind, request } of f.calls) {
+    if (kind === "card") result = JSON.parse(request.data.card.data) as RunCardJson;
+    else if (result && kind === "settings") Object.assign(result.config, JSON.parse(request.data.settings).config);
+    else if (result && (kind === "element" || kind === "content")) {
+      const element = result.body.elements.find((item) => item.element_id === request.path.element_id);
+      if (!element) throw new Error("Update targeted a missing card element");
+      Object.assign(element, kind === "element" ? JSON.parse(request.data.element) : { content: request.data.content });
+    }
+  }
+  if (!result) throw new Error("No card was written");
+  return result;
+}
 
 describe("CardKit image references", () => {
   it("renders local images as text while preserving native images, links and code", () => {
@@ -58,18 +74,58 @@ async function settle<T>(promise: Promise<T>): Promise<T> {
 describe("acknowledged CardKit element writes", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("keeps an alert mention and decision body on the same card through final writes and restart", async () => {
+  it("shows the full model reply with a mention across streaming, finalization and replay", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const full = "# 按当前问题组织回复\n\n" + "保留完整背景、原因和复查说明。".repeat(180)
+      + "\n\n- 事实一\n- 事实二\n- 事实三\n- 事实四\n\n```ts\nconst checked = true;\n```";
+    expect(full.length).toBeGreaterThan(2000);
+    await settle(f.writer.write("c1", card("开始排查")));
+    await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "简短状态记录"));
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "answer")?.content).toBe("开始排查");
+    await settle(f.writer.write("c1", card(full, "已完成", true)));
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "answer")?.content).toBe(full);
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "recipient")?.content).toBe('<at id="ou_example_member"></at>');
+    const restarted = new CardKitWriter(f.channel, () => 100, f.receipts);
+    await settle(restarted.write("c1", card(full, "已完成", true)));
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "answer")?.content).toBe(full);
+    expect(JSON.stringify(renderedCard(f))).not.toContain("简短状态记录");
+    expect(f.reply).not.toHaveBeenCalled();
+  });
+
+  it("keeps existing notice acknowledgements without using their summary as the answer", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.receipts.update(() => ({ "notice:c1": JSON.stringify({ recipients: ["ou_example_member"], text: "先前的摘要" }) }));
+    await settle(f.writer.write("c1", card("恢复出的完整模型终稿", "已完成", true)));
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "answer")?.content).toBe("恢复出的完整模型终稿");
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "recipient")?.content).toContain("ou_example_member");
+    expect(f.reply).not.toHaveBeenCalled();
+  });
+
+  it("puts recipient resolution feedback beside the answer without replacing it", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await settle(f.writer.write("c1", card("模型的详细排查说明")));
+    await settle(f.writer.notify("c1", "om_result", [], "同名成员，未发送提醒"));
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "answer")?.content).toBe("模型的详细排查说明");
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "notice")?.content).toBe("同名成员，未发送提醒");
+    expect(JSON.stringify(renderedCard(f))).not.toContain("<at");
+    expect(f.reply).not.toHaveBeenCalled();
+  });
+
+  it("keeps the alert mention without substituting a status summary through final writes and restart", async () => {
     vi.useFakeTimers();
     const f = fixture();
     await settle(f.writer.write("c1", card("排查进度")));
     await settle(f.writer.notify("c1", "om_result", ["ou_example_member", "ou_example_second"], "**需要确认**\n请核对本单"));
-    await settle(f.writer.write("c1", card("重复的 Agent 最终回复", "任务状态：已完成", true)));
-    const final = JSON.parse(f.update.mock.calls.at(-1)![0].data.card.data);
-    expect(final.body.elements.find((e: any) => e.element_id === "recipient").content).toBe('<at id="ou_example_member"></at> <at id="ou_example_second"></at>');
-    expect(final.body.elements.find((e: any) => e.element_id === "answer").content).toBe("**需要确认**\n请核对本单");
+    await settle(f.writer.write("c1", card("完整的 Agent 最终回复", "任务状态：已完成", true)));
+    const final = renderedCard(f);
+    expect(final.body.elements.find((e) => e.element_id === "recipient")?.content).toBe('<at id="ou_example_member"></at> <at id="ou_example_second"></at>');
+    expect(final.body.elements.find((e) => e.element_id === "answer")?.content).toBe("完整的 Agent 最终回复");
     const restarted = new CardKitWriter(f.channel, () => 100, f.receipts);
-    await settle(restarted.write("c1", card("重放结果", "任务状态：已完成", true)));
-    const replay = JSON.parse(f.update.mock.calls.at(-1)![0].data.card.data);
+    await settle(restarted.write("c1", card("完整的 Agent 最终回复", "任务状态：已完成", true)));
+    const replay = renderedCard(f);
     expect(replay.body.elements.slice(0, 2)).toEqual(final.body.elements.slice(0, 2));
     expect(f.reply).not.toHaveBeenCalled();
   });
@@ -100,7 +156,7 @@ describe("acknowledged CardKit element writes", () => {
     await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "需要核对"));
     expect(get).toHaveBeenCalledWith({ path: { message_id: "om_result" }, params: { card_msg_content_type: "user_card_content" } });
     expect(f.update.mock.calls[0][0].path.card_id).toBe("c1");
-    expect(JSON.parse(f.update.mock.calls[0][0].data.card.data).body.elements[1].content).toBe("需要核对");
+    expect(JSON.parse(f.update.mock.calls[0][0].data.card.data).body.elements[1].content).toBe("重启前结果");
     expect(f.reply).not.toHaveBeenCalled();
   });
 
@@ -111,9 +167,24 @@ describe("acknowledged CardKit element writes", () => {
     await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], '请核对 <at id="ou_untrusted">引用姓名</at> <at id="all"></at>'));
     const result = JSON.parse(f.update.mock.calls.at(-1)![0].data.card.data);
     expect(result.body.elements[0].content).toBe('<at id="ou_example_member"></at>');
-    expect(result.body.elements[1].content).toBe("请核对 引用姓名 ");
+    expect(result.body.elements[1].content).toBe("正在排查");
     expect(JSON.stringify(result)).not.toContain("ou_untrusted");
     expect(f.reply).not.toHaveBeenCalled();
+  });
+
+  it("delivers the full oversized model reply while keeping the same-card mention", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await settle(f.writer.write("c1", card("原进度")));
+    await settle(f.writer.notify("c1", "om_result", ["ou_example_member"], "状态摘要"));
+    const full = "完整分析与说明。".repeat(3500);
+    await settle(f.writer.write("c1", runCardJson({ answer: full, progress: "", status: "已完成", terminal: true }), "om_result"));
+    expect(f.upload.mock.calls[0][0].data.file.toString()).toBe(full);
+    expect(f.reply).toHaveBeenCalledTimes(1);
+    expect(f.reply.mock.calls[0][0].data.msg_type).toBe("file");
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "answer")?.content).toMatch(/^完整分析与说明/);
+    expect(renderedCard(f).body.elements.find(e => e.element_id === "recipient")?.content).toContain("ou_example_member");
+    expect(JSON.stringify(renderedCard(f))).not.toContain("状态摘要");
   });
 
   it("does not add a notice when human closure happens during the card read", async () => {
