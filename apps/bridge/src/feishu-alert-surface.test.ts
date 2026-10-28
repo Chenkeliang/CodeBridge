@@ -86,6 +86,30 @@ function fixture() {
 }
 
 describe("alert polling through the active Feishu adapter", () => {
+  it("sends a followup only to its source thread and selected member, escaping Agent-supplied mentions", async () => {
+    const f = fixture();
+    f.deliveries.mockImplementationOnce(async (_channel, _surface, source) => [{ conversationId: "oc_alerts|om_alert", replyToMessageId: source,
+      surfaceMessageId: "om_card", surfaceCardId: "card1", replyContext: { senderId: "ou_owner", threadId: "omt_native" } }]);
+    await expect(f.bridge.sendFollowupNotification("oc_alerts", "om_alert", '完整结果 <at id="ou_forged"></at>', {
+      sourceMessageId: "om_followup_source", recipientOpenIds: ["ou_example_member"], isCurrent: () => true,
+    })).resolves.toEqual({ messageId: "sent" });
+    expect(f.send).toHaveBeenCalledWith("oc_alerts", { markdown: expect.stringContaining("&lt;at") }, expect.objectContaining({ replyTo: "om_followup_source", replyInThread: true,
+      mentions: [{ key: expect.stringMatching(/^followup_recipient_0$/), openId: "ou_example_member", isBot: false }] }));
+    expect(JSON.stringify(f.send.mock.calls)).not.toContain('"openId":"ou_owner"');
+    const count = f.send.mock.calls.length;
+    await expect(f.bridge.sendFollowupNotification("oc_alerts", "om_alert", "迟到结果", { sourceMessageId: "om_late", recipientOpenIds: ["ou_owner"], isCurrent: () => false })).resolves.toBe(false);
+    expect(f.send).toHaveBeenCalledTimes(count);
+  });
+  it("projects delegated followup case state without posting a second owner notice", async () => {
+    const f = fixture(); await f.monitor.tick(); f.advance(); await f.monitor.tick();
+    await f.monitor.projectFollowup("oc_alerts", "om_alert", "blocked", "后台跟进受阻，提醒由跟进任务负责", "om_alert");
+    expect(f.cardUpdate).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+    f.advance(); await f.monitor.tick();
+    expect(f.cardUpdate).not.toHaveBeenCalled();
+    await f.monitor.prepareReply({ messageId: "om_closed", chatId: "oc_alerts", chatType: "group", senderId: "ou_owner", rootId: "om_alert", content: "无需处理" }, "om_alert");
+    await f.monitor.projectFollowup("oc_alerts", "om_alert", "resolved", "旧后台迟到结果", "om_alert");
+    expect(f.monitor.listIncidents("oc_alerts")[0]?.status).toBe("dismissed");
+  });
   it("uses a new Session for a repeated alert's new topic and resumes it on the next reply", async () => {
     const f = fixture();
     const catalog = new SessionCatalogStore(":memory:");

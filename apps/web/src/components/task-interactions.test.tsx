@@ -38,6 +38,26 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
 const button = (text: string) => [...host.querySelectorAll("button")].find((el) => el.textContent?.trim() === text)!;
+it("shows a bounded followup and stops it without editing, replaying or extending it", async () => {
+  const value = structuredClone(task);
+  value.enabled = true; value.pausedReason = null;
+  value.followup = { origin: { runId: "run_example", sourceMessageId: "om_example", creatorId: "ou_example_a", managerIds: ["ou_example_a"], isGroup: true },
+    deadlineAt: "2026-12-01T09:30:00Z", status: "waiting", recipients: [{ id: "ou_example_b", name: "示例成员乙" }], defaultRecipientIds: ["ou_example_b"], lastSummary: "等待外部单号" };
+  vi.mocked(api.agentTask).mockResolvedValue({ revision: "fixture-revision", task: value, runs: [], total: 0, nextOffset: null });
+  vi.mocked(api.agentTaskAction).mockImplementation(async () => {
+    const stopped = structuredClone(value); stopped.followup!.status = "cancelled"; stopped.enabled = false;
+    vi.mocked(api.agentTask).mockResolvedValue({ revision: "fixture-revision", task: stopped, runs: [], total: 0, nextOffset: null });
+    return { revision: "fixture-revision", task: stopped };
+  });
+  await act(async () => root.render(<AgentTasksPage initial={{ taskId: task.id }} onNotify={vi.fn()} onOpenSession={vi.fn()} />));
+  expect(host.textContent).toContain("截止时间"); expect(host.textContent).toContain("示例成员乙"); expect(host.textContent).toContain("后台跟进中");
+  expect(button("运行一次").disabled).toBe(true); expect(button("编辑任务").disabled).toBe(true);
+  await act(async () => button("停止跟进").click());
+  expect(api.agentTaskAction).toHaveBeenCalledWith(task.id, "pause", "fixture-revision", expect.objectContaining({ version: value.version }), expect.any(String));
+  expect(host.textContent).toContain("跟进已停止");
+  expect(button("已结束").disabled).toBe(true);
+  expect(vi.mocked(api.agentTaskAction).mock.calls.some(c => c[1] === "run" || c[1] === "retry" || c[1] === "resume")).toBe(false);
+});
 async function click(text: string) { await act(async () => button(text).click()); }
 async function fill(label: string, value: string) { await act(async () => {
   const field = host.querySelector(`[aria-label="${label}"]`) as HTMLInputElement | HTMLTextAreaElement;

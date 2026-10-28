@@ -31,6 +31,8 @@ interface Incident {
   notificationFeedback?: string;
   /** The Run's verified reply source, retained for notification retries. */
   notificationSourceMessageId?: string;
+  /** A bounded followup owns the source-bound progress/result notification. */
+  followupNoticeSource?: string;
   awaitingReplyDispatch?: boolean;
   dismissal?: { ownerOpenId: string; messageId: string; reason: string; at: number; via?: "message" | "reaction" };
   reopenedAt?: number;
@@ -77,7 +79,7 @@ export const ALERT_INVESTIGATION_INSTRUCTIONS = [
   "遵循相关业务 skill 的查询、dry-run、幂等和复查要求；用户明确的流程级授权覆盖其范围内的重复确认，不扩大操作范围，不绕过 Agent Permission。执行失败或结果不确定时停止，核实实际状态，不盲目重试。",
   "在本话题完整回答用户本轮问题，区分证据和推测；内容详略、段落和标题按实际问题组织，不套固定模板或限制证据条数。无须操作时说明原因，处理后必须复查并汇报终态。",
   "waiting/blocked 在本次排查回复卡片上直接原生 @ 所选联系人；未选择时使用默认审批人/负责人，不另发第二条重复提醒。状态摘要只用于案件状态记录，不替换、压缩或限制模型的完整最终回复；摘要概括状态和具体待办，最终回复保留完整解释、证据、必要代码和操作说明。此前上下文中的固定回复模板不再适用。单号等标识可用行内代码。",
-  '本轮结束前执行 fcb alert status <waiting|resolved|no_action|blocked> [--notify <姓名>] "证据或具体待办"。这会直接更新原卡片 Reaction；指定 notify 姓名时只通知唯一匹配的本群成员；未指定时 waiting 通知审批人、blocked 通知负责人。不要额外发送重复提醒或单独表情消息。',
+  '本轮结束前执行 fcb alert status <waiting|resolved|no_action|blocked> [--notify <姓名>] "证据或具体待办"。这会直接更新原卡片 Reaction；指定 notify 姓名时只通知唯一匹配的本群成员；未指定时 waiting 通知审批人、blocked 通知负责人。例外：用户或受信任群流程要求持续等待外部结果时，可用 codebridge_followup 创建有截止时间的后台只读跟进。必须写明本单标识、查询入口、完成标准及已授权提醒姓名；只有创建成功后才说明任务ID和截止时间。成功交接后保留 investigating，不为正常等待改成 waiting/blocked 或重复通知；后台每轮用 observe 上报，完成跟进不等于业务恢复。登记失败则说明原因并按真实状态记录。不要额外发送重复提醒或单独表情消息。',
   "只有核实业务恢复才能 resolved；系统依据已确认规则判断无需操作用 no_action；群成员明确回复无需处理或在原卡片点 DONE 由后端记录 dismissed 并显示 DONE，这表示人工结案而非故障修复。不要伪造结案。",
 ].join("\n");
 
@@ -112,6 +114,7 @@ export class FeishuAlertMonitor {
     statePath: string;
     config: () => MonitorConfig | undefined;
     transport: FeishuAlertTransport;
+    hasActiveFollowup?: (chatId: string, rootId: string) => boolean;
     isMaintenance?: () => boolean;
     now?: () => number;
     log: (message: string) => void;
@@ -216,7 +219,9 @@ export class FeishuAlertMonitor {
           active++;
           if (incident.awaitingReplyDispatch) this.updateIncident(incident.alert, (item) => { delete item.awaitingReplyDispatch; });
         }
-        else {
+        else if ((incident.sourceMessageIds ?? [incident.alert.messageId]).some(rootId => this.options.hasActiveFollowup?.(incident.alert.chatId, rootId))) {
+          continue; // Waiting followups retain their case state without consuming an investigation slot.
+        } else {
           if (incident.awaitingReplyDispatch && incident.status === "investigating" && (this.options.now ?? Date.now)() - (incident.statusAt ?? 0) < 60_000) {
             active++;
             continue;
@@ -239,7 +244,7 @@ export class FeishuAlertMonitor {
         if (!incident.status) continue;
         const emoji = this.statusEmoji(incident.status);
         const pendingReaction = emoji && (incident.sourceMessageIds ?? [incident.alert.messageId]).some((id) => incident.reactionApplied?.[id] !== emoji);
-        const pendingNotice = ["waiting", "blocked"].includes(incident.status)
+        const pendingNotice = !incident.followupNoticeSource && ["waiting", "blocked"].includes(incident.status)
           && incident.ownerNotice !== this.noticeKey(incident);
         if (pendingReaction || pendingNotice) await this.syncStatus(chatId, incident.alert.messageId)
           .catch((error) => this.options.log(`告警状态待重试：${error instanceof Error ? error.message : String(error)}`));
@@ -393,6 +398,7 @@ export class FeishuAlertMonitor {
         delete item.dismissal;
         item.status = "investigating"; item.summary = `${speaker}已回复，继续排查`;
         item.notificationSourceMessageId = message.messageId;
+        delete item.followupNoticeSource;
         item.statusAt = (this.options.now ?? Date.now)(); item.active = true; item.awaitingReplyDispatch = true; delete item.ownerNotice;
       }
     });
@@ -569,6 +575,7 @@ export class FeishuAlertMonitor {
       && incident.replies.includes(incident.notificationSourceMessageId)) return;
     this.updateIncident(incident.alert, (item) => {
       if (item.dismissal) return;
+      delete item.followupNoticeSource;
       if (item.status !== status || notify !== undefined && item.notificationName !== notify?.trim()
         || sourceMessageId !== undefined && item.notificationSourceMessageId !== sourceMessageId) delete item.ownerNotice;
       if (sourceMessageId !== undefined) item.notificationSourceMessageId = sourceMessageId;
@@ -579,6 +586,20 @@ export class FeishuAlertMonitor {
       }
       item.status = status as FeishuAlertStatus; item.summary = summary.trim(); item.statusAt = (this.options.now ?? Date.now)();
       if (status !== "investigating") delete item.awaitingReplyDispatch;
+    });
+    await this.syncStatus(chatId, incident.alert.messageId);
+  }
+
+  async projectFollowup(chatId: string, rootId: string, status: "investigating" | "waiting" | "blocked" | "resolved" | "no_action", summary: string, sourceMessageId: string): Promise<void> {
+    const incidents = this.store.read()[chatId]?.incidents ?? {};
+    const incident = incidents[rootId] ?? Object.values(incidents).find(i => i.sourceMessageIds?.includes(rootId));
+    if (!incident || incident.dismissal) return;
+    if (incident.notificationSourceMessageId && incident.notificationSourceMessageId !== sourceMessageId && incident.replies.includes(incident.notificationSourceMessageId)) return;
+    this.updateIncident(incident.alert, item => {
+      if (item.dismissal) return;
+      item.status = status; item.summary = summary.slice(0, 2000); item.statusAt = (this.options.now ?? Date.now)();
+      item.notificationSourceMessageId = sourceMessageId; item.followupNoticeSource = sourceMessageId;
+      item.active = status === "investigating"; item.submitted = true; delete item.awaitingReplyDispatch;
     });
     await this.syncStatus(chatId, incident.alert.messageId);
   }
@@ -598,12 +619,12 @@ export class FeishuAlertMonitor {
     if (!incident?.status) return;
     const isCurrent = (key: string): boolean => {
       const latest = this.store.read()[chatId]?.incidents[rootId];
-      return Boolean(latest && !latest.dismissal && this.noticeKey(latest) === key);
+      return Boolean(latest && !latest.dismissal && !latest.followupNoticeSource && this.noticeKey(latest) === key);
     };
     const mapping = this.options.config()?.statusReactions;
     const emoji = this.statusEmoji(incident.status);
     const noticeKey = this.noticeKey(incident);
-    const needsNotice = ["waiting", "blocked"].includes(incident.status) && incident.ownerNotice !== noticeKey;
+    const needsNotice = !incident.followupNoticeSource && ["waiting", "blocked"].includes(incident.status) && incident.ownerNotice !== noticeKey;
     if (!["waiting", "blocked"].includes(incident.status)) {
       await this.options.transport.clearAlertOwnerNotice?.(chatId, rootId, incident.notificationSourceMessageId);
     }

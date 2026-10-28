@@ -192,6 +192,8 @@ class Deployer:
                     job = job or self.state["jobs"].get(self.state["current"])
                     if not job or job["id"] != self.state["current"] or not job.get("previousPlist"):
                         raise DeployError("only the current release with a known previous version can roll back")
+                    previous = plistlib.loads(Path(job["previousPlist"]).read_bytes())
+                    self.require_task_features(previous.get("WorkingDirectory"))
                 job["messageId"] = request["messageId"]
                 job["requestedAt"] = time.time()
                 job["manualRollback"] = action == "rollback"
@@ -388,6 +390,27 @@ class Deployer:
             self.a.sleep(0.5)
         raise DeployError("release readiness timed out: " + last_error)
 
+    def require_task_features(self, app):
+        """New task payloads must never be interpreted as unbounded jobs by an older reader."""
+        database = self.data / "agent-tasks.sqlite"
+        if not database.is_file():
+            return
+        try:
+            with contextlib.closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
+                required = any(isinstance(json.loads(row[0]).get("followup"), dict)
+                               for row in db.execute("SELECT data FROM agent_tasks"))
+        except Exception as error:
+            raise DeployError("cannot verify persisted task feature requirements") from error
+        if not required:
+            return
+        package = Path(app) / "package.json" if app else None
+        try:
+            features = json.loads(package.read_text()).get("codebridgeTaskFeatures", []) if package else []
+        except (OSError, ValueError):
+            features = []
+        if "bounded-followups" not in features:
+            raise DeployError("persisted bounded followups require a compatible task reader; target release is unsupported")
+
     def compatible(self, job, old):
         env = old.get("EnvironmentVariables", {})
         baseline = env.get("CODEBRIDGE_RELEASE_COMMIT")
@@ -463,6 +486,7 @@ class Deployer:
             if not valid:
                 raise DeployError("database schema change requires a separately reviewed migration")
             job["reviewedDatabaseInitialization"] = {"database": database, "receipt": str(review_path)}
+        self.require_task_features(job.get("app"))
         bridge_only = ("apps/bridge/", "apps/web/", "packages/channel-feishu/", "packages/run-executor/",
                        "packages/session-coordinator/", "packages/work-items/", "docs/", "scripts/")
         job["restartRunner"] = any(not (name.endswith(".md") or name.startswith(bridge_only))
@@ -563,6 +587,14 @@ class Deployer:
         (self.root / "maintenance.json").unlink(missing_ok=True)
 
     def rollback(self, job):
+        try:
+            previous = plistlib.loads(Path(job["previousPlist"]).read_bytes())
+            self.require_task_features(previous.get("WorkingDirectory"))
+        except Exception as error:
+            job["error"] = "rollback blocked by task compatibility; maintenance remains enabled: " + str(error)
+            self.change(job, "recovery_failed")
+            self.notify(job)
+            return
         try:
             self.change(job, "rolling_back")
             atomic(self.c["bridgePlist"], Path(job["previousPlist"]).read_bytes(), True)

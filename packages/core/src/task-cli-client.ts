@@ -8,6 +8,8 @@ export const TASK_COMMAND_HELP = `CodeBridge任务命令（配置检查版本，
   tasks runs <任务ID> [--offset <数量>]
   tasks preflight --file <任务JSON>
   tasks create --file <任务JSON>       默认保存为暂停状态
+  tasks follow --file <跟进JSON>       当前飞书请求登记有期限的跟进；来源由后端绑定
+  tasks observe --file <观察JSON>      后台仅上报本轮waiting/progress/completed/blocked
   tasks edit <任务ID> --file <任务JSON>
   tasks pause|resume|run <任务ID> [--acknowledge-unknown] [--key <操作标识>]
   tasks result <任务ID> <运行记录ID>
@@ -29,7 +31,7 @@ export async function runTaskCommand(args: string[], context: { api: string; tok
     else if (value.startsWith("--")) throw new Error(`未识别的任务参数：${value}`);
     else positionals.push(value);
   }
-  if (!["list", "show", "runs", "result", "output", "create", "edit", "preflight", "pause", "resume", "run", "retry", "resend", "acknowledge"].includes(action!)) throw new Error("未知任务命令，请运行tasks help查看完整用法");
+  if (!["list", "show", "runs", "result", "output", "create", "edit", "preflight", "pause", "resume", "run", "retry", "resend", "acknowledge", "follow", "observe"].includes(action!)) throw new Error("未知任务命令，请运行tasks help查看完整用法");
   const endpoint = new URL(context.api);
   if (!["http:", "https:"].includes(endpoint.protocol) || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname)) throw new Error("任务管理仅连接本机Bridge地址");
   const fetchImpl = context.fetch ?? globalThis.fetch;
@@ -51,6 +53,13 @@ export async function runTaskCommand(args: string[], context: { api: string; tok
   if (action === "show" || action === "runs") return read(requireTask() + (flags.offset !== undefined ? `?offset=${encodeURIComponent(String(flags.offset))}` : ""));
   if (action === "result") return read(requireAttempt());
   const revision = (await read(root)).revision;
+  if (action === "follow" || action === "observe") {
+    if (!context.runId || typeof flags.file !== "string") throw new Error("跟进命令需要当前FCB_RUN_ID和--file参数");
+    const input = JSON.parse(fs.readFileSync(flags.file, "utf8"));
+    return action === "follow"
+      ? read("/v1/management/followups", "POST", { runId: context.runId, request: input, ...(flags.key ? { key: flags.key } : {}) }, revision)
+      : read("/v1/management/followup-observation", "POST", { runId: context.runId, observation: input }, revision);
+  }
   if (action === "output") {
     const runId = context.runId ?? (typeof flags["run-id"] === "string" ? flags["run-id"] : undefined);
     if (!runId || !positionals[0]) throw new Error("登记结果需要当前FCB_RUN_ID和项目内文件路径；本机维护者可显式提供--run-id");

@@ -73,6 +73,35 @@ class Fake(m.Adapter):
 
 
 class Tests(unittest.TestCase):
+    def test_followup_payload_requires_a_declared_reader_without_changing_data(self):
+        database = self.data / "agent-tasks.sqlite"
+        with contextlib.closing(sqlite3.connect(database)) as db:
+            db.execute("CREATE TABLE agent_tasks (data TEXT)")
+            db.execute("INSERT INTO agent_tasks VALUES (?)", (json.dumps({"followup": {"status": "waiting", "deadlineAt": "2026-12-01T00:00:00Z"}}),))
+            db.commit()
+        original = database.read_bytes()
+        (self.source / "package.json").write_text(json.dumps({"scripts": {}}))
+        with self.assertRaisesRegex(m.DeployError, "compatible task reader"):
+            self.d.require_task_features(self.source)
+        (self.source / "package.json").write_text(json.dumps({"codebridgeTaskFeatures": ["bounded-followups"]}))
+        self.d.require_task_features(self.source)
+        self.assertEqual(database.read_bytes(), original)
+
+    def test_manual_rollback_to_an_old_reader_is_rejected_before_maintenance(self):
+        database = self.data / "agent-tasks.sqlite"
+        with contextlib.closing(sqlite3.connect(database)) as db:
+            db.execute("CREATE TABLE agent_tasks (data TEXT)")
+            db.execute("INSERT INTO agent_tasks VALUES (?)", (json.dumps({"followup": {"status": "completed"}}),))
+            db.commit()
+        previous = self.root / "previous.plist"
+        previous.write_bytes(self.plist.read_bytes())
+        self.job.update(state="published", previousPlist=str(previous))
+        self.d.state["current"] = self.job["id"]
+        with self.assertRaisesRegex(m.DeployError, "compatible task reader"):
+            self.d.command({"action": "rollback", "actorId": "owner", "chatId": "chat", "messageId": "rollback_example"})
+        self.assertEqual(self.job["state"], "published")
+        self.assertFalse((self.d.root / "maintenance.json").exists())
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)

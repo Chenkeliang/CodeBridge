@@ -1,5 +1,24 @@
 export type TaskNotificationMode = "result" | "errors" | "progress";
 export interface AgentTaskTarget { channel: "local" | "feishu" | "telegram"; chatId?: string; topicId?: string }
+export interface FollowupRequest {
+  name: string; prompt: string; skills?: string[]; intervalMinutes?: number; timeoutMinutes?: number;
+  notifyNames?: string[]; allowedNotifyNames?: string[];
+}
+export interface FollowupObservation {
+  status: "waiting" | "progress" | "completed" | "blocked";
+  summary: string; key?: string; notifyNames?: string[];
+  caseStatus?: "resolved" | "no_action" | "waiting" | "blocked";
+}
+export interface AgentTaskFollowup {
+  origin: { runId: string; sourceMessageId: string; creatorId: string; managerIds: string[]; isGroup: boolean };
+  deadlineAt: string;
+  status: "waiting" | "completed" | "blocked" | "expired" | "cancelled";
+  recipients: Array<{ name: string; id: string }>;
+  defaultRecipientIds: string[];
+  lastSummary?: string;
+  lastObservedAt?: string;
+  lastObservationKey?: string;
+}
 export interface AgentTaskDraft {
   name: string;
   prompt: string;
@@ -15,6 +34,8 @@ export interface AgentTaskDraft {
   notification: TaskNotificationMode;
   target: AgentTaskTarget;
   enabled: boolean;
+  /** Backend-bound provenance; ordinary task draft endpoints do not accept this field. */
+  followup?: AgentTaskFollowup;
 }
 export type AgentTaskSchedule =
   | { kind: "once"; at: string; label: string }
@@ -27,11 +48,12 @@ export interface AgentTaskDefinition extends AgentTaskDraft {
   lastRunAt: string | null; pausedReason: string | null;
 }
 export type AgentTaskAttemptStatus = "claimed" | "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "interrupted" | "skipped";
-export type TaskNoticeState = "sending" | "sent" | "failed" | "unknown" | "acknowledged";
+export type TaskNoticeState = "sending" | "sent" | "failed" | "unknown" | "acknowledged" | "suppressed";
 export interface TaskNotice {
   id: string; attemptId: string; kind: "start" | "progress" | "approval" | "result" | "resend" | "acknowledgement";
   state: TaskNoticeState; text: string; error: string | null; messageId: string | null;
   createdAt: string; finishedAt: string | null;
+  notifyNames?: string[];
 }
 export interface AgentTaskAttempt {
   id: string; taskId: string; trigger: "scheduled" | "manual" | "retry";
@@ -42,6 +64,8 @@ export interface AgentTaskAttempt {
   retryOf: string | null;
   result: string;
   deliveryState: "pending" | "sent" | "failed" | "unknown" | "suppressed" | "local" | "acknowledged";
+  observation?: FollowupObservation;
+  followupApplied?: boolean;
 }
 export interface TaskFile {
   id: string; attemptId: string; name: string; path: string; size: number; sha256: string; createdAt: string; deliveryOwner: "task" | "agent";

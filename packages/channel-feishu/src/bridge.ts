@@ -1505,6 +1505,24 @@ export class FeishuBridge {
     return Boolean((await this.sessionIngress.getSlotCommandContext(this.buildFullSlot(chatId, rootId))).activeRunId);
   }
 
+  taskRunOptions(chatId: string, topicId?: string) {
+    const binding = this.orchestrator.router.getBinding(chatId, topicId);
+    return { agentId: binding.backendId, cwd: binding.cwd, model: binding.model ?? null, effort: binding.effort ?? null, permissionMode: binding.mode ?? null };
+  }
+
+  async sendFollowupNotification(chatId: string, topicId: string | undefined, text: string, context: { sourceMessageId: string; recipientOpenIds: string[]; isCurrent: () => boolean }): Promise<{ messageId: string } | false> {
+    if (!this.channel) throw new Error("飞书未连接");
+    if (context.recipientOpenIds.some(id => !/^ou_[A-Za-z0-9_]+$/.test(id))) throw new Error("通知身份无效");
+    const options = await this.outboundSendOptions(chatId, topicId, context.sourceMessageId);
+    if (!context.isCurrent()) return false;
+    // Only backend-selected members become native mentions; Agent markup remains readable text.
+    const result = await this.channel.send(chatId, { markdown: text.replace(/<\s*at\b/giu, "&lt;at") }, {
+      ...options, mentions: context.recipientOpenIds.map((openId, i) => ({ key: `followup_recipient_${i}`, openId, isBot: false })),
+    });
+    if (!result?.messageId) throw new Error("跟进通知没有取得飞书投递回执");
+    return { messageId: result.messageId };
+  }
+
   async investigateAlert(alert: FeishuAlertMessage, approverOpenIds: string[], instructions: string): Promise<void> {
     if (!this.channel || !this.sessionIngress || this.options.isMaintenance?.()) throw new Error("告警排查入口暂不可用");
     if (!approverOpenIds.length || approverOpenIds.some((openId) => !checkAccess(this.config, alert.chatId, openId, false))) throw new Error("告警群或审批人不在允许范围内");

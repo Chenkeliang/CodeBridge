@@ -41,19 +41,45 @@ export function registerTaskManagementRoutes(app: Hono, options: {
   };
   app.use("/v1/management/agent-tasks/*", async (c, next) => {
     const sourceRun = c.req.header("x-codebridge-run-id");
+    if (sourceRun) {
+      const id = c.req.path.match(/\/agent-tasks\/(task_[A-Za-z0-9_]+)(?:\/|$)/)?.[1];
+      if (id) try { tasks().assertTaskAccess(id, sourceRun, !["GET", "HEAD"].includes(c.req.method)); } catch { throw new HTTPException(403, { message: "无权访问此任务" }); }
+    }
     if (!["GET", "HEAD"].includes(c.req.method) && sourceRun && tasks().store.forRun(sourceRun)) {
       throw new HTTPException(403, { message: "定时任务内可读取计划和登记本次结果；创建或修改计划请由用户在工作台操作" });
     }
     await next();
   });
+  app.post("/v1/management/followups", async (c) => {
+    const body = object(await c.req.json()), source = c.req.header("x-codebridge-run-id");
+    if (typeof body.runId !== "string" || !body.runId || source && source !== body.runId) throw new HTTPException(403, { message: "跟进必须绑定当前Run" });
+    options.checkRevision(c.req.header("if-match"));
+    const saved = await tasks().createFollowup(body.runId, body.request, body.key === undefined ? undefined : actionKey(String(body.key)), () => options.checkRevision(c.req.header("if-match")));
+    return c.json({ revision: options.revision(), task: saved }, 201);
+  });
+  app.post("/v1/management/followup-observation", async (c) => {
+    const body = object(await c.req.json()), source = c.req.header("x-codebridge-run-id");
+    if (typeof body.runId !== "string" || !body.runId || source && source !== body.runId) throw new HTTPException(403, { message: "观察必须绑定当前Run" });
+    return c.json({ attempt: await tasks().observeFollowup(body.runId, body.observation) });
+  });
+  app.post("/v1/management/followup-stop", async (c) => {
+    const body = object(await c.req.json()), source = c.req.header("x-codebridge-run-id");
+    if (typeof body.runId !== "string" || !body.runId || source && source !== body.runId || typeof body.taskId !== "string") throw new HTTPException(403, { message: "停止操作必须绑定当前Run和任务" });
+    if (tasks().store.forRun(body.runId)) throw new HTTPException(403, { message: "后台只可上报自身观察，不能管理计划" });
+    let owned;
+    try { owned = tasks().assertTaskAccess(body.taskId, body.runId, true); } catch { throw new HTTPException(403, { message: "无权停止此跟进" }); }
+    if (!owned.followup) throw new Error("此接口只用于有界跟进");
+    return c.json({ task: await tasks().setEnabled(owned.id, owned.version, false, () => {}) });
+  });
   app.post("/v1/management/agent-task-output", async (c) => {
     const body = object(await c.req.json());
+    if (c.req.header("x-codebridge-run-id") && c.req.header("x-codebridge-run-id") !== body.runId) throw new HTTPException(403, { message: "不能登记其他Run的文件" });
     if (typeof body.runId !== "string" || typeof body.path !== "string" || !body.path || body.path.length > 4096) throw new Error("登记结果需要当前Run与项目内文件的绝对路径");
     const value = tasks().store.forRun(body.runId);
     if (!value) throw new HTTPException(404, { message: "当前Run不是已登记的定时任务" });
     return c.json({ file: tasks().recordFile(value.id, body.path) }, 201);
   });
-  app.get("/v1/management/agent-tasks", (c) => c.json({ revision: options.revision(), tasks: tasks().store.list(), scheduler: tasks().schedulerStatus() }));
+  app.get("/v1/management/agent-tasks", (c) => c.json({ revision: options.revision(), tasks: tasks().tasksForRun(c.req.header("x-codebridge-run-id")), scheduler: tasks().schedulerStatus() }));
   app.get("/v1/management/agent-tasks/options", async (c) => c.json(await tasks().choices()));
   app.post("/v1/management/agent-tasks/preflight", async (c) => c.json(await tasks().preflight(await c.req.json(), c.req.query("taskId"))));
   app.post("/v1/management/agent-tasks", async (c) => {
@@ -103,6 +129,12 @@ export function registerTaskManagementRoutes(app: Hono, options: {
     return c.json({ file: tasks().recordFile(value.id, body.path) }, 201);
   });
   app.get("/v1/management/agent-task-files/:id", (c) => {
+    const record = tasks().store.file(c.req.param("id"));
+    if (record) {
+      const attempt = tasks().store.getAttempt(record.file.attemptId);
+      try { if (attempt) tasks().assertTaskAccess(attempt.taskId, c.req.header("x-codebridge-run-id")); }
+      catch { throw new HTTPException(403, { message: "无权读取此任务文件" }); }
+    }
     const { file, storedPath } = tasks().fileContent(c.req.param("id"));
     return new Response(fs.readFileSync(storedPath), { headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`, "cache-control": "no-store", "x-content-type-options": "nosniff" } });
   });

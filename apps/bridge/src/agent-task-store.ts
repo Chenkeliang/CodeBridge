@@ -3,7 +3,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
-import type { AgentTaskAttempt, AgentTaskDefinition, AgentTaskDraft, AgentTaskSchedule, TaskFile, TaskNotice } from "@codebridge/core";
+import type { AgentTaskAttempt, AgentTaskDefinition, AgentTaskDraft, AgentTaskSchedule, AgentTaskFollowup, TaskFile, TaskNotice } from "@codebridge/core";
 import { nextTaskRun } from "./task-schedule.js";
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const terminal = new Set(["succeeded", "failed", "cancelled", "interrupted", "skipped"]);
@@ -13,7 +13,8 @@ export class TaskConflictError extends Error {
 }
 export function taskDraft(task: AgentTaskDraft): AgentTaskDraft {
   const { name, prompt, agentId, cwd, skills, model, effort, permissionMode, schedule, timezone, catchUp, notification, target, enabled } = task;
-  return structuredClone({ name, prompt, agentId, cwd, skills, model, effort, permissionMode, schedule, timezone, catchUp, notification, target, enabled });
+  return structuredClone({ name, prompt, agentId, cwd, skills, model, effort, permissionMode, schedule, timezone, catchUp, notification, target, enabled,
+    ...(task.followup ? { followup: task.followup } : {}) });
 }
 
 /** Definitions and dispatch identity are durable; Agent execution remains in the existing Run store. */
@@ -48,9 +49,15 @@ export class AgentTaskStore {
   list(): AgentTaskDefinition[] {
     return (this.db.prepare("SELECT data FROM agent_tasks ORDER BY rowid DESC").all() as Array<{ data: string }>).map((row) => JSON.parse(row.data));
   }
-  create(draft: AgentTaskDraft, schedule: AgentTaskSchedule, now: Date, commandKey?: string): AgentTaskDefinition {
+  creation(commandKey: string, requestHash: string): AgentTaskDefinition | undefined {
+    const prior = this.db.prepare("SELECT request_hash,task_id FROM agent_task_creations WHERE command_key=?").get(commandKey) as { request_hash: string; task_id: string } | undefined;
+    if (!prior) return undefined;
+    if (prior.request_hash !== requestHash) throw new TaskConflictError("同一操作标识不能用于不同任务");
+    return this.require(prior.task_id);
+  }
+  create(draft: AgentTaskDraft, schedule: AgentTaskSchedule, now: Date, commandKey?: string, requestHash?: string): AgentTaskDefinition {
     return this.transaction(() => {
-      const hash = createHash("sha256").update(JSON.stringify(taskDraft(draft))).digest("hex");
+      const hash = requestHash ?? createHash("sha256").update(JSON.stringify(taskDraft(draft))).digest("hex");
       if (commandKey) {
         const prior = this.db.prepare("SELECT request_hash,task_id FROM agent_task_creations WHERE command_key=?").get(commandKey) as { request_hash: string; task_id: string } | undefined;
         if (prior) {
@@ -80,6 +87,7 @@ export class AgentTaskStore {
   update(id: string, expectedVersion: number, draft: AgentTaskDraft, schedule: AgentTaskSchedule, now: Date): AgentTaskDefinition {
     return this.transaction(() => {
       const task = this.require(id, expectedVersion);
+      if (task.followup) throw new TaskConflictError("跟进来源、期限及通知范围固定；请停止后在原会话重新发起");
       if (draft.enabled && task.pausedReason?.startsWith("执行结果不明")) throw new TaskConflictError("请先核对上次执行结果，再明确恢复调度");
       const changedSchedule = task.schedule !== draft.schedule || task.timezone !== draft.timezone;
       const next = { ...task, ...taskDraft(draft), schedule: schedule.kind === "once" ? schedule.at : draft.schedule, parsedSchedule: schedule, version: task.version + 1, updatedAt: now.toISOString(),
@@ -91,6 +99,7 @@ export class AgentTaskStore {
   setEnabled(id: string, expectedVersion: number, enabled: boolean, now: Date, acknowledgeUnknown = false): AgentTaskDefinition {
     return this.transaction(() => {
       const task = this.require(id, expectedVersion);
+      if (task.followup && (task.followup.status !== "waiting" || new Date(task.followup.deadlineAt) <= now)) throw new TaskConflictError("跟进已结束，不能恢复或延长期限");
       if (enabled && task.pausedReason?.startsWith("执行结果不明") && !acknowledgeUnknown) throw new TaskConflictError("上次执行结果不明，请核对后勾选确认再恢复");
       const nextRunAt = enabled ? nextTaskRun(task.parsedSchedule, task.timezone, now) : null;
       if (enabled && !nextRunAt) throw new Error("一次性计划时间已过，请先调整计划；运行一次仍可显式触发");
@@ -104,6 +113,7 @@ export class AgentTaskStore {
       const previous = this.db.prepare("SELECT data FROM agent_task_attempts WHERE trigger_key=?").get(`${id}:${input.key}`) as { data: string } | undefined;
       if (previous) return JSON.parse(previous.data);
       const task = this.require(id, input.expectedVersion);
+      if (task.followup && !input.skipReason && (task.followup.status !== "waiting" || new Date(task.followup.deadlineAt) <= input.now)) throw new TaskConflictError("跟进已到期或结束，未调用Agent");
       if (input.trigger === "scheduled" && (!task.enabled || task.nextRunAt !== input.scheduledAt)) return null;
       if (input.trigger !== "scheduled" && task.pausedReason?.startsWith("执行结果不明") && !input.acknowledgeUnknown) throw new TaskConflictError("请先核对上次执行结果，再明确确认重新执行");
       if (task.activeAttemptId && input.trigger !== "scheduled") throw new TaskConflictError("此任务仍有一轮运行或等待审批，请结束后重试");
@@ -146,7 +156,7 @@ export class AgentTaskStore {
     return (this.db.prepare("SELECT data FROM agent_task_attempts WHERE state IN ('claimed','queued','running','waiting') OR json_extract(data,'$.deliveryState')='pending'")
       .all() as Array<{ data: string }>).map((row) => JSON.parse(row.data));
   }
-  updateAttempt(id: string, patch: Partial<Pick<AgentTaskAttempt, "status" | "reason" | "finishedAt" | "runId" | "turnId" | "workItemId" | "result" | "deliveryState" | "outcomeUncertain">>): AgentTaskAttempt {
+  updateAttempt(id: string, patch: Partial<Pick<AgentTaskAttempt, "status" | "reason" | "finishedAt" | "runId" | "turnId" | "workItemId" | "result" | "deliveryState" | "outcomeUncertain" | "observation">>): AgentTaskAttempt {
     return this.transaction(() => {
       const current = this.getAttempt(id);
       if (!current) throw new Error("运行记录不存在");
@@ -157,7 +167,7 @@ export class AgentTaskStore {
         const task = this.require(next.taskId);
         if (task.activeAttemptId === id) {
           task.activeAttemptId = null;
-          if (next.outcomeUncertain) { task.enabled = false; task.nextRunAt = null; task.pausedReason = "执行结果不明：本次已中断，请核对实际结果后再恢复或重新执行"; task.version++; }
+          if (next.outcomeUncertain && (!task.followup || task.followup.status === "waiting")) { task.enabled = false; task.nextRunAt = null; task.pausedReason = "执行结果不明：本次已中断，请核对实际结果后再恢复或重新执行"; task.version++; }
           this.write(task);
         }
       }
@@ -184,6 +194,26 @@ export class AgentTaskStore {
   }
   latestAttempt(taskId: string): AgentTaskAttempt | undefined {
     const row = this.db.prepare("SELECT data FROM agent_task_attempts WHERE task_id=? AND state!='skipped' ORDER BY rowid DESC LIMIT 1").get(taskId) as { data: string } | undefined;
+    return row ? JSON.parse(row.data) : undefined;
+  }
+  updateFollowup(id: string, status: AgentTaskFollowup["status"], summary: string, now: Date, observationKey = "terminal", attemptId?: string): AgentTaskDefinition {
+    return this.transaction(() => {
+      const task = this.require(id);
+      if (!task.followup) throw new Error("当前任务不是跟进任务");
+      const attempt = attemptId ? this.getAttempt(attemptId) : undefined;
+      if (attempt?.followupApplied) return task;
+      if (task.followup.status !== "waiting") return task;
+      task.followup = { ...task.followup, status,
+        lastSummary: observationKey === "waiting" && task.followup.lastObservationKey ? task.followup.lastSummary : summary,
+        lastObservedAt: now.toISOString(), lastObservationKey: observationKey === "waiting" ? task.followup.lastObservationKey : observationKey };
+      if (status !== "waiting") { task.enabled = false; task.nextRunAt = null; task.pausedReason = summary; }
+      task.version++; task.updatedAt = now.toISOString(); this.write(task);
+      if (attempt) this.db.prepare("UPDATE agent_task_attempts SET data=? WHERE id=?").run(JSON.stringify({ ...attempt, followupApplied: true }), attempt.id);
+      return task;
+    });
+  }
+  notice(id: string): TaskNotice | undefined {
+    const row = this.db.prepare("SELECT data FROM agent_task_notices WHERE id=?").get(id) as { data: string } | undefined;
     return row ? JSON.parse(row.data) : undefined;
   }
   notices(attemptId: string): TaskNotice[] {

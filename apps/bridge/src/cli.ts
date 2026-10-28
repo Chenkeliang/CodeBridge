@@ -479,6 +479,7 @@ program
       alertMonitor = bridge ? new FeishuAlertMonitor({
         statePath: path.join(dataDir, "feishu-alert-monitor.json"),
         config: () => store.get().feishu.alertMonitor, transport: bridge,
+        hasActiveFollowup: (chatId, rootId) => tasks?.hasActiveFollowup(chatId, rootId) ?? false,
         isMaintenance: () => deployment.isMaintenance() || Boolean(connections?.isApplying("feishu")),
         log: (message) => console.log(message),
       }) : undefined;
@@ -503,6 +504,26 @@ program
       connected: (channel) => channel === "feishu" ? bridge?.isConnected ?? false : telegram?.isConnected ?? false,
       feishuChats: () => bridge ? bridge.listManagedChats() : Promise.reject(new Error("飞书尚未连接")),
       pendingPermissions: () => runnerClient.listPendingPermissions(),
+      feishuMembers: (chatId) => bridge ? bridge.listManagedChatMembers(chatId) : Promise.reject(new Error("飞书未连接")),
+      followupOptions: (target) => {
+        if (!bridge || !target.chatId) throw new Error("原飞书会话不可用");
+        return bridge.taskRunOptions(target.chatId, target.topicId);
+      },
+      sendFollowup: (target, text, context) => {
+        if (!bridge || !target.chatId) throw new Error("飞书未连接");
+        return bridge.sendFollowupNotification(target.chatId, target.topicId, text, context);
+      },
+      cancelRun: (runId) => { runExecutor.cancelRun(runId); },
+      followupIsClosed: (target) => {
+        if (!alertMonitor || !target.chatId || !target.topicId || !store.get().feishu.alertMonitor?.groups.some(g => g.chatId === target.chatId)) return false;
+        return alertMonitor.listIncidents(target.chatId).some(i => i.sourceMessageIds.includes(target.topicId!) && i.status === "dismissed");
+      },
+      onFollowupState: async (task, observation) => {
+        if (!alertMonitor || !task.target.chatId || !task.target.topicId) return;
+        const status = task.followup!.status === "waiting" ? "investigating" : observation?.caseStatus ?? (task.followup!.status === "blocked" || task.followup!.status === "expired" ? "blocked" : "waiting");
+        await alertMonitor.projectFollowup(task.target.chatId, task.target.topicId, status,
+          observation?.summary ?? task.followup!.lastSummary ?? `已登记后台跟进，截止 ${task.followup!.deadlineAt}`, task.followup!.origin.sourceMessageId);
+      },
       isMaintenance: () => deployment.isMaintenance() || Boolean(connections?.isApplying()),
       send: async (target, text) => {
         if (target.channel === "feishu" && bridge?.isConnected) await bridge.sendOutboundMarkdown(target.chatId!, text, target.topicId);

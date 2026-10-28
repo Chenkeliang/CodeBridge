@@ -26,6 +26,19 @@ function fixture() {
 }
 
 describe("FeishuAlertMonitor", () => {
+  it("keeps a delegated followup investigating without reserving an alert execution slot", async () => {
+    const f = fixture(); f.config.maxConcurrent = 1;
+    Object.assign(f.options, { hasActiveFollowup: (_chatId: string, rootId: string) => rootId === "om_alert" });
+    const monitor = new FeishuAlertMonitor(f.options);
+    await monitor.tick(); f.advance();
+    f.transport.readAlertMessages.mockResolvedValueOnce({ messages: [f.message()], hasMore: false }); await monitor.tick();
+    await monitor.projectFollowup("oc_alerts", "om_alert", "investigating", "等待外部结果", "om_alert");
+    f.advance(); f.transport.readAlertMessages.mockResolvedValueOnce({ messages: [f.message("om_next", "不同告警：示例第二单")], hasMore: false });
+    await monitor.tick();
+    expect(monitor.listIncidents("oc_alerts").find(i => i.id === "om_alert")?.status).toBe("investigating");
+    expect(f.transport.investigateAlert).toHaveBeenCalledTimes(2);
+    expect(f.transport.investigateAlert).toHaveBeenLastCalledWith(expect.objectContaining({ messageId: "om_next" }), ["ou_owner"], expect.any(String));
+  });
   it("starts at activation time, without replaying old alerts", async () => {
     const f = fixture(); await f.monitor.tick();
     expect(f.transport.readAlertMessages).not.toHaveBeenCalled();

@@ -72,6 +72,29 @@ afterEach(() => {
 });
 
 describe("deployment MCP transport", () => {
+  it("binds followup create and observe to its native Run and current revision", async () => {
+    const requests: Array<{ url?: string; body: unknown; run?: string; revision?: string }> = [];
+    const httpServer = http.createServer(async (req, res) => {
+      const chunks = []; for await (const chunk of req) chunks.push(chunk);
+      const raw = Buffer.concat(chunks).toString();
+      requests.push({ url: req.url, body: raw ? JSON.parse(raw) : null, run: req.headers["x-codebridge-run-id"] as string, revision: req.headers["if-match"] as string });
+      res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ revision: "followup-revision", task: { id: "task_example" } }));
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const client = new Client({ name: "followup-test", version: "1.0.0" });
+    const transport = new StdioClientTransport({ command: process.execPath, args: [builtServerPath], env: {
+      FCB_API: `http://127.0.0.1:${(httpServer.address() as { port: number }).port}`, FCB_TOKEN: "fixture-followup", FCB_RUN_ID: "run_example",
+    }, stderr: "pipe" });
+    try {
+      await client.connect(transport);
+      expect((await client.callTool({ name: "codebridge_followup", arguments: { action: "create", runId: "run_forged", request: { name: "Example", prompt: "query only" } } })).isError).toBe(true);
+      expect(requests).toEqual([]);
+      expect((await client.callTool({ name: "codebridge_followup", arguments: { action: "create", request: { name: "Example", prompt: "query only", timeoutMinutes: 30, allowedNotifyNames: ["示例成员乙"] } } })).isError).toBe(false);
+      expect(requests.at(-1)).toMatchObject({ url: "/v1/management/followups", run: "run_example", revision: "followup-revision", body: { runId: "run_example", request: { timeoutMinutes: 30 } } });
+      expect((await client.callTool({ name: "codebridge_followup", arguments: { action: "observe", observation: { status: "completed", summary: "ready", notifyNames: ["示例成员乙"] } } })).isError).toBe(false);
+      expect(requests.at(-1)).toMatchObject({ url: "/v1/management/followup-observation", run: "run_example", revision: "followup-revision", body: { runId: "run_example", observation: { status: "completed" } } });
+    } finally { await client.close(); await new Promise<void>((resolve) => httpServer.close(() => resolve())); }
+  });
   it("binds each server config to a distinct run", () => {
     const first = createDeploymentMcpServerConfig("/tmp/server.js", { api: "http://127.0.0.1:19790", token: "private", runId: "run_one" });
     const second = createDeploymentMcpServerConfig("/tmp/server.js", { api: "http://127.0.0.1:19790", token: "private", runId: "run_two" });
@@ -97,7 +120,7 @@ describe("deployment MCP transport", () => {
     try {
       await client.connect(transport);
       const tools = (await client.listTools()).tools;
-      expect(tools.map((tool) => tool.name)).toEqual(["codebridge_deploy", "codebridge_alert_status"]);
+      expect(tools.map((tool) => tool.name)).toEqual(["codebridge_deploy", "codebridge_alert_status", "codebridge_followup"]);
       expect(tools[0]?.inputSchema.additionalProperties).toBe(false);
       expect(Object.keys(tools[0]?.inputSchema.properties ?? {})).toEqual(["action", "ref", "releaseId", "publishAfterPrepare"]);
       const spoof = await client.callTool({ name: "codebridge_deploy", arguments: { action: "status", runId: "forged" } });
