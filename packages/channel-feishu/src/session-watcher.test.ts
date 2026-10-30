@@ -197,6 +197,20 @@ async function waitUntil(
 }
 
 describe("FeishuSessionWatcher", () => {
+  it("keeps the preserved-session busy explanation on the original interrupted card", async () => {
+    const { host } = makeHost(); const ingress = makeIngress();
+    const busy = "会话被占用。原会话和上下文已保留；请等待占用释放后继续，不会自动新建会话或重放本次操作。";
+    const events: ChannelSessionEvent[] = [{ ...terminalEvent(8), type: "AGENT_EVENT", payload: { event: { type: "error", message: busy, fatal: true } } }, terminalEvent(9, "RUN_INTERRUPTED")];
+    ingress.events = blockingEvents(events); ingress.replayEvents.mockResolvedValue(events);
+    const w = watcher(ingress, host);
+    try {
+      w.resumeCardForRun("run_1", "card-old", "turn_1", "feishu:old:run_1", false, "cardkit-old"); w.start(0);
+      await waitUntil(() => ingress.completeDelivery.mock.calls.length >= 1);
+      const card = JSON.stringify(vi.mocked(host.updateCard).mock.calls.at(-1));
+      expect(card).toContain(busy); expect(card).toContain("⚠️ **已中断**");
+      expect(host.sendMarkdown).not.toHaveBeenCalled();
+    } finally { w.abort(); }
+  });
   it("recovers an image-bearing terminal card and then delivers the following run", async () => {
     const { host } = makeHost();
     host.updateCard = vi.fn(async (_id, card) => {

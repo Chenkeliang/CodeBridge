@@ -34,13 +34,15 @@ const commands: Record<string, DeploymentCommand> = {
 };
 export function parseDeploymentCommand(text: string): DeploymentCommand | undefined {
   const normalized = text.trim().replace(/[。！!？?]+$/, "").trim()
-    .replace(/^(?:请|帮我)/, "").replace(/吧$/, "").trim();
+    .replace(/^(?:请|帮我)\s*/, "").replace(/^CodeBridge(?:\s*[:：]\s*|\s+)/i, "").replace(/吧$/, "").trim();
   const value = Object.hasOwn(commands, normalized) ? commands[normalized] : undefined;
   return value ? { ...value } : undefined;
 }
 
 export function hasPublishIntent(text: string): boolean {
   if (/[“”"「」『』`]|不要|不用|别|不必|不发布|不上线|先不|暂不/.test(text)) return false;
+  const command = parseDeploymentCommand(text);
+  if (command?.action === "publish" || command?.publishAfterPrepare === true) return true;
   return /(?:测好后上线|测试通过后上线|测好后发布|改好后上线|并上线|然后上线|完成后上线)[。！!\s]*$/.test(text.trim());
 }
 
@@ -103,6 +105,7 @@ export class DeploymentService {
     const sourceRepo = this.readConfig()?.sourceRepo;
     // Scope first: this note must never read as a verdict on other projects' push/deploy authorization.
     return "【CodeBridge 自身修改，仅在本任务修改 CodeBridge 时适用；不涉及其他项目，其他项目的推送、合并、上线授权只以用户原话为准】"
+      + "普通“上线/准备发布/发布状态”等话语根据当前会话正在处理的项目选择对应工具；项目不明确时先澄清，不能默认调用CodeBridge发布器。仅明确带CodeBridge前缀的命令走自身发布快捷入口。"
       + (sourceRepo ? `CodeBridge 修改目录：${sourceRepo}。必须在此目录修改并提交候选。` : "")
       + (hasPublishIntent(text)
         ? "本条消息含发布指令（如“测好后上线”）：仅当本任务修改的是 CodeBridge 时，测试通过后可用 codebridge_deploy（action=prepare,publishAfterPrepare=true）。"
@@ -124,7 +127,8 @@ export class DeploymentService {
       this.nativeMessages.set(message.messageId, { ...message });
       if (this.nativeMessages.size > 1000) this.nativeMessages.delete(this.nativeMessages.keys().next().value!);
     }
-    const command = parseDeploymentCommand(message.content);
+    const command = /^(?:(?:请|帮我)\s*)?CodeBridge(?:\s|[:：])/i.test(message.content.trim())
+      ? parseDeploymentCommand(message.content) : undefined;
     const pairing = /^开启安全发布 ([A-Za-z0-9_-]+)$/.exec(message.content.trim());
     if (!command && !pairing) return undefined;
     if (pairing) {

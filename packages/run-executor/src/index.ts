@@ -411,26 +411,6 @@ export class RunExecutor {
       : this.store.updateRunStatus(run.id, "waiting");
   }
 
-  private dropPoisonedProviderSession(run: Run): Run {
-    if (!run.sessionId) return { ...run, providerSessionId: null };
-    const sessionId = run.sessionId;
-    const agentId = run.agentId;
-    const providerSessionId = run.providerSessionId;
-    this.store.withSessionTransaction((tx) => {
-      if (agentId && providerSessionId) {
-        tx.releaseProviderSession({
-          agentId,
-          providerSessionId,
-          runId: run.id,
-        });
-      }
-      tx.updateRun(run.id, { providerSessionId: null });
-      tx.setSessionProviderSessionId(sessionId, null);
-    });
-    this.activeProviderSessions.delete(run.id);
-    return { ...run, providerSessionId: null };
-  }
-
   private interrupt(run: Run, reason: string): Run {
     if (run.sessionId) {
       return this.options.sessionCoordinator!.finishRun({
@@ -502,7 +482,6 @@ export class RunExecutor {
     this.throwIfCancellationRequested(run.id);
     let replaySafety =
       this.store.getRun(run.id)?.replaySafety ?? "safe";
-    let droppedOccupiedResume = false;
     let fatalAgentError: Error | undefined;
     let renewFromEventAfter = 0;
     type ThoughtDelta = Extract<AgentEvent, { type: "thought_delta" }>;
@@ -550,7 +529,7 @@ export class RunExecutor {
         && event.fatal
         && isProviderSessionOccupiedMessage(event.message)
       ) {
-        throw new ProviderSessionOccupiedError(event.message);
+        event = { ...event, message: `${event.message}。原会话和上下文已保留；请等待占用释放后继续，不会自动新建会话或重放本次操作。` };
       }
       // Task 9 fresh 路径：首个 session 事件到达时，persist 前原子
       // updateRun(providerSessionId) + claim；失败则中断本 run，不 append AGENT_EVENT。
@@ -628,7 +607,9 @@ export class RunExecutor {
       this.options.onEvent?.(run, event);
       this.throwIfCancellationRequested(run.id);
       if (event.type === "error" && event.fatal) {
-        fatalAgentError = new Error(event.message);
+        fatalAgentError = isProviderSessionOccupiedMessage(event.message)
+          ? new ProviderSessionOccupiedError(event.message)
+          : new Error(event.message);
       }
       if (event.type === "done" && event.exitCode !== 0) {
         throw fatalAgentError ?? new Error(`Runner exited with code ${event.exitCode}`);
@@ -672,17 +653,7 @@ export class RunExecutor {
             : String(error),
           sideEffectBoundary: replaySafety,
         });
-        if (
-          error instanceof ProviderSessionOccupiedError
-          && request.resumeSessionId
-          && !droppedOccupiedResume
-        ) {
-          droppedOccupiedResume = true;
-          run = this.dropPoisonedProviderSession(run);
-          request = { ...request, resumeSessionId: undefined };
-          continue;
-        }
-        if (!isProviderTransportError(error)) throw error;
+        if (error instanceof ProviderSessionOccupiedError || !isProviderTransportError(error)) throw error;
         if (replaySafety !== "safe") {
           throw new UnsafeProviderDisconnect(error, replaySafety);
         }

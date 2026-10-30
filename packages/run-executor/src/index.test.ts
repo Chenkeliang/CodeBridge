@@ -854,7 +854,7 @@ describe("RunExecutor", () => {
     store.close();
   });
 
-  it("retries without resume when the Runner says the ACP session is occupied", async () => {
+  it.each(["已被另一个 Runner 任务占用", "正在运行；请等待当前任务结束或先 /stop"])("preserves the provider session without replay when it is %s", async (reason) => {
     const store = new SqliteEventStore(":memory:");
     const coordinator = new SessionCoordinator(store, {
       maxQueuedTurns: 100,
@@ -894,7 +894,7 @@ describe("RunExecutor", () => {
         if (request.resumeSessionId) {
           yield {
             type: "error",
-            message: `ACP session ${request.resumeSessionId} 已被另一个 Runner 任务占用`,
+            message: `ACP session ${request.resumeSessionId} ${reason}`,
             fatal: true,
           };
           yield { type: "done", exitCode: 1 };
@@ -921,16 +921,19 @@ describe("RunExecutor", () => {
     });
 
     const result = await executor.execute(run.id);
-    expect(result.status).toBe("succeeded");
-    expect(runner.requests).toHaveLength(2);
+    expect(result.status).toBe("interrupted");
+    expect(result.terminalReason).toBe("provider_session_busy");
+    expect(runner.requests).toHaveLength(1);
     expect(runner.requests[0]?.resumeSessionId).toBe("prov_poisoned");
-    expect(runner.requests[1]?.resumeSessionId).toBeUndefined();
-    expect(store.getRun(run.id)?.providerSessionId).toBe("prov_fresh");
+    expect(store.getRun(run.id)?.providerSessionId).toBe("prov_poisoned");
+    expect(store.listEvents(run.workItemId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "AGENT_EVENT", payload: { event: expect.objectContaining({ type: "error", message: expect.stringContaining("原会话和上下文已保留") }) } }),
+    ]));
     let runtimeId: string | null = null;
     store.withSessionTransaction((tx) => {
       runtimeId = tx.getSessionProviderSessionId("sess_1");
     });
-    expect(runtimeId).toBe("prov_fresh");
+    expect(runtimeId).toBe("prov_poisoned");
     store.close();
   });
 

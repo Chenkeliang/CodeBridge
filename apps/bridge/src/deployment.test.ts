@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeploymentService, hasPublishIntent, mountDeploymentRoutes, parseDeploymentCommand } from "./deployment.js";
 import { createOutboundApp } from "./outbound-api.js";
 import type { SqliteEventStore } from "@codebridge/work-items";
+import { defaultConfig } from "@codebridge/core";
+import { FeishuBridge, type FeishuMessage } from "@codebridge/channel-feishu";
 const directories: string[] = [];
 afterEach(() => directories.splice(0).forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
 function setup(config: object = { token: "secret", ownerOpenId: "ou_owner" }) {
@@ -14,8 +16,28 @@ function setup(config: object = { token: "secret", ownerOpenId: "ou_owner" }) {
   const request = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ message: "正在准备" })));
   return { dir, configPath, request, service: new DeploymentService({ configPath, fetch: request }) };
 }
-const message = { senderId: "ou_owner", messageId: "om_native", chatId: "oc_chat", chatType: "p2p" as const, content: "准备发布" };
+const message = { senderId: "ou_owner", messageId: "om_native", chatId: "oc_chat", chatType: "p2p" as const, content: "CodeBridge 准备发布" };
 describe("deployment ingress", () => {
+  it.each(["上线吧", "准备发布", "发布这次修改", "上线了吗？", "取消这次发布", "退回上一个版本", "测好后上线"])("leaves unqualified project intent to the current agent: %s", async (content) => {
+    const { service, request } = setup();
+    const native = { ...message, content };
+    expect(await service.handleFeishuMessage(native)).toBeUndefined();
+    expect(service.nativeContext(native.messageId)).toEqual(native);
+    expect(request).not.toHaveBeenCalled();
+  });
+  it("routes project intent through the active Feishu entry while keeping explicit self-deploy commands", async () => {
+    const f = setup();
+    const instance = new FeishuBridge({ config: defaultConfig(), dataDir: f.dir, onDeploymentMessage: native => f.service.handleFeishuMessage(native) });
+    const bridge = instance as unknown as { handleMessage(message: FeishuMessage): Promise<void>; submitAndStream: ReturnType<typeof vi.fn>; sendMarkdown: ReturnType<typeof vi.fn> };
+    bridge.submitAndStream = vi.fn(async () => {}); bridge.sendMarkdown = vi.fn(async () => {});
+    await bridge.handleMessage({ ...message, content: "上线吧" });
+    expect(bridge.submitAndStream).toHaveBeenCalledWith(expect.objectContaining({ content: "上线吧" }), expect.stringContaining("上线吧"), undefined);
+    expect(f.request).not.toHaveBeenCalled();
+    bridge.submitAndStream.mockClear();
+    await bridge.handleMessage({ ...message, messageId: "om_explicit", content: "CodeBridge 上线吧" });
+    expect(bridge.submitAndStream).not.toHaveBeenCalled();
+    expect(JSON.parse(f.request.mock.calls[0]![1]!.body as string)).toMatchObject({ action: "publish", messageId: "om_explicit" });
+  });
   it.each(["不要上线", "先别发布", "解释一下‘上线’", "把提示词改成上线", "修改菜单，测好后上线", '"上线"', "constructor", "toString", "请不要上线吧", "帮我解释上线", "上线后改菜单", "‘上线’？"])("preserves ordinary text %s", (text) => {
     expect(parseDeploymentCommand(text)).toBeUndefined();
   });
@@ -61,6 +83,8 @@ describe("deployment ingress", () => {
     expect(await service.handleFeishuMessage({ ...message, content: "继续解释代码" })).toBeUndefined();
   });
   it("recognizes positive final publish instruction but rejects negation/quoted prompts", () => {
+    expect(hasPublishIntent("上线吧")).toBe(true);
+    expect(hasPublishIntent("CodeBridge 上线吧")).toBe(true);
     expect(hasPublishIntent("把菜单改好，测好后上线")).toBe(true);
     expect(hasPublishIntent("不要上线，改提示词为测好后上线")).toBe(false);
     expect(hasPublishIntent('把提示词改成“测好后上线”')).toBe(false);
@@ -126,6 +150,7 @@ describe("deployment ingress", () => {
     expect(guidance).not.toMatch(/本轮未授权|未授权自动上线/);
     expect(guidance.startsWith("【CodeBridge 自身修改，仅在本任务修改 CodeBridge 时适用；不涉及其他项目")).toBe(true);
     expect(guidance).toContain("其他项目的推送、合并、上线授权只以用户原话为准");
+    expect(guidance).toContain("根据当前会话正在处理的项目");
   });
 
 });
