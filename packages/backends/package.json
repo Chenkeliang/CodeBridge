@@ -17,8 +17,8 @@
     "@agentclientprotocol/sdk": "1.8.0",
     "@codebridge/core": "workspace:*",
     "@codebridge/session-catalog": "workspace:*",
-    "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
