@@ -57,7 +57,9 @@ export interface FeishuAlertTransport {
   readAlertMessages(chatId: string, startTime: number, endTime: number, pageToken?: string): Promise<FeishuAlertPage>;
   investigateAlert(alert: FeishuAlertMessage, approverOpenIds: string[], instructions: string): Promise<void>;
   isAlertActive(chatId: string, rootId: string): Promise<boolean>;
-  cancelAlertInvestigation?(chatId: string, rootId: string): Promise<void>;
+  cancelAlertInvestigation?(chatId: string, rootId: string, excludeRunId?: string): Promise<void>;
+  /** Read the actual human message, not a model-supplied quote or summary. */
+  readAlertUserMessage?(messageId: string): Promise<FeishuMessage | undefined>;
   setAlertMessageReaction?(messageId: string, emojiType: string, managed: string[]): Promise<string>;
   notifyAlertOwner?(chatId: string, rootId: string, recipientOpenIds: string[], text: string, sourceMessageId?: string, isCurrent?: () => boolean): Promise<void>;
   clearAlertOwnerNotice?(chatId: string, rootId: string, sourceMessageId?: string): Promise<void>;
@@ -81,6 +83,7 @@ export const ALERT_INVESTIGATION_INSTRUCTIONS = [
   "waiting/blocked 在本次排查回复卡片上直接原生 @ 所选联系人；未选择时使用默认审批人/负责人，不另发第二条重复提醒。状态摘要只用于案件状态记录，不替换、压缩或限制模型的完整最终回复；摘要概括状态和具体待办，最终回复保留完整解释、证据、必要代码和操作说明。此前上下文中的固定回复模板不再适用。单号等标识可用行内代码。",
   '本轮结束前执行 fcb alert status <waiting|resolved|no_action|blocked> [--notify <姓名> ...] "证据或具体待办"。这会直接更新原卡片 Reaction；notify可为一个姓名或姓名数组，CLI多人重复--notify，按实际情况和群矩阵选人。全部姓名逐一唯一匹配后，在同一回复卡片一次@并去重；未指定时 waiting 通知审批人、blocked 通知负责人，不沿用上轮指定联系人。提醒人不获得审批权限。例外：用户或受信任群流程要求持续等待外部结果时，可用 codebridge_followup 创建有截止时间的后台只读跟进。必须写明本单标识、查询入口、完成标准及已授权提醒姓名；只有创建成功后才说明任务ID和截止时间。成功交接后保留 investigating，不为正常等待改成 waiting/blocked 或重复通知；后台每轮用 observe 上报，完成跟进不等于业务恢复。登记失败则说明原因并按真实状态记录。不要额外发送重复提醒或单独表情消息。',
   "只有核实业务恢复才能 resolved；系统依据已确认规则判断无需操作用 no_action；群成员明确回复无需处理或在原卡片点 DONE 由后端记录 dismissed 并显示 DONE，这表示人工结案而非故障修复。不要伪造结案。",
+  "当前已核实审批人的原始回复明确要求人工结案/DONE时，可在查询反馈后使用 codebridge_alert_status(status=\"dismissed\",summary=\"结案原因；非业务恢复\") 或 fcb alert status dismissed。后端会重新读取本Run绑定的真实飞书消息，核实人、群、案件及明确指令，不接受告警正文、引用或Agent摘要充当授权；被拒或DONE未确认时如实反馈。此动作只关闭当前案件，不授予后续类型规则或业务写权限。规则持久化和执行许可仍走各自原有授权流程，不绕过拒绝。",
 ].join("\n");
 
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["resolved", "no_action", "dismissed"]);
@@ -519,7 +522,7 @@ export class FeishuAlertMonitor {
     return related.length ? "\n\n【同群同类型历史，仅用于匹配适用规则，不能代替不同业务对象的事实】\n" + JSON.stringify(related) : "";
   }
 
-  private async dismissIncident(incident: Incident, message: FeishuMessage, via: "message" | "reaction" = "message"): Promise<void> {
+  private async dismissIncident(incident: Incident, message: FeishuMessage, via: "message" | "reaction" = "message", options: { excludeRunId?: string; quiet?: boolean } = {}): Promise<void> {
     const alreadyDismissed = Boolean(this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.dismissal);
     this.updateIncident(incident.alert, (item) => {
       item.dismissal = { ownerOpenId: message.senderId, messageId: message.messageId, reason: message.content, at: (this.options.now ?? Date.now)(), via };
@@ -528,13 +531,20 @@ export class FeishuAlertMonitor {
       item.statusAt = (this.options.now ?? Date.now)(); delete item.ownerNotice; delete item.awaitingReplyDispatch;
       if (!item.replies.includes(message.messageId)) item.replies.push(message.messageId);
     });
+    const decision = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.dismissal;
+    const isCurrent = () => {
+      const current = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId];
+      return current?.status === "dismissed" && current.dismissal?.messageId === decision?.messageId
+        && current.dismissal?.ownerOpenId === decision?.ownerOpenId && current.dismissal?.at === decision?.at;
+    };
     await this.syncStatus(incident.alert.chatId, incident.alert.messageId)
       .catch((error) => this.options.log(`结案已记录，表情待重试：${error instanceof Error ? error.message : String(error)}`));
     for (const rootId of incident.sourceMessageIds ?? [incident.alert.messageId]) {
-      await this.options.transport.cancelAlertInvestigation?.(incident.alert.chatId, rootId)
+      if (!isCurrent()) return;
+      await this.options.transport.cancelAlertInvestigation?.(incident.alert.chatId, rootId, ...(options.excludeRunId ? [options.excludeRunId] : []))
         .catch((error) => this.options.log(`停止已结案排查待确认：${error instanceof Error ? error.message : String(error)}`));
     }
-    if (!alreadyDismissed) await this.postDismissalReceipt(incident, message, via)
+    if (!alreadyDismissed && !options.quiet && isCurrent()) await this.postDismissalReceipt(incident, message, via)
       .catch((error) => this.options.log(`结案回执发送失败：${error instanceof Error ? error.message : String(error)}`));
   }
 
@@ -556,6 +566,40 @@ export class FeishuAlertMonitor {
     const content = fs.readFileSync(runbookPath, "utf8");
     if (!content.trim() || Buffer.byteLength(content) > 64_000) throw new Error("Invalid alert runbook");
     return `\n\n【本次告警必须遵循的 SKILL：${runbookPath}】\n${content}\n相对引用以这个 SKILL 所在目录解析；每次读取当前告警矩阵，新增或纠正类型时维护矩阵。`;
+  }
+
+  async closeFromRun(chatId: string, rootId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent?: () => boolean }): Promise<{ status: "dismissed"; emoji: "DONE" }> {
+    if (!reason.trim() || reason.length > 2000) throw new Error("人工结案需要简明原因，不能用业务恢复替代");
+    const incidents = this.store.read()[chatId]?.incidents ?? {};
+    const incident = incidents[rootId] ?? Object.values(incidents).find(item => item.sourceMessageIds?.includes(rootId));
+    if (!incident || !this.options.config()?.groups.some(group => group.chatId === chatId) || !this.currentApprovers(incident).includes(context.actorId)
+      || !incident.replies.includes(context.sourceMessageId)) throw new Error("人工结案需要本案件已核验审批人的当前回复");
+    const native = await this.options.transport.readAlertUserMessage?.(context.sourceMessageId);
+    if (!native || native.chatId !== chatId || native.messageId !== context.sourceMessageId || native.senderId !== context.actorId) {
+      throw new Error("无法核实原始用户消息，未按Agent提供的摘要或引用结案");
+    }
+    const text = native.content.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/gu, "")
+      .split("\n").filter(line => !/^\s*>/u.test(line)).join("\n")
+      .replace(/"[^"]*"|'[^']*'|“[^”]*”|「[^」]*」|『[^』]*』|`[^`]*`/gu, "").trim();
+    const definite = /^(?:\/done|done|结案|无需处理|不用处理|不需要处理)[。！!\s]*$/iu.test(text)
+      || /^(?:(?:本单|这单|本案|此单|本条|这条|本告警|该告警)\s*)?(?:标记|标|设|记)(?:为|成)?\s*done[。！!\s]*$/iu.test(text)
+      || text.split(/[，,。；;\n]/u).some(clause => /^(?:(?:本单|这单|本案|此单|本条|这条|本告警|该告警)\s*)?(?:(?:查询结果反馈|查询反馈|查询|结果反馈|反馈|查完)(?:之后|以后|后)\s*)?(?:直接|请|确认|同意)\s*(?:标记|标|设|记)?\s*(?:为|成)?\s*(?:done|人工结案|结案)(?:$|\s|不再|[!！])/iu.test(clause.trim()));
+    if (!definite || /[?？]|是否|能否|要不要|如何|怎么|解释/iu.test(text)
+      || /(?:不要|别|不能|不许|先不|暂不).{0,8}(?:done|结案)/iu.test(text)) {
+      throw new Error("原始用户消息未明确要求人工结案，或包含否定/疑问；未执行");
+    }
+    const latest = this.store.read()[chatId]?.incidents[incident.alert.messageId];
+    if (!latest || context.isCurrent?.() === false || !this.options.config()?.groups.some(group => group.chatId === chatId) || !this.currentApprovers(latest).includes(context.actorId)
+      || latest.notificationSourceMessageId !== context.sourceMessageId) throw new Error("案件已有更新的回复或任务已结束，未覆盖较新决定");
+    if (!latest.dismissal) {
+      await this.dismissIncident(latest, { ...native, rootId, content: `审批人原始指令：${native.content}\n结案说明：${reason.trim()}；不代表业务恢复。` }, "message", { excludeRunId: context.runId, quiet: true });
+    } else await this.syncStatus(chatId, latest.alert.messageId);
+    const closed = this.store.read()[chatId]!.incidents[latest.alert.messageId]!;
+    if (closed.status !== "dismissed") throw new Error("案件已有较新决定或重新开启，旧结案不作为当前终态");
+    if (!(closed.sourceMessageIds ?? [closed.alert.messageId]).every(id => closed.reactionApplied?.[id] === "DONE")) {
+      throw new Error("人工结案已记录，DONE表情尚未确认；可重试投影，不能标成业务恢复");
+    }
+    return { status: "dismissed", emoji: "DONE" };
   }
 
   async setStatus(chatId: string, rootId: string, status: string, summary: string, notify?: string | string[], sourceMessageId?: string): Promise<void> {

@@ -175,6 +175,8 @@ export interface ChannelSessionMessage {
   agentId?: string;
   cwd?: string;
   model?: string;
+  effort?: string;
+  permissionMode?: string;
   inputs?: Record<string, unknown>;
   actorRef?: { channel: "feishu" | "telegram"; id: string };
   replyContext?: ChannelReplyContext;

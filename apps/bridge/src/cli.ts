@@ -577,6 +577,9 @@ program
     });
     const apiApp = createBridgeApp(
         {
+          closeOutboundAlert: (chatId, topicId, reason, context) => alertMonitor
+            ? alertMonitor.closeFromRun(chatId, topicId, reason, context)
+            : Promise.reject(new Error("告警监控未配置")),
           setOutboundAlertStatus: (chatId, topicId, status, summary, notify, sourceMessageId) => alertMonitor
             ? alertMonitor.setStatus(chatId, topicId, status, summary, notify, sourceMessageId)
             : Promise.reject(new Error("告警监控未配置")),

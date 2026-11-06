@@ -760,9 +760,7 @@ export class FeishuBridge {
       prompt?.trim() ||
       resolveInboundPrompt("", msg.attachments?.length ?? 0);
 
-    await this.dispatchToAgent(msg, alertReply
-      ? `${alertReply.instructions}\n\n${agentPrompt}`
-      : agentPrompt, topicId);
+    await this.dispatchToAgent(msg, agentPrompt, topicId, alertReply?.instructions);
   }
 
   /** 组装话题/引用上下文并启动 agent 流式回复 */
@@ -770,6 +768,7 @@ export class FeishuBridge {
     msg: FeishuMessage,
     agentPrompt: string,
     topicId: string | undefined,
+    instructions?: string,
   ): Promise<void> {
     // 话题根消息 + 引用回复注入 prompt；拉取失败降级，不阻断
     let contextPrefix: string | undefined;
@@ -825,9 +824,6 @@ export class FeishuBridge {
         this.options.onLog?.(`话题/引用上下文拉取失败: ${message}`);
       }
     }
-    const promptWithContext = contextPrefix
-      ? `${contextPrefix}\n\n${agentPrompt}`
-      : agentPrompt;
     const scope = { chatId: msg.chatId, topicId };
     const requester = this.mentionRegistry.register(scope, {
       channel: "feishu",
@@ -853,12 +849,16 @@ export class FeishuBridge {
       mentionTargets,
       requester.ref,
     );
+    const hasContext = Boolean(contextPrefix || instructions);
     const finalPrompt = [
-      promptWithContext,
+      hasContext ? `【本轮真实用户指令】\n${msg.content}\n【本轮真实用户指令结束】` : agentPrompt,
       `【本轮发送者】${JSON.stringify({ id: msg.senderId, name: msg.senderName })}；群成员发言不自动代表其他人的操作授权。`,
+      instructions,
+      hasContext && agentPrompt !== msg.content ? `【本轮执行说明】\n${agentPrompt}` : undefined,
       mentionGuidance,
       FEISHU_OUTPUT_STYLE_GUIDANCE,
-    ].join("\n\n");
+      contextPrefix,
+    ].filter(Boolean).join("\n\n");
 
     if (topicId) this.botParticipatedTopics.add(topicId);
 
@@ -1082,6 +1082,8 @@ export class FeishuBridge {
       generation: slot.generation,
       message: prompt,
       model: binding.model,
+      effort: binding.effort,
+      permissionMode: binding.mode,
       attachments: msg.attachments,
       idempotencyKey: msg.messageId,
       replyToMessageId: msg.messageId,
@@ -1495,10 +1497,21 @@ export class FeishuBridge {
     return findHumanDoneReaction(this.channel.rawClient, messageId, after);
   }
 
-  async cancelAlertInvestigation(chatId: string, rootId: string): Promise<void> {
+  async cancelAlertInvestigation(chatId: string, rootId: string, excludeRunId?: string): Promise<void> {
     if (!this.sessionIngress) return;
     const context = await this.sessionIngress.getSlotCommandContext(this.buildFullSlot(chatId, rootId));
-    if (context.sessionId && context.activeRunId) await this.sessionIngress.cancelRun(context.sessionId, context.activeRunId);
+    if (context.sessionId && context.activeRunId && context.activeRunId !== excludeRunId) await this.sessionIngress.cancelRun(context.sessionId, context.activeRunId);
+  }
+
+  async readAlertUserMessage(messageId: string): Promise<FeishuMessage | undefined> {
+    if (!this.channel) throw new Error("飞书未连接，无法核实结案指令");
+    const result = await this.channel.rawClient.im.v1.message.get({ path: { message_id: messageId } });
+    if (result.code !== 0) throw new Error("飞书原始消息读取失败，未确认人工结案");
+    const message = result.data?.items?.find(item => item.message_id === messageId);
+    if (!message || message.sender?.sender_type !== "user" || !message.sender.id?.startsWith("ou_")
+      || !message.chat_id || !["text", "post"].includes(message.msg_type ?? "")) return undefined;
+    return { messageId, chatId: message.chat_id, chatType: "group", senderId: message.sender.id,
+      content: extractMessageText(message.msg_type, message.body?.content ?? "", message.mentions?.map(item => ({ key: item.key!, name: item.name! }))) };
   }
 
   async isAlertActive(chatId: string, rootId: string): Promise<boolean> {

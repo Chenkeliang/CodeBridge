@@ -570,6 +570,8 @@ export class TelegramBridge {
       generation: slot.generation,
       message: prompt,
       model: binding.model,
+      effort: binding.effort,
+      permissionMode: binding.mode,
       idempotencyKey: idempotencyKey,
       replyToMessageId: sourceMessageId,
       showThinking,

@@ -8,6 +8,7 @@ import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
+  closeOutboundAlert?(chatId: string, topicId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent: () => boolean }): Promise<{ status: "dismissed"; emoji: "DONE" }>;
   setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string, notify?: string | string[], sourceMessageId?: string): Promise<void>;
   sendOutboundFile(
     chatId: string,
@@ -178,10 +179,23 @@ export function createOutboundApp(
     if (!options.workItemStore || !target?.topicId || !target.chatId.startsWith("oc_")) {
       return c.json({ error: "alert_status_requires_feishu_run" }, 400);
     }
-    const body = await c.req.json().catch(() => null) as { status?: unknown; summary?: unknown; notify?: unknown } | null;
+    const body = await c.req.json().catch(() => null) as { runId?: unknown; status?: unknown; summary?: unknown; notify?: unknown } | null;
     if (typeof body?.status !== "string" || typeof body.summary !== "string") return c.json({ error: "status and summary required" }, 400);
     try {
       const notify = normalizeNotificationNames(body.notify);
+      if (body.status === "dismissed") {
+        const runId = typeof body.runId === "string" ? body.runId : "";
+        const run = options.workItemStore.getRun(runId);
+        const actor = run?.turnId ? options.workItemStore.getTurn(run.turnId)?.message.actorRef : undefined;
+        if (actor?.channel !== "feishu" || !target.sourceMessageId || notify !== undefined || !bridge.closeOutboundAlert) {
+          return c.json({ error: "人工结案需要当前飞书审批人原始指令，不接受指定通知人或后台任务" }, 403);
+        }
+        const result = await bridge.closeOutboundAlert(target.chatId, target.topicId, body.summary, {
+          actorId: actor.id, sourceMessageId: target.sourceMessageId, runId,
+          isCurrent: () => options.workItemStore!.getRun(runId)?.status === "running",
+        });
+        return c.json({ ok: true, ...result });
+      }
       if (!bridge.setOutboundAlertStatus) throw new Error("alert_status_unavailable");
       await bridge.setOutboundAlertStatus(target.chatId, target.topicId, body.status, body.summary,
         notify, target.sourceMessageId);

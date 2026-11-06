@@ -95,6 +95,8 @@ export function createChannelSessionIngress(
           agent_id: message.agentId,
           cwd: message.cwd,
           model: message.model,
+          effort: message.effort,
+          permission_mode: message.permissionMode,
 
           ...(message.inputs !== undefined ? { inputs: message.inputs } : {}),
           ...(message.actorRef !== undefined ? { actor_ref: message.actorRef } : {}),

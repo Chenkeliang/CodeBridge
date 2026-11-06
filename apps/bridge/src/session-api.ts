@@ -402,6 +402,8 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         ...(actorRef ? { actor_ref: actorRef } : {}),
         ...(channel === "feishu" && body.reply_context !== undefined ? { reply_context: body.reply_context } : {}),
         model: asNullableString(body.model),
+        ...(body.effort !== undefined ? { effort: session.effort ?? asNullableString(body.effort) } : {}),
+        ...(body.permission_mode !== undefined ? { permission_mode: session.permissionMode ?? asNullableString(body.permission_mode) } : {}),
         attachments: body.attachments,
         delivery: hasReplyToMessageId
           ? {
