@@ -624,31 +624,32 @@ export class FeishuAlertMonitor {
   private async verifiedClosureRule(incident: Incident) {
     const config = this.options.config();
     const group = config?.groups.find(item => item.chatId === incident.alert.chatId && item.enabled !== false);
-    if (!group || config?.enabled === false || !group.senderAppIds.includes(incident.alert.senderId)) throw new Error("当前告警群或来源未启用，未按持续授权结案");
+    if (!group || config?.enabled === false || !group.senderAppIds.includes(incident.alert.senderId)) return { ok: false as const, error: "当前告警群或来源未启用，未按持续授权结案" };
     const matched = matchAlertClosureRule(group.runbookPath, incident.alert);
-    if (!matched) throw new Error("本群未唯一命中已确认的持续结案规则，未执行");
+    if (!matched) return { ok: false as const, error: "本群未唯一命中已确认的持续结案规则，未执行" };
     const source = await this.options.transport.readAlertUserMessage?.(matched.rule.authorization.messageId);
     if (!source || source.messageId !== matched.rule.authorization.messageId || source.chatId !== incident.alert.chatId
       || !this.currentApprovers(incident).includes(source.senderId)
       || createHash("sha256").update(source.content).digest("hex") !== matched.rule.authorization.contentSha256) {
-      throw new Error("持续授权原始消息、群、审批人或内容未通过核验，未执行");
+      return { ok: false as const, error: "持续授权原始消息、群、审批人或内容未通过核验，未执行" };
     }
     const authorizedAt = Number((source.raw as { create_time?: unknown } | undefined)?.create_time);
     if (!Number.isFinite(authorizedAt) || authorizedAt <= 0 || incident.alert.createdAt < authorizedAt) {
-      throw new Error("告警早于持续授权或原消息时间不可核实，不追补历史案件");
+      return { ok: false as const, error: "告警早于持续授权或原消息时间不可核实，不追补历史案件" };
     }
     const current = this.options.config();
     const target = current?.groups.find(item => item.chatId === incident.alert.chatId && item.enabled !== false);
     if (!target || current?.enabled === false || !target.senderAppIds.includes(incident.alert.senderId)
       || !approversOf(target).includes(source.senderId) || matchAlertClosureRule(target.runbookPath, incident.alert)?.revision !== matched.revision) {
-      throw new Error("持续授权在核验期间已更改或撤销，未执行");
+      return { ok: false as const, error: "持续授权在核验期间已更改或撤销，未执行" };
     }
-    return { ...matched, source };
+    return { ok: true as const, ...matched, source };
   }
 
   private async requestRuleClosure(incident: Incident, topicId: string, reason: string, context: { sourceMessageId: string; runId: string; isCurrent?: () => boolean }): Promise<{ status: "investigating"; pending: true }> {
     if (!this.options.transport.readAlertDelivery) throw new Error("无法核实完整答复投递状态，未登记自动结案");
     const matched = await this.verifiedClosureRule(incident);
+    if (!matched.ok) throw new Error(matched.error);
     const current = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId];
     if (!current || current.dismissal || context.isCurrent?.() === false || current.followupNoticeSource
       || (current.notificationSourceMessageId ?? current.alert.messageId) !== context.sourceMessageId) throw new Error("案件已有更新决定或任务已结束，未登记旧结案");
@@ -677,12 +678,15 @@ export class FeishuAlertMonitor {
     let error: string | undefined;
     if (["failed", "cancelled", "interrupted"].includes(delivery.runSnapshot.status)) error = "本次排查任务未成功，未自动结案；需核对本次失败和真实业务状态。";
     if (!error && (delivery.runSnapshot.status !== "succeeded" || delivery.status !== "completed" || !delivery.surfaceMessageId)) return;
-    let matched: Awaited<ReturnType<FeishuAlertMonitor["verifiedClosureRule"]>> | undefined;
+    let matched: Extract<Awaited<ReturnType<FeishuAlertMonitor["verifiedClosureRule"]>>, { ok: true }> | undefined;
     if (!error) {
-      try {
-        matched = await this.verifiedClosureRule(incident);
+      // Read/transport failures remain pending and retry on the next poll, including after restart.
+      const verification = await this.verifiedClosureRule(incident);
+      if (!verification.ok) error = verification.error;
+      else {
+        matched = verification;
         if (matched.revision !== pending.revision || matched.rule.id !== pending.ruleId) error = "持续授权规则已更改，不沿用旧的待结案请求。";
-      } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+      }
     }
     if (!isCurrent()) return;
     if (error) {
