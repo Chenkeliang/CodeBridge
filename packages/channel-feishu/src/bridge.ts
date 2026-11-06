@@ -1511,12 +1511,18 @@ export class FeishuBridge {
     if (!message || message.sender?.sender_type !== "user" || !message.sender.id?.startsWith("ou_")
       || !message.chat_id || !["text", "post"].includes(message.msg_type ?? "")) return undefined;
     return { messageId, chatId: message.chat_id, chatType: "group", senderId: message.sender.id,
-      content: extractMessageText(message.msg_type, message.body?.content ?? "", message.mentions?.map(item => ({ key: item.key!, name: item.name! }))) };
+      content: extractMessageText(message.msg_type, message.body?.content ?? "", message.mentions?.map(item => ({ key: item.key!, name: item.name! }))), raw: message };
   }
 
   async isAlertActive(chatId: string, rootId: string): Promise<boolean> {
     if (!this.sessionIngress) throw new Error("告警监控需要 Session ingress");
     return Boolean((await this.sessionIngress.getSlotCommandContext(this.buildFullSlot(chatId, rootId))).activeRunId);
+  }
+
+  async readAlertDelivery(chatId: string, topicId: string, sourceMessageId: string, runId: string) {
+    if (!this.sessionIngress) throw new Error("告警结案需要 Session delivery 状态");
+    return (await this.sessionIngress.listDeliveries("feishu", undefined, sourceMessageId)).find(item => item.runId === runId
+      && item.replyToMessageId === sourceMessageId && item.conversationId === this.chatKey(chatId, topicId));
   }
 
   taskRunOptions(chatId: string, topicId?: string) {

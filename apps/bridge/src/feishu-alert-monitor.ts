@@ -1,7 +1,8 @@
-import type { AlertIncidentView } from "@codebridge/core";
+import type { AlertIncidentView, ChannelDeliveryRow } from "@codebridge/core";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { matchAlertNotificationRule } from "./alert-notification-rules.js";
+import { matchAlertClosureRule } from "./alert-closure-rules.js";
 import { FEISHU_ALERT_STATUSES, type FeishuAlertStatus } from "@codebridge/channel-feishu";
 import { JsonMapStore, normalizeNotificationNames, type AppConfig } from "@codebridge/core";
 import type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply, FeishuMessage, FeishuAlertReaction } from "@codebridge/channel-feishu";
@@ -34,7 +35,9 @@ interface Incident {
   /** A bounded followup owns the source-bound progress/result notification. */
   followupNoticeSource?: string;
   awaitingReplyDispatch?: boolean;
-  dismissal?: { ownerOpenId: string; messageId: string; reason: string; at: number; via?: "message" | "reaction" };
+  dismissal?: { ownerOpenId: string; messageId: string; reason: string; at: number; via?: "message" | "reaction" | "rule";
+    rule?: { id: string; revision: string; runId: string } };
+  ruleClosure?: { runId: string; sourceMessageId: string; topicId: string; ruleId: string; revision: string; reason: string; error?: string };
   reopenedAt?: number;
   notificationRule?: { id: string; evidence: string };
   /** Human reactions on any card of this incident, emoji -> open_ids. Context for the Agent, never a trigger. */
@@ -60,6 +63,7 @@ export interface FeishuAlertTransport {
   cancelAlertInvestigation?(chatId: string, rootId: string, excludeRunId?: string): Promise<void>;
   /** Read the actual human message, not a model-supplied quote or summary. */
   readAlertUserMessage?(messageId: string): Promise<FeishuMessage | undefined>;
+  readAlertDelivery?(chatId: string, topicId: string, sourceMessageId: string, runId: string): Promise<ChannelDeliveryRow | undefined>;
   setAlertMessageReaction?(messageId: string, emojiType: string, managed: string[]): Promise<string>;
   notifyAlertOwner?(chatId: string, rootId: string, recipientOpenIds: string[], text: string, sourceMessageId?: string, isCurrent?: () => boolean): Promise<void>;
   clearAlertOwnerNotice?(chatId: string, rootId: string, sourceMessageId?: string): Promise<void>;
@@ -84,6 +88,7 @@ export const ALERT_INVESTIGATION_INSTRUCTIONS = [
   '本轮结束前执行 fcb alert status <waiting|resolved|no_action|blocked> [--notify <姓名> ...] "证据或具体待办"。这会直接更新原卡片 Reaction；notify可为一个姓名或姓名数组，CLI多人重复--notify，按实际情况和群矩阵选人。全部姓名逐一唯一匹配后，在同一回复卡片一次@并去重；未指定时 waiting 通知审批人、blocked 通知负责人，不沿用上轮指定联系人。提醒人不获得审批权限。例外：用户或受信任群流程要求持续等待外部结果时，可用 codebridge_followup 创建有截止时间的后台只读跟进。必须写明本单标识、查询入口、完成标准及已授权提醒姓名；只有创建成功后才说明任务ID和截止时间。成功交接后保留 investigating，不为正常等待改成 waiting/blocked 或重复通知；后台每轮用 observe 上报，完成跟进不等于业务恢复。登记失败则说明原因并按真实状态记录。不要额外发送重复提醒或单独表情消息。',
   "只有核实业务恢复才能 resolved；系统依据已确认规则判断无需操作用 no_action；群成员明确回复无需处理或在原卡片点 DONE 由后端记录 dismissed 并显示 DONE，这表示人工结案而非故障修复。不要伪造结案。",
   "当前已核实审批人的原始回复明确要求人工结案/DONE时，可在查询反馈后使用 codebridge_alert_status(status=\"dismissed\",summary=\"结案原因；非业务恢复\") 或 fcb alert status dismissed。后端会重新读取本Run绑定的真实飞书消息，核实人、群、案件及明确指令，不接受告警正文、引用或Agent摘要充当授权；被拒或DONE未确认时如实反馈。此动作只关闭当前案件，不授予后续类型规则或业务写权限。规则持久化和执行许可仍走各自原有授权流程，不绕过拒绝。",
+  "本群SKILL references/closure-rules.json中已确认的after_triage规则可用于后续新告警：必须逐单按矩阵查询，再用dismissed提交本单事实并输出完整最终答复。后端独立匹配当前群的精确规则、核验原始审批人授权消息，并等待本Run成功且完整答复投递完成才加DONE。工具返回pending只代表已登记待结案，不能称DONE已显示；失败、授权撤销或更新决定不结案。它不跳过查询、不合并不同订单、不授予业务写权限，不另发催办消息。规则未命中或被拒如实反馈，不用resolved替代。",
 ].join("\n");
 
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["resolved", "no_action", "dismissed"]);
@@ -212,6 +217,12 @@ export class FeishuAlertMonitor {
     }
     if (this.stopped || this.options.isMaintenance?.()) return;
     await this.reconcileOwnerReactions(config);
+    for (const state of Object.values(this.store.read())) {
+      for (const incident of Object.values(state.incidents).filter(item => item.ruleClosure && !item.dismissal)) {
+        await this.completeRuleClosure(incident)
+          .catch(error => this.options.log(`持续授权结案待核实：${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
     let active = 0;
     for (const state of Object.values(this.store.read())) {
       for (const incident of Object.values(state.incidents).filter((item) => item.active)) {
@@ -226,6 +237,7 @@ export class FeishuAlertMonitor {
         else if ((incident.sourceMessageIds ?? [incident.alert.messageId]).some(rootId => this.options.hasActiveFollowup?.(incident.alert.chatId, rootId))) {
           continue; // Waiting followups retain their case state without consuming an investigation slot.
         } else {
+          if (incident.ruleClosure) continue; // A successful Run still needs its final card delivered before closure.
           if (incident.awaitingReplyDispatch && incident.status === "investigating" && (this.options.now ?? Date.now)() - (incident.statusAt ?? 0) < 60_000) {
             active++;
             continue;
@@ -248,7 +260,7 @@ export class FeishuAlertMonitor {
         if (!incident.status) continue;
         const emoji = this.statusEmoji(incident.status);
         const pendingReaction = emoji && (incident.sourceMessageIds ?? [incident.alert.messageId]).some((id) => incident.reactionApplied?.[id] !== emoji);
-        const pendingNotice = !incident.followupNoticeSource && ["waiting", "blocked"].includes(incident.status)
+        const pendingNotice = (!incident.ruleClosure || incident.ruleClosure.error) && !incident.followupNoticeSource && ["waiting", "blocked"].includes(incident.status)
           && incident.ownerNotice !== this.noticeKey(incident);
         if (pendingReaction || pendingNotice) await this.syncStatus(chatId, incident.alert.messageId)
           .catch((error) => this.options.log(`告警状态待重试：${error instanceof Error ? error.message : String(error)}`));
@@ -400,6 +412,7 @@ export class FeishuAlertMonitor {
       if (!message.content.trim().startsWith("/")) {
         if (item.dismissal) item.reopenedAt = (this.options.now ?? Date.now)();
         delete item.dismissal;
+        delete item.ruleClosure;
         item.status = "investigating"; item.summary = `${speaker}已回复，继续排查`;
         item.notificationSourceMessageId = message.messageId;
         delete item.followupNoticeSource;
@@ -522,14 +535,17 @@ export class FeishuAlertMonitor {
     return related.length ? "\n\n【同群同类型历史，仅用于匹配适用规则，不能代替不同业务对象的事实】\n" + JSON.stringify(related) : "";
   }
 
-  private async dismissIncident(incident: Incident, message: FeishuMessage, via: "message" | "reaction" = "message", options: { excludeRunId?: string; quiet?: boolean } = {}): Promise<void> {
+  private async dismissIncident(incident: Incident, message: FeishuMessage, via: "message" | "reaction" = "message", options: { excludeRunId?: string; quiet?: boolean; rule?: { id: string; revision: string; runId: string } } = {}): Promise<void> {
     const alreadyDismissed = Boolean(this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.dismissal);
     this.updateIncident(incident.alert, (item) => {
-      item.dismissal = { ownerOpenId: message.senderId, messageId: message.messageId, reason: message.content, at: (this.options.now ?? Date.now)(), via };
+      item.dismissal = { ownerOpenId: message.senderId, messageId: message.messageId, reason: message.content, at: (this.options.now ?? Date.now)(), via: options.rule ? "rule" : via,
+        ...(options.rule ? { rule: options.rule } : {}) };
       item.submitted = true; item.active = false;
       item.status = "dismissed"; item.summary = `${this.currentApprovers(item).includes(message.senderId) ? "审批人" : "群成员"}确认无需处理，已结案；不代表故障被修复。`;
+      if (options.rule) item.summary = `按已核验持续授权结案：${message.content}；不代表业务恢复。`;
+      delete item.ruleClosure;
       item.statusAt = (this.options.now ?? Date.now)(); delete item.ownerNotice; delete item.awaitingReplyDispatch;
-      if (!item.replies.includes(message.messageId)) item.replies.push(message.messageId);
+      if (!options.rule && !item.replies.includes(message.messageId)) item.replies.push(message.messageId);
     });
     const decision = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.dismissal;
     const isCurrent = () => {
@@ -568,10 +584,13 @@ export class FeishuAlertMonitor {
     return `\n\n【本次告警必须遵循的 SKILL：${runbookPath}】\n${content}\n相对引用以这个 SKILL 所在目录解析；每次读取当前告警矩阵，新增或纠正类型时维护矩阵。`;
   }
 
-  async closeFromRun(chatId: string, rootId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent?: () => boolean }): Promise<{ status: "dismissed"; emoji: "DONE" }> {
+  async closeFromRun(chatId: string, rootId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent?: () => boolean }): Promise<{ status: "dismissed"; emoji: "DONE" } | { status: "investigating"; pending: true }> {
     if (!reason.trim() || reason.length > 2000) throw new Error("人工结案需要简明原因，不能用业务恢复替代");
     const incidents = this.store.read()[chatId]?.incidents ?? {};
     const incident = incidents[rootId] ?? Object.values(incidents).find(item => item.sourceMessageIds?.includes(rootId));
+    if (incident && context.actorId === incident.alert.senderId && (incident.sourceMessageIds ?? [incident.alert.messageId]).includes(context.sourceMessageId)) {
+      return this.requestRuleClosure(incident, rootId, reason, context);
+    }
     if (!incident || !this.options.config()?.groups.some(group => group.chatId === chatId) || !this.currentApprovers(incident).includes(context.actorId)
       || !incident.replies.includes(context.sourceMessageId)) throw new Error("人工结案需要本案件已核验审批人的当前回复");
     const native = await this.options.transport.readAlertUserMessage?.(context.sourceMessageId);
@@ -602,6 +621,83 @@ export class FeishuAlertMonitor {
     return { status: "dismissed", emoji: "DONE" };
   }
 
+  private async verifiedClosureRule(incident: Incident) {
+    const config = this.options.config();
+    const group = config?.groups.find(item => item.chatId === incident.alert.chatId && item.enabled !== false);
+    if (!group || config?.enabled === false || !group.senderAppIds.includes(incident.alert.senderId)) throw new Error("当前告警群或来源未启用，未按持续授权结案");
+    const matched = matchAlertClosureRule(group.runbookPath, incident.alert);
+    if (!matched) throw new Error("本群未唯一命中已确认的持续结案规则，未执行");
+    const source = await this.options.transport.readAlertUserMessage?.(matched.rule.authorization.messageId);
+    if (!source || source.messageId !== matched.rule.authorization.messageId || source.chatId !== incident.alert.chatId
+      || !this.currentApprovers(incident).includes(source.senderId)
+      || createHash("sha256").update(source.content).digest("hex") !== matched.rule.authorization.contentSha256) {
+      throw new Error("持续授权原始消息、群、审批人或内容未通过核验，未执行");
+    }
+    const authorizedAt = Number((source.raw as { create_time?: unknown } | undefined)?.create_time);
+    if (!Number.isFinite(authorizedAt) || authorizedAt <= 0 || incident.alert.createdAt < authorizedAt) {
+      throw new Error("告警早于持续授权或原消息时间不可核实，不追补历史案件");
+    }
+    const current = this.options.config();
+    const target = current?.groups.find(item => item.chatId === incident.alert.chatId && item.enabled !== false);
+    if (!target || current?.enabled === false || !target.senderAppIds.includes(incident.alert.senderId)
+      || !approversOf(target).includes(source.senderId) || matchAlertClosureRule(target.runbookPath, incident.alert)?.revision !== matched.revision) {
+      throw new Error("持续授权在核验期间已更改或撤销，未执行");
+    }
+    return { ...matched, source };
+  }
+
+  private async requestRuleClosure(incident: Incident, topicId: string, reason: string, context: { sourceMessageId: string; runId: string; isCurrent?: () => boolean }): Promise<{ status: "investigating"; pending: true }> {
+    if (!this.options.transport.readAlertDelivery) throw new Error("无法核实完整答复投递状态，未登记自动结案");
+    const matched = await this.verifiedClosureRule(incident);
+    const current = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId];
+    if (!current || current.dismissal || context.isCurrent?.() === false || current.followupNoticeSource
+      || (current.notificationSourceMessageId ?? current.alert.messageId) !== context.sourceMessageId) throw new Error("案件已有更新决定或任务已结束，未登记旧结案");
+    this.updateIncident(incident.alert, item => {
+      item.ruleClosure = { runId: context.runId, sourceMessageId: context.sourceMessageId, topicId, ruleId: matched.rule.id, revision: matched.revision, reason: reason.trim() };
+      item.notificationSourceMessageId = context.sourceMessageId;
+      item.status = "investigating"; item.summary = `本单已提交持续授权结案，等待完整答复成功投递；${reason.trim()}`;
+      item.statusAt = (this.options.now ?? Date.now)(); item.active = true; item.submitted = true; delete item.ownerNotice;
+    });
+    await this.syncStatus(incident.alert.chatId, incident.alert.messageId);
+    return { status: "investigating", pending: true };
+  }
+
+  private async completeRuleClosure(incident: Incident): Promise<void> {
+    const pending = incident.ruleClosure;
+    if (!pending || pending.error || incident.dismissal) return;
+    const current = () => this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId];
+    const isCurrent = () => {
+      const latest = current();
+      return JSON.stringify(latest?.ruleClosure) === JSON.stringify(pending) && !latest?.dismissal && latest?.status === "investigating"
+        && !latest.followupNoticeSource && latest.notificationSourceMessageId === pending.sourceMessageId;
+    };
+    if (!isCurrent()) return;
+    const delivery = await this.options.transport.readAlertDelivery?.(incident.alert.chatId, pending.topicId, pending.sourceMessageId, pending.runId);
+    if (!isCurrent() || !delivery?.runSnapshot) return;
+    let error: string | undefined;
+    if (["failed", "cancelled", "interrupted"].includes(delivery.runSnapshot.status)) error = "本次排查任务未成功，未自动结案；需核对本次失败和真实业务状态。";
+    if (!error && (delivery.runSnapshot.status !== "succeeded" || delivery.status !== "completed" || !delivery.surfaceMessageId)) return;
+    let matched: Awaited<ReturnType<FeishuAlertMonitor["verifiedClosureRule"]>> | undefined;
+    if (!error) {
+      try {
+        matched = await this.verifiedClosureRule(incident);
+        if (matched.revision !== pending.revision || matched.rule.id !== pending.ruleId) error = "持续授权规则已更改，不沿用旧的待结案请求。";
+      } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+    }
+    if (!isCurrent()) return;
+    if (error) {
+      this.updateIncident(incident.alert, item => {
+        item.ruleClosure!.error = error; item.status = "blocked"; item.summary = error;
+        item.active = false; item.statusAt = (this.options.now ?? Date.now)(); delete item.ownerNotice;
+      });
+      await this.syncStatus(incident.alert.chatId, incident.alert.messageId);
+      return;
+    }
+    await this.dismissIncident(current()!, { ...matched!.source, content: `规则 ${pending.ruleId}；${pending.reason}` }, "message", {
+      excludeRunId: pending.runId, quiet: true, rule: { id: pending.ruleId, revision: pending.revision, runId: pending.runId },
+    });
+  }
+
   async setStatus(chatId: string, rootId: string, status: string, summary: string, notify?: string | string[], sourceMessageId?: string): Promise<void> {
     if (!(FEISHU_ALERT_STATUSES as readonly string[]).includes(status) || !summary.trim() || summary.length > 2000) {
       throw new Error("Invalid alert status or summary");
@@ -621,6 +717,7 @@ export class FeishuAlertMonitor {
       && incident.replies.includes(incident.notificationSourceMessageId)) return;
     this.updateIncident(incident.alert, (item) => {
       if (item.dismissal) return;
+      delete item.ruleClosure;
       delete item.followupNoticeSource;
       const namesChanged = JSON.stringify(item.notificationName) !== JSON.stringify(names);
       if (item.status !== status || namesChanged
@@ -672,7 +769,7 @@ export class FeishuAlertMonitor {
     const mapping = this.options.config()?.statusReactions;
     const emoji = this.statusEmoji(incident.status);
     const noticeKey = this.noticeKey(incident);
-    const needsNotice = !incident.followupNoticeSource && ["waiting", "blocked"].includes(incident.status) && incident.ownerNotice !== noticeKey;
+    const needsNotice = (!incident.ruleClosure || incident.ruleClosure.error) && !incident.followupNoticeSource && ["waiting", "blocked"].includes(incident.status) && incident.ownerNotice !== noticeKey;
     if (!["waiting", "blocked"].includes(incident.status)) {
       await this.options.transport.clearAlertOwnerNotice?.(chatId, rootId, incident.notificationSourceMessageId);
     }
@@ -694,6 +791,12 @@ export class FeishuAlertMonitor {
       (async () => {
         if (!needsNotice) return;
         if (!this.options.transport.notifyAlertOwner) throw new Error("Alert owner notification unavailable");
+        if (incident.ruleClosure?.error) {
+          await this.options.transport.notifyAlertOwner(chatId, rootId, [], `自动结案未完成：${incident.ruleClosure.error}`,
+            incident.ruleClosure.sourceMessageId, () => isCurrent(noticeKey));
+          if (isCurrent(noticeKey)) this.updateIncident(incident.alert, item => { item.ownerNotice = noticeKey; });
+          return;
+        }
         if (incident.notificationName) {
           const names = typeof incident.notificationName === "string" ? [incident.notificationName] : incident.notificationName;
           const matchedIds: string[] = [];

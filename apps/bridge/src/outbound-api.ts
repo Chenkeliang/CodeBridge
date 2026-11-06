@@ -8,7 +8,7 @@ import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
-  closeOutboundAlert?(chatId: string, topicId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent: () => boolean }): Promise<{ status: "dismissed"; emoji: "DONE" }>;
+  closeOutboundAlert?(chatId: string, topicId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent: () => boolean }): Promise<{ status: "dismissed"; emoji: "DONE" } | { status: "investigating"; pending: true }>;
   setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string, notify?: string | string[], sourceMessageId?: string): Promise<void>;
   sendOutboundFile(
     chatId: string,

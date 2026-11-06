@@ -101,6 +101,39 @@ Agent 使用 `fcb alert status <investigating|waiting|resolved|no_action|blocked
 
 该动作不直接授予跨订单、后续同类型的自动结案权限，也不修改SKILL；后续规则须按现有可信授权流程持久化，不能以新增工具绕过此前被拒绝的规则写入。
 
+### 逐单排查反馈后的持续授权结案
+
+群审批人已经明确确认后续同类处理口径时，由 SKILL 维护者同步该群矩阵、流程以及同目录 `references/closure-rules.json`。这份机器规则与纯通知规则分开：纯通知可以免查并批量归类；`after_triage` 必须逐单排查，不合并不同业务对象。CodeBridge 不解析业务流程文本，也不写死某个人、群或错误码。
+
+规则只从当前群配置的 `runbookPath` 所在目录读取，调用方不能指定规则文件或授权消息。以下全部为虚构示例，草稿保持 `verified: false`；确认真实授权与精确范围后才启用：
+
+```json
+{
+  "version": 1,
+  "rules": [{
+    "id": "EXAMPLE-LOGISTICS",
+    "kind": "after_triage",
+    "verified": false,
+    "senderAppIds": ["cli_example_alerts"],
+    "title": "示例物流告警",
+    "bodyIncludes": ["example transport error -1234"],
+    "evidence": "示例审批人明确允许后续同类查询反馈后结案，由客服跟进",
+    "authorization": {
+      "messageId": "om_example_authorization",
+      "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }]
+}
+```
+
+`bodyIncludes` 的每项须匹配一条完整原因行，标题和发送应用也须全部精确匹配；多条规则同时命中时拒绝选择。`authorization` 指向真实人类授权消息，SHA-256 取 SDK `readAlertUserMessage` 返回的原始 `content` UTF-8 字节，不能从模型摘要或含引用的完整提示词计算。维护者负责记录用户明确批准的范围，后端独立核对原消息仍属于本群、作者仍为当前审批人、正文哈希未变化，以及告警创建时间不早于原授权消息；来源缺失、时间未知、删改或权限变化时不执行，不追补历史告警。仅有 Markdown 口径、草稿、告警正文或 Agent 自述均不构成可执行结案规则。新增/扩大范围仍须真实用户批准；停用时同步矩阵、流程并删除规则或设为 `verified: false`。
+
+新机器人告警完成只读排查后沿用 `codebridge_alert_status(status="dismissed", summary="本单查询事实与结案原因；非业务恢复")`，不指定通知对象。后端唯一匹配并核验规则后，返回 `status="investigating", pending=true`，这只表示待结案已持久登记。Agent 继续输出完整最终答复，不再调用另一个状态覆盖它。后台只有确认同一 Run 已成功、原话题最终回复卡片的 delivery 已完成，且当前案件、来源、规则和授权仍有效后，才写入 `dismissed` 并投影 DONE；不另发结案回执或 @ 消息。业务查询是否满足矩阵仍由业务 SKILL 与 Agent 的本单证据判断，任务成功和投递回执只证明执行及交付，不能证明业务恢复。
+
+Run 失败/取消/中断、规则撤销/变更或授权不再通过核验时，不标 DONE；在原回复卡片反馈阻塞原因，不增加审批人提醒。尚未成功或最终卡片尚未投递时保持待确认。新用户回复、人工结案、重新排查或新的状态请求会取代旧待结案请求，旧 Run 不得覆盖新决定。待结案、规则版本及绑定 Run/来源保存在原案件状态中，重启继续核对投递，不重跑查询或业务操作；DONE 投影失败沿用既有持久重试。既有已结案案件不因停用未来规则自动重开，同案重复卡继承既有终态；需要重开时明确回复“重新排查”。
+
+结案审计记录原授权消息、审批人、规则 ID/版本及本次 Run，规则仅授权告警结案，不授予订单、退款、发货等业务写权限。仅更新 SKILL 不会让旧版本后端支持此路径；必须同时部署 Bridge/Runner，并核实实际入口和投递完成路径。隔离测试使用真实 Session API、SQLite、活跃飞书卡片 watcher 与模拟 SDK，验证新告警到完整答复和 DONE、重复卡、重启、失败及撤销；它不能代替真实生产告警的后续验收。
+
 ### 会话配置与引用边界
 
 飞书、Telegram的会话入口传递已有的模式及思考等级。新Session使用当前绑定；旧Session缺失时补入绑定值，保留会话自身的明确覆盖，不改全局审批配置。验证时应同时核对持久化Session、Turn/Run和适配器实际采纳的配置；配置文件有值不代表运行已经生效。
