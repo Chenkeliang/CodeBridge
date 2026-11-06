@@ -75,20 +75,25 @@ async function main() {
       markdown: rest.join(" "),
     });
   } else if (cmd === "mention" && rest[0] && rest.length > 1) {
+    const refs = rest[0].split(",");
+    if (refs.some(ref => !/^[ub][1-9][0-9]*$/.test(ref)) || refs.length > 20) fail("fcb: mention需要当前对话已登记的对象引用；多人用逗号分隔");
     await post("/outbound/mention", {
       runId,
-      ref: rest[0],
+      ref: refs.length === 1 ? refs[0] : refs,
       text: rest.slice(1).join(" "),
     });
   } else if (cmd === "alert" && rest[0] === "status" && rest[1] && rest.length > 2) {
     const parts = rest.slice(2);
-    let notify;
-    if (parts[0] === "--notify") {
-      notify = parts[1];
-      if (!notify || !notify.trim() || notify.length > 100 || Array.from(notify).some((c) => c.charCodeAt(0) < 32)) fail("fcb: --notify 需要本群矩阵指定的姓名");
+    const names = [];
+    while (parts[0] === "--notify") {
+      const name = parts[1];
+      if (!name || !name.trim() || name.startsWith("--") || name.length > 100 || Array.from(name).some((c) => c.charCodeAt(0) < 32)) fail("fcb: --notify 需要本群矩阵指定的姓名；多人可重复 --notify");
+      names.push(name.trim());
+      if (names.length > 20) fail("fcb: 一次最多指定20个提醒姓名");
       parts.splice(0, 2);
     }
     if (!parts.length) fail("fcb: 告警状态必须包含证据或具体待办");
+    const notify = names.length === 1 ? names[0] : names.length ? names : undefined;
     await post("/outbound/alert-status", {runId, status: rest[1], summary: parts.join(" "), ...(notify ? {notify} : {})});
   } else {
     fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb alert status <状态> <证据或待办> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]");

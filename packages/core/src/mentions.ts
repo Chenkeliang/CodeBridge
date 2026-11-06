@@ -19,6 +19,26 @@ export interface RegisteredMentionTarget extends MentionTarget {
   ref: string;
 }
 
+/** Canonical names for an explicitly selected group notification; IDs are resolved by the backend. */
+export function normalizeNotificationNames(value: unknown): string | string[] | undefined {
+  if (value === undefined) return undefined;
+  const values = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(values) || !values.length || values.length > 20 || values.some(name => typeof name !== "string"
+    || !name.trim() || name.length > 100 || /[\x00-\x1f<>@]/u.test(name) || /^(?:ou|on|oc|om|cli)_/.test(name.trim()))) {
+    throw new Error("notify must contain 1–20 group member names, not IDs or mention markup");
+  }
+  const names = [...new Set(values.map((name: string) => name.trim()))].sort();
+  return names.length === 1 ? names[0] : names;
+}
+
+export function normalizeMentionRefs(value: unknown): string[] {
+  const refs = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(refs) || !refs.length || refs.length > 20 || refs.some(ref => typeof ref !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(ref))) {
+    throw new Error("mention needs 1–20 references registered in the current conversation");
+  }
+  return [...new Set(refs)];
+}
+
 interface StoredMentionTarget {
   target: RegisteredMentionTarget;
   scopes: string[];
@@ -50,7 +70,7 @@ export class MentionRegistry {
     for (const [ref, entry] of Object.entries(saved)) {
       const target = entry?.target;
       const ordinal = Number(ref.slice(1));
-      if (!/^[ub][1-9]\d*$/.test(ref) || !Number.isSafeInteger(ordinal + 1)
+      if (!/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(ref) || !Number.isSafeInteger(ordinal + 1)
         || !target || target.ref !== ref
         || target.kind !== (ref[0] === "u" ? "user" : "bot")
         || typeof target.id !== "string" || !target.id
@@ -170,6 +190,7 @@ export function formatMentionGuidance(
     "【可主动通知对象】",
     ...lines,
     '需要主动提醒其中某个对象时，执行 `fcb mention <对象引用> "<消息>"`。',
+    '按本次情况需要同时提醒多位已列出的对象时，引用以逗号分隔，例如 `fcb mention u1,u2 "<消息>"`，会在同一条消息中一次@；告警状态提醒优先用codebridge_alert_status在原回复卡片更新，不重复发送。',
     "仅在确实需要主动通知时使用；普通回复不要调用，也不要自行猜测对象引用。",
   ].join("\n");
 }

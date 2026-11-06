@@ -1,4 +1,4 @@
-import type { AgentTaskTarget } from "@codebridge/core";
+import { normalizeMentionRefs, normalizeNotificationNames, type AgentTaskTarget } from "@codebridge/core";
 import { Hono } from "hono";
 import { createWorkItemApp } from "./work-item-api.js";
 import { type SqliteEventStore } from "@codebridge/work-items";
@@ -8,7 +8,7 @@ import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
-  setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string, notify?: string, sourceMessageId?: string): Promise<void>;
+  setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string, notify?: string | string[], sourceMessageId?: string): Promise<void>;
   sendOutboundFile(
     chatId: string,
     rawPath: string,
@@ -23,7 +23,7 @@ export interface OutboundBridge {
   ): Promise<void>;
   sendOutboundMention(
     chatId: string,
-    ref: string,
+    ref: string | string[],
     text: string,
     topicId?: string,
     sourceMessageId?: string,
@@ -180,11 +180,11 @@ export function createOutboundApp(
     }
     const body = await c.req.json().catch(() => null) as { status?: unknown; summary?: unknown; notify?: unknown } | null;
     if (typeof body?.status !== "string" || typeof body.summary !== "string") return c.json({ error: "status and summary required" }, 400);
-    if (body.notify !== undefined && typeof body.notify !== "string") return c.json({ error: "notify must be a recipient name" }, 400);
     try {
+      const notify = normalizeNotificationNames(body.notify);
       if (!bridge.setOutboundAlertStatus) throw new Error("alert_status_unavailable");
       await bridge.setOutboundAlertStatus(target.chatId, target.topicId, body.status, body.summary,
-        typeof body.notify === "string" ? body.notify : undefined, target.sourceMessageId);
+        notify, target.sourceMessageId);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -246,7 +246,7 @@ export function createOutboundApp(
   app.post("/outbound/mention", async (c) => {
     const body = (await c.req.json().catch(() => null)) as {
       chatId?: string;
-      ref?: string;
+      ref?: string | string[];
       text?: string;
       topicId?: string;
     } | null;
@@ -256,9 +256,10 @@ export function createOutboundApp(
       return c.json({ error: "chatId、ref 和 text 必填" }, 400);
     }
     try {
+      const refs = normalizeMentionRefs(body.ref);
       await bridge.sendOutboundMention(
         body.chatId,
-        body.ref,
+        refs.length === 1 ? refs[0]! : refs,
         body.text,
         body.topicId,
         ...(target?.sourceMessageId ? [target.sourceMessageId] : []),

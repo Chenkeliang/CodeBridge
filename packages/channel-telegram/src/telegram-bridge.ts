@@ -1,6 +1,7 @@
 import {
   MentionRegistry,
   formatMentionGuidance,
+  normalizeMentionRefs,
   type AppConfig,
   type ChannelSessionIngress,
   type ChannelSlot,
@@ -378,42 +379,49 @@ export class TelegramBridge {
 
   async sendOutboundMention(
     chatId: string,
-    ref: string,
+    ref: string | string[],
     text: string,
     topicId?: string,
   ): Promise<void> {
-    const target = this.mentionRegistry.resolve({ chatId, topicId }, ref);
-    if (!target || target.channel !== "telegram") {
-      throw new Error(`当前对话不存在可通知对象：${ref}`);
-    }
+    const targets = normalizeMentionRefs(ref).map(key => {
+      const target = this.mentionRegistry.resolve({ chatId, topicId }, key);
+      if (!target || target.channel !== "telegram") throw new Error(`当前对话不存在可通知对象：${key}`);
+      return target;
+    });
 
-    let label: string;
-    let entity: TelegramMessageEntity;
-    if (target.username) {
-      label = `@${target.username.replace(/^@/, "")}`;
-      entity = { type: "mention", offset: 0, length: label.length };
-    } else {
-      const id = Number(target.id);
-      if (!Number.isSafeInteger(id)) {
-        throw new Error(`Telegram 用户 ID 无效：${target.id}`);
+    let prefix = "";
+    const entities: TelegramMessageEntity[] = [];
+    for (const target of targets) {
+      let label: string;
+      let entity: TelegramMessageEntity;
+      if (target.username) {
+        label = `@${target.username.replace(/^@/, "")}`;
+        entity = { type: "mention", offset: prefix.length, length: label.length };
+      } else {
+        const id = Number(target.id);
+        if (!Number.isSafeInteger(id)) {
+          throw new Error(`Telegram 用户 ID 无效：${target.id}`);
+        }
+        label = target.name ?? "用户";
+        entity = {
+          type: "text_mention",
+          offset: prefix.length,
+          length: label.length,
+          user: {
+            id,
+            is_bot: target.kind === "bot",
+            first_name: label,
+          },
+        };
       }
-      label = target.name ?? "用户";
-      entity = {
-        type: "text_mention",
-        offset: 0,
-        length: label.length,
-        user: {
-          id,
-          is_bot: target.kind === "bot",
-          first_name: label,
-        },
-      };
+      prefix += `${label} `;
+      entities.push(entity);
     }
     await this.api.sendMessage(
       chatId,
-      `${label} ${text}`,
+      `${prefix}${text}`,
       topicId,
-      [entity],
+      entities,
     );
   }
 
