@@ -1,6 +1,6 @@
 import type { LarkChannel } from "@larksuiteoapi/node-sdk";
 import type { RunAttachment } from "@codebridge/core";
-import { downloadMessageResource, sniffImageMime } from "./feishu-inbound-media.js";
+import { downloadInboundAttachments, downloadMessageResource, sniffImageMime } from "./feishu-inbound-media.js";
 
 function quotedImageKeys(value: unknown, keys = new Set<string>()): Set<string> {
   if (value && typeof value === "object") {
@@ -164,40 +164,76 @@ export async function fetchMessageContext(
   ) {
     return undefined;
   }
-  let text = extractMessageText(
-    item.msg_type,
-    item.body.content,
-    item.mentions?.map((m) => ({ key: m.key, name: m.name })),
-  );
-  const placeholder = item.msg_type === "interactive" && text.includes("请升级至最新版本客户端");
-  if (placeholder) {
-    const ownText = item.sender?.sender_type === "app" && item.sender.id === options.selfAppId
-      ? await options.resolveOwnText?.(messageId) : undefined;
-    if (!ownText) throw new Error("interactive_card_content_unavailable");
-    text = ownText;
-  }
-  let keys = new Set<string>();
-  if (!placeholder) {
-    try { keys = quotedImageKeys(JSON.parse(item.body.content)); } catch { /* Plain text has no image keys. */ }
-  }
-  let index = 0;
-  for (const key of keys) {
-    index++;
-    if (!options.addImage || index > 10) {
-      text += "\n[引用图片未传递：附件数量或通道限制，请勿猜测图片内容]";
-      break;
+  const items = res.data?.items ?? [];
+  const visited = new Set<string>();
+  const render = async (current: NonNullable<typeof item>, currentId: string): Promise<string> => {
+    if (visited.has(currentId)) return "[重复转发子消息未重复读取]";
+    visited.add(currentId);
+    if (current.msg_type === "merge_forward") {
+      const children = items.filter(child => child.upper_message_id === currentId)
+        .sort((left, right) => Number(left.create_time ?? 0) - Number(right.create_time ?? 0));
+      if (!children.length) return "[合并转发子消息未读取成功，请勿猜测其内容]";
+      const parts: string[] = [];
+      for (const child of children) {
+        const sender = child.sender?.sender_name ?? child.sender?.id ?? "未知发送者";
+        try {
+          const body = child.message_id ? await render(child, child.message_id) : "[子消息缺少ID，未读取]";
+          parts.push(`【转发子消息｜发送方：${sender}】\n${body}`);
+        } catch {
+          parts.push(`【转发子消息｜发送方：${sender}】\n[该子消息未读取成功，请勿猜测其内容]`);
+        }
+      }
+      return parts.join("\n\n");
     }
-    try {
-      const data = await downloadMessageResource(channel, messageId, key, "image", 10_000_000);
-      const mimeType = sniffImageMime(data);
-      if (!mimeType.startsWith("image/")) throw new Error("invalid_image");
-      const name = `quoted-${messageId.replace(/[^a-zA-Z0-9_-]/g, "_")}-${index}.${mimeType.split("/")[1]}`;
-      options.addImage({ name, mimeType, dataBase64: data.toString("base64") });
-      text += `\n[引用图片附件：${name}；请读取原图，若模型不支持视觉请明确说明]`;
-    } catch {
-      text += `\n[引用图片 ${index} 未读取成功，请勿猜测图片内容]`;
+    if (!current.body?.content) return "[消息正文未取得]";
+    let text = extractMessageText(current.msg_type, current.body.content,
+      current.mentions?.map(mention => ({ key: mention.key, name: mention.name })));
+    const placeholder = current.msg_type === "interactive" && text.includes("请升级至最新版本客户端");
+    if (placeholder) {
+      const ownText = current.sender?.sender_type === "app" && current.sender.id === options.selfAppId
+        ? await options.resolveOwnText?.(currentId) : undefined;
+      if (!ownText) throw new Error("interactive_card_content_unavailable");
+      text = ownText;
     }
-  }
+    if (current.msg_type === "file") {
+      const file = JSON.parse(current.body.content) as { file_name?: string; file_key?: string };
+      text = `[文件：${file.file_name ?? "未命名文件"}]`;
+      if (!options.addImage || !file.file_key) return text + "\n[引用文件内容未取得：缺少附件入口或资源标识]";
+      // Forwarded resource keys belong to the receiving container, not the origin child ID.
+      const downloaded = await downloadInboundAttachments(channel, messageId,
+        [{ type: "file", fileKey: file.file_key, fileName: file.file_name }], 10_000_000);
+      for (const attachment of downloaded.attachments) {
+        try {
+          options.addImage(attachment);
+          text += `\n[引用文件附件：${attachment.name}；请读取文件后再判断]`;
+        } catch { text += "\n[引用文件内容未传递：附件数量或大小限制]"; }
+      }
+      for (const reason of downloaded.skipped) text += `\n[引用文件内容未取得：${reason}；请单独发送或转发原文件，不能仅凭文件名核验内容]`;
+      return text;
+    }
+    let keys = new Set<string>();
+    if (!placeholder) {
+      try { keys = quotedImageKeys(JSON.parse(current.body.content)); } catch { /* Plain text has no image keys. */ }
+    }
+    let index = 0;
+    for (const key of keys) {
+      index++;
+      if (!options.addImage || index > 10) {
+        text += "\n[引用图片未传递：附件数量或通道限制，请勿猜测图片内容]";
+        break;
+      }
+      try {
+        const data = await downloadMessageResource(channel, messageId, key, "image", 10_000_000);
+        const mimeType = sniffImageMime(data);
+        if (!mimeType.startsWith("image/")) throw new Error("invalid_image");
+        const name = `quoted-${currentId.replace(/[^a-zA-Z0-9_-]/g, "_")}-${index}.${mimeType.split("/")[1]}`;
+        options.addImage({ name, mimeType, dataBase64: data.toString("base64") });
+        text += `\n[引用图片附件：${name}；请读取原图，若模型不支持视觉请明确说明]`;
+      } catch { text += `\n[引用图片 ${index} 未读取成功，请勿猜测图片内容]`; }
+    }
+    return text;
+  };
+  const text = await render(item, messageId);
   if (!text) return undefined;
   const fullText = text.length > QUOTE_MAX_CHARS
     ? options.preserveLongText?.(text, messageId)

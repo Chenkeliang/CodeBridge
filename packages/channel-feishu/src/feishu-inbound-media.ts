@@ -122,11 +122,18 @@ export async function downloadMessageResource(
   type: InboundResourceType,
   maxBytes = MAX_INBOUND_ATTACHMENT_BYTES,
 ): Promise<Buffer> {
-  const r = await channel.rawClient.im.v1.messageResource.get({
-    path: { message_id: messageId, file_key: fileKey },
-    params: { type },
-  });
-  return bufferFromDownloadResponse(r, maxBytes);
+  try {
+    const r = await channel.rawClient.im.v1.messageResource.get({
+      path: { message_id: messageId, file_key: fileKey },
+      params: { type },
+    });
+    return await bufferFromDownloadResponse(r, maxBytes);
+  } catch (error) {
+    // Streaming HTTP errors can leave an unread response holding a connection open.
+    const data = (error as { response?: { data?: { destroy?: () => void } } })?.response?.data;
+    if (typeof data?.destroy === "function") data.destroy();
+    throw error;
+  }
 }
 
 export async function downloadMessageImage(
