@@ -1479,12 +1479,26 @@ export class FeishuBridge {
     await this.getCardKitWriter().notify(cardId, delivery.surfaceMessageId, recipientOpenIds, text, isCurrent);
   }
 
-  async displayAlertClosure(chatId: string, topicId: string, sourceMessageId: string, runId: string, text: string, isCurrent: () => boolean): Promise<{ messageId: string }> {
+  async displayAlertClosure(chatId: string, topicId: string, sourceMessageId: string, runId: string, text: string, isCurrent: () => boolean): Promise<{ messageId: string; displayedThrough: number }> {
     const delivery = await this.readAlertDelivery(chatId, topicId, sourceMessageId, runId);
     if (!delivery?.surfaceMessageId) throw new Error("结案清单的原回复卡片尚未就绪");
     const cardId = delivery.surfaceCardId ?? await this.cardHost().resolveCardId!(delivery.surfaceMessageId);
     await this.getCardKitWriter().setContext(cardId, delivery.surfaceMessageId, text, isCurrent);
-    return { messageId: delivery.surfaceMessageId };
+    // SDK-native request preserves auth and exposes the server Date without a second HTTP client.
+    const request = { method: "GET", url: `open-apis/im/v1/messages/${encodeURIComponent(delivery.surfaceMessageId)}`,
+      params: { card_msg_content_type: "user_card_content" }, $return_headers: true, timeout: 15_000 };
+    const receipt = await this.channel!.rawClient.request<{
+      data: { code?: number; data?: { items?: Array<{ message_id?: string; body?: { content?: string } }> } };
+      headers: { date?: string };
+    }>(request);
+    const message = receipt.data?.data?.items?.find(item => item.message_id === delivery.surfaceMessageId);
+    const card = JSON.parse(message?.body?.content ?? "null") as { body?: { elements?: Array<{ element_id?: string; content?: string }> } } | null;
+    const serverTime = Date.parse(receipt.headers?.date ?? "");
+    if (receipt.data?.code !== 0 || !Number.isFinite(serverTime)
+      || !card?.body?.elements?.some(element => element.element_id === "closure_scope" && element.content === text)
+      || !isCurrent()) throw new Error("结案清单的内容版本或飞书端展示时间尚未核实");
+    // HTTP Date has one-second precision. Use the end of that server second, never host wall time.
+    return { messageId: delivery.surfaceMessageId, displayedThrough: serverTime + 999 };
   }
 
   async clearAlertOwnerNotice(chatId: string, rootId: string, sourceMessageId = rootId): Promise<void> {

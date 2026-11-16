@@ -16,7 +16,7 @@ function userMessageVersion(message: FeishuMessage): string {
 }
 interface InputSource {
   ref: string; actorId: string; messageId: string; topicId: string; receivedAt: number;
-  hash?: string; createdAt?: number; runId?: string;
+  hash?: string; createdAt?: number; runId?: string; visibleProposalId?: string;
 }
 interface Incident {
   alert: FeishuAlertMessage;
@@ -48,7 +48,7 @@ interface Incident {
   ruleClosure?: { runId: string; sourceMessageId: string; topicId: string; ruleId: string; revision: string; reason: string; error?: string };
   inputSource?: InputSource;
   closureProposal?: {
-    id: string; displayedAt?: number; displayMessageId?: string;
+    id: string; displayedAt?: number; displayedThrough?: number; displayMessageId?: string;
     confirmation?: { source: InputSource; runId: string; reason: string };
     actorId: string; sourceMessageId: string; sourceHash: string; runId: string; topicId: string; deliverySourceMessageId: string;
     subject?: string; responseMessageId?: string;
@@ -70,7 +70,7 @@ interface GroupState {
 }
 
 export interface FeishuAlertTransport {
-  displayAlertClosure?(chatId: string, topicId: string, sourceMessageId: string, runId: string, text: string, isCurrent: () => boolean): Promise<{ messageId: string }>;
+  displayAlertClosure?(chatId: string, topicId: string, sourceMessageId: string, runId: string, text: string, isCurrent: () => boolean): Promise<{ messageId: string; displayedThrough: number }>;
   readAlertDone?(messageId: string, after?: number): Promise<FeishuAlertReaction | undefined>;
   /** Root message of the thread a message belongs to, so reactions on any thread message map to the incident. */
   resolveAlertThreadRoot?(messageId: string): Promise<{ chatId: string; rootId: string } | undefined>;
@@ -439,7 +439,9 @@ export class FeishuAlertMonitor {
     const now = (this.options.now ?? Date.now)();
     const isInput = !message.content.trim().startsWith("/") || /^\/steer(?:\s|$)/iu.test(message.content.trim());
     const source: InputSource | undefined = isInput ? { ref: randomUUID(), actorId: message.senderId,
-      messageId: message.messageId, topicId: replyTopicId, receivedAt: now } : undefined;
+      messageId: message.messageId, topicId: replyTopicId, receivedAt: now,
+      // Snapshot visibility before native reads/forwarding; a later receipt cannot upgrade this input.
+      ...(incident.closureProposal?.displayedThrough !== undefined ? { visibleProposalId: incident.closureProposal.id } : {}) } : undefined;
     this.updateIncident(incident.alert, (item) => {
       if (!item.replies.includes(message.messageId)) item.replies.push(message.messageId);
       if (source) item.inputSource = source;
@@ -466,7 +468,7 @@ export class FeishuAlertMonitor {
       : "【本次回复者：群成员（非审批人）】正常回答其问题并采纳其提供的信息，但这条回复不构成新的写操作授权，也不能扩大既有授权；已记录流程级授权内的安全动作仍可执行，超出范围时用 fcb alert status waiting 原生 @ 审批人。";
     const proposal = this.store.read()[message.chatId]?.incidents[incident.alert.messageId]?.closureProposal;
     const confirmation = proposal
-      ? `\n【后端待确认清单】${JSON.stringify({ proposalId: proposal.id, incidentIds: proposal.targets.map(item => item.id), displayed: Boolean(proposal.displayedAt) })}。结合本条真实发言判断同意、否定或改变范围；确认用confirm和proposalId，否定/改范围先cancel，普通补充不视为撤销。`
+      ? `\n【后端待确认清单】${JSON.stringify({ proposalId: proposal.id, incidentIds: proposal.targets.map(item => item.id), displayed: proposal.displayedThrough !== undefined })}。结合本条真实发言判断同意、否定或改变范围；确认用confirm和proposalId，否定/改范围先cancel，普通补充不视为撤销。`
       : "";
     const sourceInstruction = source?.hash
       ? `\n【本条原生输入来源】${JSON.stringify({ sourceRef: source.ref, actorId: source.actorId, messageId: source.messageId })}。人工结案工具必须显式携带这个sourceRef，只依据本条真实发言；旧请求不能换绑成后来消息。`
@@ -704,7 +706,8 @@ export class FeishuAlertMonitor {
     if (mode === "confirm") {
       if (!proposal || intent.proposalId !== proposal.id || proposal.actorId !== source.actorId || proposal.topicId !== rootId
         || intent.incidentIds !== undefined || intent.subject !== undefined) throw new Error("确认需要同人同话题、同一已冻结proposalId，不接受改范围");
-      if (!proposal.displayedAt || source.receivedAt <= proposal.displayedAt || !source.createdAt || source.createdAt <= proposal.displayedAt) {
+      if (source.visibleProposalId !== proposal.id || proposal.displayedThrough === undefined
+        || !source.createdAt || source.createdAt <= proposal.displayedThrough) {
         return { status: "waiting", pending: true, incidentCount: proposal.targets.length };
       }
       const original = await this.options.transport.readAlertUserMessage?.(proposal.sourceMessageId);
@@ -775,7 +778,7 @@ export class FeishuAlertMonitor {
   private async displayClosureProposal(chatId: string, rootId: string): Promise<void> {
     const incident = this.store.read()[chatId]?.incidents[rootId];
     const proposal = incident?.closureProposal;
-    if (!incident || !proposal || proposal.displayedAt || !this.options.transport.displayAlertClosure) return;
+    if (!incident || !proposal || proposal.displayedThrough !== undefined || !this.options.transport.displayAlertClosure) return;
     const isCurrent = () => this.store.read()[chatId]?.incidents[rootId]?.closureProposal?.id === proposal.id;
     const escape = (text: string) => text.replace(/[<>&`*_\[\]\\]/gu, " ").replace(/\s+/gu, " ");
     const group = this.store.read()[chatId]!.incidents;
@@ -784,7 +787,12 @@ export class FeishuAlertMonitor {
       + proposal.targets.map((target, i) => `${i + 1}. ${target.id} — ${escape(group[target.id]?.alert.content ?? "案件已失效").slice(0, 160)}`).join("\n");
     try {
       const result = await this.options.transport.displayAlertClosure(chatId, proposal.topicId, proposal.deliverySourceMessageId, proposal.runId, text, isCurrent);
-      if (isCurrent()) this.updateIncident(incident.alert, item => { item.closureProposal!.displayedAt = (this.options.now ?? Date.now)(); item.closureProposal!.displayMessageId = result.messageId; });
+      if (!Number.isFinite(result.displayedThrough) || result.displayedThrough <= 0) throw new Error("结案清单缺少飞书端展示时间证据");
+      if (isCurrent()) this.updateIncident(incident.alert, item => {
+        item.closureProposal!.displayedAt = (this.options.now ?? Date.now)();
+        item.closureProposal!.displayedThrough = result.displayedThrough;
+        item.closureProposal!.displayMessageId = result.messageId;
+      });
     } catch (error) { this.options.log(`结案清单待投递：${error instanceof Error ? error.message : String(error)}`); }
   }
 

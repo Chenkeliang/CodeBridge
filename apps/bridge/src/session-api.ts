@@ -1167,8 +1167,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       return c.json({ ok: false, error: "prompt is required" }, 400);
     }
     // Register before forwarding. Timeout or rejected ACK never resurrects the previous source.
-    options.beforeSteer?.(c.req.param("run_id"), isNativeChannelRequest(c.req.raw)
-      && typeof body.source_ref === "string" ? body.source_ref : undefined);
+    try {
+      options.beforeSteer?.(c.req.param("run_id"), isNativeChannelRequest(c.req.raw)
+        && typeof body.source_ref === "string" ? body.source_ref : undefined);
+    } catch {
+      // The Runner has not been called: this failure is provably not injected.
+      return c.json({ ok: false, outcome: "not_sent", error: "当前任务来源或状态已变化，补充指令未发送；请刷新任务后再试" });
+    }
     // 按 runId 直接打 Runner，不依赖 orchestrator 的 activeChatRuns。
     try {
       return c.json(await options.runner.steer(c.req.param("run_id"), body.prompt));
