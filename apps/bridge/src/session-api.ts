@@ -11,6 +11,7 @@ import type { SqliteEventStore } from "@codebridge/work-items";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
+import { isNativeChannelRequest } from "./channel-origin.js";
 import { ProviderHistoryImporter } from "./session-history-import.js";
 import { registerSessionRuntimeCommandRoutes, registerSessionRuntimeReadRoutes } from "./session-runtime-api.js";
 
@@ -27,6 +28,7 @@ export interface SessionApiOptions {
   approvals?: ApprovalService;
   coordinator?: SessionCoordinator;
   defaultCwd?: string;
+  beforeSteer?: (runId: string, sourceRef?: string) => void;
 }
 
 export function createSessionApp(options: SessionApiOptions, token: string) {
@@ -348,7 +350,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const rawActorRef = body.actor_ref && typeof body.actor_ref === "object"
       ? body.actor_ref as Record<string, unknown>
       : null;
-    const actorRef = (channel === "feishu" || channel === "telegram")
+    const actorRef = isNativeChannelRequest(c.req.raw) && (channel === "feishu" || channel === "telegram")
       ? {
           channel,
           id: rawActorRef?.channel === channel && typeof rawActorRef.id === "string" && rawActorRef.id.trim()
@@ -390,7 +392,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const childHeaders = {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
-      "x-codebridge-channel-origin": channelOriginToken,
+      ...(isNativeChannelRequest(c.req.raw) ? { "x-codebridge-channel-origin": channelOriginToken } : {}),
       ...(idempotencyKey ? { "idempotency-key": `${idempotencyKey}:message` } : {}),
     };
     const messageResponse = await app.request(`/v1/sessions/${session.id}/messages`, {
@@ -448,7 +450,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
-        "x-codebridge-channel-origin": channelOriginToken,
+        ...(isNativeChannelRequest(c.req.raw) ? { "x-codebridge-channel-origin": channelOriginToken } : {}),
         ...(idempotencyKey ? { "idempotency-key": `${idempotencyKey}:run` } : {}),
       },
       body: JSON.stringify({
@@ -1164,10 +1166,15 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (typeof body?.prompt !== "string" || !body.prompt.trim()) {
       return c.json({ ok: false, error: "prompt is required" }, 400);
     }
+    // Register before forwarding. Timeout or rejected ACK never resurrects the previous source.
+    options.beforeSteer?.(c.req.param("run_id"), isNativeChannelRequest(c.req.raw)
+      && typeof body.source_ref === "string" ? body.source_ref : undefined);
     // 按 runId 直接打 Runner，不依赖 orchestrator 的 activeChatRuns。
-    return c.json(
-      await options.runner.steer(c.req.param("run_id"), body.prompt),
-    );
+    try {
+      return c.json(await options.runner.steer(c.req.param("run_id"), body.prompt));
+    } catch {
+      return c.json({ ok: false, outcome: "unknown", error: "插队送达未确认，请查看当前任务进展；不会恢复旧消息的结案授权" });
+    }
   });
 
   return app;

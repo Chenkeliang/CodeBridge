@@ -16,6 +16,7 @@ export interface FeishuAlertPage {
 }
 
 export interface FeishuAlertReply {
+  sourceRef?: string;
   allowed: boolean;
   handled?: boolean;
   topicId: string;

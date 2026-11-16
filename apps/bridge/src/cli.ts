@@ -36,6 +36,7 @@ import fs from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveOutboundTarget } from "./outbound-api.js";
 import { createChannelIngressApi, createChannelSessionIngress } from "./channel-ingress.js";
 import { createMcpApp } from "./mcp-api.js";
 import {
@@ -462,6 +463,13 @@ program
         workItems: workItemStore,
         executor: runExecutor,
         runner: runnerClient,
+        beforeSteer: (runId, sourceRef) => {
+          if (!alertMonitor) return;
+          const delivery = workItemStore.listDeliveries("feishu").find(row => row.runId === runId);
+          if (!delivery) return;
+          const target = resolveOutboundTarget(workItemStore, runId);
+          if (target.topicId) alertMonitor.registerSteer(target.chatId, target.topicId, runId, sourceRef);
+        },
         discovery: projectDiscovery,
         capabilities: capabilityRegistry,
         approvals: approvalService,

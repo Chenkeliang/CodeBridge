@@ -1,4 +1,4 @@
-import { normalizeMentionRefs, normalizeNotificationNames, type AgentTaskTarget } from "@codebridge/core";
+import { normalizeMentionRefs, normalizeNotificationNames, type AgentTaskTarget, type AlertClosureRequest, type AlertClosureResult } from "@codebridge/core";
 import { Hono } from "hono";
 import { createWorkItemApp } from "./work-item-api.js";
 import { type SqliteEventStore } from "@codebridge/work-items";
@@ -8,7 +8,7 @@ import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
-  closeOutboundAlert?(chatId: string, topicId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent: () => boolean }): Promise<{ status: "dismissed"; emoji: "DONE" } | { status: "investigating"; pending: true }>;
+  closeOutboundAlert?(chatId: string, topicId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent: () => boolean; closure?: AlertClosureRequest }): Promise<AlertClosureResult>;
   setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string, notify?: string | string[], sourceMessageId?: string): Promise<void>;
   sendOutboundFile(
     chatId: string,
@@ -179,11 +179,24 @@ export function createOutboundApp(
     if (!options.workItemStore || !target?.topicId || !target.chatId.startsWith("oc_")) {
       return c.json({ error: "alert_status_requires_feishu_run" }, 400);
     }
-    const body = await c.req.json().catch(() => null) as { runId?: unknown; status?: unknown; summary?: unknown; notify?: unknown } | null;
+    const body = await c.req.json().catch(() => null) as { runId?: unknown; status?: unknown; summary?: unknown; notify?: unknown; closure?: unknown } | null;
     if (typeof body?.status !== "string" || typeof body.summary !== "string") return c.json({ error: "status and summary required" }, 400);
     try {
       const notify = normalizeNotificationNames(body.notify);
-      if (body.status === "dismissed") {
+      let closure: AlertClosureRequest | undefined;
+      if (body.closure !== undefined) {
+        if (!body.closure || typeof body.closure !== "object" || Array.isArray(body.closure)) throw new Error("closure requires mode and optional subject");
+        const request = body.closure as Record<string, unknown>;
+        if (Object.keys(request).some(key => !["mode", "sourceRef", "subject", "incidentIds", "proposalId"].includes(key)) || !["direct", "propose", "confirm", "cancel"].includes(String(request.mode))
+          || request.subject !== undefined && (typeof request.subject !== "string" || (!request.subject.trim() || request.subject.length > 200))) throw new Error("Invalid closure intent or subject");
+        if (typeof request.sourceRef !== "string" || !request.sourceRef || request.sourceRef.length > 100
+          || request.proposalId !== undefined && (typeof request.proposalId !== "string" || request.proposalId.length > 100)
+          || request.incidentIds !== undefined && (!Array.isArray(request.incidentIds) || !request.incidentIds.length || request.incidentIds.length > 50
+            || request.incidentIds.some(id => typeof id !== "string" || !/^om_[A-Za-z0-9_-]+$/u.test(id)))) throw new Error("Invalid closure source or incident list");
+        closure = request as unknown as AlertClosureRequest;
+        if (["propose", "cancel"].includes(closure.mode) ? body.status !== "waiting" : body.status !== "dismissed") throw new Error("propose requires waiting; direct/confirm require dismissed");
+      }
+      if (body.status === "dismissed" || closure?.mode === "propose" || closure?.mode === "cancel") {
         const runId = typeof body.runId === "string" ? body.runId : "";
         const run = options.workItemStore.getRun(runId);
         const actor = run?.turnId ? options.workItemStore.getTurn(run.turnId)?.message.actorRef : undefined;
@@ -191,7 +204,7 @@ export function createOutboundApp(
           return c.json({ error: "人工结案需要当前飞书审批人原始指令，不接受指定通知人或后台任务" }, 403);
         }
         const result = await bridge.closeOutboundAlert(target.chatId, target.topicId, body.summary, {
-          actorId: actor.id, sourceMessageId: target.sourceMessageId, runId,
+          actorId: actor.id, sourceMessageId: target.sourceMessageId, runId, ...(closure ? { closure } : {}),
           isCurrent: () => options.workItemStore!.getRun(runId)?.status === "running",
         });
         return c.json({ ok: true, ...result });

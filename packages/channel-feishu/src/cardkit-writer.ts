@@ -104,7 +104,7 @@ export class CardKitWriter {
     const snapshot = JSON.parse(JSON.stringify(card)) as RunCardJson;
     return this.enqueue(cardId, async () => {
       const notice = this.receipts?.read()[`notice:${cardId}`];
-      const { overflowText, ...dsl } = this.withNotice(snapshot, notice ? JSON.parse(notice) as CardNotice : undefined);
+      const { overflowText, ...dsl } = this.withContext(cardId, this.withNotice(snapshot, notice ? JSON.parse(notice) as CardNotice : undefined));
       if (overflowText && !dsl.config.streaming_mode) await this.deliverOverflow(cardId, replyTo, overflowText);
       await this.writeSnapshot(cardId, dsl);
     });
@@ -126,6 +126,38 @@ export class CardKitWriter {
       ...(notice.recipients.length ? [] : [{ tag: "markdown" as const, element_id: "notice", content: notice.text || " " }]),
       ...card.body.elements.filter((element) => element.element_id !== "recipient" && element.element_id !== "notice"),
     ] } };
+  }
+
+  private withContext(cardId: string, card: RunCardJson): RunCardJson {
+    const text = this.receipts?.read()[`context:${cardId}`];
+    if (!text) return card;
+    return { ...card, body: { ...card.body, elements: [
+      ...card.body.elements.filter(element => element.element_id !== "closure_scope"),
+      ...(text ? [{ tag: "markdown" as const, element_id: "closure_scope", content: text }] : []),
+    ] } };
+  }
+
+  /** A complete backend-owned scope block, independent from mentions and the Agent answer. */
+  async setContext(cardId: string, messageId: string, text: string, isCurrent: () => boolean): Promise<void> {
+    if (!this.receipts) throw new Error("Card context needs durable receipts");
+    await this.enqueue(cardId, async () => {
+      if (!isCurrent()) throw new Error("Card context superseded");
+      let card = this.confirmed.get(cardId);
+      if (!card) {
+        const response = await this.channel.rawClient.im.v1.message.get({ path: { message_id: messageId }, params: { card_msg_content_type: "user_card_content" } });
+        if (response.code !== 0) throw new Error("Card context read failed");
+        card = JSON.parse(response.data?.items?.find(item => item.message_id === messageId)?.body?.content ?? "null") as RunCardJson;
+      }
+      if (card?.schema !== "2.0" || !card.body?.elements?.some(element => element.element_id === "answer")) throw new Error("Run reply card not ready");
+      const snapshot = { ...card, body: { ...card.body, elements: [
+        ...card.body.elements.filter(element => element.element_id !== "closure_scope"),
+        { tag: "markdown" as const, element_id: "closure_scope", content: text },
+      ] } };
+      await this.writeSnapshot(cardId, snapshot, isCurrent);
+      // A scope receipt is separate from the Run's terminal delivery ACK.
+      if (!isCurrent()) throw new Error("Card context superseded after write");
+      this.receipts!.update(all => ({ ...all, [`context:${cardId}`]: text }));
+    });
   }
 
   /** Update the Run's existing reply, sharing the same FIFO as streaming and recovery. */
@@ -151,7 +183,7 @@ export class CardKitWriter {
             throw new Error("Run reply card content unavailable; notification remains pending");
           }
         }
-        await this.writeSnapshot(cardId, this.withNotice(card, notice), isCurrent);
+        await this.writeSnapshot(cardId, this.withContext(cardId, this.withNotice(card, notice)), isCurrent);
         // Persist only acknowledged delivery: ordinary stream writes must never send a pending notice.
         if (isCurrent()) this.receipts!.update((all) => ({ ...all, [`notice:${cardId}`]: JSON.stringify(notice) }));
       } catch (error) {

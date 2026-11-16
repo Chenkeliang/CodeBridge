@@ -403,7 +403,8 @@ export class RunnerHost {
   ): Promise<{ ok: boolean; outcome?: string; error?: string }> {
     const run = this.active.get(runId);
     if (!run) return { ok: false, error: "当前没有正在运行的任务" };
-    if (!run.steer) return { ok: false, error: "当前 ACP Agent 未声明 steering 支持" };
+    if (run.aborted) return { ok: false, error: "当前任务正在取消，未发送补充指令" };
+    if (!run.steer) return { ok: false, error: "当前 Agent 未声明 steering 支持" };
     try {
       const response = await run.steer(prompt);
       const outcome =
@@ -413,6 +414,9 @@ export class RunnerHost {
         typeof response.outcome === "string"
           ? response.outcome
           : "accepted";
+      if (outcome === "failed") {
+        return { ok: false, outcome, error: "Agent 未接受补充指令，未确认插队成功" };
+      }
       return { ok: true, outcome };
     } catch (err) {
       return {

@@ -1,5 +1,5 @@
-import type { AlertIncidentView, ChannelDeliveryRow } from "@codebridge/core";
-import { createHash } from "node:crypto";
+import type { AlertClosureRequest, AlertClosureResult, AlertIncidentView, ChannelDeliveryRow } from "@codebridge/core";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { matchAlertNotificationRule } from "./alert-notification-rules.js";
 import { matchAlertClosureRule } from "./alert-closure-rules.js";
@@ -10,6 +10,14 @@ import type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply, FeishuMessa
 type MonitorConfig = NonNullable<AppConfig["feishu"]["alertMonitor"]>;
 type Target = MonitorConfig["groups"][number];
 
+function userMessageVersion(message: FeishuMessage): string {
+  const version = (message.raw as { update_time?: unknown } | undefined)?.update_time;
+  return createHash("sha256").update(JSON.stringify([message.content, version ?? null])).digest("hex");
+}
+interface InputSource {
+  ref: string; actorId: string; messageId: string; topicId: string; receivedAt: number;
+  hash?: string; createdAt?: number; runId?: string;
+}
 interface Incident {
   alert: FeishuAlertMessage;
   /** Primary approver, kept for older state files; approverOpenIds is authoritative when present. */
@@ -38,6 +46,14 @@ interface Incident {
   dismissal?: { ownerOpenId: string; messageId: string; reason: string; at: number; via?: "message" | "reaction" | "rule";
     rule?: { id: string; revision: string; runId: string } };
   ruleClosure?: { runId: string; sourceMessageId: string; topicId: string; ruleId: string; revision: string; reason: string; error?: string };
+  inputSource?: InputSource;
+  closureProposal?: {
+    id: string; displayedAt?: number; displayMessageId?: string;
+    confirmation?: { source: InputSource; runId: string; reason: string };
+    actorId: string; sourceMessageId: string; sourceHash: string; runId: string; topicId: string; deliverySourceMessageId: string;
+    subject?: string; responseMessageId?: string;
+    targets: Array<{ id: string; sourceMessageId: string; dismissalAt?: number; reopenedAt?: number; terminalStatus?: string }>;
+  };
   reopenedAt?: number;
   notificationRule?: { id: string; evidence: string };
   /** Human reactions on any card of this incident, emoji -> open_ids. Context for the Agent, never a trigger. */
@@ -54,6 +70,7 @@ interface GroupState {
 }
 
 export interface FeishuAlertTransport {
+  displayAlertClosure?(chatId: string, topicId: string, sourceMessageId: string, runId: string, text: string, isCurrent: () => boolean): Promise<{ messageId: string }>;
   readAlertDone?(messageId: string, after?: number): Promise<FeishuAlertReaction | undefined>;
   /** Root message of the thread a message belongs to, so reactions on any thread message map to the incident. */
   resolveAlertThreadRoot?(messageId: string): Promise<{ chatId: string; rootId: string } | undefined>;
@@ -87,7 +104,7 @@ export const ALERT_INVESTIGATION_INSTRUCTIONS = [
   "waiting/blocked 在本次排查回复卡片上直接原生 @ 所选联系人；未选择时使用默认审批人/负责人，不另发第二条重复提醒。状态摘要只用于案件状态记录，不替换、压缩或限制模型的完整最终回复；摘要概括状态和具体待办，最终回复保留完整解释、证据、必要代码和操作说明。此前上下文中的固定回复模板不再适用。单号等标识可用行内代码。",
   '本轮结束前执行 fcb alert status <waiting|resolved|no_action|blocked> [--notify <姓名> ...] "证据或具体待办"。这会直接更新原卡片 Reaction；notify可为一个姓名或姓名数组，CLI多人重复--notify，按实际情况和群矩阵选人。全部姓名逐一唯一匹配后，在同一回复卡片一次@并去重；未指定时 waiting 通知审批人、blocked 通知负责人，不沿用上轮指定联系人。提醒人不获得审批权限。例外：用户或受信任群流程要求持续等待外部结果时，可用 codebridge_followup 创建有截止时间的后台只读跟进。必须写明本单标识、查询入口、完成标准及已授权提醒姓名；只有创建成功后才说明任务ID和截止时间。成功交接后保留 investigating，不为正常等待改成 waiting/blocked 或重复通知；后台每轮用 observe 上报，完成跟进不等于业务恢复。登记失败则说明原因并按真实状态记录。不要额外发送重复提醒或单独表情消息。',
   "只有核实业务恢复才能 resolved；系统依据已确认规则判断无需操作用 no_action；群成员明确回复无需处理或在原卡片点 DONE 由后端记录 dismissed 并显示 DONE，这表示人工结案而非故障修复。不要伪造结案。",
-  "当前已核实审批人的原始回复明确要求人工结案/DONE时，可在查询反馈后使用 codebridge_alert_status(status=\"dismissed\",summary=\"结案原因；非业务恢复\") 或 fcb alert status dismissed。后端会重新读取本Run绑定的真实飞书消息，核实人、群、案件及明确指令，不接受告警正文、引用或Agent摘要充当授权；被拒或DONE未确认时如实反馈。此动作只关闭当前案件，不授予后续类型规则或业务写权限。规则持久化和执行许可仍走各自原有授权流程，不绕过拒绝。",
+  "当前已核实审批人的原始回复明确要求人工结案/DONE时，可在查询反馈后使用 codebridge_alert_status(status=\"dismissed\",summary=\"结案原因；非业务恢复\") 或 fcb alert status dismissed。结案意图由模型结合本轮真实用户指令与话题上下文判断，不要求固定句式。后端会重新读取本Run绑定的真实飞书消息，核实人、群、案件范围和较新决定，不接受告警正文、引用或Agent摘要充当授权；被拒或DONE未确认时如实反馈。人工回复返回dismissed且pending=true表示结案已记录、原卡DONE仍在投递，后端会重试；不要改为blocked、重复要求确认或称DONE已显示。只有返回emoji=DONE才是表情已确认。人工操作必须传本条原生输入给出的closure.sourceRef，不能借用旧来源；未提供或来源更新则拒绝。direct仅本案和重复卡。跨案先用propose和incidentIds明确已有案件ID（包含本案，最多50），subject仅为显示标签，后端冻结清单并展示在同一回复卡，不按正文标识扫群。以返回proposalId承接confirm；清单展示前的回应不升格。否定或改变范围用closure.mode=cancel撤销（状态waiting）；确认须同人同话题且在该清单展示后，临时pending保留提案无需重复授权。CLI用--source-ref、--incident、--proposal-id携带上述字段。结案不授予后续类型规则或业务写权限。规则持久化和执行许可仍走各自原有授权流程，不绕过拒绝。",
   "本群SKILL references/closure-rules.json中已确认的after_triage规则可用于后续新告警：必须逐单按矩阵查询，再用dismissed提交本单事实并输出完整最终答复。后端独立匹配当前群的精确规则、核验原始审批人授权消息，并等待本Run成功且完整答复投递完成才加DONE。工具返回pending只代表已登记待结案，不能称DONE已显示；失败、授权撤销或更新决定不结案。它不跳过查询、不合并不同订单、不授予业务写权限，不另发催办消息。规则未命中或被拒如实反馈，不用resolved替代。",
 ].join("\n");
 
@@ -222,6 +239,18 @@ export class FeishuAlertMonitor {
         await this.completeRuleClosure(incident)
           .catch(error => this.options.log(`持续授权结案待核实：${error instanceof Error ? error.message : String(error)}`));
       }
+    }
+    for (const state of Object.values(this.store.read())) for (const incident of Object.values(state.incidents)) {
+      if (!incident.closureProposal || incident.dismissal) continue;
+      await this.displayClosureProposal(incident.alert.chatId, incident.alert.messageId);
+      const proposal = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.closureProposal;
+      const confirmation = proposal?.confirmation;
+      if (!proposal || !confirmation || incident.inputSource?.ref !== confirmation.source.ref) continue;
+      await this.closeFromRun(incident.alert.chatId, proposal.topicId, confirmation.reason, {
+        actorId: confirmation.source.actorId, sourceMessageId: confirmation.source.messageId, runId: confirmation.runId,
+        closure: { mode: "confirm", sourceRef: confirmation.source.ref, proposalId: proposal.id },
+        isCurrent: () => this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.closureProposal?.id === proposal.id,
+      }).catch(error => this.options.log(`已确认结案待核验：${error instanceof Error ? error.message : String(error)}`));
     }
     let active = 0;
     for (const state of Object.values(this.store.read())) {
@@ -388,7 +417,7 @@ export class FeishuAlertMonitor {
   async prepareReply(message: FeishuMessage, topicId: string | undefined): Promise<FeishuAlertReply | undefined> {
     const incidents = this.store.read()[message.chatId]?.incidents ?? {};
     const incident = [message.rootId, topicId, message.replyToMessageId]
-      .map((id) => id ? incidents[id] ?? Object.values(incidents).find((item) => item.replies.includes(id)) : undefined).find(Boolean);
+      .map((id) => id ? incidents[id] ?? Object.values(incidents).find((item) => item.sourceMessageIds?.includes(id) || item.replies.includes(id)) : undefined).find(Boolean);
     if (!incident) return undefined;
     const sourceRoots = incident.sourceMessageIds ?? [incident.alert.messageId];
     const replyTopicId = [message.rootId, topicId, message.replyToMessageId]
@@ -407,26 +436,61 @@ export class FeishuAlertMonitor {
     if (incident.dismissal && !["重新排查", "重新处理", "继续排查"].includes(decision)) {
       return { allowed: true, topicId: replyTopicId, instructions: `本告警已由${speaker}确认无需处理并结案。仅答复当前问题，不重新排查或改变状态；需要重新开启时请明确回复“重新排查”。` };
     }
+    const now = (this.options.now ?? Date.now)();
+    const isInput = !message.content.trim().startsWith("/") || /^\/steer(?:\s|$)/iu.test(message.content.trim());
+    const source: InputSource | undefined = isInput ? { ref: randomUUID(), actorId: message.senderId,
+      messageId: message.messageId, topicId: replyTopicId, receivedAt: now } : undefined;
     this.updateIncident(incident.alert, (item) => {
       if (!item.replies.includes(message.messageId)) item.replies.push(message.messageId);
+      if (source) item.inputSource = source;
       if (!message.content.trim().startsWith("/")) {
-        if (item.dismissal) item.reopenedAt = (this.options.now ?? Date.now)();
+        if (item.dismissal) { item.reopenedAt = now; delete item.closureProposal; }
         delete item.dismissal;
-        delete item.ruleClosure;
+        // Informational replies do not revoke a separately verified standing rule or proposal.
         item.status = "investigating"; item.summary = `${speaker}已回复，继续排查`;
         item.notificationSourceMessageId = message.messageId;
         delete item.followupNoticeSource;
-        item.statusAt = (this.options.now ?? Date.now)(); item.active = true; item.awaitingReplyDispatch = true; delete item.ownerNotice;
+        item.statusAt = now; item.active = true; item.awaitingReplyDispatch = true; delete item.ownerNotice;
       }
     });
+    if (source) {
+      const native = await this.options.transport.readAlertUserMessage?.(message.messageId).catch(() => undefined);
+      if (native?.messageId === message.messageId && native.chatId === message.chatId && native.senderId === message.senderId) {
+        source.hash = userMessageVersion(native);
+        source.createdAt = Number((native.raw as { create_time?: unknown } | undefined)?.create_time);
+        this.updateIncident(incident.alert, item => { if (item.inputSource?.ref === source.ref) item.inputSource = source; });
+      }
+    }
     const authority = isApprover
       ? "【本次回复者：审批人（已核实身份）】本次回复可授予具体动作权限；已记录的流程级授权仍按其核实条件执行，超出两者范围时再 @ 审批人。"
       : "【本次回复者：群成员（非审批人）】正常回答其问题并采纳其提供的信息，但这条回复不构成新的写操作授权，也不能扩大既有授权；已记录流程级授权内的安全动作仍可执行，超出范围时用 fcb alert status waiting 原生 @ 审批人。";
+    const proposal = this.store.read()[message.chatId]?.incidents[incident.alert.messageId]?.closureProposal;
+    const confirmation = proposal
+      ? `\n【后端待确认清单】${JSON.stringify({ proposalId: proposal.id, incidentIds: proposal.targets.map(item => item.id), displayed: Boolean(proposal.displayedAt) })}。结合本条真实发言判断同意、否定或改变范围；确认用confirm和proposalId，否定/改范围先cancel，普通补充不视为撤销。`
+      : "";
+    const sourceInstruction = source?.hash
+      ? `\n【本条原生输入来源】${JSON.stringify({ sourceRef: source.ref, actorId: source.actorId, messageId: source.messageId })}。人工结案工具必须显式携带这个sourceRef，只依据本条真实发言；旧请求不能换绑成后来消息。`
+      : "\n本条消息尚未核实原始内容，只能回答或排查，不得人工结案。";
     return {
       allowed: true,
+      sourceRef: source?.hash ? source.ref : undefined,
       topicId: replyTopicId,
-      instructions: ALERT_INVESTIGATION_INSTRUCTIONS + this.runbookInstructions(incident.runbookPath) + this.reactionInstructions(incident) + "\n" + authority,
+      instructions: ALERT_INVESTIGATION_INSTRUCTIONS + this.runbookInstructions(incident.runbookPath) + this.reactionInstructions(incident) + "\n" + authority + confirmation + sourceInstruction,
     };
+  }
+
+  registerSteer(chatId: string, rootId: string, runId: string, sourceRef?: string): void {
+    const group = this.store.read()[chatId]?.incidents ?? {};
+    const incident = group[rootId] ?? Object.values(group).find(item => item.sourceMessageIds?.includes(rootId));
+    if (!incident) return;
+    this.updateIncident(incident.alert, item => {
+      if (sourceRef && item.inputSource?.ref === sourceRef && item.inputSource.hash && item.inputSource.topicId === rootId) {
+        item.inputSource.runId = runId;
+      } else {
+        item.inputSource = { ref: randomUUID(), actorId: "unknown", messageId: "", topicId: rootId,
+          receivedAt: (this.options.now ?? Date.now)(), runId };
+      }
+    });
   }
 
   async prepareReaction(reaction: FeishuAlertReaction): Promise<void> {
@@ -535,18 +599,25 @@ export class FeishuAlertMonitor {
     return related.length ? "\n\n【同群同类型历史，仅用于匹配适用规则，不能代替不同业务对象的事实】\n" + JSON.stringify(related) : "";
   }
 
-  private async dismissIncident(incident: Incident, message: FeishuMessage, via: "message" | "reaction" = "message", options: { excludeRunId?: string; quiet?: boolean; rule?: { id: string; revision: string; runId: string } } = {}): Promise<void> {
-    const alreadyDismissed = Boolean(this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.dismissal);
-    this.updateIncident(incident.alert, (item) => {
+  private recordDismissal(item: Incident, message: FeishuMessage, via: "message" | "reaction", options: { excludeRunId?: string; quiet?: boolean; rule?: { id: string; revision: string; runId: string } } = {}): void {
       item.dismissal = { ownerOpenId: message.senderId, messageId: message.messageId, reason: message.content, at: (this.options.now ?? Date.now)(), via: options.rule ? "rule" : via,
         ...(options.rule ? { rule: options.rule } : {}) };
       item.submitted = true; item.active = false;
       item.status = "dismissed"; item.summary = `${this.currentApprovers(item).includes(message.senderId) ? "审批人" : "群成员"}确认无需处理，已结案；不代表故障被修复。`;
       if (options.rule) item.summary = `按已核验持续授权结案：${message.content}；不代表业务恢复。`;
       delete item.ruleClosure;
+      delete item.closureProposal;
       item.statusAt = (this.options.now ?? Date.now)(); delete item.ownerNotice; delete item.awaitingReplyDispatch;
       if (!options.rule && !item.replies.includes(message.messageId)) item.replies.push(message.messageId);
-    });
+  }
+
+  private async dismissIncident(incident: Incident, message: FeishuMessage, via: "message" | "reaction" = "message", options: { excludeRunId?: string; quiet?: boolean; rule?: { id: string; revision: string; runId: string } } = {}): Promise<void> {
+    const alreadyDismissed = Boolean(this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.dismissal);
+    this.updateIncident(incident.alert, item => this.recordDismissal(item, message, via, options));
+    await this.deliverDismissal(incident, message, via, alreadyDismissed, options);
+  }
+
+  private async deliverDismissal(incident: Incident, message: FeishuMessage, via: "message" | "reaction", alreadyDismissed: boolean, options: { excludeRunId?: string; quiet?: boolean; rule?: { id: string; revision: string; runId: string } } = {}): Promise<void> {
     const decision = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId]?.dismissal;
     const isCurrent = () => {
       const current = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId];
@@ -584,41 +655,137 @@ export class FeishuAlertMonitor {
     return `\n\n【本次告警必须遵循的 SKILL：${runbookPath}】\n${content}\n相对引用以这个 SKILL 所在目录解析；每次读取当前告警矩阵，新增或纠正类型时维护矩阵。`;
   }
 
-  async closeFromRun(chatId: string, rootId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent?: () => boolean }): Promise<{ status: "dismissed"; emoji: "DONE" } | { status: "investigating"; pending: true }> {
+  async closeFromRun(chatId: string, rootId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent?: () => boolean; closure?: AlertClosureRequest }): Promise<AlertClosureResult> {
     if (!reason.trim() || reason.length > 2000) throw new Error("人工结案需要简明原因，不能用业务恢复替代");
     const incidents = this.store.read()[chatId]?.incidents ?? {};
     const incident = incidents[rootId] ?? Object.values(incidents).find(item => item.sourceMessageIds?.includes(rootId));
-    if (incident && context.actorId === incident.alert.senderId && (incident.sourceMessageIds ?? [incident.alert.messageId]).includes(context.sourceMessageId)) {
+    if (incident && !context.closure && context.actorId === incident.alert.senderId
+      && (incident.sourceMessageIds ?? [incident.alert.messageId]).includes(context.sourceMessageId)) {
       return this.requestRuleClosure(incident, rootId, reason, context);
     }
-    if (!incident || !this.options.config()?.groups.some(group => group.chatId === chatId) || !this.currentApprovers(incident).includes(context.actorId)
-      || !incident.replies.includes(context.sourceMessageId)) throw new Error("人工结案需要本案件已核验审批人的当前回复");
-    const native = await this.options.transport.readAlertUserMessage?.(context.sourceMessageId);
-    if (!native || native.chatId !== chatId || native.messageId !== context.sourceMessageId || native.senderId !== context.actorId) {
-      throw new Error("无法核实原始用户消息，未按Agent提供的摘要或引用结案");
+    const current = () => this.store.read()[chatId]?.incidents[incident?.alert.messageId ?? ""];
+    const source = current()?.inputSource;
+    const intent = context.closure;
+    const invalidate = () => this.updateIncident(incident!.alert, item => { delete item.closureProposal; });
+    if (incident && source && !this.currentApprovers(incident).includes(source.actorId)
+      && current()?.closureProposal?.actorId === source.actorId) invalidate();
+    if (!incident || !source?.hash || !intent || intent.sourceRef !== source.ref || source.topicId !== rootId
+      || !this.currentApprovers(incident).includes(source.actorId)) throw new Error("人工结案需要本条已核实审批人输入的sourceRef，不能借旧Turn或他人的身份");
+    if (source.runId !== context.runId) {
+      const delivery = await this.options.transport.readAlertDelivery?.(chatId, rootId, source.messageId, context.runId);
+      if (!delivery || delivery.runId !== context.runId) throw new Error("当前输入尚未绑定此任务，不能借其他任务的来源");
     }
-    const text = native.content.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/gu, "")
-      .split("\n").filter(line => !/^\s*>/u.test(line)).join("\n")
-      .replace(/"[^"]*"|'[^']*'|“[^”]*”|「[^」]*」|『[^』]*』|`[^`]*`/gu, "").trim();
-    const definite = /^(?:\/done|done|结案|无需处理|不用处理|不需要处理)[。！!\s]*$/iu.test(text)
-      || /^(?:(?:本单|这单|本案|此单|本条|这条|本告警|该告警)\s*)?(?:标记|标|设|记)(?:为|成)?\s*done[。！!\s]*$/iu.test(text)
-      || text.split(/[，,。；;\n]/u).some(clause => /^(?:(?:本单|这单|本案|此单|本条|这条|本告警|该告警)\s*)?(?:(?:查询结果反馈|查询反馈|查询|结果反馈|反馈|查完)(?:之后|以后|后)\s*)?(?:直接|请|确认|同意)\s*(?:标记|标|设|记)?\s*(?:为|成)?\s*(?:done|人工结案|结案)(?:$|\s|不再|[!！])/iu.test(clause.trim()));
-    if (!definite || /[?？]|是否|能否|要不要|如何|怎么|解释/iu.test(text)
-      || /(?:不要|别|不能|不许|先不|暂不).{0,8}(?:done|结案)/iu.test(text)) {
-      throw new Error("原始用户消息未明确要求人工结案，或包含否定/疑问；未执行");
+    const validSource = async (input: InputSource) => {
+      const native = await this.options.transport.readAlertUserMessage?.(input.messageId);
+      if (!native || native.messageId !== input.messageId || native.chatId !== chatId || native.senderId !== input.actorId
+        || userMessageVersion(native) !== input.hash) {
+        const pending = current()?.closureProposal;
+        if (pending && (pending.sourceMessageId === input.messageId || pending.confirmation?.source.ref === input.ref)) invalidate();
+        throw new Error("原始指令已编辑、撤回或无法核实，未结案");
+      }
+      return native;
+    };
+    const native = await validSource(source);
+    const assertCurrent = () => {
+      if (context.isCurrent?.() === false || current()?.inputSource?.ref !== source.ref
+        || !this.options.config()?.groups.some(group => group.chatId === chatId && group.enabled !== false)
+        || this.options.config()?.enabled === false || !this.currentApprovers(current()!).includes(source.actorId)) {
+        throw new Error("输入来源、权限或任务已变化，旧请求未换绑新授权");
+      }
+    };
+    assertCurrent();
+    const mode = intent.mode;
+    if (mode === "cancel") {
+      this.updateIncident(incident.alert, item => { delete item.closureProposal; });
+      return { status: "waiting", pending: true };
     }
-    const latest = this.store.read()[chatId]?.incidents[incident.alert.messageId];
-    if (!latest || context.isCurrent?.() === false || !this.options.config()?.groups.some(group => group.chatId === chatId) || !this.currentApprovers(latest).includes(context.actorId)
-      || latest.notificationSourceMessageId !== context.sourceMessageId) throw new Error("案件已有更新的回复或任务已结束，未覆盖较新决定");
-    if (!latest.dismissal) {
-      await this.dismissIncident(latest, { ...native, rootId, content: `审批人原始指令：${native.content}\n结案说明：${reason.trim()}；不代表业务恢复。` }, "message", { excludeRunId: context.runId, quiet: true });
-    } else await this.syncStatus(chatId, latest.alert.messageId);
-    const closed = this.store.read()[chatId]!.incidents[latest.alert.messageId]!;
-    if (closed.status !== "dismissed") throw new Error("案件已有较新决定或重新开启，旧结案不作为当前终态");
-    if (!(closed.sourceMessageIds ?? [closed.alert.messageId]).every(id => closed.reactionApplied?.[id] === "DONE")) {
-      throw new Error("人工结案已记录，DONE表情尚未确认；可重试投影，不能标成业务恢复");
+    if (mode === "direct" && (intent.incidentIds !== undefined || intent.proposalId !== undefined)) throw new Error("direct仅当前案件；跨案须先propose展示清单");
+    let proposal = current()?.closureProposal;
+    if (mode === "confirm") {
+      if (!proposal || intent.proposalId !== proposal.id || proposal.actorId !== source.actorId || proposal.topicId !== rootId
+        || intent.incidentIds !== undefined || intent.subject !== undefined) throw new Error("确认需要同人同话题、同一已冻结proposalId，不接受改范围");
+      if (!proposal.displayedAt || source.receivedAt <= proposal.displayedAt || !source.createdAt || source.createdAt <= proposal.displayedAt) {
+        return { status: "waiting", pending: true, incidentCount: proposal.targets.length };
+      }
+      const original = await this.options.transport.readAlertUserMessage?.(proposal.sourceMessageId);
+      if (!original || original.chatId !== chatId || original.senderId !== source.actorId
+        || userMessageVersion(original) !== proposal.sourceHash) {
+        this.updateIncident(incident.alert, item => { if (item.closureProposal?.id === proposal!.id) delete item.closureProposal; });
+        throw new Error("原提案指令已变化，不能沿用旧确认");
+      }
+      if (current()?.closureProposal?.id !== proposal.id) throw new Error("结案清单已有新决定");
     }
-    return { status: "dismissed", emoji: "DONE" };
+    const group = this.store.read()[chatId]!.incidents;
+    const ids = mode === "confirm" ? proposal!.targets.map(item => item.id)
+      : mode === "propose" ? [...new Set(intent.incidentIds ?? [incident.alert.messageId])] : [incident.alert.messageId];
+    if (!ids.length || ids.length > 50 || !ids.includes(incident.alert.messageId) || ids.some(id => !group[id])) throw new Error("清单必须包含本案且仅包含本群已有案件");
+    const targets = ids.map(id => group[id]!);
+    const snapshotOf = (item: Incident) => ({ id: item.alert.messageId, sourceMessageId: item.alert.messageId,
+      ...(item.dismissal ? { dismissalAt: item.dismissal.at } : {}), ...(item.reopenedAt !== undefined ? { reopenedAt: item.reopenedAt } : {}),
+      ...(["resolved", "no_action"].includes(item.status ?? "") ? { terminalStatus: item.status } : {}) });
+    if (targets.some(item => !this.currentApprovers(item).includes(source.actorId))) throw new Error("清单案件的当前审批权限不足");
+    if (mode === "confirm" && targets.some(item => JSON.stringify(snapshotOf(item)) !== JSON.stringify(proposal!.targets.find(snapshot => snapshot.id === item.alert.messageId)))) {
+      this.updateIncident(incident.alert, item => { delete item.closureProposal; });
+      throw new Error("清单案件已有结案/重开决定，请重新展示范围");
+    }
+    const counts = { incidentCount: targets.length, cardCount: targets.reduce((sum, item) => sum + (item.sourceMessageIds ?? [item.alert.messageId]).length, 0) };
+    assertCurrent();
+    if (mode === "propose") {
+      proposal = { id: randomUUID(), actorId: source.actorId, sourceMessageId: source.messageId, sourceHash: source.hash,
+        runId: context.runId, topicId: rootId, deliverySourceMessageId: context.sourceMessageId, subject: intent.subject, targets: targets.map(snapshotOf) };
+      this.updateIncident(incident.alert, item => { item.closureProposal = proposal; });
+      void this.setStatus(chatId, rootId, "waiting", reason, undefined, context.sourceMessageId)
+        .catch(error => this.options.log(`结案提案状态待投递：${error instanceof Error ? error.message : String(error)}`));
+      await this.displayClosureProposal(chatId, incident.alert.messageId);
+      return { status: "waiting", pending: true, ...counts, proposalId: proposal.id };
+    }
+    if (mode === "confirm") {
+      // Persist valid confirmation before checking overall answer delivery; a lagging ACK is technical pending.
+      assertCurrent();
+      this.updateIncident(incident.alert, item => { if (item.closureProposal?.id === proposal!.id) item.closureProposal.confirmation = { source, runId: context.runId, reason }; });
+      const delivery = await this.options.transport.readAlertDelivery?.(chatId, rootId, proposal!.deliverySourceMessageId, proposal!.runId);
+      if (delivery?.status !== "completed" || delivery.runSnapshot?.status !== "succeeded") return { status: "waiting", pending: true, ...counts };
+    }
+    const before = targets.map(snapshotOf);
+    await validSource(source);
+    assertCurrent();
+    if (targets.some(item => {
+      const latest = this.store.read()[chatId]?.incidents[item.alert.messageId];
+      return !latest || !this.currentApprovers(latest).includes(source.actorId)
+        || JSON.stringify(snapshotOf(latest)) !== JSON.stringify(before.find(snapshot => snapshot.id === item.alert.messageId));
+    })) throw new Error("案件已有较新决定或权限变化，未覆盖新状态");
+    if (mode === "confirm" && current()?.closureProposal?.id !== proposal!.id) throw new Error("提案已被替换，旧确认失效");
+    // No await between the final freshness check and the atomic domain decision.
+    const message = { ...native, rootId, content: `审批人原始指令：${native.content}\n结案说明：${reason.trim()}；不代表业务恢复。` };
+    this.store.update(all => {
+      for (const item of targets) {
+        const stored = all[chatId]!.incidents[item.alert.messageId]!;
+        if (!stored.dismissal) this.recordDismissal(stored, message, "message");
+      }
+      return all;
+    });
+    for (const item of targets) void this.deliverDismissal(item, message, "message", Boolean(item.dismissal), { excludeRunId: context.runId, quiet: true })
+      .catch(error => this.options.log(`人工结案已记录，投影待重试：${error instanceof Error ? error.message : String(error)}`));
+    const closed = targets.map(item => this.store.read()[chatId]!.incidents[item.alert.messageId]!);
+    const actualCounts = { incidentCount: closed.length, cardCount: closed.reduce((sum, item) => sum + (item.sourceMessageIds ?? [item.alert.messageId]).length, 0) };
+    return closed.every(item => (item.sourceMessageIds ?? [item.alert.messageId]).every(id => item.reactionApplied?.[id] === "DONE"))
+      ? { status: "dismissed", emoji: "DONE", ...actualCounts } : { status: "dismissed", pending: true, ...actualCounts };
+  }
+
+  private async displayClosureProposal(chatId: string, rootId: string): Promise<void> {
+    const incident = this.store.read()[chatId]?.incidents[rootId];
+    const proposal = incident?.closureProposal;
+    if (!incident || !proposal || proposal.displayedAt || !this.options.transport.displayAlertClosure) return;
+    const isCurrent = () => this.store.read()[chatId]?.incidents[rootId]?.closureProposal?.id === proposal.id;
+    const escape = (text: string) => text.replace(/[<>&`*_\[\]\\]/gu, " ").replace(/\s+/gu, " ");
+    const group = this.store.read()[chatId]!.incidents;
+    // Bounded complete list, never a summary or substring-based selection.
+    const text = `待确认人工结案清单（${proposal.targets.length}个案件，仅停止跟进，不代表业务恢复）\n清单版本：${proposal.id}\n`
+      + proposal.targets.map((target, i) => `${i + 1}. ${target.id} — ${escape(group[target.id]?.alert.content ?? "案件已失效").slice(0, 160)}`).join("\n");
+    try {
+      const result = await this.options.transport.displayAlertClosure(chatId, proposal.topicId, proposal.deliverySourceMessageId, proposal.runId, text, isCurrent);
+      if (isCurrent()) this.updateIncident(incident.alert, item => { item.closureProposal!.displayedAt = (this.options.now ?? Date.now)(); item.closureProposal!.displayMessageId = result.messageId; });
+    } catch (error) { this.options.log(`结案清单待投递：${error instanceof Error ? error.message : String(error)}`); }
   }
 
   private async verifiedClosureRule(incident: Incident) {
@@ -722,6 +889,7 @@ export class FeishuAlertMonitor {
     this.updateIncident(incident.alert, (item) => {
       if (item.dismissal) return;
       delete item.ruleClosure;
+      if (["resolved", "no_action"].includes(status)) delete item.closureProposal;
       delete item.followupNoticeSource;
       const namesChanged = JSON.stringify(item.notificationName) !== JSON.stringify(names);
       if (item.status !== status || namesChanged
@@ -746,6 +914,7 @@ export class FeishuAlertMonitor {
     if (incident.notificationSourceMessageId && incident.notificationSourceMessageId !== sourceMessageId && incident.replies.includes(incident.notificationSourceMessageId)) return;
     this.updateIncident(incident.alert, item => {
       if (item.dismissal) return;
+      if (["resolved", "no_action"].includes(status)) delete item.closureProposal;
       item.status = status; item.summary = summary.slice(0, 2000); item.statusAt = (this.options.now ?? Date.now)();
       item.notificationSourceMessageId = sourceMessageId; item.followupNoticeSource = sourceMessageId;
       item.active = status === "investigating"; item.submitted = true; delete item.awaitingReplyDispatch;

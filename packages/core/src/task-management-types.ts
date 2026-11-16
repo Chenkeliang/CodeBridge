@@ -102,3 +102,18 @@ export interface AlertIncidentView {
   sessionId: string | null;
   dismissal: { reason: string; at: string } | null;
 }
+
+/** Model-selected intent; actor, source message, scope and newer decisions are verified by Bridge. */
+export interface AlertClosureRequest {
+  mode: "direct" | "propose" | "confirm" | "cancel";
+  /** Source/version issued by the native channel input, never the original Turn actor. */
+  sourceRef: string;
+  /** Display label only; never used to select cases. */
+  subject?: string;
+  incidentIds?: string[];
+  proposalId?: string;
+}
+export type AlertClosureResult =
+  | { status: "dismissed"; incidentCount: number; cardCount: number; emoji: "DONE" }
+  | { status: "dismissed"; incidentCount: number; cardCount: number; pending: true }
+  | { status: "waiting" | "investigating"; pending: true; incidentCount?: number; cardCount?: number; proposalId?: string };

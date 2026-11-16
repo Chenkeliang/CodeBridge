@@ -324,6 +324,7 @@ export interface ChannelSessionIngress {
   steerRun(
     runId: string,
     prompt: string,
+    sourceRef?: string,
   ): Promise<{ ok: boolean; outcome?: string; error?: string }>;
   resolvePermission(runId: string, approve: boolean): Promise<boolean>;
   resumeQueue(

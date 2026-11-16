@@ -729,7 +729,8 @@ export class FeishuBridge {
         if (!this.sessionIngress) {
           return { ok: false, error: "Runner 未就绪" };
         }
-        return this.sessionIngress.steerRun(runId, prompt);
+        return this.sessionIngress.steerRun(runId,
+          alertReply ? `${alertReply.instructions}\n【本条真实用户补充】\n${prompt}` : prompt, alertReply?.sourceRef);
       },
       authorizeDirectory: (directory) =>
         this.orchestrator.authorizeDirectory(directory),
@@ -1476,6 +1477,14 @@ export class FeishuBridge {
     const topicId = delivery.conversationId.slice(chatId.length + 1) || undefined;
     for (const id of recipientOpenIds) this.mentionRegistry.register({ chatId, topicId }, { channel: "feishu", kind: "user", id });
     await this.getCardKitWriter().notify(cardId, delivery.surfaceMessageId, recipientOpenIds, text, isCurrent);
+  }
+
+  async displayAlertClosure(chatId: string, topicId: string, sourceMessageId: string, runId: string, text: string, isCurrent: () => boolean): Promise<{ messageId: string }> {
+    const delivery = await this.readAlertDelivery(chatId, topicId, sourceMessageId, runId);
+    if (!delivery?.surfaceMessageId) throw new Error("结案清单的原回复卡片尚未就绪");
+    const cardId = delivery.surfaceCardId ?? await this.cardHost().resolveCardId!(delivery.surfaceMessageId);
+    await this.getCardKitWriter().setContext(cardId, delivery.surfaceMessageId, text, isCurrent);
+    return { messageId: delivery.surfaceMessageId };
   }
 
   async clearAlertOwnerNotice(chatId: string, rootId: string, sourceMessageId = rootId): Promise<void> {

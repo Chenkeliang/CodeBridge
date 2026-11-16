@@ -85,16 +85,37 @@ async function main() {
   } else if (cmd === "alert" && rest[0] === "status" && rest[1] && rest.length > 2) {
     const parts = rest.slice(2);
     const names = [];
-    while (parts[0] === "--notify") {
-      const name = parts[1];
-      if (!name || !name.trim() || name.startsWith("--") || name.length > 100 || Array.from(name).some((c) => c.charCodeAt(0) < 32)) fail("fcb: --notify 需要本群矩阵指定的姓名；多人可重复 --notify");
-      names.push(name.trim());
-      if (names.length > 20) fail("fcb: 一次最多指定20个提醒姓名");
+    let closureMode, subject, sourceRef, proposalId;
+    const incidentIds = [];
+    while (["--notify", "--closure-mode", "--subject", "--source-ref", "--incident", "--proposal-id"].includes(parts[0])) {
+      const flag = parts[0], value = parts[1];
+      if (!value || !value.trim() || value.startsWith("--")) fail("fcb: " + flag + " 需要参数");
+      if (flag === "--notify") {
+        if (value.length > 100 || Array.from(value).some((c) => c.charCodeAt(0) < 32)) fail("fcb: --notify 需要本群矩阵指定的姓名");
+        names.push(value.trim());
+        if (names.length > 20) fail("fcb: 一次最多指定20个提醒姓名");
+      } else if (flag === "--closure-mode") {
+        if (closureMode || !["direct", "propose", "confirm", "cancel"].includes(value)) fail("fcb: --closure-mode 需要 direct/propose/confirm 且只能指定一次");
+        closureMode = value;
+      } else if (flag === "--source-ref") {
+        if (sourceRef || value.length > 100) fail("fcb: sourceRef无效");
+        sourceRef = value;
+      } else if (flag === "--proposal-id") {
+        if (proposalId || value.length > 100) fail("fcb: proposalId无效");
+        proposalId = value;
+      } else if (flag === "--incident") {
+        if (!/^om_[A-Za-z0-9_-]+$/.test(value) || incidentIds.length >= 50) fail("fcb: incidentId无效");
+        incidentIds.push(value);
+      } else {
+        if (subject || value.length > 200) fail("fcb: --subject 需要显示标签且只能指定一次");
+        subject = value;
+      }
       parts.splice(0, 2);
     }
+    if ((subject || sourceRef || proposalId || incidentIds.length) && !closureMode) fail("fcb: --subject 需要 --closure-mode");
     if (!parts.length) fail("fcb: 告警状态必须包含证据或具体待办");
     const notify = names.length === 1 ? names[0] : names.length ? names : undefined;
-    await post("/outbound/alert-status", {runId, status: rest[1], summary: parts.join(" "), ...(notify ? {notify} : {})});
+    await post("/outbound/alert-status", {runId, status: rest[1], summary: parts.join(" "), ...(notify ? {notify} : {}), ...(closureMode ? {closure: {mode: closureMode, sourceRef, ...(proposalId ? {proposalId} : {}), ...(incidentIds.length ? {incidentIds} : {}), ...(subject ? {subject} : {})}} : {})});
   } else {
     fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb alert status <状态> <证据或待办> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]");
   }

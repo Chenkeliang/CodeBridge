@@ -10,6 +10,7 @@ import type {
 } from "@codebridge/core";
 import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
 import { Hono } from "hono";
+import { channelRequest } from "./channel-origin.js";
 
 function toChannelSessionEvent(input: unknown): ChannelSessionEvent {
   const event = parseSessionEventWire(input);
@@ -79,7 +80,7 @@ export function createChannelSessionIngress(
     ) {
       throw new Error("channel_delivery_incomplete");
     }
-    const accepted = await app.request(
+    const accepted = await channelRequest(app,
       `/v1/channels/${encodeURIComponent(message.channel)}/conversations/${encodeURIComponent(message.conversationId)}/messages`,
       {
         method: "POST",
@@ -423,15 +424,21 @@ export function createChannelSessionIngress(
   const steerRun = async (
     runId: string,
     prompt: string,
+    sourceRef?: string,
   ): Promise<{ ok: boolean; outcome?: string; error?: string }> => {
-    const response = await app.request(
+    let response: Response;
+    try {
+      response = await channelRequest(app,
       `/v1/runs/${encodeURIComponent(runId)}/steer`,
       {
         method: "POST",
         headers: { ...auth, "content-type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, source_ref: sourceRef }),
       },
-    );
+      );
+    } catch {
+      return { ok: false, outcome: "unknown", error: "插队送达未确认，请查看当前任务进展" };
+    }
     if (!response.ok) {
       let message = `steer run failed (${response.status})`;
       try {
@@ -440,7 +447,7 @@ export function createChannelSessionIngress(
       } catch {
         // 非 JSON 错误体，保留默认消息
       }
-      throw new Error(message);
+      return { ok: false, outcome: "unknown", error: message };
     }
     return response.json() as Promise<{
       ok: boolean;
