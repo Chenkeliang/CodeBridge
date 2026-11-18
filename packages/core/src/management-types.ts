@@ -31,6 +31,7 @@ export interface ManagementSnapshot {
   local: { tasks: ManagedLocalTask[]; issues: Array<{ id: string; name: string; message: string }>; supported: boolean };
 }
 export interface ManagedRule {
+  readOnly?: boolean;
   root: string; entry: string; name: string; description: string; files: string[];
   relative: string; content: string; revision: string; issues?: string[];
 }

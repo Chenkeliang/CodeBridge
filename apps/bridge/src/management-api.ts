@@ -214,19 +214,22 @@ export function createManagementApp(options: ManagementOptions): Hono {
   });
   app.post("/v1/management/alerts/:chat/closure-rule", async (c) => {
     const chat = c.req.param("chat"), body = record(await c.req.json());
+    const disable = body.action === "disable";
     const currentGroup = () => {
       const monitor = options.store.get().feishu.alertMonitor;
-      return monitor?.enabled === false ? undefined : monitor?.groups.find(g => g.chatId === chat);
+      return !disable && monitor?.enabled === false ? undefined : monitor?.groups.find(g => g.chatId === chat);
     };
     const group = currentGroup();
-    if (!group?.runbookPath || group.enabled === false) return c.json({ error: "group_unavailable", message: "本群告警监控或 SKILL 入口未配置" }, 404);
-    if (!options.incidents || !options.readAlertAuthorization) return c.json({ error: "feishu_not_connected", message: "飞书告警校验尚未就绪" }, 503);
-    if (typeof body.ruleId !== "string" || typeof body.sampleId !== "string"
-      || (body.action !== "check" && body.action !== "save") || (body.action === "save" && body.draft === undefined)) {
-      return c.json({ error: "invalid_request", message: "请提供规则 ID、样本 ID，保存时还须提供规则草稿" }, 400);
+    if (!group?.runbookPath || (!disable && group.enabled === false)) return c.json({ error: "group_unavailable", message: "本群告警监控或 SKILL 入口未配置" }, 404);
+    if (!disable && (!options.incidents || !options.readAlertAuthorization)) return c.json({ error: "feishu_not_connected", message: "飞书告警校验尚未就绪" }, 503);
+    if (typeof body.ruleId !== "string" || (!disable && typeof body.sampleId !== "string")
+      || (body.action !== "check" && body.action !== "save" && !disable)
+      || (body.action === "save" && body.draft === undefined) || (disable && body.draft !== undefined)) {
+      return c.json({ error: "invalid_request", message: "请提供规则 ID；预检和保存需要样本 ID，保存还需要草稿" }, 400);
     }
-    const sample = (await options.incidents(chat)).find(i => i.id === body.sampleId || i.sourceMessageIds.includes(String(body.sampleId)));
-    if (!sample) return c.json({ error: "sample_not_found", message: "当前群没有这条告警样本" }, 404);
+    const sample = disable ? undefined
+      : (await options.incidents!(chat)).find(i => i.id === body.sampleId || i.sourceMessageIds.includes(String(body.sampleId)));
+    if (!disable && !sample) return c.json({ error: "sample_not_found", message: "当前群没有这条告警样本" }, 404);
     // Shared SKILL packages are allowed; sharing a rules file would cross the group authorization boundary.
     const actualDirectory = (entry: string) => {
       try { return path.dirname(fs.realpathSync(entry)); } catch { return undefined; }
@@ -243,10 +246,10 @@ export function createManagementApp(options: ManagementOptions): Hono {
           checkRevision(c.req.header("if-match"));
           return sharedDirectory() ? undefined : currentGroup();
         },
-        dataDir: options.dataDir, id: body.ruleId, draft: body.draft, save: body.action === "save",
-        sample: { messageId: sample.id, chatId: sample.chatId, senderType: "app", senderId: sample.senderAppId,
+        dataDir: options.dataDir, id: body.ruleId, draft: body.draft, save: body.action === "save", disable,
+        sample: sample && { messageId: sample.id, chatId: sample.chatId, senderType: "app", senderId: sample.senderAppId,
           createdAt: Date.parse(sample.firstSeenAt), content: sample.content },
-        sampleRoots: [sample.id, ...sample.sourceMessageIds], readApproval: options.readAlertAuthorization,
+        sampleRoots: sample && [sample.id, ...sample.sourceMessageIds], readApproval: options.readAlertAuthorization ?? (async () => undefined),
       }));
     } catch (error) {
       if (error instanceof ClosureRuleCheckError) return c.json({ error: error.code, message: error.message, approvalLine: error.approvalLine }, 400);

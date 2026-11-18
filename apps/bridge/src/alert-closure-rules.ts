@@ -16,6 +16,25 @@ export interface AlertClosureRule {
   authorization: { messageId: string; contentSha256: string };
 }
 
+export const ALERT_CLOSURE_RULES_FILENAME = "closure-rules.json";
+
+/** Resolve rules beside the real entry and refuse a second rules file beside an alias. */
+export function resolveAlertClosureRulesFile(runbookPath: string): string {
+  const realDirectory = path.dirname(fs.realpathSync(runbookPath));
+  const references = path.join(realDirectory, "references");
+  const target = path.join(references, ALERT_CLOSURE_RULES_FILENAME);
+  const alias = path.join(path.dirname(path.resolve(runbookPath)), "references", ALERT_CLOSURE_RULES_FILENAME);
+  const aliasEntry = fs.lstatSync(alias, { throwIfNoEntry: false });
+  if (aliasEntry && path.join(fs.realpathSync(path.dirname(alias)), ALERT_CLOSURE_RULES_FILENAME) !== target) {
+    throw new Error("SKILL 软链接位置存在另一份持续结案规则，请先核对规则文件位置");
+  }
+  const directory = fs.lstatSync(references, { throwIfNoEntry: false });
+  if (directory && !directory.isDirectory()) throw new Error("持续结案规则的 references 须为当前 Skill 内的普通目录");
+  const entry = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (entry && !entry.isFile()) throw new Error("持续结案规则须为当前 Skill 内的普通文件");
+  return target;
+}
+
 export function parseAlertClosureRules(raw: string): unknown[] {
   if (Buffer.byteLength(raw) > 64_000) throw new Error("Closure rules too large");
   const parsed = JSON.parse(raw) as { version?: unknown; rules?: unknown };
@@ -28,9 +47,8 @@ export function selectAlertClosureRule(rules: unknown[], message: FeishuAlertMes
   const matches = rules.filter((value): value is AlertClosureRule => {
     if (!value || typeof value !== "object") return false;
     const rule = value as Partial<AlertClosureRule>;
-    if (selectedRuleId !== undefined && rule.id !== selectedRuleId) return false;
     if (rule.conditions !== undefined && (typeof rule.conditions !== "string" || !rule.conditions.trim()
-      || rule.conditions.length > 8000 || selectedRuleId !== rule.id)) return false;
+      || rule.conditions.length > 8000)) return false;
     return rule.kind === "after_triage" && rule.verified === true
       && typeof rule.id === "string" && Boolean(rule.id.trim())
       && typeof rule.evidence === "string" && Boolean(rule.evidence.trim())
@@ -42,17 +60,22 @@ export function selectAlertClosureRule(rules: unknown[], message: FeishuAlertMes
       && typeof rule.authorization?.messageId === "string" && /^om_[A-Za-z0-9_]+$/u.test(rule.authorization.messageId)
       && typeof rule.authorization.contentSha256 === "string" && /^[a-f0-9]{64}$/u.test(rule.authorization.contentSha256);
   });
-  if (matches.length > 1) throw new Error("同一告警命中多条结案规则，未选择授权");
-  const rule = matches[0];
+  const eligible = selectedRuleId === undefined
+    ? matches.filter(rule => rule.conditions === undefined)
+    : matches.filter(rule => rule.id === selectedRuleId);
+  if (eligible.length > 1) throw new Error("同一告警命中多条结案规则，未选择授权");
+  const rule = eligible[0];
+  if (rule && rule.conditions === undefined && matches.some(match => match.conditions !== undefined)) {
+    throw new Error("精确规则与条件规则同时匹配，须按业务条件显式选择条件规则");
+  }
   return rule ? { rule, revision: createHash("sha256").update(JSON.stringify(rule)).digest("hex") } : undefined;
 }
 
 /** Unlike notifications, these rules never batch different orders or skip investigation. */
 export function matchAlertClosureRule(runbookPath: string | undefined, message: FeishuAlertMessage, selectedRuleId?: string): { rule: AlertClosureRule; revision: string } | undefined {
   if (!runbookPath || message.senderType !== "app") return undefined;
-  const file = path.join(path.dirname(runbookPath), "references", "closure-rules.json");
   let raw: string;
-  try { raw = fs.readFileSync(file, "utf8"); }
+  try { raw = fs.readFileSync(resolveAlertClosureRulesFile(runbookPath), "utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   return selectAlertClosureRule(parseAlertClosureRules(raw), message, selectedRuleId);
 }

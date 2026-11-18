@@ -3,6 +3,7 @@ import path from "node:path";
 import { parse } from "yaml";
 import type { SecretOptions } from "@codebridge/core";
 import { fileRevision, replaceManagedFile } from "./management-files.js";
+import { ALERT_CLOSURE_RULES_FILENAME } from "./alert-closure-rules.js";
 
 /** The existing external Skill package remains the only source of business rules. */
 export class ManagedRunbooks {
@@ -76,11 +77,15 @@ export class ManagedRunbooks {
   read(entry: string, relative: string) {
     const info = this.inspect(entry, false);
     const target = this.target(info.root, relative);
-    return { ...info, relative, content: fs.readFileSync(target, "utf8"), revision: fileRevision(target) };
+    return { ...info, relative, content: fs.readFileSync(target, "utf8"), revision: fileRevision(target),
+      readOnly: path.basename(target).toLowerCase() === ALERT_CLOSURE_RULES_FILENAME };
   }
   save(entry: string, relative: string, content: string, revision: string) {
     const info = this.inspect(entry, false);
     const target = this.target(info.root, relative);
+    if (path.basename(target).toLowerCase() === ALERT_CLOSURE_RULES_FILENAME) {
+      throw new Error("持续结案规则在编辑器中只读，请使用 codebridge closure-rule 预检、保存或停用");
+    }
     this.validate(info.root, relative, content);
     if (relative === info.entry && Buffer.byteLength(content) > 64_000) throw new Error("告警入口超过64KB，请将详细规则移到 references");
     return { ...replaceManagedFile(target, content, revision, this.dataDir, this.secrets), relative };

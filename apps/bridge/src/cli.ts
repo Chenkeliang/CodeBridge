@@ -809,16 +809,17 @@ program.command("tasks")
   });
 
 program.command("closure-rule")
-  .description("预检或保存当前飞书告警群的持续结案规则")
-  .argument("<action>", "check 或 save")
+  .description("预检、保存或停用当前飞书告警群的持续结案规则")
+  .argument("<action>", "check、save 或 disable")
   .requiredOption("--chat <id>", "当前群的 ID")
-  .requiredOption("--sample <id>", "当前群已采集的代表性告警消息 ID")
+  .option("--sample <id>", "当前群已采集的代表性告警消息 ID，check 和 save 必填")
   .requiredOption("--rule-id <id>", "持续结案规则 ID")
   .option("--draft <file>", "需要预检或保存的 JSON 草稿")
   .option("--data-dir <path>", "CodeBridge 数据目录", DEFAULT_DATA_DIR)
-  .action(async (action: string, opts: { chat: string; sample: string; ruleId: string; draft?: string; dataDir: string }) => {
-    if (!["check", "save"].includes(action) || (action === "save" && !opts.draft)) {
-      throw new Error("请使用 check 或 save，保存时须传 --draft");
+  .action(async (action: string, opts: { chat: string; sample?: string; ruleId: string; draft?: string; dataDir: string }) => {
+    if (!["check", "save", "disable"].includes(action) || (action !== "disable" && !opts.sample)
+      || (action === "save" && !opts.draft) || (action === "disable" && opts.draft)) {
+      throw new Error("check 和 save 须传 --sample，save 还须传 --draft；disable 只停用已有规则");
     }
     const draft = opts.draft ? JSON.parse(fs.readFileSync(opts.draft, "utf8")) as unknown : undefined;
     const config = new ConfigStore({ dataDir: opts.dataDir, resolve: ["runner.token"] }).get();

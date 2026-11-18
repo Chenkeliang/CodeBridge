@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { FeishuAlertMessage, FeishuMessage } from "@codebridge/channel-feishu";
-import { parseAlertClosureRules, selectAlertClosureRule, type AlertClosureRule } from "./alert-closure-rules.js";
+import { parseAlertClosureRules, resolveAlertClosureRulesFile, selectAlertClosureRule, type AlertClosureRule } from "./alert-closure-rules.js";
 import { fileRevision, replaceManagedFile } from "./management-files.js";
 
 type Rule = Omit<AlertClosureRule, "verified"> & { verified: boolean };
@@ -40,22 +40,21 @@ export async function maintainClosureRule(input: {
   group: Group;
   currentGroup: () => Group | undefined;
   dataDir: string;
-  sample: FeishuAlertMessage;
-  sampleRoots: string[];
+  sample?: FeishuAlertMessage;
+  sampleRoots?: string[];
   id: string;
   draft?: unknown;
   save: boolean;
+  disable?: boolean;
   readApproval: (id: string) => Promise<FeishuMessage | undefined>;
 }) {
   const { group, sample, id } = input;
   check(ruleId.test(id), "invalid_rule_id", "规则 ID 格式无效");
-  check(group.runbookPath && group.enabled !== false, "group_unavailable", "本群告警监控或 SKILL 入口未配置");
-  check(sample.chatId === group.chatId && sample.senderType === "app" && group.senderAppIds.includes(sample.senderId),
-    "sample_mismatch", "样本不属于本群配置的告警来源");
-  const directory = path.join(path.dirname(fs.realpathSync(group.runbookPath)), "references");
+  check(group.runbookPath && (input.disable || group.enabled !== false), "group_unavailable", "本群告警监控或 SKILL 入口未配置");
+  const file = resolveAlertClosureRulesFile(group.runbookPath);
+  const directory = path.dirname(file);
   check(fs.realpathSync(directory) === directory && fs.statSync(directory).isDirectory(),
     "invalid_rule_directory", "规则 references 须位于当前群的实际 SKILL 目录内");
-  const file = path.join(directory, "closure-rules.json");
   const entry = fs.lstatSync(file, { throwIfNoEntry: false });
   check(!entry || entry.isFile(), "invalid_rule_file", "持续结案规则必须是本群内的普通文件");
   const raw = entry ? fs.readFileSync(file) : undefined;
@@ -69,10 +68,32 @@ export async function maintainClosureRule(input: {
   check(new Set(rules.map(r => r.id)).size === rules.length, "duplicate_rule_id", "本群有重复的持续结案规则 ID");
   const old = rules.find(r => r.id === id);
   check(input.draft !== undefined || old, "rule_not_registered", "本群尚未登记该规则 ID，请核对登记记录和名称");
+  const checkCurrent = () => {
+    check(JSON.stringify(input.currentGroup()) === JSON.stringify(group), "group_changed", "本群设置已改变，请重新预检");
+    check(resolveAlertClosureRulesFile(group.runbookPath!) === file && fileRevision(file) === revision,
+      "rules_changed", "持续结案规则已被修改，请重新预检");
+  };
+  if (input.disable) {
+    check(old && !input.draft, "invalid_request", "停用仅适用于本群已有规则");
+    checkCurrent();
+    if (old.verified) {
+      const content = JSON.stringify({ version: 1, rules: rules.map(r => r.id === id ? { ...r, verified: false } : r) }, null, 2) + "\n";
+      parseAlertClosureRules(content);
+      replaceManagedFile(file, content, revision, input.dataDir);
+    }
+    return { ruleId: id, enabled: false, changed: old.verified };
+  }
+  check(sample?.chatId === group.chatId && sample.senderType === "app" && group.senderAppIds.includes(sample.senderId),
+    "sample_mismatch", "样本不属于本群配置的告警来源");
   const draft = input.draft === undefined ? old! : validatedDraft(input.draft);
   check(draft.id === id, "rule_id_mismatch", "草稿与请求中的规则 ID 不一致");
   check(draft.verified, "rule_disabled", "该规则处于停用状态");
   check(draft.senderAppIds.every(sender => group.senderAppIds.includes(sender)), "sender_mismatch", "规则包含本群未配置的发送方");
+  // The matcher requires all listed lines. Different sets of required lines can still appear together.
+  const overlap = rules.find(rule => rule.id !== id && rule.verified && rule.title === draft.title
+    && (rule.conditions === undefined) !== (draft.conditions === undefined)
+    && rule.senderAppIds.some(sender => draft.senderAppIds.includes(sender)));
+  check(!overlap, "overlapping_exact_rule", "同标题和发送方的精确规则与条件规则可能同时命中，请先调整规则范围");
   const scopeChanged = old !== undefined && scope(old) !== scope(draft);
   const authorId = draft.authorization?.messageId ?? (!scopeChanged && old?.verified ? old.authorization.messageId : undefined);
   const bindNewApproval = !old || scopeChanged || old.authorization.messageId !== authorId;
@@ -86,9 +107,6 @@ export async function maintainClosureRule(input: {
   let selected;
   try {
     selected = selectAlertClosureRule(proposed, sample, draft.conditions === undefined ? undefined : id);
-    if (draft.conditions !== undefined && selectAlertClosureRule(proposed, sample)) {
-      throw new ClosureRuleCheckError("overlapping_exact_rule", "另有启用的精确规则可匹配此样本，请先核对重叠范围");
-    }
   } catch (error) {
     if (error instanceof ClosureRuleCheckError) throw error;
     throw new ClosureRuleCheckError("ambiguous_sample", "样本同时命中多条持续结案规则，请先消除重叠");
@@ -110,7 +128,7 @@ export async function maintainClosureRule(input: {
   check(Number.isFinite(date) && date > 0, "authorization_time_unknown", "无法核验原始授权时间");
   if (bindNewApproval) {
     const root = (approval.raw as { root_id?: string })?.root_id;
-    check(root && input.sampleRoots.includes(root), "authorization_thread_mismatch", "新增规则或变更范围时，请使用原批准所在告警作为样本");
+    check(root && input.sampleRoots?.includes(root), "authorization_thread_mismatch", "新增规则或变更范围时，请使用原批准所在告警作为样本");
     if (approval.content.trim() !== approvalLine) {
       throw new ClosureRuleCheckError("authorization_scope_unbound", "这条消息未绑定当前规则草稿。请在告警原话题展示范围，由审批人回复一次对应批准文本", approvalLine);
     }
@@ -119,8 +137,7 @@ export async function maintainClosureRule(input: {
     bodyIncludes: [...draft.bodyIncludes], ...(draft.conditions === undefined ? {} : { conditions: draft.conditions }),
     evidence: draft.evidence, authorization: { messageId: authorId, contentSha256: hash } };
   const next = [...rules.filter(r => r.id !== id), candidate];
-  check(JSON.stringify(input.currentGroup()) === JSON.stringify(group), "group_changed", "本群设置已改变，请重新预检");
-  check(fileRevision(file) === revision, "rules_changed", "持续结案规则已被修改，请重新预检");
+  checkCurrent();
   const unchanged = old !== undefined && scope(old) === scope(candidate) && old.verified === candidate.verified
     && old.evidence === candidate.evidence && old.authorization.messageId === authorId && old.authorization.contentSha256 === hash;
   if (input.save && !unchanged) {
