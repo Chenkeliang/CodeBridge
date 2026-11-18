@@ -16,17 +16,16 @@ export interface AlertClosureRule {
   authorization: { messageId: string; contentSha256: string };
 }
 
-/** Unlike notifications, these rules never batch different orders or skip investigation. */
-export function matchAlertClosureRule(runbookPath: string | undefined, message: FeishuAlertMessage, selectedRuleId?: string): { rule: AlertClosureRule; revision: string } | undefined {
-  if (!runbookPath || message.senderType !== "app") return undefined;
-  const file = path.join(path.dirname(runbookPath), "references", "closure-rules.json");
-  let raw: string;
-  try { raw = fs.readFileSync(file, "utf8"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+export function parseAlertClosureRules(raw: string): unknown[] {
   if (Buffer.byteLength(raw) > 64_000) throw new Error("Closure rules too large");
   const parsed = JSON.parse(raw) as { version?: unknown; rules?: unknown };
   if (parsed.version !== 1 || !Array.isArray(parsed.rules)) throw new Error("Invalid closure rules");
-  const matches = parsed.rules.filter((value): value is AlertClosureRule => {
+  return parsed.rules;
+}
+
+export function selectAlertClosureRule(rules: unknown[], message: FeishuAlertMessage, selectedRuleId?: string): { rule: AlertClosureRule; revision: string } | undefined {
+  if (message.senderType !== "app") return undefined;
+  const matches = rules.filter((value): value is AlertClosureRule => {
     if (!value || typeof value !== "object") return false;
     const rule = value as Partial<AlertClosureRule>;
     if (selectedRuleId !== undefined && rule.id !== selectedRuleId) return false;
@@ -46,4 +45,14 @@ export function matchAlertClosureRule(runbookPath: string | undefined, message: 
   if (matches.length > 1) throw new Error("同一告警命中多条结案规则，未选择授权");
   const rule = matches[0];
   return rule ? { rule, revision: createHash("sha256").update(JSON.stringify(rule)).digest("hex") } : undefined;
+}
+
+/** Unlike notifications, these rules never batch different orders or skip investigation. */
+export function matchAlertClosureRule(runbookPath: string | undefined, message: FeishuAlertMessage, selectedRuleId?: string): { rule: AlertClosureRule; revision: string } | undefined {
+  if (!runbookPath || message.senderType !== "app") return undefined;
+  const file = path.join(path.dirname(runbookPath), "references", "closure-rules.json");
+  let raw: string;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  return selectAlertClosureRule(parseAlertClosureRules(raw), message, selectedRuleId);
 }

@@ -4,6 +4,7 @@ import type { TaskAttentionService } from "./task-attention.js";
 import type { AlertIncidentView } from "@codebridge/core";
 import { ChannelConnections, type ManagedChannelId } from "./channel-connections.js";
 import { isLocalManagementRequest } from "./local-management.js";
+import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
@@ -13,6 +14,8 @@ import { listPublishers, updatePublisher, publishersPath } from "./outbound-publ
 import { fileRevision } from "./management-files.js";
 import { ManagedRunbooks } from "./managed-runbooks.js";
 import { LocalTaskManager, type CalendarTime } from "./managed-local-tasks.js";
+import type { FeishuMessage } from "@codebridge/channel-feishu";
+import { ClosureRuleCheckError, maintainClosureRule } from "./closure-rule-maintenance.js";
 
 export interface ChannelSettings {
   channel: "feishu" | "telegram"; configured: boolean; connected: boolean | null;
@@ -36,6 +39,7 @@ export interface ManagementOptions {
   chats?: () => Promise<ManagedChat[]>;
   sources?: (chatId: string) => Promise<ManagedAlertSource[]>;
   members?: (chatId: string) => Promise<Array<{ id: string; name: string }>>;
+  readAlertAuthorization?: (messageId: string) => Promise<FeishuMessage | undefined>;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -207,6 +211,47 @@ export function createManagementApp(options: ManagementOptions): Hono {
     checkRevision(c.req.header("if-match"));
     if (typeof body.file !== "string" || typeof body.content !== "string" || typeof body.revision !== "string") throw new Error("规则保存参数无效");
     return c.json(options.runbooks.save(group.runbookPath, body.file, body.content, body.revision));
+  });
+  app.post("/v1/management/alerts/:chat/closure-rule", async (c) => {
+    const chat = c.req.param("chat"), body = record(await c.req.json());
+    const currentGroup = () => {
+      const monitor = options.store.get().feishu.alertMonitor;
+      return monitor?.enabled === false ? undefined : monitor?.groups.find(g => g.chatId === chat);
+    };
+    const group = currentGroup();
+    if (!group?.runbookPath || group.enabled === false) return c.json({ error: "group_unavailable", message: "本群告警监控或 SKILL 入口未配置" }, 404);
+    if (!options.incidents || !options.readAlertAuthorization) return c.json({ error: "feishu_not_connected", message: "飞书告警校验尚未就绪" }, 503);
+    if (typeof body.ruleId !== "string" || typeof body.sampleId !== "string"
+      || (body.action !== "check" && body.action !== "save") || (body.action === "save" && body.draft === undefined)) {
+      return c.json({ error: "invalid_request", message: "请提供规则 ID、样本 ID，保存时还须提供规则草稿" }, 400);
+    }
+    const sample = (await options.incidents(chat)).find(i => i.id === body.sampleId || i.sourceMessageIds.includes(String(body.sampleId)));
+    if (!sample) return c.json({ error: "sample_not_found", message: "当前群没有这条告警样本" }, 404);
+    // Shared SKILL packages are allowed; sharing a rules file would cross the group authorization boundary.
+    const actualDirectory = (entry: string) => {
+      try { return path.dirname(fs.realpathSync(entry)); } catch { return undefined; }
+    };
+    const directory = actualDirectory(group.runbookPath);
+    const sharedDirectory = () => options.store.get().feishu.alertMonitor?.groups.some(g => g.chatId !== chat && g.runbookPath
+      && actualDirectory(g.runbookPath) === directory);
+    if (directory && sharedDirectory()) {
+      return c.json({ error: "shared_rule_directory", message: "告警群须使用各自独立的规则目录" }, 400);
+    }
+    try {
+      return c.json(await maintainClosureRule({
+        group, currentGroup: () => {
+          checkRevision(c.req.header("if-match"));
+          return sharedDirectory() ? undefined : currentGroup();
+        },
+        dataDir: options.dataDir, id: body.ruleId, draft: body.draft, save: body.action === "save",
+        sample: { messageId: sample.id, chatId: sample.chatId, senderType: "app", senderId: sample.senderAppId,
+          createdAt: Date.parse(sample.firstSeenAt), content: sample.content },
+        sampleRoots: [sample.id, ...sample.sourceMessageIds], readApproval: options.readAlertAuthorization,
+      }));
+    } catch (error) {
+      if (error instanceof ClosureRuleCheckError) return c.json({ error: error.code, message: error.message, approvalLine: error.approvalLine }, 400);
+      throw error;
+    }
   });
   app.patch("/v1/management/publishers/:label", async (c) => {
     const body = record(await c.req.json());

@@ -636,6 +636,7 @@ skillApp,
       members: (chatId) => bridge ? bridge.listManagedChatMembers(chatId) : Promise.reject(new Error("飞书尚未连接")),
       chats: () => bridge ? bridge.listManagedChats() : Promise.reject(new Error("飞书尚未连接")),
       sources: (chatId) => bridge ? bridge.listManagedAlertSources(chatId) : Promise.reject(new Error("飞书尚未连接")),
+      readAlertAuthorization: (messageId) => bridge ? bridge.readAlertUserMessage(messageId) : Promise.reject(new Error("飞书尚未连接")),
     }));
     mountDeploymentRoutes(apiApp, deployment, workItemStore);
     serve({
@@ -805,6 +806,34 @@ program.command("tasks")
     const result = await runTaskCommand([action, ...args], { api: process.env.FCB_API ?? `http://127.0.0.1:${config.bridge?.apiPort ?? 19790}`,
       token: config.runner.token, runId: process.env.FCB_RUN_ID });
     console.log(JSON.stringify(result, null, 2));
+  });
+
+program.command("closure-rule")
+  .description("预检或保存当前飞书告警群的持续结案规则")
+  .argument("<action>", "check 或 save")
+  .requiredOption("--chat <id>", "当前群的 ID")
+  .requiredOption("--sample <id>", "当前群已采集的代表性告警消息 ID")
+  .requiredOption("--rule-id <id>", "持续结案规则 ID")
+  .option("--draft <file>", "需要预检或保存的 JSON 草稿")
+  .option("--data-dir <path>", "CodeBridge 数据目录", DEFAULT_DATA_DIR)
+  .action(async (action: string, opts: { chat: string; sample: string; ruleId: string; draft?: string; dataDir: string }) => {
+    if (!["check", "save"].includes(action) || (action === "save" && !opts.draft)) {
+      throw new Error("请使用 check 或 save，保存时须传 --draft");
+    }
+    const draft = opts.draft ? JSON.parse(fs.readFileSync(opts.draft, "utf8")) as unknown : undefined;
+    const config = new ConfigStore({ dataDir: opts.dataDir, resolve: ["runner.token"] }).get();
+    const api = `http://127.0.0.1:${config.bridge?.apiPort ?? 19790}/v1/management`;
+    const auth = { authorization: `Bearer ${config.runner.token}` };
+    const snapshot = await fetch(api, { headers: auth, signal: AbortSignal.timeout(10_000) });
+    if (!snapshot.ok) throw new Error("本机管理接口未就绪或认证失败");
+    const { revision } = await snapshot.json() as { revision: string };
+    const result = await fetch(`${api}/alerts/${encodeURIComponent(opts.chat)}/closure-rule`, {
+      method: "POST", headers: { ...auth, "content-type": "application/json", "if-match": revision },
+      body: JSON.stringify({ action, sampleId: opts.sample, ruleId: opts.ruleId, draft }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    console.log(JSON.stringify(await result.json(), null, 2));
+    if (!result.ok) process.exitCode = 1;
   });
 
 program.parseAsync(process.argv).catch((err) => {
