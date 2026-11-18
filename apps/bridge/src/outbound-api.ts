@@ -8,7 +8,7 @@ import type { RunExecutor } from "@codebridge/run-executor";
 
 /** 出站 API 依赖的最小 Bridge 能力面 */
 export interface OutboundBridge {
-  closeOutboundAlert?(chatId: string, topicId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent: () => boolean; closure?: AlertClosureRequest }): Promise<AlertClosureResult>;
+  closeOutboundAlert?(chatId: string, topicId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent: () => boolean; closure?: AlertClosureRequest; ruleId?: string }): Promise<AlertClosureResult>;
   setOutboundAlertStatus?(chatId: string, topicId: string, status: string, summary: string, notify?: string | string[], sourceMessageId?: string): Promise<void>;
   sendOutboundFile(
     chatId: string,
@@ -179,10 +179,12 @@ export function createOutboundApp(
     if (!options.workItemStore || !target?.topicId || !target.chatId.startsWith("oc_")) {
       return c.json({ error: "alert_status_requires_feishu_run" }, 400);
     }
-    const body = await c.req.json().catch(() => null) as { runId?: unknown; status?: unknown; summary?: unknown; notify?: unknown; closure?: unknown } | null;
+    const body = await c.req.json().catch(() => null) as { runId?: unknown; status?: unknown; summary?: unknown; notify?: unknown; closure?: unknown; ruleId?: unknown } | null;
     if (typeof body?.status !== "string" || typeof body.summary !== "string") return c.json({ error: "status and summary required" }, 400);
     try {
       const notify = normalizeNotificationNames(body.notify);
+      if (body.ruleId !== undefined && (typeof body.ruleId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/u.test(body.ruleId)
+        || body.status !== "dismissed" || body.closure !== undefined || notify !== undefined)) throw new Error("ruleId仅用于原机器人告警的持续规则结案，不能混用人工确认或通知");
       let closure: AlertClosureRequest | undefined;
       if (body.closure !== undefined) {
         if (!body.closure || typeof body.closure !== "object" || Array.isArray(body.closure)) throw new Error("closure requires mode and optional subject");
@@ -205,6 +207,7 @@ export function createOutboundApp(
         }
         const result = await bridge.closeOutboundAlert(target.chatId, target.topicId, body.summary, {
           actorId: actor.id, sourceMessageId: target.sourceMessageId, runId, ...(closure ? { closure } : {}),
+          ...(typeof body.ruleId === "string" ? { ruleId: body.ruleId } : {}),
           isCurrent: () => options.workItemStore!.getRun(runId)?.status === "running",
         });
         return c.json({ ok: true, ...result });

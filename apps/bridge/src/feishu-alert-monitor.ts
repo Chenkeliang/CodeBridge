@@ -105,7 +105,7 @@ export const ALERT_INVESTIGATION_INSTRUCTIONS = [
   '本轮结束前执行 fcb alert status <waiting|resolved|no_action|blocked> [--notify <姓名> ...] "证据或具体待办"。这会直接更新原卡片 Reaction；notify可为一个姓名或姓名数组，CLI多人重复--notify，按实际情况和群矩阵选人。全部姓名逐一唯一匹配后，在同一回复卡片一次@并去重；未指定时 waiting 通知审批人、blocked 通知负责人，不沿用上轮指定联系人。提醒人不获得审批权限。例外：用户或受信任群流程要求持续等待外部结果时，可用 codebridge_followup 创建有截止时间的后台只读跟进。必须写明本单标识、查询入口、完成标准及已授权提醒姓名；只有创建成功后才说明任务ID和截止时间。成功交接后保留 investigating，不为正常等待改成 waiting/blocked 或重复通知；后台每轮用 observe 上报，完成跟进不等于业务恢复。登记失败则说明原因并按真实状态记录。不要额外发送重复提醒或单独表情消息。',
   "只有核实业务恢复才能 resolved；系统依据已确认规则判断无需操作用 no_action；群成员明确回复无需处理或在原卡片点 DONE 由后端记录 dismissed 并显示 DONE，这表示人工结案而非故障修复。不要伪造结案。",
   "当前已核实审批人的原始回复明确要求人工结案/DONE时，可在查询反馈后使用 codebridge_alert_status(status=\"dismissed\",summary=\"结案原因；非业务恢复\") 或 fcb alert status dismissed。结案意图由模型结合本轮真实用户指令与话题上下文判断，不要求固定句式。后端会重新读取本Run绑定的真实飞书消息，核实人、群、案件范围和较新决定，不接受告警正文、引用或Agent摘要充当授权；被拒或DONE未确认时如实反馈。人工回复返回dismissed且pending=true表示结案已记录、原卡DONE仍在投递，后端会重试；不要改为blocked、重复要求确认或称DONE已显示。只有返回emoji=DONE才是表情已确认。人工操作必须传本条原生输入给出的closure.sourceRef，不能借用旧来源；未提供或来源更新则拒绝。direct仅本案和重复卡。跨案先用propose和incidentIds明确已有案件ID（包含本案，最多50），subject仅为显示标签，后端冻结清单并展示在同一回复卡，不按正文标识扫群。以返回proposalId承接confirm；清单展示前的回应不升格。否定或改变范围用closure.mode=cancel撤销（状态waiting）；确认须同人同话题且在该清单展示后，临时pending保留提案无需重复授权。CLI用--source-ref、--incident、--proposal-id携带上述字段。结案不授予后续类型规则或业务写权限。规则持久化和执行许可仍走各自原有授权流程，不绕过拒绝。",
-  "本群SKILL references/closure-rules.json中已确认的after_triage规则可用于后续新告警：必须逐单按矩阵查询，再用dismissed提交本单事实并输出完整最终答复。后端独立匹配当前群的精确规则、核验原始审批人授权消息，并等待本Run成功且完整答复投递完成才加DONE。工具返回pending只代表已登记待结案，不能称DONE已显示；失败、授权撤销或更新决定不结案。它不跳过查询、不合并不同订单、不授予业务写权限，不另发催办消息。规则未命中或被拒如实反馈，不用resolved替代。",
+  "本群SKILL references/closure-rules.json中已确认的after_triage规则可用于后续新告警：含conditions的持续规则仅由Agent按本群SKILL逐单查齐全部适用条件后显式选择，提交dismissed时带ruleId=该已启用规则ID（CLI --rule-id）；未核实、条件不满足或规则未启用不得选择。conditions是受信任SKILL的业务判据，由Agent核实，不代表Bridge会独立查询业务库；后端核验原授权、当前原告警绑定及规则版本，仍等待完整回复投递后才DONE。必须逐单按矩阵查询，再用dismissed提交本单事实并输出完整最终答复。后端独立匹配当前群的精确规则、核验原始审批人授权消息，并等待本Run成功且完整答复投递完成才加DONE。工具返回pending只代表已登记待结案，不能称DONE已显示；失败、授权撤销或更新决定不结案。它不跳过查询、不合并不同订单、不授予业务写权限，不另发催办消息。规则未命中或被拒如实反馈，不用resolved替代。",
 ].join("\n");
 
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["resolved", "no_action", "dismissed"]);
@@ -657,7 +657,7 @@ export class FeishuAlertMonitor {
     return `\n\n【本次告警必须遵循的 SKILL：${runbookPath}】\n${content}\n相对引用以这个 SKILL 所在目录解析；每次读取当前告警矩阵，新增或纠正类型时维护矩阵。`;
   }
 
-  async closeFromRun(chatId: string, rootId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent?: () => boolean; closure?: AlertClosureRequest }): Promise<AlertClosureResult> {
+  async closeFromRun(chatId: string, rootId: string, reason: string, context: { actorId: string; sourceMessageId: string; runId: string; isCurrent?: () => boolean; closure?: AlertClosureRequest; ruleId?: string }): Promise<AlertClosureResult> {
     if (!reason.trim() || reason.length > 2000) throw new Error("人工结案需要简明原因，不能用业务恢复替代");
     const incidents = this.store.read()[chatId]?.incidents ?? {};
     const incident = incidents[rootId] ?? Object.values(incidents).find(item => item.sourceMessageIds?.includes(rootId));
@@ -665,6 +665,7 @@ export class FeishuAlertMonitor {
       && (incident.sourceMessageIds ?? [incident.alert.messageId]).includes(context.sourceMessageId)) {
       return this.requestRuleClosure(incident, rootId, reason, context);
     }
+    if (context.ruleId !== undefined) throw new Error("持续规则只能用于本Run原生机器人告警，不能代替人工回复授权");
     const current = () => this.store.read()[chatId]?.incidents[incident?.alert.messageId ?? ""];
     const source = current()?.inputSource;
     const intent = context.closure;
@@ -698,7 +699,7 @@ export class FeishuAlertMonitor {
     assertCurrent();
     const mode = intent.mode;
     if (mode === "cancel") {
-      this.updateIncident(incident.alert, item => { delete item.closureProposal; });
+      this.updateIncident(incident.alert, item => { delete item.closureProposal; delete item.ruleClosure; });
       return { status: "waiting", pending: true };
     }
     if (mode === "direct" && (intent.incidentIds !== undefined || intent.proposalId !== undefined)) throw new Error("direct仅当前案件；跨案须先propose展示清单");
@@ -796,11 +797,11 @@ export class FeishuAlertMonitor {
     } catch (error) { this.options.log(`结案清单待投递：${error instanceof Error ? error.message : String(error)}`); }
   }
 
-  private async verifiedClosureRule(incident: Incident) {
+  private async verifiedClosureRule(incident: Incident, selectedRuleId?: string) {
     const config = this.options.config();
     const group = config?.groups.find(item => item.chatId === incident.alert.chatId && item.enabled !== false);
     if (!group || config?.enabled === false || !group.senderAppIds.includes(incident.alert.senderId)) return { ok: false as const, error: "当前告警群或来源未启用，未按持续授权结案" };
-    const matched = matchAlertClosureRule(group.runbookPath, incident.alert);
+    const matched = matchAlertClosureRule(group.runbookPath, incident.alert, selectedRuleId);
     if (!matched) return { ok: false as const, error: "本群未唯一命中已确认的持续结案规则，未执行" };
     const source = await this.options.transport.readAlertUserMessage?.(matched.rule.authorization.messageId);
     if (!source || source.messageId !== matched.rule.authorization.messageId || source.chatId !== incident.alert.chatId
@@ -815,15 +816,15 @@ export class FeishuAlertMonitor {
     const current = this.options.config();
     const target = current?.groups.find(item => item.chatId === incident.alert.chatId && item.enabled !== false);
     if (!target || current?.enabled === false || !target.senderAppIds.includes(incident.alert.senderId)
-      || !approversOf(target).includes(source.senderId) || matchAlertClosureRule(target.runbookPath, incident.alert)?.revision !== matched.revision) {
+      || !approversOf(target).includes(source.senderId) || matchAlertClosureRule(target.runbookPath, incident.alert, selectedRuleId)?.revision !== matched.revision) {
       return { ok: false as const, error: "持续授权在核验期间已更改或撤销，未执行" };
     }
     return { ok: true as const, ...matched, source };
   }
 
-  private async requestRuleClosure(incident: Incident, topicId: string, reason: string, context: { sourceMessageId: string; runId: string; isCurrent?: () => boolean }): Promise<{ status: "investigating"; pending: true }> {
+  private async requestRuleClosure(incident: Incident, topicId: string, reason: string, context: { sourceMessageId: string; runId: string; isCurrent?: () => boolean; ruleId?: string }): Promise<{ status: "investigating"; pending: true }> {
     if (!this.options.transport.readAlertDelivery) throw new Error("无法核实完整答复投递状态，未登记自动结案");
-    const matched = await this.verifiedClosureRule(incident);
+    const matched = await this.verifiedClosureRule(incident, context.ruleId);
     if (!matched.ok) throw new Error(matched.error);
     const current = this.store.read()[incident.alert.chatId]?.incidents[incident.alert.messageId];
     if (!current || current.dismissal || context.isCurrent?.() === false || current.followupNoticeSource
@@ -856,7 +857,7 @@ export class FeishuAlertMonitor {
     let matched: Extract<Awaited<ReturnType<FeishuAlertMonitor["verifiedClosureRule"]>>, { ok: true }> | undefined;
     if (!error) {
       // Read/transport failures remain pending and retry on the next poll, including after restart.
-      const verification = await this.verifiedClosureRule(incident);
+      const verification = await this.verifiedClosureRule(incident, pending.ruleId);
       if (!verification.ok) error = verification.error;
       else {
         matched = verification;

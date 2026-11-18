@@ -85,9 +85,9 @@ async function main() {
   } else if (cmd === "alert" && rest[0] === "status" && rest[1] && rest.length > 2) {
     const parts = rest.slice(2);
     const names = [];
-    let closureMode, subject, sourceRef, proposalId;
+    let closureMode, subject, sourceRef, proposalId, ruleId;
     const incidentIds = [];
-    while (["--notify", "--closure-mode", "--subject", "--source-ref", "--incident", "--proposal-id"].includes(parts[0])) {
+    while (["--notify", "--closure-mode", "--subject", "--source-ref", "--incident", "--proposal-id", "--rule-id"].includes(parts[0])) {
       const flag = parts[0], value = parts[1];
       if (!value || !value.trim() || value.startsWith("--")) fail("fcb: " + flag + " 需要参数");
       if (flag === "--notify") {
@@ -97,6 +97,9 @@ async function main() {
       } else if (flag === "--closure-mode") {
         if (closureMode || !["direct", "propose", "confirm", "cancel"].includes(value)) fail("fcb: --closure-mode 需要 direct/propose/confirm 且只能指定一次");
         closureMode = value;
+      } else if (flag === "--rule-id") {
+        if (ruleId || !/^[A-Za-z0-9_-]{1,100}$/.test(value)) fail("fcb: ruleId无效");
+        ruleId = value;
       } else if (flag === "--source-ref") {
         if (sourceRef || value.length > 100) fail("fcb: sourceRef无效");
         sourceRef = value;
@@ -113,9 +116,10 @@ async function main() {
       parts.splice(0, 2);
     }
     if ((subject || sourceRef || proposalId || incidentIds.length) && !closureMode) fail("fcb: --subject 需要 --closure-mode");
+    if (ruleId && (rest[1] !== "dismissed" || closureMode || names.length)) fail("fcb: ruleId仅用于持续规则dismissed");
     if (!parts.length) fail("fcb: 告警状态必须包含证据或具体待办");
     const notify = names.length === 1 ? names[0] : names.length ? names : undefined;
-    await post("/outbound/alert-status", {runId, status: rest[1], summary: parts.join(" "), ...(notify ? {notify} : {}), ...(closureMode ? {closure: {mode: closureMode, sourceRef, ...(proposalId ? {proposalId} : {}), ...(incidentIds.length ? {incidentIds} : {}), ...(subject ? {subject} : {})}} : {})});
+    await post("/outbound/alert-status", {runId, status: rest[1], summary: parts.join(" "), ...(ruleId ? {ruleId} : {}), ...(notify ? {notify} : {}), ...(closureMode ? {closure: {mode: closureMode, sourceRef, ...(proposalId ? {proposalId} : {}), ...(incidentIds.length ? {incidentIds} : {}), ...(subject ? {subject} : {})}} : {})});
   } else {
     fail("用法: fcb send <文件路径> | fcb say <消息> | fcb mention <对象引用> <消息> | fcb alert status <状态> <证据或待办> | fcb deploy prepare [--publish] [--ref <commit>] | fcb deploy apply/status/cancel/rollback [release]");
   }

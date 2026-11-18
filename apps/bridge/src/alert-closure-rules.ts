@@ -11,11 +11,13 @@ export interface AlertClosureRule {
   title: string;
   bodyIncludes: string[];
   evidence: string;
+  /** Trusted SKILL conditions; require explicit Agent selection after per-case verification. */
+  conditions?: string;
   authorization: { messageId: string; contentSha256: string };
 }
 
 /** Unlike notifications, these rules never batch different orders or skip investigation. */
-export function matchAlertClosureRule(runbookPath: string | undefined, message: FeishuAlertMessage): { rule: AlertClosureRule; revision: string } | undefined {
+export function matchAlertClosureRule(runbookPath: string | undefined, message: FeishuAlertMessage, selectedRuleId?: string): { rule: AlertClosureRule; revision: string } | undefined {
   if (!runbookPath || message.senderType !== "app") return undefined;
   const file = path.join(path.dirname(runbookPath), "references", "closure-rules.json");
   let raw: string;
@@ -27,6 +29,9 @@ export function matchAlertClosureRule(runbookPath: string | undefined, message: 
   const matches = parsed.rules.filter((value): value is AlertClosureRule => {
     if (!value || typeof value !== "object") return false;
     const rule = value as Partial<AlertClosureRule>;
+    if (selectedRuleId !== undefined && rule.id !== selectedRuleId) return false;
+    if (rule.conditions !== undefined && (typeof rule.conditions !== "string" || !rule.conditions.trim()
+      || rule.conditions.length > 8000 || selectedRuleId !== rule.id)) return false;
     return rule.kind === "after_triage" && rule.verified === true
       && typeof rule.id === "string" && Boolean(rule.id.trim())
       && typeof rule.evidence === "string" && Boolean(rule.evidence.trim())
