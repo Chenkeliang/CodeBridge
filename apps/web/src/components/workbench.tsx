@@ -1,4 +1,4 @@
-import { parseNativeSessionCommand } from "@codebridge/core/native-session-command";
+import { canonicalSlashCommand, parseNativeSessionCommand } from "@codebridge/core/native-session-command";
 import { TaskWorkspace } from "@/components/task-workspace";
 import { TaskAttentionPage } from "@/components/task-attention-page";
 import type { TaskLocation } from "@/components/agent-tasks-page";
@@ -616,8 +616,11 @@ export function Workbench() {
   async function submit() {
     const message = draft.trim();
     if (!message || sending) return;
-    const query = message.toLowerCase().slice(1);
-    if (message.startsWith("/") && (query === "context" || query === "usage" || query === "goal")) {
+    const [name] = message.split(/\s/, 1);
+    const commandName = canonicalSlashCommand(name!.toLowerCase());
+    const args = message.slice(name!.length).trim();
+    const query = commandName.startsWith("/") ? commandName.slice(1) : "";
+    if (!args && (query === "context" || query === "usage" || query === "goal")) {
       if (!selectedSessionId || attachments.length) {
         setError(attachments.length ? "会话状态命令不能携带附件。" : "请先选择要查询的会话。");
         return;
@@ -634,9 +637,8 @@ export function Workbench() {
       }
       return;
     }
-    if (/^\/review-result(?:\s|$)/i.test(message)) {
-      const report = /^\/review-result(?:\s+([0-9a-f]{64}))?$/i.exec(message);
-      if (!report) {
+    if (commandName === "/review-result") {
+      if (args && !/^[0-9a-f]{64}$/i.test(args)) {
         setError("请使用 /review-result，或附加原话题给出的报告编号。");
         return;
       }
@@ -647,7 +649,7 @@ export function Workbench() {
       setSending(true);
       setError(null);
       try {
-        const result = await api.latestNativeReview(selectedSessionId, report[1]?.toLowerCase());
+        const result = await api.latestNativeReview(selectedSessionId, args ? args.toLowerCase() : undefined);
         if (result.text) setNativeReview({ sessionId: selectedSessionId, text: result.text });
         else notify("当前会话暂无原生审查报告。");
       } catch (error) {

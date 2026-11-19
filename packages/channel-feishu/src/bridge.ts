@@ -1,4 +1,4 @@
-import { parseNativeSessionCommand } from "@codebridge/core/native-session-command";
+import { canonicalSlashCommand, parseNativeSessionCommand } from "@codebridge/core/native-session-command";
 import type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply, FeishuAlertReaction } from "./alert-types.js";
 import { setAlertReaction, findHumanDoneReaction } from "./alert-reactions.js";
 import {
@@ -679,7 +679,8 @@ export class FeishuBridge {
         if (msg.attachments?.length || msg.resources?.length || (msg.rawContentType && msg.rawContentType !== "text")) {
           return { status: "rejected", reason: "invalid_arguments" };
         }
-        let source = /^\/(?:compact|review)$/i.test(msg.content.trim()) ? msg.content.trim() : "";
+        const bareCommand = canonicalSlashCommand(msg.content.trim().toLowerCase());
+        let source = bareCommand === "/compact" || bareCommand === "/review" ? msg.content.trim() : "";
         if (raw?.message?.content) {
           const payload = JSON.parse(raw.message.content) as { text?: unknown } | null;
           source = typeof payload?.text === "string" ? payload.text.trimStart() : "";

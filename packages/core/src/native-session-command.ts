@@ -1,5 +1,52 @@
 import type { SessionGoalObservation } from "./types.js";
 
+export const SLASH_COMMAND_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  "/help": ["/h"],
+  "/menu": ["/mn"],
+  "/commands": ["/cmd"],
+  "/context": ["/ctx"],
+  "/usage": ["/u"],
+  "/goal": ["/g"],
+  "/status": ["/s"],
+  "/stop": ["/x", "/cancel"],
+  "/continue": ["/c"],
+  "/command-status": ["/cs"],
+  "/command-cancel": ["/cc"],
+  "/steer": ["/st"],
+  "/approve": ["/a"],
+  "/deny": ["/d"],
+  "/new": ["/n", "/reset"],
+  "/resume": ["/r"],
+  "/session": ["/sess"],
+  "/backend": ["/b"],
+  "/transport": ["/tr"],
+  "/model": ["/m"],
+  "/effort": ["/e"],
+  "/permission": ["/perm"],
+  "/config": ["/cfg"],
+  "/thinking": ["/think"],
+  "/cd": ["/j"],
+  "/roots": ["/rs"],
+  "/root": ["/rt"],
+  "/ws": ["/w"],
+  "/send": ["/sf"],
+  "/clone": ["/cl"],
+  "/pull": ["/pl"],
+  "/compact": ["/cp"],
+  "/review": ["/rv"],
+  "/review-branch": ["/rvb"],
+  "/review-commit": ["/rvc"],
+  "/review-result": ["/rvr"],
+};
+
+const canonicalByAlias = new Map(Object.entries(SLASH_COMMAND_ALIASES).flatMap(
+  ([command, aliases]) => aliases.map((alias) => [alias, command] as const),
+));
+
+export function canonicalSlashCommand(command: string): string {
+  return canonicalByAlias.get(command) ?? command;
+}
+
 export const NATIVE_SESSION_COMMANDS = ["compact", "goal", "review", "review-branch", "review-commit"] as const;
 export type NativeSessionCommand = typeof NATIVE_SESSION_COMMANDS[number];
 
@@ -26,9 +73,10 @@ export function isNativeSessionCommand(value: unknown): value is NativeSessionCo
 
 export function parseNativeSessionCommand(text: string): { command: NativeSessionCommand; instructions: string } | null {
   const match = /^\/([a-z-]+)(?:\s([\s\S]*))?$/i.exec(text.trimStart());
-  const command = match?.[1]?.toLowerCase();
+  if (!match) return null;
+  const command = canonicalSlashCommand(`/${match[1]!.toLowerCase()}`).slice(1);
   if (!isNativeSessionCommand(command)) return null;
-  const instructions = match?.[2] ?? "";
+  const instructions = match[2] ?? "";
   return command === "goal" && !instructions.trim() ? null : { command, instructions };
 }
 

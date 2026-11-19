@@ -1,3 +1,4 @@
+import { canonicalSlashCommand, SLASH_COMMAND_ALIASES } from "@codebridge/core/native-session-command";
 import type { ConversationEvent } from "./events";
 import type { AgentCommand, AgentProfile, AgentSession, ConfigOption, MessageAttachmentInput } from "./types";
 
@@ -76,10 +77,13 @@ export function composerTrigger(draft: string): { kind: "command" | "context"; q
 
 export function filterCommands(commands: AgentCommand[], query: string): AgentCommand[] {
   const normalized = query.trim().toLowerCase();
-  const filtered = normalized
-    ? commands.filter((command) => `${command.name} ${command.description}`.toLowerCase().includes(normalized))
-    : commands;
-  return [...filtered].sort((left, right) => Number(right.name.startsWith("$")) - Number(left.name.startsWith("$")));
+  const filtered = commands.filter((command) => {
+    const name = `/${command.name.toLowerCase()}`;
+    if (canonicalSlashCommand(name) !== name) return false;
+    return !normalized || `${command.name} ${command.description}`.toLowerCase().includes(normalized)
+      || SLASH_COMMAND_ALIASES[name]?.some((alias) => alias.slice(1).includes(normalized));
+  });
+  return filtered.sort((left, right) => Number(right.name.startsWith("$")) - Number(left.name.startsWith("$")));
 }
 
 export function applyComposerSuggestion(draft: string, replacement: string): string {

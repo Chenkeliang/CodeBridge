@@ -1,4 +1,4 @@
-import { parseNativeSessionCommand, type NativeSessionCommand } from "@codebridge/core/native-session-command";
+import { canonicalSlashCommand, parseNativeSessionCommand, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import {
   resolveDefaultAgentId,
   type AgentAvailableCommand,
@@ -111,7 +111,7 @@ export async function handleSlashCommand(
 
   const [cmd, ...rest] = trimmed.split(/\s+/);
   const arg = rest.join(" ").trim();
-  const lower = cmd!.toLowerCase();
+  const lower = canonicalSlashCommand(cmd!.toLowerCase());
 
   const native = parseNativeSessionCommand(ctx.text);
   if (native) {
@@ -147,6 +147,8 @@ export async function handleSlashCommand(
           : result.reason === "forbidden" ? "当前发送者无权查看或取消此命令。" : "原生命令未成功执行。"
         : labels[result.status] };
     }
+    case "/review-result":
+      return { type: "reply", text: "请在同一绑定的 Web 会话使用 /review-result 查看报告。" };
     case "/context":
     case "/usage":
     case "/goal": {
@@ -189,7 +191,6 @@ export async function handleSlashCommand(
     }
 
     case "/new":
-    case "/reset":
       // 只 +1 代：下一句进新 session，旧 generation 的绑定与旧 run 不受影响。
       ctx.router.incrementSlotGeneration(ctx.chatId, ctx.topicId);
       return {
@@ -198,8 +199,6 @@ export async function handleSlashCommand(
       };
 
     case "/stop":
-    case "/cancel":
-    case "/x":
       if (!ctx.cancelActiveRun) {
         return {
           type: "reply",
@@ -216,8 +215,7 @@ export async function handleSlashCommand(
         };
       }
 
-    case "/continue":
-    case "/c": {
+    case "/continue": {
       if (!ctx.getSlotCommandContext || !ctx.resumeQueue) {
         return { type: "reply", text: "Runner 未就绪，无法恢复队列。" };
       }
@@ -261,13 +259,11 @@ export async function handleSlashCommand(
     }
 
     case "/approve":
-    case "/a":
-    case "/deny":
-    case "/d": {
+    case "/deny": {
       if (!ctx.resolvePermission) {
         return { type: "reply", text: "Runner 未就绪，无法回应权限请求。" };
       }
-      const approve = lower === "/approve" || lower === "/a";
+      const approve = lower === "/approve";
       const resolved = await ctx.resolvePermission(approve);
       return {
         type: "reply",
@@ -280,7 +276,6 @@ export async function handleSlashCommand(
     }
 
     case "/resume":
-    case "/r":
       try {
         return await handleResume(ctx, arg);
       } catch (err) {
@@ -343,8 +338,7 @@ export async function handleSlashCommand(
       }
       return { type: "send_file", path: arg };
 
-    case "/status":
-    case "/s": {
+    case "/status": {
       const key = ctx.router.buildSessionKey(ctx.chatId, ctx.topicId);
       const runOpts = ctx.router.resolveRunOptions(
         ctx.chatId,
@@ -390,11 +384,9 @@ export async function handleSlashCommand(
       return { type: "reply", text: "当前仅支持 ACP，无需切换 transport。" };
 
     case "/permission":
-    case "/perm":
       return handlePermission(ctx, arg);
 
     case "/thinking":
-    case "/think":
       return handleThinking(ctx, arg);
 
     case "/cd": {
@@ -414,8 +406,7 @@ export async function handleSlashCommand(
     case "/config":
       return handleAcpConfig(ctx, arg);
 
-    case "/backend":
-    case "/b": {
+    case "/backend": {
       const id = arg === "default" || !arg
         ? resolveDefaultAgentId(ctx.config)
         : arg;

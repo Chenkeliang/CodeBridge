@@ -1,5 +1,5 @@
 import type { AgentAvailableCommand } from "@codebridge/core";
-import { isNativeSessionCommand, NATIVE_COMMAND_UNAVAILABLE } from "@codebridge/core/native-session-command";
+import { canonicalSlashCommand, isNativeSessionCommand, NATIVE_COMMAND_UNAVAILABLE, SLASH_COMMAND_ALIASES } from "@codebridge/core/native-session-command";
 
 export interface CommandHelpItem {
   command: string;
@@ -23,46 +23,47 @@ const COMMAND_HELP_GROUPS: CommandHelpGroup[] = [
       { command: "/context", summary: "查看当前会话最近上报的上下文占用" },
       { command: "/usage", summary: "查看当前会话最近上报的用量和费用" },
       { command: "/goal", summary: "查看当前会话最近上报的目标状态" },
-      { command: "/status", summary: "查看 backend、目录、模型和任务状态（别名 /s）" },
+      { command: "/status", summary: "查看 backend、目录、模型和任务状态" },
     ],
   },
   {
     title: "任务控制",
     items: [
-      { command: "/stop", summary: "停止当前 Agent 任务（别名 /cancel、/x）" },
-      { command: "/continue", summary: "恢复暂停队列（别名 /c）" },
+      { command: "/stop", summary: "停止当前 Agent 任务" },
+      { command: "/continue", summary: "恢复暂停队列" },
       { command: "/command-status", summary: "引用自己的原生命令后查询回执" },
       { command: "/command-cancel", summary: "引用自己的原生命令后请求取消" },
       { command: "/steer <指令>", summary: "向运行中的 ACP turn 注入补充指令" },
-      { command: "/approve", summary: "允许当前 Agent 工具权限请求（别名 /a）" },
-      { command: "/deny", summary: "拒绝当前 Agent 工具权限请求（别名 /d）" },
+      { command: "/approve", summary: "允许当前 Agent 工具权限请求" },
+      { command: "/deny", summary: "拒绝当前 Agent 工具权限请求" },
     ],
   },
   {
     title: "会话管理",
     items: [
-      { command: "/new", summary: "新建会话（别名 /reset）" },
-      { command: "/resume", summary: "列出当前目录的本机 session（别名 /r）" },
+      { command: "/new", summary: "新建会话" },
+      { command: "/resume", summary: "列出当前目录的本机 session" },
       { command: "/resume <N>", summary: "绑定列表中第 N 条 session" },
       { command: "/resume last", summary: "绑定最近一条 session" },
       { command: "/resume all", summary: "列出全部目录的本机 session" },
       { command: "/session close <sessionId>", summary: "关闭指定 ACP session" },
       { command: "/session delete <sessionId>", summary: "永久删除指定 ACP session" },
+      { command: "/review-result [报告编号]", summary: "在绑定的 Web 会话查看审查报告" },
     ],
   },
   {
     title: "Agent 与模型",
     items: [
-      { command: "/backend <cursor|claude|codex|pi|opencode|default>", summary: "切换 Agent（别名 /b）" },
+      { command: "/backend <cursor|claude|codex|pi|opencode|default>", summary: "切换 Agent" },
       { command: "/transport", summary: "兼容命令；当前仅支持 ACP，无需切换" },
       { command: "/model [list|名称|default]", summary: "列出或切换实时模型" },
       { command: "/effort [list|级别|default]", summary: "列出或切换实时推理强度" },
       {
         command: "/permission [list|模式|default]",
-        summary: "列出或切换实时 mode/权限（别名 /perm）",
+        summary: "列出或切换实时 mode/权限",
       },
       { command: "/config [id value|default]", summary: "查看或设置 ACP 实时配置（含 boolean）" },
-      { command: "/thinking [on|off]", summary: "显示或隐藏思考/工具过程（别名 /think）" },
+      { command: "/thinking [on|off]", summary: "显示或隐藏思考/工具过程" },
     ],
   },
   {
@@ -92,16 +93,17 @@ export const SLASH_COMMANDS: CommandHelpItem[] = COMMAND_HELP_GROUPS.flatMap(
 );
 
 const publicGroupCommands = new Set([
-  "/help", "/status", "/s", "/new", "/stop", "/cancel", "/x", "/continue", "/c", "/steer", "/commands",
+  "/help", "/status", "/new", "/stop", "/continue", "/steer", "/commands",
 ]);
 
 export function isPublicGroupCommand(command: string): boolean {
-  return publicGroupCommands.has(command);
+  // /reset historically requires group operator access.
+  return command !== "/reset" && publicGroupCommands.has(canonicalSlashCommand(command));
 }
 
 const bridgeCommandNames = new Set([
   ...SLASH_COMMANDS.map(({ command }) => command.split(" ", 1)[0]!),
-  "/s", "/reset", "/cancel", "/x", "/c", "/a", "/d", "/r", "/perm", "/think", "/b",
+  ...Object.values(SLASH_COMMAND_ALIASES).flat(),
 ]);
 
 export function discoveredAgentCommands(commands: readonly AgentAvailableCommand[]) {
@@ -116,26 +118,30 @@ export function formatCommandCatalog(
   format: CommandHelpFormat,
 ): string {
   const keyword = query.toLowerCase();
+  const commandMatch = (command: string, summary = "") => {
+    const name = command.split(" ", 1)[0]!;
+    const aliases = SLASH_COMMAND_ALIASES[name] ?? [];
+    return `${command} ${summary} ${aliases.join(" ")}`.toLowerCase().includes(keyword);
+  };
   const builtin = SLASH_COMMANDS.filter(({ command, summary }) => (
     (!groupLimited || isPublicGroupCommand(command.split(" ", 1)[0]!))
-    && `${command} ${summary}`.toLowerCase().includes(keyword)
+    && commandMatch(command, summary)
   ));
   const available = observed.filter(({ name, status }) => status === "available" && isNativeSessionCommand(name)
-    && name.toLowerCase().includes(keyword));
+    && commandMatch(`/${name}`));
   const discovered = discoveredAgentCommands(observed.filter((entry) => entry.status !== "available"))
-    .filter(({ name }) => name.toLowerCase().includes(keyword));
+    .filter(({ name }) => commandMatch(`/${name}`));
   const lines = builtin.length
     ? [heading("CodeBridge 命令", format), ...builtin.map((item) => commandLine(item, format))]
     : [];
   if (available.length) {
-    lines.push(heading("当前会话可执行的原生命令", format), ...available.map(({ name }) => (
-      format === "markdown" ? `\`/${name}${name === "goal" ? " <操作>" : ""}\`` : `/${name}${name === "goal" ? " <操作>" : ""}`
-    )));
+    lines.push(heading("当前会话可执行的原生命令", format), ...available.map(({ name }) =>
+      commandLine({ command: `/${name}${name === "goal" ? " <操作>" : ""}`, summary: "" }, format)));
   }
   if (discovered.length) {
     lines.push(heading("Agent 已上报 · 待验证", format), ...discovered.map(({ name, unavailableReason }) => {
-      const command = format === "markdown" ? `\`/${name}\`` : `/${name}`;
-      return unavailableReason ? `${command} · ${NATIVE_COMMAND_UNAVAILABLE[unavailableReason]}` : command;
+      return commandLine({ command: `/${name}`, summary: unavailableReason
+        ? NATIVE_COMMAND_UNAVAILABLE[unavailableReason] : "" }, format);
     }));
   }
   return lines.join("\n") || "没有匹配的命令。";
@@ -178,7 +184,9 @@ function commandLine(
   format: CommandHelpFormat,
 ): string {
   const command = format === "markdown" ? `\`${item.command}\`` : item.command;
-  return `${command} — ${item.summary}`;
+  const aliases = SLASH_COMMAND_ALIASES[item.command.split(" ", 1)[0]!];
+  const summary = item.summary ? ` — ${item.summary}` : "";
+  return `${command}${summary}${aliases?.length ? `（别名 ${aliases.join("、")}）` : ""}`;
 }
 
 export function formatCompactCommandHelp(
@@ -207,6 +215,18 @@ export function formatFullCommandHelp(
       ...group.items.map((item) => commandLine(item, format)),
     );
   }
+  lines.push(
+    "",
+    heading("原生命令", format),
+    ...[
+      { command: "/compact [说明]", summary: "压缩当前会话的上下文" },
+      { command: "/goal <操作>", summary: "设置、暂停、恢复或清除当前目标" },
+      { command: "/review [说明]", summary: "发起原生代码审查" },
+      { command: "/review-branch <分支>", summary: "审查指定分支" },
+      { command: "/review-commit <提交>", summary: "审查指定提交" },
+    ].map((item) => commandLine(item, format)),
+    "发送 /commands（/cmd）查看当前会话可执行的原生命令。",
+  );
   return lines.join("\n");
 }
 

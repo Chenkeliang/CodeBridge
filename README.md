@@ -137,29 +137,31 @@ This reference describes the current source checkout. Installed builds provide t
 
 ### Feishu and Telegram
 
-Send `/commands` to see the catalog for the current chat or topic. Add a keyword to filter it. `/menu` and `/help` show shortcuts for mobile, and `/help full` opens the grouped reference.
+Use `/h full` for all aliases or `/cmd <keyword>` to search the current command catalog. Short forms use the same arguments as full names, such as `/st <instruction>` or `/rvb <branch>`.
+
+Send `/commands` (`/cmd`) to see the catalog for the current chat or topic. Add a keyword to filter it. `/menu` (`/mn`) and `/help` (`/h`) show shortcuts for mobile, and `/help full` opens the grouped reference.
 
 | Command | Use |
 | --- | --- |
 | `/status` (`/s`) | Show the backend, workspace, session settings, and active task. |
-| `/new` (`/reset`) | Start a new session with the next message. |
+| `/new` (`/n`, `/reset`) | Start a new session with the next message. |
 | `/resume` (`/r`), `/resume <N>`, `/resume last`, `/resume all` | List local sessions in the current directory, bind a numbered entry, bind the latest entry, or list sessions across directories. |
-| `/session close <session-id>`, `/session delete <session-id>` | Close or delete a session through the selected backend. |
+| `/session close <session-id>` (`/sess`), `/session delete <session-id>` | Close or delete a session through the selected backend. |
 | `/stop` (`/cancel`, `/x`), `/continue` (`/c`) | Stop the active task or resume a paused queue. |
-| `/command-status`, `/command-cancel` | Reply to your original native-command message to check its receipt or request cancellation. Mention the bot when the Feishu group requires it. |
-| `/steer <instruction>` | Send an instruction to the running turn when the adapter supports steering. |
+| `/command-status` (`/cs`), `/command-cancel` (`/cc`) | Reply to your original native-command message to check its receipt or request cancellation. Mention the bot when the Feishu group requires it. |
+| `/steer <instruction>` (`/st`) | Send an instruction to the running turn when the adapter supports steering. |
 | `/approve` (`/a`), `/deny` (`/d`) | Approve or reject the pending Agent permission request. |
 | `/backend [name]` (`/b`), `/backend default` | Switch to a configured backend or select the default, such as `/backend codex` or `/backend pi`. |
-| `/model [list]`, `/model <name>`, `/model default` | List models, choose one, or clear the session override. |
-| `/effort [list]`, `/effort <level>`, `/effort default` | List reasoning levels, choose one, or clear the session override. |
+| `/model [list]` (`/m`), `/model <name>`, `/model default` | List models, choose one, or clear the session override. |
+| `/effort [list]` (`/e`), `/effort <level>`, `/effort default` | List reasoning levels, choose one, or clear the session override. |
 | `/permission [list]` (`/perm`), `/permission <mode>`, `/permission default` | List permission modes, choose one, or clear the session override. |
-| `/config`, `/config <id> <value>`, `/config <id> default` | Show adapter settings, set a value, or clear the override for one setting. |
+| `/config` (`/cfg`), `/config <id> <value>`, `/config <id> default` | Show adapter settings, set a value, or clear the override for one setting. |
 | `/thinking` (`/think`), `/thinking on`, `/thinking off` | Check or change whether thinking and tool progress are displayed. |
-| `/cd <absolute-path>` | Change the current project directory. |
-| `/roots`, `/root add <absolute-path>`, `/root remove <absolute-path>` (`rm`) | List, add, or remove additional directories. |
-| `/ws list`, `/ws save <name>`, `/ws use <name>`, `/ws remove <name>` | List, save, open, or remove named workspaces. |
-| `/send <path>`, `/clone <git-url> [directory-name]`, `/pull` | Send a file from the Bridge host, clone and switch to a repository, or run a fast-forward-only pull. |
-| `/transport` | Show the transport information for this compatibility command. |
+| `/cd <absolute-path>` (`/j`) | Change the current project directory. |
+| `/roots` (`/rs`), `/root add <absolute-path>` (`/rt`), `/root remove <absolute-path>` (`rm`) | List, add, or remove additional directories. |
+| `/ws list` (`/w`), `/ws save <name>`, `/ws use <name>`, `/ws remove <name>` | List, save, open, or remove named workspaces. |
+| `/send <path>` (`/sf`), `/clone <git-url> [directory-name]` (`/cl`), `/pull` (`/pl`) | Send a file from the Bridge host, clone and switch to a repository, or run a fast-forward-only pull. |
+| `/transport` (`/tr`) | Show the transport information for this compatibility command. |
 
 Model, reasoning, permission, and configuration options depend on the selected adapter. Use the corresponding list command to see its current options.
 
@@ -169,13 +171,13 @@ The table covers commands shared by Feishu, Telegram, and the Web Workbench, plu
 
 | Command | Use and availability |
 | --- | --- |
-| `/context` | Show the latest reported context usage, window limit, and utilization. |
-| `/usage` | Show the latest reported session usage and any cost reported with it. |
-| `/goal` | Show the latest reported Codex goal status and token figures when available. |
-| `/compact`, `/compact <instructions>` | Compact the bound session. Codex and Claude support the bare command. Pi accepts optional instructions. |
+| `/context` (`/ctx`) | Show the latest reported context usage, window limit, and utilization. |
+| `/usage` (`/u`) | Show the latest reported session usage and any cost reported with it. |
+| `/goal` (`/g`) | Show the latest reported Codex goal status and token figures when available. |
+| `/compact` (`/cp`), `/compact <instructions>` | Compact the bound session. Codex and Claude support the bare command. Pi accepts optional instructions. |
 | `/goal set <objective>`, `/goal pause`, `/goal resume`, `/goal clear` | Set, pause, resume, or clear the bound Codex session’s goal. `/goal <objective>` is shorthand for setting a goal. Setting or resuming may start a turn. |
-| `/review [instructions]`, `/review-branch <branch>`, `/review-commit <sha>` | Run Codex’s native review of uncommitted changes or a custom target, a branch, or a specific commit. |
-| `/review-result [report-id]` | View the latest or a specific report in the bound Web session. Group chats receive a severity count and the report reference. |
+| `/review [instructions]` (`/rv`), `/review-branch <branch>` (`/rvb`), `/review-commit <sha>` (`/rvc`) | Run Codex’s native review of uncommitted changes or a custom target, a branch, or a specific commit. |
+| `/review-result [report-id]` (`/rvr`) | View the latest or a specific report in the bound Web session. Group chats receive a severity count and the report reference. |
 
 Context, usage, and goal queries use observations already recorded for the bound provider session. Pi reports an estimate of context usage and cumulative session statistics. A session with no matching report shows that data is unavailable.
 
