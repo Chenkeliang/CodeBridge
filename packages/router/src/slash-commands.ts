@@ -4,6 +4,7 @@ import {
   type AppConfig,
   type BackendConfigOption,
   type ChannelCommandContext,
+  type SessionCompactionResult,
 } from "@codebridge/core";
 import type { CliSessionSummary } from "@codebridge/runner-client";
 import { execSync } from "node:child_process";
@@ -62,6 +63,7 @@ export interface SlashContext {
   helpFormat?: CommandHelpFormat;
   listDiscoveredCommands?: () => Promise<AgentAvailableCommand[]>;
   groupCommandListOnly?: boolean;
+  compactSession?: () => Promise<SessionCompactionResult>;
 }
 
 export type SlashResult =
@@ -99,6 +101,17 @@ export async function handleSlashCommand(
   const lower = cmd!.toLowerCase();
 
   switch (lower) {
+    case "/compact": {
+      const result = await ctx.compactSession?.().catch((): SessionCompactionResult => ({ status: "unknown" }));
+      if (result?.status === "completed") return { type: "reply", text: "当前会话上下文已压缩。" };
+      if (result?.status === "unknown") return { type: "reply", text: "本次压缩结果未知。请先确认原会话状态，以免重复压缩。" };
+      const rejected = {
+        unsupported: "当前 Agent 暂未开放原生压缩。", busy: "当前会话有进行中或排队的任务，请结束后再压缩。",
+        session_missing: "没有可压缩的原会话，请先在当前会话中开始对话。", forbidden: "此操作需要当前渠道的管理员权限。",
+        invalid_arguments: "无法从原消息读取压缩参数，请直接发送 /compact。", failed: "原生压缩失败。", cancelled: "原生压缩已取消。",
+      };
+      return { type: "reply", text: rejected[result?.reason ?? "unsupported"] };
+    }
     case "/help":
       return {
         type: "reply",

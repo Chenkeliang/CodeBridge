@@ -276,6 +276,9 @@ class Deployer:
             self.abort(job)
             if not (app / "apps/bridge/dist/cli.js").is_file():
                 raise DeployError("Bridge build output missing")
+            if package.get("codebridgeCommandProtocol") is not None:
+                job["stage"] = "command-protocol"
+                job["commandEvidence"] = self.command_evidence(app, package)
             job["hashes"] = self.hashes(app)
             job["build"] = job["test"] = "passed"
             job["preparedAt"] = time.time()
@@ -291,6 +294,22 @@ class Deployer:
             job["error"] = (job.get("stage", "prepare") + ": " + str(error)) if isinstance(error, DeployError) else "prepare failed"
             self.change(job, "cancelled" if job.get("cancelRequested") else "failed")
             self.notify(job)
+
+    def command_evidence(self, app, package):
+        if package.get("codebridgeCommandProtocol") != 1:
+            raise DeployError("unsupported command protocol")
+        raw = self.a.command([self.c["nodePath"], "scripts/check-command-protocol.mjs",
+                              str(self.data / "config.yaml")], cwd=str(app), timeout=120)
+        try:
+            evidence = json.loads(raw)
+            if (not isinstance(evidence, dict) or evidence.get("protocol") != 1 or evidence.get("piSdk") is not True
+                    or not isinstance(evidence.get("codexProfiles"), dict)
+                    or not all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v)
+                               for v in evidence["codexProfiles"].values())):
+                raise ValueError("invalid evidence")
+            return evidence
+        except (ValueError, TypeError) as error:
+            raise DeployError("invalid command protocol evidence") from error
 
     def hashes(self, app):
         for directory, dirs, files in os.walk(app, followlinks=False):
@@ -322,7 +341,12 @@ class Deployer:
                 placeholders = ",".join("?" for _ in active_ids) or "NULL"
                 pending = db.execute("SELECT count(*) FROM channel_turn_delivery WHERE status != ? AND (run_id IN (SELECT id FROM runs WHERE status NOT IN (?, ?)) OR status = ?) AND (created_at >= ? OR run_id IN (" + placeholders + "))", ("completed", "queued", "pending", "delivering", since, *active_ids)).fetchone()[0]
             if running == 0 and pending == 0:
-                return
+                if not job.get("commandEvidence"):
+                    return
+                token = self.secret(self.c["runnerToken"])
+                runner = self.a.http(self.c.get("runnerUrl", "http://127.0.0.1:19789").rstrip("/") + "/health", token)
+                if runner.get("activeCompactions", 0) == 0:
+                    return
             if time.monotonic() >= deadline:
                 raise DeployError("drain timed out; no services were switched")
             self.a.sleep(1)
@@ -500,6 +524,8 @@ class Deployer:
                       and len(args) >= 2 and Path(args[1]).resolve() == directory / "packages/runner-host/dist/cli.js")
             if not frozen:
                 job["restartRunner"] = True
+        if job.get("commandEvidence"):
+            job["restartRunner"] = True
         if job["restartRunner"] and not self.c.get("runnerPlist"):
             raise DeployError("Runner restart requires runnerPlist configuration")
 
@@ -512,6 +538,19 @@ class Deployer:
                 if package.get("scripts", {}).get("check:codex-network"):
                     self.a.command([self.c["pnpmPath"], "run", "check:codex-network", "--config",
                                     str(self.data / "config.yaml")], cwd=job["app"])
+                current = self.state["jobs"].get(self.state["current"], {})
+                if current.get("commandEvidence") and package.get("codebridgeCommandProtocol") is None:
+                    raise DeployError("candidate removes an installed command protocol")
+                if package.get("codebridgeCommandProtocol") is not None:
+                    prepared = job.get("commandEvidence")
+                    app = Path(job["app"])
+                    if self.hashes(app) != job["hashes"]:
+                        raise DeployError("prepared release files changed")
+                    if not prepared or self.command_evidence(app, package) != prepared:
+                        raise DeployError("command protocol evidence missing or changed after preparation")
+                    old_profiles = current.get("commandEvidence", {}).get("codexProfiles", {})
+                    if not set(old_profiles).issubset(prepared["codexProfiles"]):
+                        raise DeployError("candidate loses a verified Codex compaction profile")
             if not job.get("manualRollback"):
                 current = self.state["jobs"].get(self.state["current"], {})
                 self.verify(current.get("id"), current.get("commit"))
@@ -551,6 +590,9 @@ class Deployer:
                     runner_new["ProgramArguments"] = [self.c["nodePath"], str(app / "packages/runner-host/dist/cli.js"), *runner_args[2:]]
                     runner_new["WorkingDirectory"] = str(app)
                     runner_new["EnvironmentVariables"] = dict(runner_old.get("EnvironmentVariables", {}), CODEBRIDGE_RELEASE_ID=job["id"], CODEBRIDGE_RELEASE_COMMIT=job["commit"])
+                    runner_new["EnvironmentVariables"].pop("CODEBRIDGE_COMMAND_EVIDENCE", None)
+                    if job.get("commandEvidence"):
+                        runner_new["EnvironmentVariables"]["CODEBRIDGE_COMMAND_EVIDENCE"] = json.dumps(job["commandEvidence"], separators=(",", ":"))
                 self.change(job, "switching")
                 switched = True
                 if job["restartRunner"]:
@@ -565,6 +607,11 @@ class Deployer:
             self.restart()
             self.change(job, "verifying")
             self.verify(job["id"], job["commit"])
+            if job.get("commandEvidence"):
+                token = self.secret(self.c["runnerToken"])
+                runner = self.a.http(self.c.get("runnerUrl", "http://127.0.0.1:19789").rstrip("/") + "/health", token)
+                if runner.get("releaseId") != job["id"] or runner.get("commit") != job["commit"] or runner.get("commandProtocol") != 1:
+                    raise DeployError("Runner command protocol or release identity mismatch")
             self.state["current"] = job["id"]
             self.change(job, "published")
             self.clear_maintenance()

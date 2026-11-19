@@ -35,6 +35,8 @@ export {
   deleteAcpSession,
   loadAcpSessionHistory,
   listAcpConfigOptions,
+  compactCodexSession,
+  probeCodexCompactionSupport,
   listAcpSessions,
   killProcessTree,
   mapSessionUpdate,

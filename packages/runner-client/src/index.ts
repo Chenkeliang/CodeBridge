@@ -423,13 +423,13 @@ export class RunnerClient {
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(120_000),
     });
-    if (!res.ok) return { status: "unknown" };
-    const body = await res.json() as Partial<{ status: string; reason: string }> | null;
-    if (body?.status === "completed") return { status: "completed" };
-    if (body?.status === "rejected" && (body.reason === "unsupported" || body.reason === "busy" || body.reason === "session_missing")) {
-      return { status: "rejected", reason: body.reason };
-    }
-    return { status: "unknown" };
+    return decodeCompactionResult(res);
+  }
+
+  async readCompactionResult(sessionId: string, requestId: string): Promise<SessionCompactionResult> {
+    return decodeCompactionResult(await this.fetch(`/sessions/${encodeURIComponent(sessionId)}/compact/${encodeURIComponent(requestId)}`, {
+      signal: AbortSignal.timeout(10_000),
+    }));
   }
 
   async cancel(runId: string): Promise<void> {
@@ -643,6 +643,18 @@ export class RunnerClient {
       },
     });
   }
+}
+
+async function decodeCompactionResult(response: Response): Promise<SessionCompactionResult> {
+  if (!response.ok) return { status: "unknown" };
+  const body = await response.json() as { status?: unknown; reason?: unknown } | null;
+  if (body?.status === "completed") return { status: "completed" };
+  const reason = body?.reason;
+  if (body?.status === "rejected" && (reason === "unsupported" || reason === "busy" || reason === "session_missing"
+    || reason === "invalid_arguments" || reason === "failed" || reason === "cancelled" || reason === "forbidden")) {
+    return { status: "rejected", reason };
+  }
+  return { status: "unknown" };
 }
 
 interface SetupErrorPayload {

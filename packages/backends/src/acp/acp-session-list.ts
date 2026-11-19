@@ -6,6 +6,7 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
   client,
+  type ClientCapabilities,
   type ClientConnection,
   type InitializeResponse,
   type ListSessionsRequest,
@@ -15,7 +16,9 @@ import {
 import type {
   BackendConfigOption,
   BackendProfile,
+  SessionCompactionResult,
 } from "@codebridge/core";
+import { ACP_CODEX_ACP_VERSION } from "@codebridge/core";
 import type {
   CliSessionSummary,
   ProviderSessionHistoryEvent,
@@ -48,6 +51,8 @@ async function withAcpConnection<T>(
   ) => Promise<T>,
   onSessionUpdate?: (sessionId: string, update: SessionUpdate) => void,
   timeoutMs = 60_000,
+  clientCapabilities: ClientCapabilities = ACP_CLIENT_CAPABILITIES,
+  isAborted: () => boolean = () => false,
 ): Promise<T> {
   const spawnProfile = resolveAcpSpawn(profile);
   const child = spawn(spawnProfile.command, spawnProfile.args, {
@@ -59,6 +64,7 @@ async function withAcpConnection<T>(
   const spawnError = new Promise<never>((_, reject) => {
     child.once("error", reject);
   });
+  child.stderr?.resume();
   const app = client({ name: "codebridge" }).onNotification(
     methods.client.session.update,
     ({ params }) => onSessionUpdate?.(params.sessionId, params.update),
@@ -70,18 +76,18 @@ async function withAcpConnection<T>(
       Promise.race([
         connection.agent.request(methods.agent.initialize, {
           protocolVersion: PROTOCOL_VERSION,
-          clientCapabilities: ACP_CLIENT_CAPABILITIES,
+          clientCapabilities,
           clientInfo: { name: "codebridge", version: "0.1.0" },
         }),
         spawnError,
       ]),
-      () => false,
+      isAborted,
       timeoutMs,
       "ACP initialize timeout",
     );
     return await raceWithAbort(
       Promise.race([op(connection.agent, initializeResponse), spawnError]),
-      () => false,
+      isAborted,
       timeoutMs,
       "ACP operation timeout",
     );
@@ -89,6 +95,58 @@ async function withAcpConnection<T>(
     connection.close();
     if (!child.killed) killProcessTree(child, "SIGTERM");
   }
+}
+
+export async function compactCodexSession(
+  profile: BackendProfile,
+  cwd: string,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<SessionCompactionResult> {
+  const observed = new Map<string, string>();
+  let advertised = false;
+  let receiveCommands: () => void = () => {};
+  const commandsPublished = new Promise<void>((resolve) => { receiveCommands = resolve; });
+  let sent = false;
+  return withAcpConnection(profile, cwd, async (agent, init) => {
+    if (init.agentInfo?.name !== "@agentclientprotocol/codex-acp" || init.agentInfo.version !== ACP_CODEX_ACP_VERSION
+      || !init.agentCapabilities?.sessionCapabilities?.resume) {
+      return { status: "rejected", reason: "unsupported" };
+    }
+    await agent.request(methods.agent.session.resume, { sessionId, cwd, mcpServers: [] });
+    try {
+      await raceWithAbort(commandsPublished, () => signal.aborted, 5_000, "Codex commands unavailable");
+    } catch {
+      return { status: "rejected", reason: "unsupported" };
+    }
+    if (!advertised || signal.aborted) return { status: "rejected", reason: "unsupported" };
+    sent = true;
+    const response = await agent.request(methods.agent.session.prompt, { sessionId, prompt: [{ type: "text", text: "/compact" }] });
+    if (observed.size !== 1 || signal.aborted) return { status: "unknown" };
+    const status = observed.values().next().value;
+    if (status === "cancelled" || response.stopReason === "cancelled") return { status: "rejected", reason: "cancelled" };
+    if (status === "failed") return { status: "rejected", reason: "failed" };
+    return { status: status === "completed" && response.stopReason === "end_turn" ? "completed" : "unknown" };
+  }, (source, update) => {
+    if (source !== sessionId) return;
+    if (!sent && update.sessionUpdate === "available_commands_update") {
+      advertised = update.availableCommands.filter((command) => command.name === "compact").length === 1;
+      receiveCommands();
+    }
+    if (!sent || update.sessionUpdate !== "compaction_update" || !update.compactionId) return;
+    if (update.status === "in_progress" && !observed.has(update.compactionId)) {
+      observed.set(update.compactionId, update.status);
+    } else if (observed.get(update.compactionId) === "in_progress") {
+      observed.set(update.compactionId, update.status);
+    }
+  }, 90_000, { ...ACP_CLIENT_CAPABILITIES, session: { ...ACP_CLIENT_CAPABILITIES.session, compaction: {} } }, () => signal.aborted);
+}
+
+export async function probeCodexCompactionSupport(profile: BackendProfile, cwd: string): Promise<boolean> {
+  return withAcpConnection(profile, cwd, async (_agent, init) =>
+    init.agentInfo?.name === "@agentclientprotocol/codex-acp"
+    && init.agentInfo.version === ACP_CODEX_ACP_VERSION
+    && Boolean(init.agentCapabilities?.sessionCapabilities?.resume), undefined, 20_000);
 }
 
 export function collectAcpSessionHistory(

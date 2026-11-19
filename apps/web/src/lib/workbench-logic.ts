@@ -83,7 +83,7 @@ export function filterCommands(commands: AgentCommand[], query: string): AgentCo
 }
 
 export function parseCompactionCommand(draft: string): string | null {
-  const command = /^\/compact(?:\s([\s\S]*))?$/.exec(draft.trimStart());
+  const command = /^\/compact(?:\s([\s\S]*))?$/i.exec(draft.trimStart());
   return command ? command[1] ?? "" : null;
 }
 

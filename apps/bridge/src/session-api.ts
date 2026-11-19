@@ -13,6 +13,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { createHash, randomUUID } from "node:crypto";
 import { isNativeChannelRequest } from "./channel-origin.js";
+import { isLocalManagementRequest } from "./local-management.js";
 import { ProviderHistoryImporter } from "./session-history-import.js";
 import { registerSessionRuntimeCommandRoutes, registerSessionRuntimeReadRoutes } from "./session-runtime-api.js";
 
@@ -30,6 +31,7 @@ export interface SessionApiOptions {
   coordinator?: SessionCoordinator;
   defaultCwd?: string;
   beforeSteer?: (runId: string, sourceRef?: string) => void;
+  isMaintenance?: () => boolean;
 }
 
 export function createSessionApp(options: SessionApiOptions, token: string) {
@@ -604,7 +606,57 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json({ commands: discoveredAgentCommands(options.workItems.listSessionCommands(session.id)) });
   });
 
+  const compactBoundSession = async (
+    session: NonNullable<ReturnType<SessionCatalogStore["getSession"]>>,
+    providerId: string,
+    instructions: string,
+    namespace: string,
+    key: string,
+    actor: unknown,
+  ): Promise<SessionCompactionResult | "key_conflict"> => {
+    if (!session.cwd || !session.providerSessionId || providerId !== session.providerSessionId) {
+      return { status: "rejected", reason: "session_missing" };
+    }
+    if (!options.runner) return { status: "rejected", reason: "unsupported" };
+    const terminal = `${namespace}:result`;
+    const requestId = createHash("sha256").update(JSON.stringify([namespace, key])).digest("hex");
+    const fingerprint = createHash("sha256").update(JSON.stringify([
+      actor, session.id, session.agentId, session.cwd, providerId, session.model, instructions,
+    ])).digest("hex");
+    const admission = options.workItems.withSessionTransaction((tx) => {
+      const prior = tx.getIdempotencyResponse<string>(namespace, key);
+      if (prior !== undefined) return prior === fingerprint ? "replay" : "conflict";
+      if (options.isMaintenance?.() || tx.getRuntime(session.id)?.activeRunId || tx.countQueuedTurns(session.id) > 0) return "busy";
+      tx.putIdempotencyResponse(namespace, key, fingerprint);
+      return "dispatch";
+    });
+    if (admission === "conflict") return "key_conflict";
+    if (admission === "busy") return { status: "rejected", reason: "busy" };
+    if (admission === "replay") {
+      const prior = options.workItems.getIdempotencyResponse(terminal, key) as SessionCompactionResult | undefined;
+      if (prior) return prior;
+      try {
+        const recovered = await options.runner.readCompactionResult(providerId, requestId);
+        if (recovered.status !== "unknown") options.workItems.putIdempotencyResponse(terminal, key, recovered);
+        return recovered;
+      } catch {
+        return { status: "unknown" };
+      }
+    }
+    let result: SessionCompactionResult;
+    try {
+      result = await options.runner.compactSession(providerId, {
+        backend: session.agentId, cwd: session.cwd, requestId, instructions, model: session.model ?? undefined,
+      });
+    } catch {
+      result = { status: "unknown" };
+    }
+    if (result.status !== "unknown") options.workItems.putIdempotencyResponse(terminal, key, result);
+    return result;
+  };
+
   app.post("/v1/sessions/:session_id/compact", async (c) => {
+    if (!isLocalManagementRequest(c.req.raw)) return c.json({ error: "local_management_only" }, 403);
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
     const body = await readJson(c);
@@ -614,39 +666,29 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       || typeof body?.provider_session_id !== "string") {
       return c.json({ error: "invalid_compaction_request" }, 400);
     }
-    if (!session.cwd || !session.providerSessionId || body.provider_session_id !== session.providerSessionId) {
-      return c.json({ status: "rejected", reason: "session_missing" });
+    const result = await compactBoundSession(session, body.provider_session_id, instructions,
+      `session:compact:${session.id}`, key, "web/local");
+    return result === "key_conflict" ? c.json({ error: "compaction_key_conflict" }, 409) : c.json(result);
+  });
+
+  app.post("/v1/channels/compact", async (c) => {
+    if (!isNativeChannelRequest(c.req.raw)) return c.json({ error: "channel_origin_required" }, 403);
+    const body = await readJson(c);
+    const slot = parseChannelSlot(body?.slot);
+    if (!slot || (slot.channel !== "feishu" && slot.channel !== "telegram")
+      || typeof body?.sender_id !== "string" || !body.sender_id
+      || typeof body.message_id !== "string" || !body.message_id || body.message_id.length > 128
+      || typeof body.private_chat !== "boolean" || typeof body.instructions !== "string" || body.instructions.length > 4096) {
+      return c.json({ error: "invalid_compaction_request" }, 400);
     }
-    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
-    const namespace = `session:compact:${session.id}`;
-    const terminal = `${namespace}:result`;
-    const requestId = createHash("sha256").update(JSON.stringify([session.id, key])).digest("hex");
-    const fingerprint = createHash("sha256").update(JSON.stringify([
-      session.agentId, session.cwd, session.providerSessionId, session.model, instructions,
-    ])).digest("hex");
-    const admission = options.workItems.withSessionTransaction((tx) => {
-      const prior = tx.getIdempotencyResponse<string>(namespace, key);
-      if (prior !== undefined) return prior === fingerprint ? "replay" : "conflict";
-      if (tx.getRuntime(session.id)?.activeRunId || tx.countQueuedTurns(session.id) > 0) return "busy";
-      tx.putIdempotencyResponse(namespace, key, fingerprint);
-      return "dispatch";
-    });
-    if (admission === "conflict") return c.json({ error: "compaction_key_conflict" }, 409);
-    if (admission === "busy") return c.json({ status: "rejected", reason: "busy" });
-    if (admission === "replay") {
-      return c.json((options.workItems.getIdempotencyResponse(terminal, key) as SessionCompactionResult | undefined)
-        ?? { status: "unknown" });
-    }
-    let result: SessionCompactionResult;
-    try {
-      result = await options.runner.compactSession(session.providerSessionId, {
-        backend: session.agentId, cwd: session.cwd, requestId, instructions, model: session.model ?? undefined,
-      });
-    } catch {
-      result = { status: "unknown" };
-    }
-    options.workItems.putIdempotencyResponse(terminal, key, result);
-    return c.json(result);
+    const config = options.configStore?.get();
+    const admins = slot.channel === "feishu" ? config?.access?.admins : config?.telegram?.admins;
+    if (!body.private_chat && !admins?.includes(body.sender_id)) return c.json({ error: "compaction_forbidden" }, 403);
+    const session = options.catalog.getChannelSession(slot);
+    if (!session?.providerSessionId) return c.json({ status: "rejected", reason: "session_missing" });
+    const result = await compactBoundSession(session, session.providerSessionId, body.instructions,
+      `channel:compact:${slot.channel}`, body.message_id, [body.sender_id, slot]);
+    return result === "key_conflict" ? c.json({ error: "compaction_key_conflict" }, 409) : c.json(result);
   });
 
   app.patch("/v1/sessions/:session_id", async (c) => {

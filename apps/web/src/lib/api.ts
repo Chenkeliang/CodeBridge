@@ -1,5 +1,6 @@
 import type { AgentTaskDraft, AgentTaskDefinition, AgentTaskAttempt, AgentTaskAttemptDetail, AgentTaskOptions, TaskPreflight, TaskAttentionItem, AlertIncidentView } from "@codebridge/core";
 import type { ManagementSnapshot, ManagedRule, ManagedChat, ManagedAlertSource, ManagedChannel, ChannelVerification } from "@codebridge/core";
+import type { SessionCompactionResult } from "@codebridge/core";
 import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
 import { parseSseFrames } from "./sse";
 import type {
@@ -334,7 +335,7 @@ export const api = {
   commands: async (id: string) =>
     (await request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodeURIComponent(id)}/commands`)).commands ?? [],
   compactSession: (id: string, providerId: string, instructions: string, key: string) =>
-    request<{ status: "completed" | "rejected" | "unknown"; reason?: "busy" | "session_missing" | "unsupported" }>(
+    request<SessionCompactionResult>(
       `/v1/sessions/${encodeURIComponent(id)}/compact`, {
         method: "POST", headers: { "idempotency-key": key },
         body: JSON.stringify({ provider_session_id: providerId, instructions }),

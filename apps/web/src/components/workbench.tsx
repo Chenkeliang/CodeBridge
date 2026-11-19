@@ -623,8 +623,12 @@ export function Workbench() {
           setDraft((current) => current === draft ? "" : current);
           notify("当前会话上下文已压缩。");
         } else {
-          setError(result.reason === "busy" ? "当前会话有进行中或排队的任务，请结束后重试。"
-            : result.reason === "session_missing" ? "原会话已不可用，请重新选择会话。" : "当前 Agent 暂未开放原生压缩。");
+          const reasons = {
+            busy: "当前会话有进行中或排队的任务，请结束后重试。", session_missing: "原会话已不可用，请重新选择会话。",
+            unsupported: "当前 Agent 暂未开放原生压缩。", invalid_arguments: "当前 Agent 不接受此压缩参数，请直接发送 /compact。",
+            forbidden: "当前入口没有压缩此会话的权限。", failed: "原生压缩失败。", cancelled: "原生压缩已取消。",
+          };
+          setError(reasons[result.reason]);
         }
       } catch {
         setError("压缩回执未收到。再次提交同一命令将沿用原请求编号，避免重复压缩。");

@@ -566,7 +566,25 @@ export async function compactPiSession(
     if (!session.compact) return { status: "rejected", reason: "unsupported" };
     if (signal.aborted) return { status: "unknown" };
     signal.addEventListener("abort", abort, { once: true });
-    const result = await session.compact(ctx.prompt || undefined);
+    let terminal: "cancelled" | "failed" | undefined;
+    const unsubscribe = session.subscribe((value) => {
+      const event = value as { type?: string; reason?: string; result?: unknown; aborted?: boolean; errorMessage?: string };
+      if (event.type === "compaction_end" && event.reason === "manual" && !event.result) {
+        if (event.aborted === true) terminal = "cancelled";
+        else if (event.errorMessage) terminal = "failed";
+      }
+    });
+    let result: { firstKeptEntryId: string };
+    try {
+      result = await session.compact(ctx.prompt || undefined);
+    } catch (error) {
+      const saved = SessionManager.open(existing.path, undefined, ctx.cwd);
+      if (terminal && saved.getSessionId() === ctx.resumeSessionId && !saved.getEntries().some((entry) =>
+        entry.type === "compaction" && !previous.has(entry.id))) return { status: "rejected", reason: terminal };
+      throw error;
+    } finally {
+      unsubscribe();
+    }
     const saved = SessionManager.open(existing.path, undefined, ctx.cwd);
     const persisted = saved.getSessionId() === ctx.resumeSessionId && saved.getEntries().some((entry) =>
       entry.type === "compaction" && !previous.has(entry.id) && entry.firstKeptEntryId === result.firstKeptEntryId

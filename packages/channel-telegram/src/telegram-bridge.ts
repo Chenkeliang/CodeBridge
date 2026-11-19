@@ -158,7 +158,7 @@ export class TelegramBridge {
     const rawText = message.text ?? message.caption ?? "";
     const text = rawText.trim();
     if (!text || !message.from) return;
-    const addressedCatalog = /^\/commands(@[^\s]+)(?:\s|$)/i.exec(text);
+    const addressedCatalog = /^\/(?:commands|compact)(@[^\s]+)(?:\s|$)/i.exec(text);
     if (addressedCatalog && addressedCatalog[1]!.toLowerCase() !== this.botName?.toLowerCase()) return;
     const senderId = String(message.from.id);
     const rawChatId = String(message.chat.id);
@@ -241,6 +241,16 @@ export class TelegramBridge {
       text: normalized,
       config: this.config,
       router: this.orchestrator.router,
+      compactSession: async () => {
+        if (message.from?.is_bot || (!isPrivate && !isAdmin)) return { status: "rejected", reason: "forbidden" };
+        if (!message.text) return { status: "rejected", reason: "invalid_arguments" };
+        const source = rawText.trimStart().replace(/^(\/compact)@[^\s]+/i, "$1");
+        const parsed = /^\/compact(?:\s([\s\S]*))?$/i.exec(source);
+        if (!parsed) return { status: "rejected", reason: "invalid_arguments" };
+        return await this.sessionIngress?.compactSession?.(this.buildFullSlot(chatId, topicId), {
+          senderId, messageId: String(update.update_id), privateChat: isPrivate, instructions: parsed[1] ?? "",
+        }) ?? { status: "rejected", reason: "unsupported" };
+      },
       groupCommandListOnly,
       listDiscoveredCommands: isPrivate || isAdmin
         ? async () => await this.sessionIngress?.listDiscoveredCommands?.(this.buildFullSlot(chatId, topicId)) ?? []

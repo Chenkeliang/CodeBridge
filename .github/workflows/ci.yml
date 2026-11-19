@@ -23,6 +23,7 @@ jobs:
       - run: pnpm secrets:check
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - run: node scripts/check-command-protocol.mjs --artifact
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm version:check

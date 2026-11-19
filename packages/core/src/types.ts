@@ -315,6 +315,12 @@ export interface ChannelSessionIngress {
   completeDelivery(turnId: string, owner: string): Promise<boolean>;
   getSlotCommandContext(slot: ChannelSlot): Promise<ChannelCommandContext>;
   listDiscoveredCommands?(slot: ChannelSlot): Promise<AgentAvailableCommand[]>;
+  compactSession?(slot: ChannelSlot, source: {
+    senderId: string;
+    messageId: string;
+    privateChat: boolean;
+    instructions: string;
+  }): Promise<SessionCompactionResult>;
   /** Task 10：将 Provider Session 绑定到槽位（幂等 + Lease 预检 + 原子建绑） */
   resumeProviderSession(
     slot: ChannelSlot,
@@ -360,7 +366,7 @@ export interface RunContext {
 
 export type SessionCompactionResult =
   | { status: "completed" }
-  | { status: "rejected"; reason: "unsupported" | "busy" | "session_missing" }
+  | { status: "rejected"; reason: "unsupported" | "busy" | "session_missing" | "forbidden" | "invalid_arguments" | "failed" | "cancelled" }
   | { status: "unknown" };
 
 export type ClaudePermissionMode =

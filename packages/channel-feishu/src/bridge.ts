@@ -515,6 +515,8 @@ export class FeishuBridge {
       mentionedBot: msg.mentionedBot,
       mentions: msg.mentions,
       resources: msg.resources,
+      rawContentType: msg.rawContentType,
+      raw: msg.raw,
     });
   }
 
@@ -655,6 +657,29 @@ export class FeishuBridge {
       text: msg.content,
       config: this.config,
       router: this.orchestrator.router,
+      compactSession: async () => {
+        if (!isDm && !this.config.access?.admins?.includes(msg.senderId)) {
+          return { status: "rejected", reason: "forbidden" };
+        }
+        const raw = msg.raw as { sender?: { sender_type?: string }; message?: { content?: string } } | undefined;
+        if (raw?.sender?.sender_type && raw.sender.sender_type !== "user") return { status: "rejected", reason: "forbidden" };
+        if (msg.attachments?.length || msg.resources?.length || (msg.rawContentType && msg.rawContentType !== "text")) {
+          return { status: "rejected", reason: "invalid_arguments" };
+        }
+        let source = /^\/compact$/i.test(msg.content.trim()) ? "/compact" : "";
+        if (raw?.message?.content) {
+          const payload = JSON.parse(raw.message.content) as { text?: unknown } | null;
+          source = typeof payload?.text === "string" ? payload.text.trimStart() : "";
+          if (msg.mentionedBot && !msg.mentions?.some((mention) => !mention.isBot)) {
+            source = source.replace(/^@_user_\d+\s+/, "");
+          }
+        }
+        const parsed = /^\/compact(?:\s([\s\S]*))?$/i.exec(source);
+        if (!parsed) return { status: "rejected", reason: "invalid_arguments" };
+        return await this.sessionIngress?.compactSession?.(this.buildFullSlot(msg.chatId, topicId), {
+          senderId: msg.senderId, messageId: msg.messageId, privateChat: isDm, instructions: parsed[1] ?? "",
+        }) ?? { status: "rejected", reason: "unsupported" };
+      },
       groupCommandListOnly: !isDm && !groupOperator,
       listDiscoveredCommands: isDm || groupOperator
         ? async () => await this.sessionIngress?.listDiscoveredCommands?.(this.buildFullSlot(msg.chatId, topicId)) ?? []

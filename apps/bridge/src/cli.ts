@@ -461,6 +461,7 @@ program
         agentRegistry: registry,
         configStore: store,
         workItems: workItemStore,
+        isMaintenance: () => deployment.isMaintenance(),
         executor: runExecutor,
         runner: runnerClient,
         beforeSteer: (runId, sourceRef) => {

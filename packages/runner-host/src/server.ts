@@ -5,6 +5,7 @@ import {
   BackendRegistry,
   closePiSession,
   compactPiSession,
+  compactCodexSession,
   deleteAcpSession,
   deletePiSession,
   forkPiSession,
@@ -68,6 +69,8 @@ import { createDeploymentMcpServerConfig } from "./deployment-mcp-server.js";
 import { writeFcbScript } from "./fcb-script.js";
 import { cleanupAttachments, materializeAttachments } from "./materialize-attachments.js";
 import { SessionLeaseStore, type SessionLease } from "./session-lease.js";
+import { compactionDigest, compactionReceiptFile, finishCompactionReceipt, readCompactionReceipt, reserveCompactionReceipt } from "./compaction-receipts.js";
+import { COMMAND_PROTOCOL, codexCompactionFingerprint, readCommandEvidence } from "./compaction-evidence.js";
 
 /** doctor 的认证探测：BackendProfile.type → AgentSetupService 的 agentId 命名空间 */
 const AGENT_ID_BY_BACKEND_TYPE: Partial<Record<BackendProfile["type"], string>> = {
@@ -88,6 +91,7 @@ export interface RunnerHostOptions {
   /** Test/embedding hook for provider-native session fork. */
   piSessionForker?: typeof forkPiSession;
   piSessionCompactor?: typeof compactPiSession;
+  codexSessionCompactor?: typeof compactCodexSession;
   inspectSessionOwners?: (
     sessionId: string,
     allowedProcessGroups: ReadonlySet<number>,
@@ -112,6 +116,7 @@ interface ActiveRun {
   runId: string;
   sessionId?: string;
   aborted: boolean;
+  compaction?: true;
   cancel: () => void;
   steer?: (prompt: string) => Promise<unknown>;
 }
@@ -700,9 +705,29 @@ export class RunnerHost {
     model?: string,
   ): Promise<SessionCompactionResult> {
     const profile = this.options.config.backends[backend];
-    if (profile?.type !== "pi-sdk") return { status: "rejected", reason: "unsupported" };
+    if (profile?.type !== "pi-sdk" && profile?.type !== "codex") return { status: "rejected", reason: "unsupported" };
+    if (process.env.CODEBRIDGE_RELEASE_ID) {
+      const evidence = readCommandEvidence(process.env.CODEBRIDGE_COMMAND_EVIDENCE);
+      if (!evidence) return { status: "rejected", reason: "unsupported" };
+      if (profile.type === "codex") {
+        try {
+          if (evidence.codexProfiles[backend] !== codexCompactionFingerprint(profile)) return { status: "rejected", reason: "unsupported" };
+        } catch {
+          return { status: "rejected", reason: "unsupported" };
+        }
+      }
+    }
+    if (profile.type === "codex" && instructions.trim()) return { status: "rejected", reason: "invalid_arguments" };
     const resolved = resolveRunCwd(cwd);
     if ("error" in resolved) return { status: "rejected", reason: "session_missing" };
+    const file = compactionReceiptFile(this.dataDir, requestId);
+    const marker = { session: compactionDigest(sessionId),
+      fingerprint: compactionDigest([backend, resolved.cwd, sessionId, instructions, model]),
+      result: { status: "unknown" as const } };
+    const previous = await readCompactionReceipt(file).catch(() => null);
+    if (previous !== undefined) {
+      return previous?.fingerprint === marker.fingerprint ? previous.result : { status: "unknown" };
+    }
     if (this.active.size >= this.maxConcurrent || this.active.has(requestId)
       || [...this.active.values()].some((run) => run.sessionId === sessionId)) {
       return { status: "rejected", reason: "busy" };
@@ -710,21 +735,39 @@ export class RunnerHost {
     const lease = await this.sessionLeases.acquire(sessionId, requestId);
     if (!lease) return { status: "rejected", reason: "busy" };
     const controller = new AbortController();
-    const activeRun: ActiveRun = { runId: requestId, sessionId, aborted: false, cancel: () => controller.abort() };
-    void lease.lost.then(() => controller.abort());
+    const activeRun: ActiveRun = { runId: requestId, sessionId, aborted: false, compaction: true, cancel: () => controller.abort() };
+    let lost = false;
+    void lease.lost.then(() => { lost = true; controller.abort(); });
     try {
       if (this.active.size >= this.maxConcurrent || this.active.has(requestId)) return { status: "rejected", reason: "busy" };
       this.active.set(requestId, activeRun);
-      const operation = this.options.piSessionCompactor ?? compactPiSession;
-      const result = await operation({ runId: requestId, cwd: resolved.cwd, resumeSessionId: sessionId,
-        prompt: instructions, backendConfig: profile, model }, controller.signal);
-      return controller.signal.aborted ? { status: "unknown" } : result;
+      if (profile.type === "codex") {
+        this.sessionPool.remove(sessionId);
+        if ((await this.inspectSessionOwners(sessionId, new Set())).length) return { status: "rejected", reason: "busy" };
+      }
+      if (!await reserveCompactionReceipt(file, marker)) return { status: "unknown" };
+      const result = profile.type === "codex"
+        ? await (this.options.codexSessionCompactor ?? compactCodexSession)(profile, resolved.cwd, sessionId, controller.signal)
+        : await (this.options.piSessionCompactor ?? compactPiSession)({ runId: requestId, cwd: resolved.cwd,
+          resumeSessionId: sessionId, prompt: instructions, backendConfig: profile, model }, controller.signal);
+      const reported = lost ? marker.result : result;
+      await finishCompactionReceipt(file, { ...marker, result: reported });
+      return reported;
     } catch {
       return { status: "unknown" };
     } finally {
       if (this.active.get(requestId) === activeRun) this.active.delete(requestId);
       await lease.release();
     }
+  }
+
+  async readCompactionResult(sessionId: string, requestId: string): Promise<SessionCompactionResult> {
+    const receipt = await readCompactionReceipt(compactionReceiptFile(this.dataDir, requestId)).catch(() => undefined);
+    return receipt?.session === compactionDigest(sessionId) ? receipt.result : { status: "unknown" };
+  }
+
+  get activeCompactions(): number {
+    return [...this.active.values()].filter((run) => run.compaction).length;
   }
 
   /** /model 动态列表：拉取 ACP 适配器 advertise 的会话配置项 */
@@ -858,6 +901,11 @@ export class RunnerHost {
     request: RunRequest,
     lifecycle: RunLifecycle,
   ): AsyncGenerator<AgentEvent> {
+    if (/^\s*\/compact(?:\s|$)/i.test(request.prompt)) {
+      yield { type: "error", message: "请在已绑定的会话中使用专用压缩入口。", fatal: true };
+      yield { type: "done", exitCode: 1 };
+      return;
+    }
     while (this.active.size >= this.maxConcurrent) {
       if (lifecycle.cancelRequested) return;
       await new Promise((r) => setTimeout(r, 100));
@@ -1202,9 +1250,11 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     await next();
   });
 
-  app.get("/health", (c) =>
-    c.json({ ok: true, version: VERSION, backends: host.registryIds }),
-  );
+  app.get("/health", (c) => c.json({
+    ok: true, version: VERSION, backends: host.registryIds, activeCompactions: host.activeCompactions,
+    releaseId: process.env.CODEBRIDGE_RELEASE_ID, commit: process.env.CODEBRIDGE_RELEASE_COMMIT,
+    commandProtocol: readCommandEvidence(process.env.CODEBRIDGE_COMMAND_EVIDENCE) ? COMMAND_PROTOCOL : null,
+  }));
 
   app.get("/doctor", async (c) => c.json(await host.doctor()));
 
@@ -1564,6 +1614,12 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     }
     return c.json(await host.compactSession(body.backend, body.cwd, c.req.param("id"), body.requestId,
       body.instructions, body.model as string | undefined));
+  });
+
+  app.get("/sessions/:id/compact/:request_id", async (c) => {
+    const requestId = c.req.param("request_id");
+    if (!/^[0-9a-f]{64}$/.test(requestId)) return c.json({ error: "invalid_compaction_request" }, 400);
+    return c.json(await host.readCompactionResult(c.req.param("id"), requestId));
   });
 
   app.delete("/sessions/:id", async (c) => {

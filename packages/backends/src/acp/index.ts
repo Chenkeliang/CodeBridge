@@ -14,6 +14,8 @@ export {
   deleteAcpSession,
   loadAcpSessionHistory,
   listAcpConfigOptions,
+  compactCodexSession,
+  probeCodexCompactionSupport,
   listAcpSessions,
   probeAcpInitialize,
 } from "./acp-session-list.js";

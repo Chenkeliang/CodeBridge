@@ -8,6 +8,7 @@ import type {
   ChannelSessionMessage,
   ChannelSlot,
   ChannelSubmitReceipt,
+  SessionCompactionResult,
 } from "@codebridge/core";
 import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
 import { Hono } from "hono";
@@ -385,6 +386,23 @@ export function createChannelSessionIngress(
     return (await response.json() as { commands: AgentAvailableCommand[] }).commands;
   };
 
+  const compactSession: NonNullable<ChannelSessionIngress["compactSession"]> = async (slot, source) => {
+    const response = await channelRequest(app, "/v1/channels/compact", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({
+        slot: { channel: slot.channel, conversation_id: slot.conversationId, agent_id: slot.agentId,
+          workspace_key: slot.workspaceKey, generation: slot.generation },
+        sender_id: source.senderId, message_id: source.messageId, private_chat: source.privateChat,
+        instructions: source.instructions,
+      }),
+    });
+    if (response.status === 403) return { status: "rejected", reason: "forbidden" };
+    if (response.status === 400) return { status: "rejected", reason: "invalid_arguments" };
+    if (!response.ok) return { status: "unknown" };
+    return (await response.json()) as SessionCompactionResult;
+  };
+
   const resolvePermission = async (
     runId: string,
     approve: boolean,
@@ -563,6 +581,7 @@ export function createChannelSessionIngress(
     completeDelivery,
     getSlotCommandContext,
     listDiscoveredCommands,
+    compactSession,
     resumeProviderSession,
     cancelRun,
     steerRun,
