@@ -636,7 +636,7 @@ export class SqliteEventStore {
   }
 
   getProviderObservation(sessionId: string, providerSessionId: string,
-    target: "usage_update" | "session_info_update" | "available_commands_update"):
+    target: "usage_update" | "session_info_update" | "available_commands_update" | "pi_session_metrics"):
     { payload: unknown; observedAt: string } | undefined {
     const workItemId = this.getWorkItemBySessionId(sessionId)?.id;
     if (!workItemId) return undefined;

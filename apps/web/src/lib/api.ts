@@ -344,8 +344,8 @@ export const api = {
     ),
   sessionObservation: (id: string, kind: SessionObservationKind) =>
     request<{ text: string }>(`/v1/sessions/${encodeURIComponent(id)}/observations/${kind}`),
-  latestNativeReview: (id: string) =>
-    request<{ text: string | null }>(`/v1/sessions/${encodeURIComponent(id)}/review-result`),
+  latestNativeReview: (id: string, reportId?: string) =>
+    request<{ text: string | null }>(`/v1/sessions/${encodeURIComponent(id)}/review-result${reportId ? `?${new URLSearchParams({ report: reportId })}` : ""}`),
   pickDirectory: (id: string) =>
     request<AgentSession | { cancelled: true }>(`/v1/sessions/${encodeURIComponent(id)}/directories/pick`, { method: "POST", body: "{}" }),
   workspaceEntries: (id: string, root?: string, relativePath = "") => {

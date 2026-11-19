@@ -6,6 +6,7 @@ import {
   type BackendConfigOption,
   type ChannelCommandContext,
   type SessionCompactionResult,
+  type SessionCommandReceipt,
   type SessionObservationKind,
 } from "@codebridge/core";
 import type { CliSessionSummary } from "@codebridge/runner-client";
@@ -66,6 +67,7 @@ export interface SlashContext {
   listDiscoveredCommands?: () => Promise<AgentAvailableCommand[]>;
   groupCommandListOnly?: boolean;
   compactSession?: (command: NativeSessionCommand) => Promise<SessionCompactionResult>;
+  inspectSessionCommand?: (cancel: boolean) => Promise<SessionCommandReceipt>;
   readSessionObservation?: (kind: SessionObservationKind) => Promise<string | null>;
 }
 
@@ -93,6 +95,14 @@ function canonicalDirectory(raw: string):
   }
 }
 
+function formatPublicReviewReceipt(result: Extract<SessionCompactionResult, { status: "completed" }>): string {
+  const summary = result.reviewSummary;
+  const counts = summary ? [["P0", summary.p0], ["P1", summary.p1], ["P2", summary.p2], ["P3", summary.p3]] as const : [];
+  const findings = counts.filter(([, count]) => count > 0).map(([priority, count]) => `${priority} ${count} 条`).join("，");
+  const command = result.reportId ? `\`/review-result ${result.reportId}\`` : "`/review-result`";
+  return `原生审查已完成。${findings ? `已识别分级条目 · ${findings}。` : "报告中暂无可识别的分级条目。"}\n在同一绑定的 Web 会话发送 ${command} 查看完整报告。`;
+}
+
 export async function handleSlashCommand(
   ctx: SlashContext,
 ): Promise<SlashResult | null> {
@@ -109,7 +119,7 @@ export async function handleSlashCommand(
     if (result?.status === "completed") {
       const text = native.command === "compact" ? "当前会话上下文已压缩。"
         : native.command === "goal" ? "当前会话的目标已更新。发送 /goal 查看状态。"
-          : result.output ?? "原生审查已完成。可在已绑定的 Web 会话中发送 /review-result 查看报告。";
+          : result.output ?? formatPublicReviewReceipt(result);
       return { type: "reply", text };
     }
     if (result?.status === "unknown") return { type: "reply", text: "本次命令结果未知。请先确认原会话状态，以免重复执行。" };
@@ -122,6 +132,21 @@ export async function handleSlashCommand(
   }
 
   switch (lower) {
+    case "/command-status":
+    case "/command-cancel": {
+      if (arg || !ctx.inspectSessionCommand) return { type: "reply", text: `请引用自己发送的原生命令，再发送 \`${lower}\`。` };
+      const result = await ctx.inspectSessionCommand(lower === "/command-cancel").catch((): SessionCommandReceipt => ({ status: "unknown" }));
+      if (result.status === "completed" && result.reportId) return { type: "reply", text: formatPublicReviewReceipt(result) };
+      const labels = {
+        completed: "原生命令已完成。", running: "原生命令正在运行。",
+        cancel_requested: "已请求取消，等待 Agent 确认终态。", unknown: "原生命令终态尚未确认。",
+        not_found: "未找到此原命令的回执，请核对原消息、话题和发送者。",
+      };
+      return { type: "reply", text: result.status === "rejected"
+        ? result.reason === "cancelled" ? "原生命令已取消。"
+          : result.reason === "forbidden" ? "当前发送者无权查看或取消此命令。" : "原生命令未成功执行。"
+        : labels[result.status] };
+    }
     case "/context":
     case "/usage":
     case "/goal": {
@@ -150,6 +175,10 @@ export async function handleSlashCommand(
       let note = "";
       try {
         observed = await ctx.listDiscoveredCommands?.() ?? [];
+        if (!ctx.groupCommandListOnly && !observed.length && ctx.getSlotCommandContext) {
+          const scope = await ctx.getSlotCommandContext();
+          if (!scope.providerSessionId) note = "\n当前会话尚未绑定 Provider 会话。";
+        }
       } catch {
         note = "\nAgent 命令快照暂时无法读取。";
       }

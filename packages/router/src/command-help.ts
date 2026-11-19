@@ -1,5 +1,5 @@
 import type { AgentAvailableCommand } from "@codebridge/core";
-import { isNativeSessionCommand } from "@codebridge/core/native-session-command";
+import { isNativeSessionCommand, NATIVE_COMMAND_UNAVAILABLE } from "@codebridge/core/native-session-command";
 
 export interface CommandHelpItem {
   command: string;
@@ -31,6 +31,8 @@ const COMMAND_HELP_GROUPS: CommandHelpGroup[] = [
     items: [
       { command: "/stop", summary: "停止当前 Agent 任务（别名 /cancel、/x）" },
       { command: "/continue", summary: "恢复暂停队列（别名 /c）" },
+      { command: "/command-status", summary: "引用自己的原生命令后查询回执" },
+      { command: "/command-cancel", summary: "引用自己的原生命令后请求取消" },
       { command: "/steer <指令>", summary: "向运行中的 ACP turn 注入补充指令" },
       { command: "/approve", summary: "允许当前 Agent 工具权限请求（别名 /a）" },
       { command: "/deny", summary: "拒绝当前 Agent 工具权限请求（别名 /d）" },
@@ -131,9 +133,10 @@ export function formatCommandCatalog(
     )));
   }
   if (discovered.length) {
-    lines.push(heading("Agent 已上报 · 待验证", format), ...discovered.map(({ name }) => (
-      format === "markdown" ? `\`/${name}\`` : `/${name}`
-    )));
+    lines.push(heading("Agent 已上报 · 待验证", format), ...discovered.map(({ name, unavailableReason }) => {
+      const command = format === "markdown" ? `\`/${name}\`` : `/${name}`;
+      return unavailableReason ? `${command} · ${NATIVE_COMMAND_UNAVAILABLE[unavailableReason]}` : command;
+    }));
   }
   return lines.join("\n") || "没有匹配的命令。";
 }

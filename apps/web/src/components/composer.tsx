@@ -1,4 +1,4 @@
-import { parseNativeSessionCommand } from "@codebridge/core/native-session-command";
+import { NATIVE_COMMAND_UNAVAILABLE, parseNativeSessionCommand } from "@codebridge/core/native-session-command";
 import { ComposerAttachments } from "@/components/composer-attachments";
 import { ComposerActions, ModelControls, PermissionControl } from "@/components/composer-controls";
 import { MarkdownComposer, type ComposerPickerKey, type ComposerTrigger } from "@/components/markdown-composer/markdown-composer";
@@ -335,7 +335,9 @@ function CommandPicker({ activeIndex, commands, onPick, onSelect }: {
       type="button"
     >
       <span className="font-mono text-xs">/{command.name}</span>
-      <span className="truncate text-xs text-muted">{command.status === "discovered" ? "Agent 已上报 · 待验证" : command.description}</span>
+      <span className="truncate text-xs text-muted">{command.status === "discovered"
+        ? command.unavailableReason ? NATIVE_COMMAND_UNAVAILABLE[command.unavailableReason] : "Agent 已上报 · 待验证"
+        : command.description}</span>
     </button>)}
   </div>;
 }

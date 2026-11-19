@@ -72,6 +72,7 @@ export interface AgentAvailableCommand {
   description: string;
   input?: { hint: string } | null;
   status?: "discovered" | "available";
+  unavailableReason?: import("./native-session-command.js").NativeCommandUnavailableReason;
 }
 
 export type AgentEvent =
@@ -139,6 +140,16 @@ export type AgentEvent =
       used: number;
       size: number;
       cost?: { amount: number; currency: string } | null;
+    }
+  | {
+      type: "pi_session_metrics";
+      contextTokens: number | null;
+      contextWindow: number | null;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      cost: number;
     }
   | { type: "session"; sessionId: string }
   | { type: "error"; message: string; fatal?: boolean }
@@ -321,10 +332,17 @@ export interface ChannelSessionIngress {
   compactSession?(slot: ChannelSlot, source: {
     senderId: string;
     messageId: string;
+    sourceMessageId?: string;
     privateChat: boolean;
     instructions: string;
     command?: import("./native-session-command.js").NativeSessionCommand;
   }): Promise<SessionCompactionResult>;
+  inspectSessionCommand?(slot: ChannelSlot, source: {
+    senderId: string;
+    sourceMessageId: string;
+    privateChat: boolean;
+    cancel: boolean;
+  }): Promise<SessionCommandReceipt>;
   /** Task 10：将 Provider Session 绑定到槽位（幂等 + Lease 预检 + 原子建绑） */
   resumeProviderSession(
     slot: ChannelSlot,
@@ -369,9 +387,12 @@ export interface RunContext {
 }
 
 export type SessionCompactionResult =
-  | { status: "completed"; output?: string; goal?: SessionGoalObservation | null; observedAt?: string }
+  | { status: "completed"; output?: string; goal?: SessionGoalObservation | null; observedAt?: string;
+    reportId?: string; reviewSummary?: { p0: number; p1: number; p2: number; p3: number } }
   | { status: "rejected"; reason: "unsupported" | "busy" | "session_missing" | "forbidden" | "invalid_arguments" | "failed" | "cancelled" }
   | { status: "unknown" };
+
+export type SessionCommandReceipt = SessionCompactionResult | { status: "running" | "cancel_requested" | "not_found" };
 
 export type SessionObservationKind = "context" | "usage" | "goal";
 

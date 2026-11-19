@@ -4,8 +4,10 @@ import type {
   BackendConfigOption,
   RunRequest,
   SessionCompactionResult,
+  SessionCommandReceipt,
 } from "@codebridge/core";
-import { isNativeSessionCommand, parseSessionGoalObservation, type NativeSessionCommand } from "@codebridge/core/native-session-command";
+import { isNativeCommandUnavailableReason, isNativeSessionCommand, parseSessionGoalObservation,
+  type NativeCommandUnavailableReason, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import type {
   AgentSetupInstallResult,
   AgentSetupRecord,
@@ -434,11 +436,26 @@ export class RunnerClient {
     }));
   }
 
+  async inspectSessionCommand(sessionId: string, requestId: string, cancel: boolean): Promise<SessionCommandReceipt> {
+    const res = await this.fetch(`/sessions/${encodeURIComponent(sessionId)}/compact/${encodeURIComponent(requestId)}/status`, {
+      method: cancel ? "POST" : "GET", signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return { status: "unknown" };
+    const body = await res.clone().json() as { status?: unknown } | null;
+    if (body?.status === "running" || body?.status === "cancel_requested") return { status: body.status };
+    return decodeCompactionResult(res);
+  }
+
   async nativeSessionCommands(backend: string): Promise<NativeSessionCommand[]> {
+    return (await this.nativeSessionCommandStatus(backend)).commands;
+  }
+
+  async nativeSessionCommandStatus(backend: string): Promise<{ commands: NativeSessionCommand[]; reason?: NativeCommandUnavailableReason }> {
     const res = await this.fetch(`/native-session-commands?${new URLSearchParams({ backend })}`, { signal: AbortSignal.timeout(2500) });
-    if (!res.ok) return [];
-    const body = await res.json() as { commands?: unknown } | null;
-    return Array.isArray(body?.commands) ? body.commands.filter(isNativeSessionCommand) : [];
+    if (!res.ok) return { commands: [], reason: "runner_unavailable" };
+    const body = await res.json() as { commands?: unknown; reason?: unknown } | null;
+    const commands = Array.isArray(body?.commands) ? body.commands.filter(isNativeSessionCommand) : [];
+    return { commands, ...(isNativeCommandUnavailableReason(body?.reason) ? { reason: body.reason } : {}) };
   }
 
   async cancel(runId: string): Promise<void> {

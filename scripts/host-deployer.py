@@ -305,8 +305,9 @@ class Deployer:
             evidence = json.loads(raw)
             if (not isinstance(evidence, dict) or evidence.get("protocol") != protocol or evidence.get("piSdk") is not True
                     or not isinstance(evidence.get("codexProfiles"), dict)
+                    or not isinstance(evidence.get("claudeProfiles", {}), dict)
                     or not all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v)
-                               for v in evidence["codexProfiles"].values())):
+                               for profiles in (evidence["codexProfiles"], evidence.get("claudeProfiles", {})) for v in profiles.values())):
                 raise ValueError("invalid evidence")
             return evidence
         except (ValueError, TypeError) as error:
@@ -549,9 +550,10 @@ class Deployer:
                         raise DeployError("prepared release files changed")
                     if not prepared or self.command_evidence(app, package) != prepared:
                         raise DeployError("command protocol evidence missing or changed after preparation")
-                    old_profiles = current.get("commandEvidence", {}).get("codexProfiles", {})
-                    if not set(old_profiles).issubset(prepared["codexProfiles"]):
-                        raise DeployError("candidate loses a verified Codex compaction profile")
+                    for field in ("codexProfiles", "claudeProfiles"):
+                        old_profiles = current.get("commandEvidence", {}).get(field, {})
+                        if not set(old_profiles).issubset(prepared.get(field, {})):
+                            raise DeployError("candidate loses a verified ACP compaction profile")
             if not job.get("manualRollback"):
                 current = self.state["jobs"].get(self.state["current"], {})
                 self.verify(current.get("id"), current.get("commit"))

@@ -38,6 +38,7 @@ export {
   compactCodexSession,
   runCodexNativeSessionCommand,
   probeCodexCompactionSupport,
+  probeClaudeCompactionSupport,
   listAcpSessions,
   killProcessTree,
   mapSessionUpdate,

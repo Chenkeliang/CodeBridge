@@ -54,9 +54,10 @@ import type {
   RunContext,
   RunRequest,
   SessionCompactionResult,
+  SessionCommandReceipt,
 } from "@codebridge/core";
 import { DEFAULT_DATA_DIR, VERSION } from "@codebridge/core";
-import { isNativeSessionCommand, NATIVE_SESSION_COMMANDS, type NativeSessionCommand } from "@codebridge/core/native-session-command";
+import { isNativeSessionCommand, NATIVE_SESSION_COMMANDS, type NativeCommandUnavailableReason, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import { Hono } from "hono";
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
@@ -708,9 +709,9 @@ export class RunnerHost {
     command: NativeSessionCommand = "compact",
   ): Promise<SessionCompactionResult> {
     const profile = this.options.config.backends[backend];
-    if (profile?.type !== "pi-sdk" && profile?.type !== "codex") return { status: "rejected", reason: "unsupported" };
+    if (profile?.type !== "pi-sdk" && profile?.type !== "codex" && profile?.type !== "claude-code") return { status: "rejected", reason: "unsupported" };
     if (!this.nativeSessionCommands(backend).includes(command)) return { status: "rejected", reason: "unsupported" };
-    if (command === "compact" && profile.type === "codex" && instructions.trim()) return { status: "rejected", reason: "invalid_arguments" };
+    if (command === "compact" && profile.type !== "pi-sdk" && instructions.trim()) return { status: "rejected", reason: "invalid_arguments" };
     const resolved = resolveRunCwd(cwd);
     if ("error" in resolved) return { status: "rejected", reason: "session_missing" };
     const file = compactionReceiptFile(this.dataDir, requestId);
@@ -738,10 +739,12 @@ export class RunnerHost {
         this.sessionPool.remove(sessionId);
         if ((await this.inspectSessionOwners(sessionId, new Set())).length) return { status: "rejected", reason: "busy" };
       }
+      if (profile.type === "claude-code") this.sessionPool.remove(sessionId);
       if (!await reserveCompactionReceipt(file, marker)) return { status: "unknown" };
-      const result = command !== "compact"
+      const result: SessionCompactionResult = controller.signal.aborted && !lost ? { status: "rejected", reason: "cancelled" }
+        : command !== "compact"
         ? await runCodexNativeSessionCommand(profile, resolved.cwd, sessionId, command, instructions, controller.signal)
-        : profile.type === "codex"
+        : profile.type !== "pi-sdk"
         ? await (this.options.codexSessionCompactor ?? compactCodexSession)(profile, resolved.cwd, sessionId, controller.signal)
         : await (this.options.piSessionCompactor ?? compactPiSession)({ runId: requestId, cwd: resolved.cwd,
           resumeSessionId: sessionId, prompt: instructions, backendConfig: profile, model }, controller.signal);
@@ -757,25 +760,41 @@ export class RunnerHost {
   }
 
   nativeSessionCommands(backend: string): readonly NativeSessionCommand[] {
+    return this.nativeSessionCommandStatus(backend).commands;
+  }
+
+  nativeSessionCommandStatus(backend: string): { commands: readonly NativeSessionCommand[]; reason?: NativeCommandUnavailableReason } {
     const profile = this.options.config.backends[backend];
-    if (profile?.type !== "pi-sdk" && profile?.type !== "codex") return [];
+    if (profile?.type !== "pi-sdk" && profile?.type !== "codex" && profile?.type !== "claude-code") return { commands: [], reason: "unsupported_backend" };
     if (process.env.CODEBRIDGE_RELEASE_ID) {
       const evidence = readCommandEvidence(process.env.CODEBRIDGE_COMMAND_EVIDENCE);
-      if (!evidence) return [];
-      if (profile.type === "codex") {
+      if (!evidence) return { commands: [], reason: "release_unverified" };
+      if (profile.type !== "pi-sdk") {
         try {
-          if (evidence.codexProfiles[backend] !== codexCompactionFingerprint(profile)) return [];
+          const profiles = profile.type === "codex" ? evidence.codexProfiles : evidence.claudeProfiles;
+          const fingerprint = profiles?.[backend];
+          if (!fingerprint) return { commands: [], reason: "release_unverified" };
+          if (fingerprint !== codexCompactionFingerprint(profile)) return { commands: [], reason: "adapter_changed" };
         } catch {
-          return [];
+          return { commands: [], reason: "adapter_changed" };
         }
       }
     }
-    return profile.type === "pi-sdk" ? ["compact"] : NATIVE_SESSION_COMMANDS;
+    return { commands: profile.type === "codex" ? NATIVE_SESSION_COMMANDS : ["compact"] };
   }
 
   async readCompactionResult(sessionId: string, requestId: string): Promise<SessionCompactionResult> {
     const receipt = await readCompactionReceipt(compactionReceiptFile(this.dataDir, requestId)).catch(() => undefined);
     return receipt?.session === compactionDigest(sessionId) ? receipt.result : { status: "unknown" };
+  }
+
+  async inspectSessionCommand(sessionId: string, requestId: string, cancel: boolean): Promise<SessionCommandReceipt> {
+    const result = await this.readCompactionResult(sessionId, requestId);
+    if (result.status !== "unknown") return result;
+    const active = this.active.get(requestId);
+    if (!active?.compaction || active.sessionId !== sessionId) return result;
+    if (cancel) this.cancel(requestId);
+    return { status: active.aborted ? "cancel_requested" : "running" };
   }
 
   get activeCompactions(): number {
@@ -1635,7 +1654,13 @@ export function createRunnerApp(host: RunnerHost, token: string) {
     return c.json(await host.readCompactionResult(c.req.param("id"), requestId));
   });
 
-  app.get("/native-session-commands", (c) => c.json({ commands: host.nativeSessionCommands(c.req.query("backend") ?? "") }));
+  app.on(["GET", "POST"], "/sessions/:id/compact/:request_id/status", async (c) => {
+    const id = c.req.param("request_id");
+    if (!/^[0-9a-f]{64}$/.test(id)) return c.json({ error: "invalid_compaction_request" }, 400);
+    return c.json(await host.inspectSessionCommand(c.req.param("id"), id, c.req.method === "POST"));
+  });
+
+  app.get("/native-session-commands", (c) => c.json(host.nativeSessionCommandStatus(c.req.query("backend") ?? "")));
 
   app.delete("/sessions/:id", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {

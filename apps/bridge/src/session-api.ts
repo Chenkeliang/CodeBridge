@@ -1,6 +1,6 @@
 import { AgentRegistry, cloneSetupManifest, projectAgentStatus, projectSetupState } from "@codebridge/agent-registry";
 import type { ChannelSlot, ConfigStore, SessionCompactionResult, SessionObservationKind } from "@codebridge/core";
-import { isNativeSessionCommand, type NativeSessionCommand } from "@codebridge/core/native-session-command";
+import { isNativeSessionCommand, type NativeCommandUnavailableReason, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import { canonicalWorkspaceKey, isSupportedAgentId } from "@codebridge/core";
 import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
 import type { ProjectDiscovery } from "@codebridge/project-catalog";
@@ -606,8 +606,11 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!session) return c.json({ error: "session_not_found" }, 404);
     const reported = options.workItems.listSessionCommands(session.id);
     const discovered = discoveredAgentCommands(reported);
-    const supported = session.providerSessionId
-      ? await options.runner?.nativeSessionCommands?.(session.agentId).catch(() => []) ?? [] : [];
+    const readiness: { commands: NativeSessionCommand[]; reason?: NativeCommandUnavailableReason } = session.providerSessionId
+      ? await options.runner?.nativeSessionCommandStatus?.(session.agentId).catch(() => ({ commands: [], reason: "runner_unavailable" as const }))
+        ?? { commands: [], reason: "runner_unavailable" }
+      : { commands: [], reason: "unbound" };
+    const supported = readiness.commands;
     const pi = options.configStore?.get().backends[session.agentId]?.type === "pi-sdk";
     const scoped = session.providerSessionId && options.workItems.getProviderObservation(session.id, session.providerSessionId, "available_commands_update");
     const snapshot = scoped ? (scoped.payload as { availableCommands?: unknown } | null)?.availableCommands : null;
@@ -620,7 +623,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
         description: reported.find((entry) => entry.name === name)?.description ?? "压缩当前绑定会话",
         source: "agent", status: "available",
       })),
-      ...discovered.filter((entry) => !available.some((name) => name === entry.name)),
+      ...discovered.filter((entry) => !available.some((name) => name === entry.name)).map((entry) => ({
+        ...entry,
+        unavailableReason: isNativeSessionCommand(entry.name)
+          ? readiness.reason ?? (supported.includes(entry.name) ? "not_reported" : "unsupported_backend")
+          : "unverified_command",
+      })),
     ] });
   });
 
@@ -631,6 +639,10 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!session) return c.json({ error: "session_not_found" }, 404);
     let observation = session.providerSessionId && options.workItems.getProviderObservation(session.id,
       session.providerSessionId, kind === "goal" ? "session_info_update" : "usage_update");
+    if (kind !== "goal" && session.providerSessionId) {
+      const metrics = options.workItems.getProviderObservation(session.id, session.providerSessionId, "pi_session_metrics");
+      if (metrics && (!observation || metrics.observedAt > observation.observedAt)) observation = metrics;
+    }
     if (kind === "goal" && session.providerSessionId) {
       const saved = options.workItems.getLatestCommandObservation(observationNamespace(session.id, session.providerSessionId, "goal"));
       const result = saved?.response as SessionCompactionResult | undefined;
@@ -646,10 +658,24 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!isLocalManagementRequest(c.req.raw)) return c.json({ error: "local_management_only" }, 403);
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session?.providerSessionId) return c.json({ text: null });
-    const receipt = options.workItems.getLatestCommandObservation(observationNamespace(session.id, session.providerSessionId, "review"));
+    const reportId = c.req.query("report");
+    if (reportId !== undefined && !/^[0-9a-f]{64}$/.test(reportId)) return c.json({ error: "invalid_review_report_id" }, 400);
+    const namespace = observationNamespace(session.id, session.providerSessionId, "review");
+    const receipt = reportId ? options.workItems.getIdempotencyRecord(namespace, reportId) : options.workItems.getLatestCommandObservation(namespace);
     const result = receipt?.response as SessionCompactionResult | undefined;
     return c.json({ text: result?.status === "completed" ? result.output ?? null : null });
   });
+
+  const rememberBoundCommand = (record: BoundCommandReceipt, result: SessionCompactionResult) => {
+    if (result.status === "completed") {
+      if (record.command === "goal" && result.goal !== undefined && result.observedAt) {
+        options.workItems.putIdempotencyResponse(observationNamespace(record.sessionId, record.providerId, "goal"), record.requestId, result, result.observedAt);
+      } else if (record.command.startsWith("review") && result.output) {
+        options.workItems.putIdempotencyResponse(observationNamespace(record.sessionId, record.providerId, "review"), record.requestId, result, result.observedAt);
+      }
+    }
+    if (result.status !== "unknown") options.workItems.putIdempotencyResponse(`${record.namespace}:result`, record.key, result);
+  };
 
   const compactBoundSession = async (
     session: NonNullable<ReturnType<SessionCatalogStore["getSession"]>>,
@@ -659,30 +685,30 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     key: string,
     actor: unknown,
     command: NativeSessionCommand = "compact",
+    origin?: { slot: ChannelSlot; sourceMessageId: string; senderId: string },
   ): Promise<SessionCompactionResult | "key_conflict"> => {
     if (!session.cwd || !session.providerSessionId || providerId !== session.providerSessionId) {
       return { status: "rejected", reason: "session_missing" };
     }
     if (!options.runner) return { status: "rejected", reason: "unsupported" };
     const terminal = `${namespace}:result`;
-    const requestId = createHash("sha256").update(JSON.stringify([namespace, key])).digest("hex");
+    const requestId = commandRequestId(namespace, key);
     const fingerprint = createHash("sha256").update(JSON.stringify([
       actor, session.id, session.agentId, session.cwd, providerId, session.model, instructions, ...(command === "compact" ? [] : [command]),
     ])).digest("hex");
-    const remember = (result: SessionCompactionResult) => {
-      if (result.status === "completed") {
-        if (command === "goal" && result.goal !== undefined && result.observedAt) {
-          options.workItems.putIdempotencyResponse(observationNamespace(session.id, providerId, "goal"), requestId, result, result.observedAt);
-        } else if (command.startsWith("review") && result.output) {
-          options.workItems.putIdempotencyResponse(observationNamespace(session.id, providerId, "review"), requestId, result, result.observedAt);
-        }
-      }
-      if (result.status !== "unknown") options.workItems.putIdempotencyResponse(terminal, key, result);
-    };
+    const record: BoundCommandReceipt = { namespace, key, requestId, sessionId: session.id, providerId, command };
     const admission = options.workItems.withSessionTransaction((tx) => {
       const prior = tx.getIdempotencyResponse<string>(namespace, key);
       if (prior !== undefined) return prior === fingerprint ? "replay" : "conflict";
       if (options.isMaintenance?.() || tx.getRuntime(session.id)?.activeRunId || tx.countQueuedTurns(session.id) > 0) return "busy";
+      if (origin) {
+        const sourceKey = nativeCommandSourceKey(origin.slot, origin.sourceMessageId);
+        const saved = tx.getIdempotencyResponse<ChannelCommandReceipt>(NATIVE_COMMAND_SOURCES, sourceKey);
+        if (saved && saved.requestId !== requestId) return "conflict";
+        tx.putIdempotencyResponse(NATIVE_COMMAND_SOURCES, sourceKey, {
+          ...record, conversationId: origin.slot.conversationId, senderId: origin.senderId,
+        } satisfies ChannelCommandReceipt);
+      }
       tx.putIdempotencyResponse(namespace, key, fingerprint);
       return "dispatch";
     });
@@ -693,7 +719,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       if (prior) return prior;
       try {
         const recovered = await options.runner.readCompactionResult(providerId, requestId);
-        remember(recovered);
+        rememberBoundCommand(record, recovered);
         return recovered;
       } catch {
         return { status: "unknown" };
@@ -707,7 +733,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     } catch {
       result = { status: "unknown" };
     }
-    remember(result);
+    rememberBoundCommand(record, result);
     return result;
   };
 
@@ -737,7 +763,8 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       || typeof body?.sender_id !== "string" || !body.sender_id
       || typeof body.message_id !== "string" || !body.message_id || body.message_id.length > 128
       || typeof body.private_chat !== "boolean" || typeof body.instructions !== "string" || body.instructions.length > 4096
-      || !isNativeSessionCommand(command)) {
+      || !isNativeSessionCommand(command)
+      || (body.source_message_id !== undefined && (typeof body.source_message_id !== "string" || !body.source_message_id || body.source_message_id.length > 128))) {
       return c.json({ error: "invalid_compaction_request" }, 400);
     }
     const config = options.configStore?.get();
@@ -746,10 +773,45 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const session = options.catalog.getChannelSession(slot);
     if (!session?.providerSessionId) return c.json({ status: "rejected", reason: "session_missing" });
     const result = await compactBoundSession(session, session.providerSessionId, body.instructions,
-      `channel:compact:${slot.channel}`, body.message_id, [body.sender_id, slot], command);
+      `channel:compact:${slot.channel}`, body.message_id, [body.sender_id, slot], command,
+      { slot, sourceMessageId: typeof body.source_message_id === "string" ? body.source_message_id : body.message_id, senderId: body.sender_id });
     if (result === "key_conflict") return c.json({ error: "compaction_key_conflict" }, 409);
-    if (!body.private_chat && result.status === "completed" && result.output) return c.json({ status: "completed" });
+    if (!body.private_chat && result.status === "completed" && result.output) {
+      return c.json(publicReviewReceipt(result.output, commandRequestId(`channel:compact:${slot.channel}`, body.message_id)));
+    }
     return c.json(result);
+  });
+
+  app.post("/v1/channels/command-receipt", async (c) => {
+    if (!isNativeChannelRequest(c.req.raw)) return c.json({ error: "channel_origin_required" }, 403);
+    const body = await readJson(c);
+    const slot = parseChannelSlot(body?.slot);
+    if (!slot || (slot.channel !== "feishu" && slot.channel !== "telegram")
+      || typeof body?.sender_id !== "string" || !body.sender_id || typeof body.source_message_id !== "string"
+      || !body.source_message_id || body.source_message_id.length > 128
+      || typeof body.private_chat !== "boolean" || typeof body.cancel !== "boolean") {
+      return c.json({ error: "invalid_command_receipt_request" }, 400);
+    }
+    const config = options.configStore?.get();
+    const admins = slot.channel === "feishu" ? config?.access?.admins : config?.telegram?.admins;
+    if (!body.private_chat && !admins?.includes(body.sender_id)) return c.json({ status: "rejected", reason: "forbidden" });
+    const record = options.workItems.getIdempotencyResponse(NATIVE_COMMAND_SOURCES,
+      nativeCommandSourceKey(slot, body.source_message_id)) as ChannelCommandReceipt | undefined;
+    // A Feishu group-level command can acquire a topic rooted at itself when quoted.
+    const root = slot.conversationId.split("|", 1)[0]!;
+    const rootQuote = slot.channel === "feishu" && record?.conversationId === `${root}|`
+      && slot.conversationId === `${root}|${body.source_message_id}`;
+    if (!record || record.senderId !== body.sender_id || (record.conversationId !== slot.conversationId && !rootQuote)) {
+      return c.json({ status: "not_found" });
+    }
+    const prior = options.workItems.getIdempotencyResponse(`${record.namespace}:result`, record.key) as SessionCompactionResult | undefined;
+    if (prior) return c.json(prior.status === "completed"
+      ? prior.output ? publicReviewReceipt(prior.output, record.requestId) : { status: "completed" } : prior);
+    if (!options.runner) return c.json({ status: "unknown" });
+    const result = await options.runner.inspectSessionCommand(record.providerId, record.requestId, body.cancel).catch(() => ({ status: "unknown" as const }));
+    if (result.status === "completed" || result.status === "rejected") rememberBoundCommand(record, result);
+    return c.json(result.status === "completed"
+      ? result.output ? publicReviewReceipt(result.output, record.requestId) : { status: "completed" } : result);
   });
 
   app.patch("/v1/sessions/:session_id", async (c) => {
@@ -1513,6 +1575,38 @@ function toApiAttachment(attachment: ReturnType<SqliteEventStore["getMessageAtta
   };
 }
 
+const NATIVE_COMMAND_SOURCES = "channel:compact:source";
+
+interface BoundCommandReceipt {
+  namespace: string;
+  key: string;
+  requestId: string;
+  sessionId: string;
+  providerId: string;
+  command: NativeSessionCommand;
+}
+
+interface ChannelCommandReceipt extends BoundCommandReceipt {
+  senderId: string;
+  conversationId: string;
+}
+
+function commandRequestId(namespace: string, key: string): string {
+  return createHash("sha256").update(JSON.stringify([namespace, key])).digest("hex");
+}
+
+function publicReviewReceipt(output: string, reportId: string): SessionCompactionResult {
+  const summary = { p0: 0, p1: 0, p2: 0, p3: 0 };
+  for (const match of output.matchAll(/^\s*(?:[-*]|\d+\.)\s+(?:\*\*)?\[P([0-3])\]/gm)) {
+    summary[`p${match[1]}` as keyof typeof summary]++;
+  }
+  return { status: "completed", reportId, reviewSummary: summary };
+}
+
+function nativeCommandSourceKey(slot: ChannelSlot, sourceMessageId: string): string {
+  return createHash("sha256").update(JSON.stringify([slot.channel, slot.conversationId.split("|", 1)[0], sourceMessageId])).digest("hex");
+}
+
 function observationNamespace(sessionId: string, providerId: string, kind: "goal" | "review"): string {
   return `session:observed-${kind}:${sessionId}:${createHash("sha256").update(providerId).digest("hex")}`;
 }
@@ -1530,6 +1624,17 @@ function describeSessionObservation(kind: SessionObservationKind, observation?: 
     const usage = count(goal.tokensUsed) ? `，目标已用 ${tokens.format(goal.tokensUsed)} tokens`
       + (count(goal.tokenBudget) ? `，预算 ${tokens.format(goal.tokenBudget)} tokens` : "") : "";
     return `目标最近状态${stamp} · ${names[goal.status as keyof typeof names]}${usage}。`;
+  }
+  if (data?.type === "pi_session_metrics") {
+    if (kind === "context") {
+      if (!count(data.contextWindow) || data.contextWindow === 0) return `Pi 最近上报${stamp} · 暂无上下文窗口数据。`;
+      if (!count(data.contextTokens)) return `Pi 最近上报${stamp} · 窗口上限 ${tokens.format(data.contextWindow)} tokens，暂无上下文占用估算。`;
+      return `Pi 最近上下文估算${stamp} · ${tokens.format(data.contextTokens)} / ${tokens.format(data.contextWindow)} tokens（${(data.contextTokens / data.contextWindow * 100).toFixed(1)}%）。`;
+    }
+    const fields = [["输入", data.inputTokens], ["输出", data.outputTokens], ["缓存读取", data.cacheReadTokens], ["缓存写入", data.cacheWriteTokens]] as const;
+    const usage = fields.flatMap(([label, value]) => count(value) ? [`${label} ${tokens.format(value)} tokens`] : []);
+    if (typeof data.cost === "number" && Number.isFinite(data.cost) && data.cost >= 0) usage.push(`SDK 成本估算 ${data.cost} USD`);
+    return usage.length ? `Pi 会话累计统计${stamp} · ${usage.join("，")}。` : "当前会话尚未上报 Pi 用量。";
   }
   if (!count(data?.used) || !count(data.size) || data.size === 0) return "当前会话尚未上报上下文用量。";
   const window = `${tokens.format(data.used)} / ${tokens.format(data.size)} tokens（${(data.used / data.size * 100).toFixed(1)}%）`;

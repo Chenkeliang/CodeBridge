@@ -18,7 +18,7 @@ import type {
   BackendProfile,
   SessionCompactionResult,
 } from "@codebridge/core";
-import { ACP_CODEX_ACP_VERSION } from "@codebridge/core";
+import { ACP_CLAUDE_AGENT_ACP_VERSION, ACP_CODEX_ACP_VERSION } from "@codebridge/core";
 import { parseGoalAction, parseSessionGoalObservation, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import type {
   CliSessionSummary,
@@ -110,13 +110,12 @@ export async function compactCodexSession(
   const commandsPublished = new Promise<void>((resolve) => { receiveCommands = resolve; });
   let sent = false;
   return withAcpConnection(profile, cwd, async (agent, init) => {
-    if (init.agentInfo?.name !== "@agentclientprotocol/codex-acp" || init.agentInfo.version !== ACP_CODEX_ACP_VERSION
-      || !init.agentCapabilities?.sessionCapabilities?.resume) {
+    if (!supportsAcpCompaction(profile, init)) {
       return { status: "rejected", reason: "unsupported" };
     }
     await agent.request(methods.agent.session.resume, { sessionId, cwd, mcpServers: [] });
     try {
-      await raceWithAbort(commandsPublished, () => signal.aborted, 5_000, "Codex commands unavailable");
+      await raceWithAbort(commandsPublished, () => signal.aborted, 5_000, "ACP commands unavailable");
     } catch {
       return { status: "rejected", reason: "unsupported" };
     }
@@ -141,6 +140,20 @@ export async function compactCodexSession(
       observed.set(update.compactionId, update.status);
     }
   }, 90_000, { ...ACP_CLIENT_CAPABILITIES, session: { ...ACP_CLIENT_CAPABILITIES.session, compaction: {} } }, () => signal.aborted);
+}
+
+function supportsAcpCompaction(profile: BackendProfile, init: InitializeResponse): boolean {
+  if (!init.agentCapabilities?.sessionCapabilities?.resume) return false;
+  if (profile.type === "claude-code") {
+    return init.agentInfo?.name === "@agentclientprotocol/claude-agent-acp" && init.agentInfo.version === ACP_CLAUDE_AGENT_ACP_VERSION;
+  }
+  return profile.type === "codex" && init.agentInfo?.name === "@agentclientprotocol/codex-acp"
+    && init.agentInfo.version === ACP_CODEX_ACP_VERSION;
+}
+
+export async function probeClaudeCompactionSupport(profile: BackendProfile, cwd: string): Promise<boolean> {
+  return withAcpConnection(profile, cwd, async (_agent, init) =>
+    profile.type === "claude-code" && supportsAcpCompaction(profile, init), undefined, 20_000);
 }
 
 export async function probeCodexCompactionSupport(profile: BackendProfile, cwd: string): Promise<boolean> {

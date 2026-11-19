@@ -17,6 +17,7 @@ export {
   compactCodexSession,
   runCodexNativeSessionCommand,
   probeCodexCompactionSupport,
+  probeClaudeCompactionSupport,
   listAcpSessions,
   probeAcpInitialize,
 } from "./acp-session-list.js";

@@ -658,6 +658,15 @@ export class FeishuBridge {
       text: msg.content,
       config: this.config,
       router: this.orchestrator.router,
+      inspectSessionCommand: msg.replyToMessageId && this.sessionIngress?.inspectSessionCommand
+        ? async (cancel) => {
+          const raw = msg.raw as { sender?: { sender_type?: string } } | undefined;
+          if (raw?.sender?.sender_type && raw.sender.sender_type !== "user") return { status: "rejected", reason: "forbidden" };
+          return this.sessionIngress!.inspectSessionCommand!(this.buildFullSlot(msg.chatId, topicId), {
+            senderId: msg.senderId, sourceMessageId: msg.replyToMessageId!, privateChat: isDm, cancel,
+          });
+        }
+        : undefined,
       readSessionObservation: isDm || groupOperator
         ? async (kind) => await this.sessionIngress?.readSessionObservation?.(this.buildFullSlot(msg.chatId, topicId), kind) ?? null
         : undefined,
@@ -689,7 +698,8 @@ export class FeishuBridge {
         ? async () => {
           const catalog = await this.sessionIngress?.listDiscoveredCommands?.(this.buildFullSlot(msg.chatId, topicId)) ?? [];
           return isDm || this.config.access?.admins?.includes(msg.senderId)
-            ? catalog : catalog.filter((entry) => entry.status !== "available");
+            ? catalog : catalog.map((entry) => entry.status === "available"
+              ? { ...entry, status: "discovered", unavailableReason: "requires_admin" } : entry);
         }
         : undefined,
       listSessions: (options) =>

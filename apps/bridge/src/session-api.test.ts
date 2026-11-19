@@ -2448,7 +2448,7 @@ describe("session API", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       commands: [
-        { name: "compact", description: "Compact context", source: "agent", status: "discovered" },
+        { name: "compact", description: "Compact context", source: "agent", status: "discovered", unavailableReason: "unbound" },
       ],
     });
     expect(listCommands).not.toHaveBeenCalled();
@@ -2479,7 +2479,7 @@ describe("session API", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      commands: [{ name: "compact", description: "Compact context", source: "agent", status: "discovered" }],
+      commands: [{ name: "compact", description: "Compact context", source: "agent", status: "discovered", unavailableReason: "unbound" }],
     });
     catalog.close();
     workItems.close();

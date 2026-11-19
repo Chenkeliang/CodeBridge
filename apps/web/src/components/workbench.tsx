@@ -634,7 +634,12 @@ export function Workbench() {
       }
       return;
     }
-    if (query === "review-result" && message.startsWith("/")) {
+    if (/^\/review-result(?:\s|$)/i.test(message)) {
+      const report = /^\/review-result(?:\s+([0-9a-f]{64}))?$/i.exec(message);
+      if (!report) {
+        setError("请使用 /review-result，或附加原话题给出的报告编号。");
+        return;
+      }
       if (!selectedSessionId || attachments.length) {
         setError("请选择要查看的会话。查看审查报告时请勿附带文件。");
         return;
@@ -642,7 +647,7 @@ export function Workbench() {
       setSending(true);
       setError(null);
       try {
-        const result = await api.latestNativeReview(selectedSessionId);
+        const result = await api.latestNativeReview(selectedSessionId, report[1]?.toLowerCase());
         if (result.text) setNativeReview({ sessionId: selectedSessionId, text: result.text });
         else notify("当前会话暂无原生审查报告。");
       } catch (error) {

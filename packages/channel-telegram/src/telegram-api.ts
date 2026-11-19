@@ -20,6 +20,7 @@ export interface TelegramChat {
 export interface TelegramMessage {
   message_id: number;
   message_thread_id?: number;
+  reply_to_message?: { message_id: number };
   from?: TelegramUser;
   chat: TelegramChat;
   text?: string;

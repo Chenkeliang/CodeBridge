@@ -159,7 +159,7 @@ export class TelegramBridge {
     const rawText = message.text ?? message.caption ?? "";
     const text = rawText.trim();
     if (!text || !message.from) return;
-    const addressedCatalog = /^\/(?:commands|compact|context|usage|goal|review(?:-branch|-commit)?)(@[^\s]+)(?:\s|$)/i.exec(text);
+    const addressedCatalog = /^\/(?:commands|command-status|command-cancel|compact|context|usage|goal|review(?:-branch|-commit)?)(@[^\s]+)(?:\s|$)/i.exec(text);
     if (addressedCatalog && addressedCatalog[1]!.toLowerCase() !== this.botName?.toLowerCase()) return;
     const senderId = String(message.from.id);
     const rawChatId = String(message.chat.id);
@@ -242,6 +242,14 @@ export class TelegramBridge {
       text: normalized,
       config: this.config,
       router: this.orchestrator.router,
+      inspectSessionCommand: message.reply_to_message && this.sessionIngress?.inspectSessionCommand
+        ? async (cancel) => {
+          if (message.from?.is_bot) return { status: "rejected", reason: "forbidden" };
+          return this.sessionIngress!.inspectSessionCommand!(this.buildFullSlot(chatId, topicId), {
+            senderId, sourceMessageId: String(message.reply_to_message!.message_id), privateChat: isPrivate, cancel,
+          });
+        }
+        : undefined,
       readSessionObservation: isPrivate || isAdmin
         ? async (kind) => await this.sessionIngress?.readSessionObservation?.(this.buildFullSlot(chatId, topicId), kind) ?? null
         : undefined,
@@ -252,7 +260,7 @@ export class TelegramBridge {
         const parsed = parseNativeSessionCommand(source);
         if (!parsed || parsed.command !== command) return { status: "rejected", reason: "invalid_arguments" };
         return await this.sessionIngress?.compactSession?.(this.buildFullSlot(chatId, topicId), {
-          senderId, messageId: String(update.update_id), privateChat: isPrivate, ...parsed,
+          senderId, messageId: String(update.update_id), sourceMessageId: String(message.message_id), privateChat: isPrivate, ...parsed,
         }) ?? { status: "rejected", reason: "unsupported" };
       },
       groupCommandListOnly,

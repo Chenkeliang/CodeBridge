@@ -97,6 +97,7 @@ export interface AgentCommand {
   input?: { hint: string };
   source?: "agent";
   status?: "discovered" | "available";
+  unavailableReason?: import("@codebridge/core/native-session-command").NativeCommandUnavailableReason;
 }
 
 export type SkillAgentId = "codex" | "claude" | "cursor" | "opencode" | "pi";

@@ -53,6 +53,7 @@ You can also run `npx @graychennpm/codebridge@0.1.0 init`. For local distributio
 - One ACP path for `cursor`, `claude`, and `codex`; the legacy direct-CLI transport is gone
 - Resume local sessions with `/resume`, `/resume last`, or `/resume all`
 - Live adapter capabilities through `/model`, `/effort`, `/permission`, and `/config`
+- Per-session command discovery and native actions in the [command reference](#commands)
 - Named workspaces, additional directories, `/clone`, `/pull`, and file delivery
 - macOS TCC-aware `/root add` flow with an immediate “waiting for system permission” status
 - launchd KeepAlive on macOS, or the built-in watchdog for manual background mode
@@ -130,37 +131,59 @@ Web is disabled by default. Use `codebridge start --web` for npm, or `node apps/
 
 Web shares Sessions, Runs, and events with channels. It has no separate user login and is intended for local access; do not expose it directly to the internet. Agent and tool network requests still follow their own configuration.
 
-## Phone-first commands
+## Commands
 
-`/menu` and `/help` intentionally return a short list for small screens. Use `/help full` for the grouped reference.
+This reference describes the current source checkout. Installed builds provide the commands included in their release.
+
+### Feishu and Telegram
+
+Send `/commands` to see the catalog for the current chat or topic. Add a keyword to filter it. `/menu` and `/help` show shortcuts for mobile, and `/help full` opens the grouped reference.
 
 | Command | Use |
-|---------|-----|
-| `/status` | Check backend, project directory, model, permission, and active-task state |
-| `/resume last` | Continue the most recent local session in the current directory |
-| `/new` | Start a clean ACP session |
-| `/stop` | Stop the current task and clear queued Feishu prompts |
-| `/backend claude` | Switch the current chat to Cursor, Claude, or Codex |
-| `/model` | List live models; `/model <name>` switches one |
-| `/permission` | List live modes; `/permission <mode>` switches one |
-| `/ws list` | Show saved workspaces |
+| --- | --- |
+| `/status` (`/s`) | Show the backend, workspace, session settings, and active task. |
+| `/new` (`/reset`) | Start a new session with the next message. |
+| `/resume` (`/r`), `/resume <N>`, `/resume last`, `/resume all` | List local sessions in the current directory, bind a numbered entry, bind the latest entry, or list sessions across directories. |
+| `/session close <session-id>`, `/session delete <session-id>` | Close or delete a session through the selected backend. |
+| `/stop` (`/cancel`, `/x`), `/continue` (`/c`) | Stop the active task or resume a paused queue. |
+| `/command-status`, `/command-cancel` | Reply to your original native-command message to check its receipt or request cancellation. Mention the bot when the Feishu group requires it. |
+| `/steer <instruction>` | Send an instruction to the running turn when the adapter supports steering. |
+| `/approve` (`/a`), `/deny` (`/d`) | Approve or reject the pending Agent permission request. |
+| `/backend [name]` (`/b`), `/backend default` | Switch to a configured backend or select the default, such as `/backend codex` or `/backend pi`. |
+| `/model [list]`, `/model <name>`, `/model default` | List models, choose one, or clear the session override. |
+| `/effort [list]`, `/effort <level>`, `/effort default` | List reasoning levels, choose one, or clear the session override. |
+| `/permission [list]` (`/perm`), `/permission <mode>`, `/permission default` | List permission modes, choose one, or clear the session override. |
+| `/config`, `/config <id> <value>`, `/config <id> default` | Show adapter settings, set a value, or clear the override for one setting. |
+| `/thinking` (`/think`), `/thinking on`, `/thinking off` | Check or change whether thinking and tool progress are displayed. |
+| `/cd <absolute-path>` | Change the current project directory. |
+| `/roots`, `/root add <absolute-path>`, `/root remove <absolute-path>` (`rm`) | List, add, or remove additional directories. |
+| `/ws list`, `/ws save <name>`, `/ws use <name>`, `/ws remove <name>` | List, save, open, or remove named workspaces. |
+| `/send <path>`, `/clone <git-url> [directory-name]`, `/pull` | Send a file from the Bridge host, clone and switch to a repository, or run a fast-forward-only pull. |
+| `/transport` | Show the transport information for this compatibility command. |
 
-Other useful commands:
+Model, reasoning, permission, and configuration options depend on the selected adapter. Use the corresponding list command to see its current options.
 
-```text
-/resume [N|last|all]
-/effort [list|level|default]
-/config [id value|default]
-/root add|remove|rm /absolute/path
-/send /absolute/path/to/file
-/clone <git-url> [directory-name]
-/pull
-/approve  /deny  /steer <instruction>
-```
+### Session and native commands
 
-The exact model, effort, permission, and boolean config values come from the connected ACP adapter, so `/model list`, `/effort list`, `/permission list`, and `/config` are the source of truth.
+The table covers commands shared by Feishu, Telegram, and the Web Workbench, plus the Web report viewer. In Web, type `/` to browse the catalog or enter a command directly. The Workbench has its own controls for session management, task control, and settings.
 
-To request a real channel notification, say “mention me when it finishes” or explicitly mention a participant in the task. The Agent uses `fcb mention` internally; current-source Feishu group task replies already mention the current requester, so no extra notification is needed. This group behavior is not in npm `0.1.0`.
+| Command | Use and availability |
+| --- | --- |
+| `/context` | Show the latest reported context usage, window limit, and utilization. |
+| `/usage` | Show the latest reported session usage and any cost reported with it. |
+| `/goal` | Show the latest reported Codex goal status and token figures when available. |
+| `/compact`, `/compact <instructions>` | Compact the bound session. Codex and Claude support the bare command. Pi accepts optional instructions. |
+| `/goal set <objective>`, `/goal pause`, `/goal resume`, `/goal clear` | Set, pause, resume, or clear the bound Codex session’s goal. `/goal <objective>` is shorthand for setting a goal. Setting or resuming may start a turn. |
+| `/review [instructions]`, `/review-branch <branch>`, `/review-commit <sha>` | Run Codex’s native review of uncommitted changes or a custom target, a branch, or a specific commit. |
+| `/review-result [report-id]` | View the latest or a specific report in the bound Web session. Group chats receive a severity count and the report reference. |
+
+Context, usage, and goal queries use observations already recorded for the bound provider session. Pi reports an estimate of context usage and cumulative session statistics. A session with no matching report shows that data is unavailable.
+
+The dynamic catalog combines the current provider session’s advertised commands with the Runner’s verified capabilities. Commands marked **Available** can be invoked. Reported entries that cannot run show the reason when available, such as missing release evidence, adapter drift, or group permissions. Native commands require an already-bound provider session. Group execution requires an administrator configured in `access.admins` for Feishu or `telegram.admins` for Telegram.
+
+Managed deployments of these native commands require command protocol 2 evidence from the independent host deployer. Retrying with the same request ID reads the existing receipt, including after a restart. Sending a new command creates a new request. Use the receipt tools above to check an earlier command. Cancellation stays pending until the adapter confirms the outcome.
+
+To request a real channel notification, say “mention me when it finishes” or explicitly mention a participant in the task. The Agent uses `fcb mention` internally. Current-source Feishu group task replies already mention the current requester. npm `0.1.0` predates this group behavior.
 
 ## Sessions, directories, and permissions
 
@@ -182,7 +205,7 @@ Read [SECURITY.md](https://github.com/Chenkeliang/CodeBridge/blob/main/SECURITY.
 ## Concurrency and known boundaries
 
 - Different chats can run in parallel up to `runnerHost.maxConcurrentRuns` (default `4`).
-- Each Session has one active task and defaults to at most 100 queued turns, controlled by `orchestration.session.maxQueuedTurns`. `/stop` cancels its task and clears its queue.
+- Each Session has one active task and defaults to at most 100 queued turns, controlled by `orchestration.session.maxQueuedTurns`. `/stop` cancels the active task. Queued turns follow the session’s queue state.
 - **Current source, not npm:** each new ordinary Feishu group request gets an independent conversation and normally requires a bot mention. Quoting a verified bot reply continues its conversation without another mention. Ordinary replies stay in the group stream; existing native threads remain threads. Members quoting the same answer share its context.
 - **npm `0.1.0`** uses the older group routing and lacks these ordinary-message isolation and quoted-reply fixes. Change agent, directory, model, or resumed session within the target conversation; slash commands without a reference use group-level context.
 - In current source, members of an explicitly allowed Feishu group can ask and continue tasks. Group configuration commands require `access.admins` or `access.allowedUsers`; incident write approval remains scoped to that alert group’s `approverOpenIds`. Administrators are not automatically approvers for every workflow.

@@ -1,5 +1,5 @@
 import type { AgentAvailableCommand, AgentEvent, BackendConfigOption, RunContext, SessionCompactionResult } from "@codebridge/core";
-import type { CreateAgentSessionOptions, ResourceLoader } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, CreateAgentSessionOptions, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -18,6 +18,7 @@ export interface PiSession {
   readonly sessionId: string;
   readonly sessionFile?: string;
   readonly resourceLoader?: Pick<ResourceLoader, "getSkills" | "getPrompts">;
+  getSessionStats?: AgentSession["getSessionStats"];
   compact?(customInstructions?: string): Promise<{ firstKeptEntryId: string }>;
   abortCompaction?(): void;
   subscribe(listener: (event: unknown) => void): () => void;
@@ -247,6 +248,15 @@ export async function* runPiSession(
         };
       } else {
         yield { type: "session", sessionId: session.sessionId };
+        if (session.getSessionStats) {
+          try {
+            const stats = session.getSessionStats();
+            yield { type: "pi_session_metrics", contextTokens: stats.contextUsage?.tokens ?? null,
+              contextWindow: stats.contextUsage?.contextWindow ?? null, inputTokens: stats.tokens.input,
+              outputTokens: stats.tokens.output, cacheReadTokens: stats.tokens.cacheRead,
+              cacheWriteTokens: stats.tokens.cacheWrite, cost: stats.cost };
+          } catch { /* Metrics do not alter the outcome of the completed prompt. */ }
+        }
       }
     }
   } finally {

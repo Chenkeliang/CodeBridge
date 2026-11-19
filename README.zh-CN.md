@@ -55,6 +55,7 @@ Bridge 处理通道和 API，Runner 启动本机 Agent。推荐两者运行在�
 - 统一 ACP 通道：`cursor`、`claude`、`codex`；旧版直接 CLI transport 已移除
 - `/resume`、`/resume last`、`/resume all` 恢复本机会话
 - `/model`、`/effort`、`/permission`、`/config` 实时读取当前 adapter 能力
+- 按会话动态发现命令和执行原生操作，见[命令参考](#命令参考)
 - 命名工作区、ACP 附加目录、`/clone`、`/pull`、文件发送
 - `/root add` 感知 macOS TCC 授权，并即时提示“正在等待系统权限”
 - macOS launchd KeepAlive，或手动后台模式 watchdog
@@ -130,37 +131,59 @@ telegram:
 
 Web 默认关闭。npm 安装用 `codebridge start --web`，源码安装用 `node apps/bridge/dist/cli.js start --web` 临时开启；或在配置里保存 `web.enabled: true` 后按原方式启动。默认地址为 `http://127.0.0.1:19790/workbench/`，修改 `bridge.apiPort` 后使用对应端口。它和飞书、Telegram 共用 WorkItem、Run 和事件流：像普通 Agent 工作台一样直接输入目标，输入框周边的 Agent、模式和工作空间用于配置当前会话，任务由选定 Agent 处理。页面连接本地 Bridge；Agent 和工具的网络请求仍按各自配置执行。Web 没有独立用户登录，不能直接开放到公网。
 
-## 手机优先的命令
+## 命令参考
 
-`/menu` 和 `/help` 默认只返回短菜单，适合手机；发送 `/help full` 查看分组完整帮助。
+以下清单对应当前源码。已安装版本以该构建包含的命令为准。
+
+### 飞书和 Telegram
+
+发送 `/commands` 查看当前聊天或话题的命令目录，也可以附加关键词筛选。`/menu` 和 `/help` 显示手机快捷菜单，`/help full` 显示分组帮助。
 
 | 命令 | 用途 |
-|------|------|
-| `/status` | 查看 backend、目录、模型、权限和任务状态 |
-| `/resume last` | 继续当前目录最近一次本机会话 |
-| `/new` | 新建 ACP session |
-| `/stop` | 停止当前任务，并清空飞书排队消息 |
-| `/backend claude` | 在 Cursor、Claude、Codex 之间切换 |
-| `/model` | 拉取实时模型；`/model <名称>` 切换 |
-| `/permission` | 拉取实时权限模式；`/permission <模式>` 切换 |
-| `/ws list` | 查看已保存工作区 |
+| --- | --- |
+| `/status`（`/s`） | 查看当前后端、工作目录、会话设置和活动任务。 |
+| `/new`（`/reset`） | 从下一条消息开始使用新会话。 |
+| `/resume`（`/r`）、`/resume <序号>`、`/resume last`、`/resume all` | 列出当前目录的本机会话、绑定指定序号、绑定最近会话，或跨目录列出会话。 |
+| `/session close <会话 ID>`、`/session delete <会话 ID>` | 通过当前后端关闭或删除指定会话。 |
+| `/stop`（`/cancel`、`/x`）、`/continue`（`/c`） | 停止活动任务，或恢复暂停的队列。 |
+| `/command-status`、`/command-cancel` | 回复自己发送的原生命令，查询回执或请求取消。飞书群要求提及机器人时记得 @ 它。 |
+| `/steer <补充指令>` | 在适配器支持时，把补充指令发送给正在执行的轮次。 |
+| `/approve`（`/a`）、`/deny`（`/d`） | 批准或拒绝当前待处理的 Agent 权限请求。 |
+| `/backend [名称]`（`/b`）、`/backend default` | 选择配置好的后端或恢复默认后端，例如 `/backend codex`、`/backend pi`。 |
+| `/model [list]`、`/model <名称>`、`/model default` | 列出模型、切换模型或清除当前会话的覆盖值。 |
+| `/effort [list]`、`/effort <级别>`、`/effort default` | 列出推理强度、切换级别或清除覆盖值。 |
+| `/permission [list]`（`/perm`）、`/permission <模式>`、`/permission default` | 列出权限模式、切换模式或清除覆盖值。 |
+| `/config`、`/config <id> <值>`、`/config <id> default` | 查看、设置适配器选项，或清除单项覆盖值。 |
+| `/thinking`（`/think`）、`/thinking on`、`/thinking off` | 查看或切换思考和工具调用过程的显示。 |
+| `/cd <绝对路径>` | 切换当前项目目录。 |
+| `/roots`、`/root add <绝对路径>`、`/root remove <绝对路径>`（`rm`） | 列出、添加或删除附加目录。 |
+| `/ws list`、`/ws save <名称>`、`/ws use <名称>`、`/ws remove <名称>` | 列出、保存、打开或删除命名工作区。 |
+| `/send <文件路径>`、`/clone <Git URL> [目录名]`、`/pull` | 发送 Bridge 主机上的文件、克隆并切换仓库，或执行仅允许快进的拉取。 |
+| `/transport` | 查看旧传输切换命令的兼容提示。 |
 
-其他常用命令：
+模型、推理强度、权限模式和配置项由当前适配器提供。用对应的列表命令查看实际选项。
 
-```text
-/resume [N|last|all]
-/effort [list|级别|default]
-/config [id value|default]
-/root add|remove|rm /absolute/path
-/send /absolute/path/to/file
-/clone <git-url> [目录名]
-/pull
-/approve  /deny  /steer <指令>
-```
+### 会话查询与原生命令
 
-模型、effort、permission 和 boolean config 的准确选项以当前 ACP adapter 为准；可用 `/model list`、`/effort list`、`/permission list`、`/config` 查看。
+下表包含飞书、Telegram 和 Web 共用的会话命令，以及 Web 专用的审查报告入口。在 Web 输入 `/` 可查看目录，也可以直接输入命令。工作台提供独立的会话管理、任务控制和设置控件。
 
-需要真实通知时，可以在任务里说“完成后 @ 我”，或者直接 @ 需要通知的参与者。Agent 会在确有必要时调用内部的 `fcb mention`；当前源码的飞书群聊任务回复会原生 @ 本轮提问者，无需另发通知；这项群聊行为尚未包含在 npm `0.1.0`。
+| 命令 | 用途和可用范围 |
+| --- | --- |
+| `/context` | 查看最近上报的上下文用量、窗口上限和占用比例。 |
+| `/usage` | 查看最近上报的会话用量，以及同次上报提供的费用。 |
+| `/goal` | 查看最近上报的 Codex 目标状态，以及有上报时的已用 tokens 和预算。 |
+| `/compact`、`/compact <说明>` | 压缩当前绑定会话。Codex 和 Claude 使用无参数形式，Pi 支持附带说明。 |
+| `/goal set <目标>`、`/goal pause`、`/goal resume`、`/goal clear` | 设置、暂停、恢复或清除当前 Codex 会话的目标。`/goal <目标>` 是设置目标的简写。设置或恢复可能启动一轮执行。 |
+| `/review [审查说明]`、`/review-branch <分支>`、`/review-commit <提交 SHA>` | 调用 Codex 原生审查，审查未提交改动、自定义目标、指定分支或指定提交。 |
+| `/review-result [报告编号]` | 在绑定的 Web 会话查看最近或指定的报告。群聊返回分级条目数量和报告编号。 |
+
+上下文、用量和目标查询使用当前绑定的 Provider 会话已记录的上报。Pi 上报上下文占用估算和会话累计统计。缺少对应数据时会明确提示。
+
+动态目录同时核对当前 Provider 会话的命令上报和 Runner 的能力验证。标为「可执行」的命令可提交执行，已上报但暂不可运行的条目会显示原因，例如发布验证缺失、适配器变化或群权限。原生命令要求已有绑定的 Provider 会话。群聊执行权限来自飞书的 `access.admins` 或 Telegram 的 `telegram.admins`。
+
+通过独立发布控制器部署原生命令，需要通过命令协议 2 验证。使用相同请求编号重试时会查询已有回执，服务重启后也适用。发送新命令会形成独立请求。查询旧请求请使用上面的回执命令。发出取消请求后，以适配器确认的终态为准。
+
+需要真实通知时，可以在任务里说「完成后 @ 我」，或者直接 @ 需要通知的参与者。Agent 会在确有必要时调用内部的 `fcb mention`。当前源码的飞书群聊任务回复会原生 @ 本轮提问者。npm `0.1.0` 发布早于这项群聊行为。
 
 ## Session、目录与权限
 
@@ -182,7 +205,7 @@ Web 默认关闭。npm 安装用 `codebridge start --web`，源码安装用 `nod
 ## 并发与限制
 
 - 不同聊天可并行运行，默认上限为 `runnerHost.maxConcurrentRuns: 4`。
-- 同一 Session 同时只有一个活动任务；默认最多排队100条，可通过 `orchestration.session.maxQueuedTurns` 调整。`/stop` 取消当前任务并清空该会话队列。
+- 同一 Session 同时只有一个活动任务，默认最多排队 100 条，可通过 `orchestration.session.maxQueuedTurns` 调整。`/stop` 取消活动任务，排队消息按会话的队列状态继续处理。
 - **当前源码，未发 npm**：飞书群聊每条新的普通任务建立独立会话；默认需 @ 机器人。直接引用机器人回复可不再 @，沿原会话续聊；普通回复留在群消息流，已有原生话题沿用话题，不强制创建新话题。不同成员引用同一回复会共享该会话上下文。
 - **npm `0.1.0`** 使用旧群聊路由，未包含上述普通消息隔离和引用续聊修复。设置目录、Agent、模型或恢复会话时，请在目标会话内操作；无引用的斜杠命令使用群级上下文。
 - 当前源码中，配置允许访问的飞书群成员可提问和续聊；修改配置类群命令需要 `access.admins` 或 `access.allowedUsers` 中的身份。告警话题的操作审批仍由该群 `approverOpenIds` 决定。管理员不等于所有流程的审批人。

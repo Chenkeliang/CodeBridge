@@ -9,6 +9,7 @@ import type {
   ChannelSlot,
   ChannelSubmitReceipt,
   SessionCompactionResult,
+  SessionCommandReceipt,
 } from "@codebridge/core";
 import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
 import { Hono } from "hono";
@@ -393,7 +394,7 @@ export function createChannelSessionIngress(
       body: JSON.stringify({
         slot: { channel: slot.channel, conversation_id: slot.conversationId, agent_id: slot.agentId,
           workspace_key: slot.workspaceKey, generation: slot.generation },
-        sender_id: source.senderId, message_id: source.messageId, private_chat: source.privateChat,
+        sender_id: source.senderId, message_id: source.messageId, source_message_id: source.sourceMessageId, private_chat: source.privateChat,
         instructions: source.instructions, command: source.command,
       }),
     });
@@ -401,6 +402,20 @@ export function createChannelSessionIngress(
     if (response.status === 400) return { status: "rejected", reason: "invalid_arguments" };
     if (!response.ok) return { status: "unknown" };
     return (await response.json()) as SessionCompactionResult;
+  };
+
+  const inspectSessionCommand: NonNullable<ChannelSessionIngress["inspectSessionCommand"]> = async (slot, source) => {
+    const response = await channelRequest(app, "/v1/channels/command-receipt", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({
+        slot: { channel: slot.channel, conversation_id: slot.conversationId, agent_id: slot.agentId,
+          workspace_key: slot.workspaceKey, generation: slot.generation },
+        sender_id: source.senderId, source_message_id: source.sourceMessageId,
+        private_chat: source.privateChat, cancel: source.cancel,
+      }),
+    });
+    return response.ok ? (await response.json()) as SessionCommandReceipt : { status: "unknown" };
   };
 
   const readSessionObservation: NonNullable<ChannelSessionIngress["readSessionObservation"]> = async (slot, kind) => {
@@ -589,6 +604,7 @@ export function createChannelSessionIngress(
     getSlotCommandContext,
     listDiscoveredCommands,
     compactSession,
+    inspectSessionCommand,
     readSessionObservation,
     resumeProviderSession,
     cancelRun,

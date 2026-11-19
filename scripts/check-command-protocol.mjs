@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ConfigStore } from "../packages/core/dist/index.js";
-import { probeCodexCompactionSupport } from "../packages/backends/dist/index.js";
+import { probeClaudeCompactionSupport, probeCodexCompactionSupport } from "../packages/backends/dist/index.js";
 import { COMMAND_PROTOCOL, codexCompactionFingerprint } from "../packages/runner-host/dist/compaction-evidence.js";
 import { RunnerHost } from "../packages/runner-host/dist/server.js";
 import { AgentSession } from "../packages/backends/node_modules/@earendil-works/pi-coding-agent/dist/index.js";
@@ -20,15 +20,18 @@ if (!configPath || !fs.statSync(configPath).isFile()) throw new Error("Runner co
 const config = new ConfigStore({ dataDir: path.dirname(configPath), configFileName: path.basename(configPath), resolve: [] }).get();
 const checks = new Map();
 const codexProfiles = {};
+const claudeProfiles = {};
 for (const [id, profile] of Object.entries(config.backends)) {
-  if (profile.type !== "codex") continue;
+  if (profile.type !== "codex" && profile.type !== "claude-code") continue;
   let fingerprint;
   try {
     fingerprint = codexCompactionFingerprint(profile);
   } catch {
     continue;
   }
-  if (!checks.has(fingerprint)) checks.set(fingerprint, await probeCodexCompactionSupport(profile, os.tmpdir()).catch(() => false));
-  if (checks.get(fingerprint)) codexProfiles[id] = fingerprint;
+  const key = profile.type + "|" + fingerprint;
+  const probe = profile.type === "codex" ? probeCodexCompactionSupport : probeClaudeCompactionSupport;
+  if (!checks.has(key)) checks.set(key, await probe(profile, os.tmpdir()).catch(() => false));
+  if (checks.get(key)) (profile.type === "codex" ? codexProfiles : claudeProfiles)[id] = fingerprint;
 }
-process.stdout.write(JSON.stringify({ protocol: COMMAND_PROTOCOL, piSdk: true, codexProfiles }));
+process.stdout.write(JSON.stringify({ protocol: COMMAND_PROTOCOL, piSdk: true, codexProfiles, claudeProfiles }));
