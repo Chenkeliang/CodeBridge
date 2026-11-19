@@ -1,5 +1,5 @@
 import { AgentRegistry, cloneSetupManifest, projectAgentStatus, projectSetupState } from "@codebridge/agent-registry";
-import type { ChannelSlot, ConfigStore, SessionCompactionResult } from "@codebridge/core";
+import type { ChannelSlot, ConfigStore, SessionCompactionResult, SessionObservationKind } from "@codebridge/core";
 import { canonicalWorkspaceKey, isSupportedAgentId } from "@codebridge/core";
 import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
 import type { ProjectDiscovery } from "@codebridge/project-catalog";
@@ -604,6 +604,16 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
     return c.json({ commands: discoveredAgentCommands(options.workItems.listSessionCommands(session.id)) });
+  });
+
+  app.get("/v1/sessions/:session_id/observations/:kind", (c) => {
+    const kind = c.req.param("kind");
+    if (kind !== "context" && kind !== "usage" && kind !== "goal") return c.json({ error: "unknown_observation" }, 404);
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    const observation = session.providerSessionId && options.workItems.getProviderObservation(session.id,
+      session.providerSessionId, kind === "goal" ? "session_info_update" : "usage_update");
+    return c.json({ text: describeSessionObservation(kind, observation || undefined) });
   });
 
   const compactBoundSession = async (
@@ -1450,6 +1460,30 @@ function toApiAttachment(attachment: ReturnType<SqliteEventStore["getMessageAtta
     content_hash: attachment.contentHash,
     created_at: attachment.createdAt,
   };
+}
+
+function describeSessionObservation(kind: SessionObservationKind, observation?: { payload: unknown; observedAt: string }): string {
+  const data = observation?.payload as Record<string, unknown> | undefined;
+  const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  const tokens = new Intl.NumberFormat("zh-CN");
+  const stamp = observation?.observedAt ? `（${observation.observedAt}）` : "";
+  if (kind === "goal") {
+    const goal = data?.goal as { status?: unknown; tokensUsed?: unknown; tokenBudget?: unknown } | null | undefined;
+    if (goal === null) return "当前会话尚未设置目标。";
+    const names = { active: "进行中", paused: "已暂停", blocked: "受阻", complete: "已完成", limited: "已达用量限制" };
+    if (typeof goal?.status !== "string" || !Object.hasOwn(names, goal.status)) return "当前会话尚未上报目标状态。";
+    const usage = count(goal.tokensUsed) ? `，目标已用 ${tokens.format(goal.tokensUsed)} tokens`
+      + (count(goal.tokenBudget) ? `，预算 ${tokens.format(goal.tokenBudget)} tokens` : "") : "";
+    return `目标最近状态${stamp} · ${names[goal.status as keyof typeof names]}${usage}。`;
+  }
+  if (!count(data?.used) || !count(data.size) || data.size === 0) return "当前会话尚未上报上下文用量。";
+  const window = `${tokens.format(data.used)} / ${tokens.format(data.size)} tokens（${(data.used / data.size * 100).toFixed(1)}%）`;
+  if (kind === "context") return `最近上下文${stamp} · ${window}。`;
+  const cost = data.cost as { amount?: unknown; currency?: unknown } | null | undefined;
+  const amount = typeof cost?.amount === "number" && Number.isFinite(cost.amount) && cost.amount >= 0
+    && typeof cost.currency === "string" && /^[A-Z]{3}$/.test(cost.currency)
+    ? `，同次上报费用 ${cost.amount} ${cost.currency}` : "，同次上报未提供费用";
+  return `会话最近用量${stamp} · ${window}${amount}。`;
 }
 
 async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown> | null> {

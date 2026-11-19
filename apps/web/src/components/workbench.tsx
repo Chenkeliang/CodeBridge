@@ -599,6 +599,24 @@ export function Workbench() {
   async function submit() {
     const message = draft.trim();
     if (!message || sending) return;
+    const query = message.toLowerCase().slice(1);
+    if (message.startsWith("/") && (query === "context" || query === "usage" || query === "goal")) {
+      if (!selectedSessionId || attachments.length) {
+        setError(attachments.length ? "会话状态命令不能携带附件。" : "请先选择要查询的会话。");
+        return;
+      }
+      setSending(true);
+      setError(null);
+      try {
+        const result = await api.sessionObservation(selectedSessionId, query);
+        notify(result.text);
+      } catch (error) {
+        setError(messageOf(error));
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
     const instructions = parseCompactionCommand(draft);
     if (instructions !== null) {
       if (!selectedSession?.provider_session_id || attachments.length) {

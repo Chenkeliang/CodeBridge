@@ -5,6 +5,7 @@ import {
   type BackendConfigOption,
   type ChannelCommandContext,
   type SessionCompactionResult,
+  type SessionObservationKind,
 } from "@codebridge/core";
 import type { CliSessionSummary } from "@codebridge/runner-client";
 import { execSync } from "node:child_process";
@@ -64,6 +65,7 @@ export interface SlashContext {
   listDiscoveredCommands?: () => Promise<AgentAvailableCommand[]>;
   groupCommandListOnly?: boolean;
   compactSession?: () => Promise<SessionCompactionResult>;
+  readSessionObservation?: (kind: SessionObservationKind) => Promise<string | null>;
 }
 
 export type SlashResult =
@@ -101,6 +103,14 @@ export async function handleSlashCommand(
   const lower = cmd!.toLowerCase();
 
   switch (lower) {
+    case "/context":
+    case "/usage":
+    case "/goal": {
+      if (arg) return lower === "/goal" ? { type: "agent", prompt: trimmed } : { type: "reply", text: `用法 · ${lower}` };
+      if (!ctx.readSessionObservation) return { type: "reply", text: "当前入口无法查询会话状态。" };
+      const info = await ctx.readSessionObservation(lower.slice(1) as SessionObservationKind).catch(() => null);
+      return { type: "reply", text: info ?? "当前会话暂无可查询的状态。" };
+    }
     case "/compact": {
       const result = await ctx.compactSession?.().catch((): SessionCompactionResult => ({ status: "unknown" }));
       if (result?.status === "completed") return { type: "reply", text: "当前会话上下文已压缩。" };

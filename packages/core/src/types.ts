@@ -131,6 +131,7 @@ export type AgentEvent =
       type: "session_info_update";
       title?: string | null;
       updatedAt?: string | null;
+      goal?: SessionGoalObservation | null;
     }
   | {
       type: "usage_update";
@@ -315,6 +316,7 @@ export interface ChannelSessionIngress {
   completeDelivery(turnId: string, owner: string): Promise<boolean>;
   getSlotCommandContext(slot: ChannelSlot): Promise<ChannelCommandContext>;
   listDiscoveredCommands?(slot: ChannelSlot): Promise<AgentAvailableCommand[]>;
+  readSessionObservation?(slot: ChannelSlot, kind: SessionObservationKind): Promise<string | null>;
   compactSession?(slot: ChannelSlot, source: {
     senderId: string;
     messageId: string;
@@ -368,6 +370,14 @@ export type SessionCompactionResult =
   | { status: "completed" }
   | { status: "rejected"; reason: "unsupported" | "busy" | "session_missing" | "forbidden" | "invalid_arguments" | "failed" | "cancelled" }
   | { status: "unknown" };
+
+export type SessionObservationKind = "context" | "usage" | "goal";
+
+export interface SessionGoalObservation {
+  status: "active" | "paused" | "blocked" | "complete" | "limited";
+  tokensUsed?: number;
+  tokenBudget?: number;
+}
 
 export type ClaudePermissionMode =
   | "acceptEdits"

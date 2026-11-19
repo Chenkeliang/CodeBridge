@@ -1,6 +1,6 @@
 import type { AgentTaskDraft, AgentTaskDefinition, AgentTaskAttempt, AgentTaskAttemptDetail, AgentTaskOptions, TaskPreflight, TaskAttentionItem, AlertIncidentView } from "@codebridge/core";
 import type { ManagementSnapshot, ManagedRule, ManagedChat, ManagedAlertSource, ManagedChannel, ChannelVerification } from "@codebridge/core";
-import type { SessionCompactionResult } from "@codebridge/core";
+import type { SessionCompactionResult, SessionObservationKind } from "@codebridge/core";
 import { parseSessionEventWire } from "@codebridge/core/session-event-wire";
 import { parseSseFrames } from "./sse";
 import type {
@@ -341,6 +341,8 @@ export const api = {
         body: JSON.stringify({ provider_session_id: providerId, instructions }),
       },
     ),
+  sessionObservation: (id: string, kind: SessionObservationKind) =>
+    request<{ text: string }>(`/v1/sessions/${encodeURIComponent(id)}/observations/${kind}`),
   pickDirectory: (id: string) =>
     request<AgentSession | { cancelled: true }>(`/v1/sessions/${encodeURIComponent(id)}/directories/pick`, { method: "POST", body: "{}" }),
   workspaceEntries: (id: string, root?: string, relativePath = "") => {

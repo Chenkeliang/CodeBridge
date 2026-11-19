@@ -657,6 +657,9 @@ export class FeishuBridge {
       text: msg.content,
       config: this.config,
       router: this.orchestrator.router,
+      readSessionObservation: isDm || groupOperator
+        ? async (kind) => await this.sessionIngress?.readSessionObservation?.(this.buildFullSlot(msg.chatId, topicId), kind) ?? null
+        : undefined,
       compactSession: async () => {
         if (!isDm && !this.config.access?.admins?.includes(msg.senderId)) {
           return { status: "rejected", reason: "forbidden" };

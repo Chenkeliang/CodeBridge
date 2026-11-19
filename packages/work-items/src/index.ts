@@ -635,6 +635,20 @@ export class SqliteEventStore {
     return latest && first ? { first, latest } : undefined;
   }
 
+  getProviderObservation(sessionId: string, providerSessionId: string, target: "usage_update" | "session_info_update"):
+    { payload: unknown; observedAt: string } | undefined {
+    const workItemId = this.getWorkItemBySessionId(sessionId)?.id;
+    if (!workItemId) return undefined;
+    const row = this.database.prepare(`SELECT e.payload, e.occurred_at
+      FROM domain_events e INDEXED BY domain_events_work_item_sequence
+      JOIN runs r ON r.id = e.run_id AND r.session_id = ? AND r.provider_session_id = ?
+      WHERE e.work_item_id = ? AND e.target = ? AND e.type = 'AGENT_EVENT'
+        AND (e.target <> 'session_info_update' OR json_type(e.payload, '$.event.goal') IS NOT NULL)
+      ORDER BY e.sequence DESC LIMIT 1`).get(sessionId, providerSessionId, workItemId, target) as
+      { payload: string; occurred_at: string } | undefined;
+    return row ? { payload: (JSON.parse(row.payload) as { event?: unknown }).event, observedAt: row.occurred_at } : undefined;
+  }
+
   getTurn(turnId: string): SessionTurn | undefined {
     const row = this.database
       .prepare("SELECT * FROM session_turns WHERE turn_id = ?")

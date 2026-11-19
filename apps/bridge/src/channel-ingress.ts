@@ -403,6 +403,13 @@ export function createChannelSessionIngress(
     return (await response.json()) as SessionCompactionResult;
   };
 
+  const readSessionObservation: NonNullable<ChannelSessionIngress["readSessionObservation"]> = async (slot, kind) => {
+    const { sessionId } = await getSlotCommandContext(slot);
+    if (!sessionId) return null;
+    const response = await app.request(`/v1/sessions/${encodeURIComponent(sessionId)}/observations/${kind}`, { headers: auth });
+    return response.ok ? (await response.json() as { text: string }).text : null;
+  };
+
   const resolvePermission = async (
     runId: string,
     approve: boolean,
@@ -582,6 +589,7 @@ export function createChannelSessionIngress(
     getSlotCommandContext,
     listDiscoveredCommands,
     compactSession,
+    readSessionObservation,
     resumeProviderSession,
     cancelRun,
     steerRun,

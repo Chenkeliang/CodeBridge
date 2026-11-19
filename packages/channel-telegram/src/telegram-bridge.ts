@@ -158,7 +158,7 @@ export class TelegramBridge {
     const rawText = message.text ?? message.caption ?? "";
     const text = rawText.trim();
     if (!text || !message.from) return;
-    const addressedCatalog = /^\/(?:commands|compact)(@[^\s]+)(?:\s|$)/i.exec(text);
+    const addressedCatalog = /^\/(?:commands|compact|context|usage|goal)(@[^\s]+)(?:\s|$)/i.exec(text);
     if (addressedCatalog && addressedCatalog[1]!.toLowerCase() !== this.botName?.toLowerCase()) return;
     const senderId = String(message.from.id);
     const rawChatId = String(message.chat.id);
@@ -241,6 +241,9 @@ export class TelegramBridge {
       text: normalized,
       config: this.config,
       router: this.orchestrator.router,
+      readSessionObservation: isPrivate || isAdmin
+        ? async (kind) => await this.sessionIngress?.readSessionObservation?.(this.buildFullSlot(chatId, topicId), kind) ?? null
+        : undefined,
       compactSession: async () => {
         if (message.from?.is_bot || (!isPrivate && !isAdmin)) return { status: "rejected", reason: "forbidden" };
         if (!message.text) return { status: "rejected", reason: "invalid_arguments" };

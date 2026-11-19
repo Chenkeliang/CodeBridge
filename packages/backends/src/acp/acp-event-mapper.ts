@@ -1,6 +1,18 @@
-import type { AgentEvent } from "@codebridge/core";
+import type { AgentEvent, SessionGoalObservation } from "@codebridge/core";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { mapSessionConfigOptions } from "./acp-config-options.js";
+
+function mapGoalObservation(value: unknown): SessionGoalObservation | null | undefined {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") return undefined;
+  const { status, tokensUsed, tokenBudget } = value as Record<string, unknown>;
+  if (status !== "active" && status !== "paused" && status !== "blocked" && status !== "complete" && status !== "limited") return undefined;
+  return {
+    status,
+    ...(typeof tokensUsed === "number" && Number.isSafeInteger(tokensUsed) && tokensUsed >= 0 ? { tokensUsed } : {}),
+    ...(typeof tokenBudget === "number" && Number.isSafeInteger(tokenBudget) && tokenBudget >= 0 ? { tokenBudget } : {}),
+  };
+}
 
 function codexMessagePhase(
   update: SessionUpdate,
@@ -124,7 +136,8 @@ export function mapSessionUpdate(update: SessionUpdate): AgentEvent[] {
           configOptions: mapSessionConfigOptions(update.configOptions),
         },
       ];
-    case "session_info_update":
+    case "session_info_update": {
+      const goal = mapGoalObservation(update._meta?.goal);
       return [
         {
           type: "session_info_update",
@@ -132,8 +145,10 @@ export function mapSessionUpdate(update: SessionUpdate): AgentEvent[] {
           ...(update.updatedAt !== undefined
             ? { updatedAt: update.updatedAt }
             : {}),
+          ...(goal !== undefined ? { goal } : {}),
         },
       ];
+    }
     case "usage_update":
       return [
         {
