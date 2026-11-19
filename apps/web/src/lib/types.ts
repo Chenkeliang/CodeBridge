@@ -96,7 +96,7 @@ export interface AgentCommand {
   description: string;
   input?: { hint: string };
   source?: "agent";
-  status?: "discovered";
+  status?: "discovered" | "available";
 }
 
 export type SkillAgentId = "codex" | "claude" | "cursor" | "opencode" | "pi";

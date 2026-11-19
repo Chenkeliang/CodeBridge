@@ -1,5 +1,6 @@
 import { AgentRegistry, cloneSetupManifest, projectAgentStatus, projectSetupState } from "@codebridge/agent-registry";
 import type { ChannelSlot, ConfigStore, SessionCompactionResult, SessionObservationKind } from "@codebridge/core";
+import { isNativeSessionCommand, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import { canonicalWorkspaceKey, isSupportedAgentId } from "@codebridge/core";
 import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
 import type { ProjectDiscovery } from "@codebridge/project-catalog";
@@ -600,10 +601,27 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(await request);
   });
 
-  app.get("/v1/sessions/:session_id/commands", (c) => {
+  app.get("/v1/sessions/:session_id/commands", async (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
-    return c.json({ commands: discoveredAgentCommands(options.workItems.listSessionCommands(session.id)) });
+    const reported = options.workItems.listSessionCommands(session.id);
+    const discovered = discoveredAgentCommands(reported);
+    const supported = session.providerSessionId
+      ? await options.runner?.nativeSessionCommands?.(session.agentId).catch(() => []) ?? [] : [];
+    const pi = options.configStore?.get().backends[session.agentId]?.type === "pi-sdk";
+    const scoped = session.providerSessionId && options.workItems.getProviderObservation(session.id, session.providerSessionId, "available_commands_update");
+    const snapshot = scoped ? (scoped.payload as { availableCommands?: unknown } | null)?.availableCommands : null;
+    const names = Array.isArray(snapshot) ? snapshot.map((entry: { name?: unknown } | null) => entry?.name) : [];
+    const available = supported.filter((name) => (pi && name === "compact")
+      || (reported.some((entry) => entry.name === name) && names.filter((observed) => observed === name).length === 1));
+    return c.json({ commands: [
+      ...available.map((name) => ({
+        ...reported.find((entry) => entry.name === name), name,
+        description: reported.find((entry) => entry.name === name)?.description ?? "压缩当前绑定会话",
+        source: "agent", status: "available",
+      })),
+      ...discovered.filter((entry) => !available.some((name) => name === entry.name)),
+    ] });
   });
 
   app.get("/v1/sessions/:session_id/observations/:kind", (c) => {
@@ -611,9 +629,26 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (kind !== "context" && kind !== "usage" && kind !== "goal") return c.json({ error: "unknown_observation" }, 404);
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
-    const observation = session.providerSessionId && options.workItems.getProviderObservation(session.id,
+    let observation = session.providerSessionId && options.workItems.getProviderObservation(session.id,
       session.providerSessionId, kind === "goal" ? "session_info_update" : "usage_update");
+    if (kind === "goal" && session.providerSessionId) {
+      const saved = options.workItems.getLatestCommandObservation(observationNamespace(session.id, session.providerSessionId, "goal"));
+      const result = saved?.response as SessionCompactionResult | undefined;
+      if (result?.status === "completed" && result.goal !== undefined && result.observedAt
+        && (!observation || result.observedAt >= observation.observedAt)) {
+        observation = { payload: { goal: result.goal }, observedAt: result.observedAt };
+      }
+    }
     return c.json({ text: describeSessionObservation(kind, observation || undefined) });
+  });
+
+  app.get("/v1/sessions/:session_id/review-result", (c) => {
+    if (!isLocalManagementRequest(c.req.raw)) return c.json({ error: "local_management_only" }, 403);
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session?.providerSessionId) return c.json({ text: null });
+    const receipt = options.workItems.getLatestCommandObservation(observationNamespace(session.id, session.providerSessionId, "review"));
+    const result = receipt?.response as SessionCompactionResult | undefined;
+    return c.json({ text: result?.status === "completed" ? result.output ?? null : null });
   });
 
   const compactBoundSession = async (
@@ -623,6 +658,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     namespace: string,
     key: string,
     actor: unknown,
+    command: NativeSessionCommand = "compact",
   ): Promise<SessionCompactionResult | "key_conflict"> => {
     if (!session.cwd || !session.providerSessionId || providerId !== session.providerSessionId) {
       return { status: "rejected", reason: "session_missing" };
@@ -631,8 +667,18 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const terminal = `${namespace}:result`;
     const requestId = createHash("sha256").update(JSON.stringify([namespace, key])).digest("hex");
     const fingerprint = createHash("sha256").update(JSON.stringify([
-      actor, session.id, session.agentId, session.cwd, providerId, session.model, instructions,
+      actor, session.id, session.agentId, session.cwd, providerId, session.model, instructions, ...(command === "compact" ? [] : [command]),
     ])).digest("hex");
+    const remember = (result: SessionCompactionResult) => {
+      if (result.status === "completed") {
+        if (command === "goal" && result.goal !== undefined && result.observedAt) {
+          options.workItems.putIdempotencyResponse(observationNamespace(session.id, providerId, "goal"), requestId, result, result.observedAt);
+        } else if (command.startsWith("review") && result.output) {
+          options.workItems.putIdempotencyResponse(observationNamespace(session.id, providerId, "review"), requestId, result, result.observedAt);
+        }
+      }
+      if (result.status !== "unknown") options.workItems.putIdempotencyResponse(terminal, key, result);
+    };
     const admission = options.workItems.withSessionTransaction((tx) => {
       const prior = tx.getIdempotencyResponse<string>(namespace, key);
       if (prior !== undefined) return prior === fingerprint ? "replay" : "conflict";
@@ -647,7 +693,7 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
       if (prior) return prior;
       try {
         const recovered = await options.runner.readCompactionResult(providerId, requestId);
-        if (recovered.status !== "unknown") options.workItems.putIdempotencyResponse(terminal, key, recovered);
+        remember(recovered);
         return recovered;
       } catch {
         return { status: "unknown" };
@@ -656,12 +702,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     let result: SessionCompactionResult;
     try {
       result = await options.runner.compactSession(providerId, {
-        backend: session.agentId, cwd: session.cwd, requestId, instructions, model: session.model ?? undefined,
+        backend: session.agentId, cwd: session.cwd, requestId, instructions, model: session.model ?? undefined, command,
       });
     } catch {
       result = { status: "unknown" };
     }
-    if (result.status !== "unknown") options.workItems.putIdempotencyResponse(terminal, key, result);
+    remember(result);
     return result;
   };
 
@@ -672,12 +718,13 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const body = await readJson(c);
     const key = c.req.header("idempotency-key");
     const instructions = body?.instructions ?? "";
+    const command = body?.command ?? "compact";
     if (!key || key.length > 128 || typeof instructions !== "string" || instructions.length > 4096
-      || typeof body?.provider_session_id !== "string") {
+      || typeof body?.provider_session_id !== "string" || !isNativeSessionCommand(command)) {
       return c.json({ error: "invalid_compaction_request" }, 400);
     }
     const result = await compactBoundSession(session, body.provider_session_id, instructions,
-      `session:compact:${session.id}`, key, "web/local");
+      `session:compact:${session.id}`, key, "web/local", command);
     return result === "key_conflict" ? c.json({ error: "compaction_key_conflict" }, 409) : c.json(result);
   });
 
@@ -685,10 +732,12 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     if (!isNativeChannelRequest(c.req.raw)) return c.json({ error: "channel_origin_required" }, 403);
     const body = await readJson(c);
     const slot = parseChannelSlot(body?.slot);
+    const command = body?.command ?? "compact";
     if (!slot || (slot.channel !== "feishu" && slot.channel !== "telegram")
       || typeof body?.sender_id !== "string" || !body.sender_id
       || typeof body.message_id !== "string" || !body.message_id || body.message_id.length > 128
-      || typeof body.private_chat !== "boolean" || typeof body.instructions !== "string" || body.instructions.length > 4096) {
+      || typeof body.private_chat !== "boolean" || typeof body.instructions !== "string" || body.instructions.length > 4096
+      || !isNativeSessionCommand(command)) {
       return c.json({ error: "invalid_compaction_request" }, 400);
     }
     const config = options.configStore?.get();
@@ -697,8 +746,10 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const session = options.catalog.getChannelSession(slot);
     if (!session?.providerSessionId) return c.json({ status: "rejected", reason: "session_missing" });
     const result = await compactBoundSession(session, session.providerSessionId, body.instructions,
-      `channel:compact:${slot.channel}`, body.message_id, [body.sender_id, slot]);
-    return result === "key_conflict" ? c.json({ error: "compaction_key_conflict" }, 409) : c.json(result);
+      `channel:compact:${slot.channel}`, body.message_id, [body.sender_id, slot], command);
+    if (result === "key_conflict") return c.json({ error: "compaction_key_conflict" }, 409);
+    if (!body.private_chat && result.status === "completed" && result.output) return c.json({ status: "completed" });
+    return c.json(result);
   });
 
   app.patch("/v1/sessions/:session_id", async (c) => {
@@ -1460,6 +1511,10 @@ function toApiAttachment(attachment: ReturnType<SqliteEventStore["getMessageAtta
     content_hash: attachment.contentHash,
     created_at: attachment.createdAt,
   };
+}
+
+function observationNamespace(sessionId: string, providerId: string, kind: "goal" | "review"): string {
+  return `session:observed-${kind}:${sessionId}:${createHash("sha256").update(providerId).digest("hex")}`;
 }
 
 function describeSessionObservation(kind: SessionObservationKind, observation?: { payload: unknown; observedAt: string }): string {

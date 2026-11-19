@@ -1,3 +1,4 @@
+import { parseNativeSessionCommand } from "@codebridge/core/native-session-command";
 import { ComposerAttachments } from "@/components/composer-attachments";
 import { ComposerActions, ModelControls, PermissionControl } from "@/components/composer-controls";
 import { MarkdownComposer, type ComposerPickerKey, type ComposerTrigger } from "@/components/markdown-composer/markdown-composer";
@@ -10,7 +11,7 @@ import type {
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, composerTrigger, filterCommands, parseCompactionCommand, workspacePaths } from "@/lib/workbench-logic";
+import { applyComposerSuggestion, composerTrigger, filterCommands, workspacePaths } from "@/lib/workbench-logic";
 import {
   ChevronDown,
   ChevronRight,
@@ -171,7 +172,7 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
 
   function submitWithSweep() {
     if (disabled || sending || !draft.trim() || serializationError) return;
-    if (parseCompactionCommand(draft) === null) {
+    if (parseNativeSessionCommand(draft) === null) {
       setSweepKey((value) => value + 1);
       onDraft("");
     }

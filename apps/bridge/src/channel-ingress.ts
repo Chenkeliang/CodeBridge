@@ -394,7 +394,7 @@ export function createChannelSessionIngress(
         slot: { channel: slot.channel, conversation_id: slot.conversationId, agent_id: slot.agentId,
           workspace_key: slot.workspaceKey, generation: slot.generation },
         sender_id: source.senderId, message_id: source.messageId, private_chat: source.privateChat,
-        instructions: source.instructions,
+        instructions: source.instructions, command: source.command,
       }),
     });
     if (response.status === 403) return { status: "rejected", reason: "forbidden" };

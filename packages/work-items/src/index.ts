@@ -635,7 +635,8 @@ export class SqliteEventStore {
     return latest && first ? { first, latest } : undefined;
   }
 
-  getProviderObservation(sessionId: string, providerSessionId: string, target: "usage_update" | "session_info_update"):
+  getProviderObservation(sessionId: string, providerSessionId: string,
+    target: "usage_update" | "session_info_update" | "available_commands_update"):
     { payload: unknown; observedAt: string } | undefined {
     const workItemId = this.getWorkItemBySessionId(sessionId)?.id;
     if (!workItemId) return undefined;
@@ -1895,6 +1896,13 @@ export class SqliteEventStore {
       .get(namespace, key) as { response?: string; created_at?: string } | undefined;
     if (!row?.response) return undefined;
     return { response: JSON.parse(row.response), createdAt: row.created_at ?? "" };
+  }
+
+  getLatestCommandObservation(namespace: string): { response: unknown; createdAt: string } | undefined {
+    const row = this.database.prepare(`SELECT response, created_at FROM idempotency_responses
+      WHERE namespace = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(namespace) as
+      { response: string; created_at: string } | undefined;
+    return row ? { response: JSON.parse(row.response), createdAt: row.created_at } : undefined;
   }
 
   getIdempotencyResponse(namespace: string, key: string): unknown | undefined {

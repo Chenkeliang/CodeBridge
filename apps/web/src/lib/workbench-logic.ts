@@ -82,11 +82,6 @@ export function filterCommands(commands: AgentCommand[], query: string): AgentCo
   return [...filtered].sort((left, right) => Number(right.name.startsWith("$")) - Number(left.name.startsWith("$")));
 }
 
-export function parseCompactionCommand(draft: string): string | null {
-  const command = /^\/compact(?:\s([\s\S]*))?$/i.exec(draft.trimStart());
-  return command ? command[1] ?? "" : null;
-}
-
 export function applyComposerSuggestion(draft: string, replacement: string): string {
   return draft.trimEnd().replace(/([/@])[^\s]*$/, replacement);
 }

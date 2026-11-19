@@ -19,6 +19,7 @@ import type {
   SessionCompactionResult,
 } from "@codebridge/core";
 import { ACP_CODEX_ACP_VERSION } from "@codebridge/core";
+import { parseGoalAction, parseSessionGoalObservation, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import type {
   CliSessionSummary,
   ProviderSessionHistoryEvent,
@@ -143,10 +144,90 @@ export async function compactCodexSession(
 }
 
 export async function probeCodexCompactionSupport(profile: BackendProfile, cwd: string): Promise<boolean> {
-  return withAcpConnection(profile, cwd, async (_agent, init) =>
-    init.agentInfo?.name === "@agentclientprotocol/codex-acp"
-    && init.agentInfo.version === ACP_CODEX_ACP_VERSION
-    && Boolean(init.agentCapabilities?.sessionCapabilities?.resume), undefined, 20_000);
+  return withAcpConnection(profile, cwd, async (_agent, init) => {
+    const goal = init._meta?.goal as { version?: unknown; controlMethod?: unknown; actions?: unknown } | undefined;
+    const actions = goal?.actions;
+    return init.agentInfo?.name === "@agentclientprotocol/codex-acp" && init.agentInfo.version === ACP_CODEX_ACP_VERSION
+      && Boolean(init.agentCapabilities?.sessionCapabilities?.resume) && goal?.version === 1 && goal.controlMethod === "_session/goal"
+      && Array.isArray(actions) && ["set", "pause", "resume", "clear"].every((action) => actions.includes(action));
+  }, undefined, 20_000);
+}
+
+export async function runCodexNativeSessionCommand(
+  profile: BackendProfile,
+  cwd: string,
+  sessionId: string,
+  command: Exclude<NativeSessionCommand, "compact">,
+  instructions: string,
+  signal: AbortSignal,
+): Promise<SessionCompactionResult> {
+  const goalAction = command === "goal" ? parseGoalAction(instructions) : null;
+  const argument = instructions.trim();
+  if ((command === "goal" && !goalAction) || (command === "review-branch" && !/^[a-z\d][a-z\d._/-]*$/i.test(argument))
+    || (command === "review-commit" && !/^[\da-f]{7,64}$/i.test(argument))) {
+    return { status: "rejected", reason: "invalid_arguments" };
+  }
+  let advertised = false;
+  let sent = false;
+  let goalChanged = false;
+  let goal: unknown;
+  let goalSeen = false;
+  let output = "";
+  let publishCommands: () => void = () => {};
+  const commands = new Promise<void>((resolve) => { publishCommands = resolve; });
+  let publishGoal: () => void = () => {};
+  const initialGoal = new Promise<void>((resolve) => { publishGoal = resolve; });
+  return withAcpConnection(profile, cwd, async (agent, init) => {
+    if (init.agentInfo?.name !== "@agentclientprotocol/codex-acp" || init.agentInfo.version !== ACP_CODEX_ACP_VERSION
+      || !init.agentCapabilities?.sessionCapabilities?.resume) return { status: "rejected", reason: "unsupported" };
+    const goalProtocol = init._meta?.goal as { version?: unknown; controlMethod?: unknown; actions?: unknown } | undefined;
+    if (goalAction && (goalProtocol?.version !== 1 || goalProtocol.controlMethod !== "_session/goal"
+      || !Array.isArray(goalProtocol.actions) || !goalProtocol.actions.includes(goalAction.action))) {
+      return { status: "rejected", reason: "unsupported" };
+    }
+    await agent.request(methods.agent.session.resume, { sessionId, cwd, mcpServers: [] });
+    try {
+      await raceWithAbort(Promise.all(goalAction ? [commands, initialGoal] : [commands]),
+        () => signal.aborted, 5_000, "Codex command or goal state unavailable");
+    } catch {
+      return { status: "rejected", reason: "unsupported" };
+    }
+    if (!advertised || signal.aborted) return { status: "rejected", reason: "unsupported" };
+    sent = true;
+    if (goalAction?.action === "pause" || goalAction?.action === "clear") {
+      await agent.request("_session/goal", { sessionId, ...goalAction });
+    } else {
+      // For set/resume the native prompt wrapper waits for any inline continuation.
+      const value = goalAction?.action === "set" ? goalAction.objective : goalAction?.action ?? instructions;
+      const response = await agent.request(methods.agent.session.prompt, { sessionId,
+        prompt: [{ type: "text", text: value ? `/${command} ${value}` : `/${command}` }] });
+      if (response.stopReason === "cancelled") return { status: "rejected", reason: "cancelled" };
+      if (response.stopReason !== "end_turn" || signal.aborted) return { status: "unknown" };
+    }
+    if (!goalAction) return output.trim() ? { status: "completed", output: output.trim(), observedAt: new Date().toISOString() } : { status: "unknown" };
+    const snapshot = parseSessionGoalObservation(goal);
+    const actual = goal as { objective?: unknown } | null | undefined;
+    const matches = goalAction.action === "clear" ? goalSeen && snapshot === null
+      : goalAction.action === "pause" ? snapshot?.status === "paused"
+        : goalAction.action === "resume" ? goalChanged && Boolean(snapshot && snapshot.status !== "paused")
+          : goalChanged && Boolean(snapshot && actual?.objective === (goalAction as { objective: string }).objective);
+    return matches ? { status: "completed", goal: snapshot, observedAt: new Date().toISOString() } : { status: "unknown" };
+  }, (source, update) => {
+    if (source !== sessionId) return;
+    if (!sent && update.sessionUpdate === "available_commands_update") {
+      advertised = update.availableCommands.filter((item) => item.name === command).length === 1;
+      publishCommands();
+    }
+    if (goalAction && update.sessionUpdate === "session_info_update" && update._meta && Object.hasOwn(update._meta, "goal")) {
+      goalSeen = true;
+      goal = update._meta.goal;
+      if (sent) goalChanged = true;
+      else publishGoal();
+    }
+    if (sent && !goalAction && update.sessionUpdate === "agent_message_chunk" && update.content.type === "text" && output.length < 16000) {
+      output += update.content.text.slice(0, 16000 - output.length);
+    }
+  }, 105_000, ACP_CLIENT_CAPABILITIES, () => signal.aborted);
 }
 
 export function collectAcpSessionHistory(

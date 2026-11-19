@@ -1,3 +1,4 @@
+import { parseNativeSessionCommand } from "@codebridge/core/native-session-command";
 import type { FeishuAlertMessage, FeishuAlertPage, FeishuAlertReply, FeishuAlertReaction } from "./alert-types.js";
 import { setAlertReaction, findHumanDoneReaction } from "./alert-reactions.js";
 import {
@@ -660,7 +661,7 @@ export class FeishuBridge {
       readSessionObservation: isDm || groupOperator
         ? async (kind) => await this.sessionIngress?.readSessionObservation?.(this.buildFullSlot(msg.chatId, topicId), kind) ?? null
         : undefined,
-      compactSession: async () => {
+      compactSession: async (command) => {
         if (!isDm && !this.config.access?.admins?.includes(msg.senderId)) {
           return { status: "rejected", reason: "forbidden" };
         }
@@ -669,7 +670,7 @@ export class FeishuBridge {
         if (msg.attachments?.length || msg.resources?.length || (msg.rawContentType && msg.rawContentType !== "text")) {
           return { status: "rejected", reason: "invalid_arguments" };
         }
-        let source = /^\/compact$/i.test(msg.content.trim()) ? "/compact" : "";
+        let source = /^\/(?:compact|review)$/i.test(msg.content.trim()) ? msg.content.trim() : "";
         if (raw?.message?.content) {
           const payload = JSON.parse(raw.message.content) as { text?: unknown } | null;
           source = typeof payload?.text === "string" ? payload.text.trimStart() : "";
@@ -677,15 +678,19 @@ export class FeishuBridge {
             source = source.replace(/^@_user_\d+\s+/, "");
           }
         }
-        const parsed = /^\/compact(?:\s([\s\S]*))?$/i.exec(source);
-        if (!parsed) return { status: "rejected", reason: "invalid_arguments" };
+        const parsed = parseNativeSessionCommand(source);
+        if (!parsed || parsed.command !== command) return { status: "rejected", reason: "invalid_arguments" };
         return await this.sessionIngress?.compactSession?.(this.buildFullSlot(msg.chatId, topicId), {
-          senderId: msg.senderId, messageId: msg.messageId, privateChat: isDm, instructions: parsed[1] ?? "",
+          senderId: msg.senderId, messageId: msg.messageId, privateChat: isDm, ...parsed,
         }) ?? { status: "rejected", reason: "unsupported" };
       },
       groupCommandListOnly: !isDm && !groupOperator,
       listDiscoveredCommands: isDm || groupOperator
-        ? async () => await this.sessionIngress?.listDiscoveredCommands?.(this.buildFullSlot(msg.chatId, topicId)) ?? []
+        ? async () => {
+          const catalog = await this.sessionIngress?.listDiscoveredCommands?.(this.buildFullSlot(msg.chatId, topicId)) ?? [];
+          return isDm || this.config.access?.admins?.includes(msg.senderId)
+            ? catalog : catalog.filter((entry) => entry.status !== "available");
+        }
         : undefined,
       listSessions: (options) =>
         this.orchestrator.listSessions(msg.chatId, topicId, options),

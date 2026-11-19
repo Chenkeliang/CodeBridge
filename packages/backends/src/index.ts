@@ -36,6 +36,7 @@ export {
   loadAcpSessionHistory,
   listAcpConfigOptions,
   compactCodexSession,
+  runCodexNativeSessionCommand,
   probeCodexCompactionSupport,
   listAcpSessions,
   killProcessTree,

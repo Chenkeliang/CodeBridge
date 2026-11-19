@@ -71,6 +71,7 @@ export interface AgentAvailableCommand {
   name: string;
   description: string;
   input?: { hint: string } | null;
+  status?: "discovered" | "available";
 }
 
 export type AgentEvent =
@@ -322,6 +323,7 @@ export interface ChannelSessionIngress {
     messageId: string;
     privateChat: boolean;
     instructions: string;
+    command?: import("./native-session-command.js").NativeSessionCommand;
   }): Promise<SessionCompactionResult>;
   /** Task 10：将 Provider Session 绑定到槽位（幂等 + Lease 预检 + 原子建绑） */
   resumeProviderSession(
@@ -367,7 +369,7 @@ export interface RunContext {
 }
 
 export type SessionCompactionResult =
-  | { status: "completed" }
+  | { status: "completed"; output?: string; goal?: SessionGoalObservation | null; observedAt?: string }
   | { status: "rejected"; reason: "unsupported" | "busy" | "session_missing" | "forbidden" | "invalid_arguments" | "failed" | "cancelled" }
   | { status: "unknown" };
 

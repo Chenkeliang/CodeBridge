@@ -5,6 +5,7 @@ import type {
   RunRequest,
   SessionCompactionResult,
 } from "@codebridge/core";
+import { isNativeSessionCommand, parseSessionGoalObservation, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import type {
   AgentSetupInstallResult,
   AgentSetupRecord,
@@ -416,6 +417,7 @@ export class RunnerClient {
     requestId: string;
     instructions: string;
     model?: string;
+    command?: NativeSessionCommand;
   }): Promise<SessionCompactionResult> {
     const res = await this.fetch(`/sessions/${encodeURIComponent(sessionId)}/compact`, {
       method: "POST",
@@ -430,6 +432,13 @@ export class RunnerClient {
     return decodeCompactionResult(await this.fetch(`/sessions/${encodeURIComponent(sessionId)}/compact/${encodeURIComponent(requestId)}`, {
       signal: AbortSignal.timeout(10_000),
     }));
+  }
+
+  async nativeSessionCommands(backend: string): Promise<NativeSessionCommand[]> {
+    const res = await this.fetch(`/native-session-commands?${new URLSearchParams({ backend })}`, { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return [];
+    const body = await res.json() as { commands?: unknown } | null;
+    return Array.isArray(body?.commands) ? body.commands.filter(isNativeSessionCommand) : [];
   }
 
   async cancel(runId: string): Promise<void> {
@@ -647,8 +656,16 @@ export class RunnerClient {
 
 async function decodeCompactionResult(response: Response): Promise<SessionCompactionResult> {
   if (!response.ok) return { status: "unknown" };
-  const body = await response.json() as { status?: unknown; reason?: unknown } | null;
-  if (body?.status === "completed") return { status: "completed" };
+  const body = await response.json() as { status?: unknown; reason?: unknown; output?: unknown; goal?: unknown; observedAt?: unknown } | null;
+  if (body?.status === "completed") {
+    const goal = parseSessionGoalObservation(body.goal);
+    return {
+      status: "completed",
+      ...(typeof body.output === "string" ? { output: body.output.slice(0, 16000) } : {}),
+      ...(goal !== undefined ? { goal } : {}),
+      ...(typeof body.observedAt === "string" && Number.isFinite(Date.parse(body.observedAt)) ? { observedAt: body.observedAt } : {}),
+    };
+  }
   const reason = body?.reason;
   if (body?.status === "rejected" && (reason === "unsupported" || reason === "busy" || reason === "session_missing"
     || reason === "invalid_arguments" || reason === "failed" || reason === "cancelled" || reason === "forbidden")) {

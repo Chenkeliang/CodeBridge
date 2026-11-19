@@ -13,6 +13,10 @@
       "types": "./dist/session-event-wire.d.ts",
       "import": "./dist/session-event-wire.js"
     },
+    "./native-session-command": {
+      "types": "./dist/native-session-command.d.ts",
+      "import": "./dist/native-session-command.js"
+    },
     "./task-cli": {
       "types": "./dist/task-cli-client.d.ts",
       "import": "./dist/task-cli-client.js",

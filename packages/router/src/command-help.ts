@@ -1,4 +1,5 @@
 import type { AgentAvailableCommand } from "@codebridge/core";
+import { isNativeSessionCommand } from "@codebridge/core/native-session-command";
 
 export interface CommandHelpItem {
   command: string;
@@ -117,10 +118,18 @@ export function formatCommandCatalog(
     (!groupLimited || isPublicGroupCommand(command.split(" ", 1)[0]!))
     && `${command} ${summary}`.toLowerCase().includes(keyword)
   ));
-  const discovered = discoveredAgentCommands(observed).filter(({ name }) => name.toLowerCase().includes(keyword));
+  const available = observed.filter(({ name, status }) => status === "available" && isNativeSessionCommand(name)
+    && name.toLowerCase().includes(keyword));
+  const discovered = discoveredAgentCommands(observed.filter((entry) => entry.status !== "available"))
+    .filter(({ name }) => name.toLowerCase().includes(keyword));
   const lines = builtin.length
     ? [heading("CodeBridge 命令", format), ...builtin.map((item) => commandLine(item, format))]
     : [];
+  if (available.length) {
+    lines.push(heading("当前会话可执行的原生命令", format), ...available.map(({ name }) => (
+      format === "markdown" ? `\`/${name}${name === "goal" ? " <操作>" : ""}\`` : `/${name}${name === "goal" ? " <操作>" : ""}`
+    )));
+  }
   if (discovered.length) {
     lines.push(heading("Agent 已上报 · 待验证", format), ...discovered.map(({ name }) => (
       format === "markdown" ? `\`/${name}\`` : `/${name}`

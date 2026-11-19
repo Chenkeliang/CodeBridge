@@ -1,3 +1,4 @@
+import { parseNativeSessionCommand } from "@codebridge/core/native-session-command";
 import { TaskWorkspace } from "@/components/task-workspace";
 import { TaskAttentionPage } from "@/components/task-attention-page";
 import type { TaskLocation } from "@/components/agent-tasks-page";
@@ -31,6 +32,7 @@ import { SessionConnection } from "@/lib/session-connection";
 import { sessionViewStore, useSessionView } from "@/lib/session-store";
 import { submitSessionMessage } from "@/lib/submit-session-message";
 import type {
+  AgentCommand,
   AgentProfile,
   AgentSession,
   ConfigOption,
@@ -47,7 +49,6 @@ import {
   isSpeedOption,
   isThoughtLevelOption,
   orderSessions,
-  parseCompactionCommand,
   restoreSessionSelection,
   selectInitialAgent,
   serializeConfigOverride,
@@ -82,6 +83,7 @@ export function Workbench() {
   const [approvalStatusOverrides, setApprovalStatusOverrides] = useState<Record<string, RuntimeApprovalStatus>>({});
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
+  const [nativeComposerEpoch, setNativeComposerEpoch] = useState(0);
   const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
   const [sending, setSending] = useState(false);
   const pendingSubmissionKey = useRef<string | null>(null);
@@ -95,6 +97,7 @@ export function Workbench() {
   const [loadingSession, setLoadingSession] = useState(false);
   const [pickingDirectory, setPickingDirectory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nativeReview, setNativeReview] = useState<{ sessionId: string; text: string } | null>(null);
   const [notice, setNotice] = useState<{ text: string; kind: "info" | "error" } | null>(null);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [loadingBlockId, setLoadingBlockId] = useState<string | null>(null);
@@ -117,7 +120,21 @@ export function Workbench() {
     openSession: api.openSession,
   }), []);
   const sessionView = useSessionView(selectedSessionId);
-  const commands = sessionView?.snapshot.commands ?? [];
+  const observedCommands = sessionView?.snapshot.commands;
+  const [liveCommands, setLiveCommands] = useState<{ sessionId: string; observed?: AgentCommand[]; commands: AgentCommand[] } | null>(null);
+  const commands = commandOpen && liveCommands?.sessionId === selectedSessionId && liveCommands.observed === observedCommands
+    ? liveCommands.commands : observedCommands ?? [];
+  useEffect(() => {
+    if (!commandOpen || !selectedSessionId) return;
+    const sessionId = selectedSessionId;
+    let active = true;
+    void api.commands(sessionId).then((list) => {
+      if (active) setLiveCommands({ sessionId, observed: observedCommands, commands: list });
+    }).catch(() => {
+      if (active) setLiveCommands(null);
+    });
+    return () => { active = false; };
+  }, [commandOpen, selectedSessionId, observedCommands]);
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
@@ -617,39 +634,65 @@ export function Workbench() {
       }
       return;
     }
-    const instructions = parseCompactionCommand(draft);
-    if (instructions !== null) {
+    if (query === "review-result" && message.startsWith("/")) {
+      if (!selectedSessionId || attachments.length) {
+        setError("请选择要查看的会话。查看审查报告时请勿附带文件。");
+        return;
+      }
+      setSending(true);
+      setError(null);
+      try {
+        const result = await api.latestNativeReview(selectedSessionId);
+        if (result.text) setNativeReview({ sessionId: selectedSessionId, text: result.text });
+        else notify("当前会话暂无原生审查报告。");
+      } catch (error) {
+        setError(messageOf(error));
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+    const nativeCommand = parseNativeSessionCommand(draft);
+    if (nativeCommand) {
+      const { command, instructions } = nativeCommand;
       if (!selectedSession?.provider_session_id || attachments.length) {
-        setError(attachments.length ? "压缩命令不能携带附件。" : "请先在当前会话中开始对话，再压缩上下文。");
+        setError(attachments.length ? "原生命令不能携带附件。" : "请先在当前会话中开始对话，再执行原生命令。");
         return;
       }
       const sessionId = selectedSession.session_id;
       const providerId = selectedSession.provider_session_id;
-      const scope = JSON.stringify([sessionId, providerId, instructions]);
+      const scope = JSON.stringify([sessionId, providerId, command, instructions]);
       const key = compactRequests.current.get(scope) ?? crypto.randomUUID();
       compactRequests.current.set(scope, key);
       setSending(true);
       setError(null);
       try {
-        const result = await api.compactSession(sessionId, providerId, instructions, key);
+        const result = await api.compactSession(sessionId, providerId, instructions, key, command);
         if (result.status === "unknown") {
-          setError("压缩结果未知。再次发送同一命令只会查询原请求。");
+          setError("命令结果未知。再次发送同一命令只会查询原请求。");
           return;
         }
         compactRequests.current.delete(scope);
         if (result.status === "completed") {
-          setDraft((current) => current === draft ? "" : current);
-          notify("当前会话上下文已压缩。");
+          if (selectedSessionRef.current === sessionId) {
+            setDraft((current) => {
+              const parsed = parseNativeSessionCommand(current);
+              return parsed?.command === command && parsed.instructions.trimEnd() === instructions.trimEnd() ? "" : current;
+            });
+            setNativeComposerEpoch((epoch) => epoch + 1);
+          }
+          if (result.output) setNativeReview({ sessionId, text: result.output });
+          else notify(command === "compact" ? "当前会话上下文已压缩。" : "当前会话目标已更新。");
         } else {
           const reasons = {
             busy: "当前会话有进行中或排队的任务，请结束后重试。", session_missing: "原会话已不可用，请重新选择会话。",
-            unsupported: "当前 Agent 暂未开放原生压缩。", invalid_arguments: "当前 Agent 不接受此压缩参数，请直接发送 /compact。",
-            forbidden: "当前入口没有压缩此会话的权限。", failed: "原生压缩失败。", cancelled: "原生压缩已取消。",
+            unsupported: "当前 Agent 暂未开放此原生命令。", invalid_arguments: "命令参数无效或当前 Agent 不支持这些参数。",
+            forbidden: "当前入口没有执行权限。", failed: "原生命令失败。", cancelled: "原生命令已取消。",
           };
           setError(reasons[result.reason]);
         }
       } catch {
-        setError("压缩回执未收到。再次提交同一命令将沿用原请求编号，避免重复压缩。");
+        setError("命令回执未收到。再次提交同一命令将沿用原请求编号，避免重复执行。");
       } finally {
         setSending(false);
       }
@@ -1092,6 +1135,7 @@ export function Workbench() {
                 <p className={cn("mt-2 text-xs", "text-muted")}>{selectedAgent ? "创建 Session，或直接输入目标" : "选择一个可用的 Agent"}</p>
               </div>
               <Composer
+                key={nativeComposerEpoch}
                 attachments={attachments}
                 commands={commands}
                 contextOpen={contextOpen}
@@ -1171,6 +1215,7 @@ export function Workbench() {
                   turns={sessionView.snapshot.runtime.queue.turns}
                 />}
                 <Composer
+                  key={nativeComposerEpoch}
                   attachments={attachments}
                   commands={commands}
                   contextOpen={contextOpen}
@@ -1223,6 +1268,15 @@ export function Workbench() {
         sessions={sessions.filter((session) => session.agent_id === selectedAgentId && !session.archived_at)}
       />}
       <input className="hidden" multiple onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ""; }} ref={fileInput} type="file" />
+      {nativeReview && nativeReview.sessionId === selectedSessionId && (
+        <aside aria-label="原生审查报告" className="fixed inset-x-4 bottom-6 z-50 mx-auto max-h-[70vh] max-w-3xl overflow-auto rounded-xl border border-line-strong bg-surface p-4 shadow-panel">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold">原生审查报告</h2>
+            <button type="button" aria-label="关闭审查报告" className="rounded-md p-1 hover:bg-line" onClick={() => setNativeReview(null)}><X className="size-4" /></button>
+          </div>
+          <pre className="whitespace-pre-wrap break-words text-sm">{nativeReview.text}</pre>
+        </aside>
+      )}
       {notice && <div className={cn("fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-md border px-3 py-2 text-xs", notice.kind === "error" ? cn("bg-danger-soft", "text-danger", "border-line-strong") : cn("bg-surface", "text-ink", "border-line-strong"), "shadow-panel")} role="status">{notice.kind === "error" && <X className="size-3.5 shrink-0" />}{notice.text}</div>}
     </div>
   );

@@ -1,3 +1,4 @@
+import { parseNativeSessionCommand, type NativeSessionCommand } from "@codebridge/core/native-session-command";
 import {
   resolveDefaultAgentId,
   type AgentAvailableCommand,
@@ -64,7 +65,7 @@ export interface SlashContext {
   helpFormat?: CommandHelpFormat;
   listDiscoveredCommands?: () => Promise<AgentAvailableCommand[]>;
   groupCommandListOnly?: boolean;
-  compactSession?: () => Promise<SessionCompactionResult>;
+  compactSession?: (command: NativeSessionCommand) => Promise<SessionCompactionResult>;
   readSessionObservation?: (kind: SessionObservationKind) => Promise<string | null>;
 }
 
@@ -102,6 +103,24 @@ export async function handleSlashCommand(
   const arg = rest.join(" ").trim();
   const lower = cmd!.toLowerCase();
 
+  const native = parseNativeSessionCommand(ctx.text);
+  if (native) {
+    const result = await ctx.compactSession?.(native.command).catch((): SessionCompactionResult => ({ status: "unknown" }));
+    if (result?.status === "completed") {
+      const text = native.command === "compact" ? "当前会话上下文已压缩。"
+        : native.command === "goal" ? "当前会话的目标已更新。发送 /goal 查看状态。"
+          : result.output ?? "原生审查已完成。可在已绑定的 Web 会话中发送 /review-result 查看报告。";
+      return { type: "reply", text };
+    }
+    if (result?.status === "unknown") return { type: "reply", text: "本次命令结果未知。请先确认原会话状态，以免重复执行。" };
+    const rejected = {
+      unsupported: "当前 Agent 暂未开放此原生命令。", busy: "当前会话有进行中或排队的任务，请结束后重试。",
+      session_missing: "没有已绑定的原会话，请先在当前会话中开始对话。", forbidden: "此操作需要当前渠道的管理员权限。",
+      invalid_arguments: "命令参数无效或当前 Agent 不支持这些参数。", failed: "原生命令执行失败。", cancelled: "原生命令已取消。",
+    };
+    return { type: "reply", text: rejected[result?.reason ?? "unsupported"] };
+  }
+
   switch (lower) {
     case "/context":
     case "/usage":
@@ -110,17 +129,6 @@ export async function handleSlashCommand(
       if (!ctx.readSessionObservation) return { type: "reply", text: "当前入口无法查询会话状态。" };
       const info = await ctx.readSessionObservation(lower.slice(1) as SessionObservationKind).catch(() => null);
       return { type: "reply", text: info ?? "当前会话暂无可查询的状态。" };
-    }
-    case "/compact": {
-      const result = await ctx.compactSession?.().catch((): SessionCompactionResult => ({ status: "unknown" }));
-      if (result?.status === "completed") return { type: "reply", text: "当前会话上下文已压缩。" };
-      if (result?.status === "unknown") return { type: "reply", text: "本次压缩结果未知。请先确认原会话状态，以免重复压缩。" };
-      const rejected = {
-        unsupported: "当前 Agent 暂未开放原生压缩。", busy: "当前会话有进行中或排队的任务，请结束后再压缩。",
-        session_missing: "没有可压缩的原会话，请先在当前会话中开始对话。", forbidden: "此操作需要当前渠道的管理员权限。",
-        invalid_arguments: "无法从原消息读取压缩参数，请直接发送 /compact。", failed: "原生压缩失败。", cancelled: "原生压缩已取消。",
-      };
-      return { type: "reply", text: rejected[result?.reason ?? "unsupported"] };
     }
     case "/help":
       return {

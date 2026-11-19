@@ -373,11 +373,12 @@ describe("Workbench component policy", () => {
     expect(source).toContain('document.addEventListener("pointerdown"');
   });
 
-  it("reads Agent command observations from the live Web session snapshot", () => {
+  it("refreshes verified commands only while the Web command menu is open", () => {
     const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
 
     expect(workbench).toContain("sessionView?.snapshot.commands");
-    expect(workbench).not.toContain("api.commands(");
+    expect(workbench).toContain("if (!commandOpen || !selectedSessionId) return;");
+    expect(workbench).toContain("api.commands(sessionId)");
     expect(workbench).toContain("setCommandOpen(nextTrigger?.kind === \"command\")");
   });
 

@@ -296,13 +296,14 @@ class Deployer:
             self.notify(job)
 
     def command_evidence(self, app, package):
-        if package.get("codebridgeCommandProtocol") != 1:
+        protocol = package.get("codebridgeCommandProtocol")
+        if protocol not in (1, 2):
             raise DeployError("unsupported command protocol")
         raw = self.a.command([self.c["nodePath"], "scripts/check-command-protocol.mjs",
                               str(self.data / "config.yaml")], cwd=str(app), timeout=120)
         try:
             evidence = json.loads(raw)
-            if (not isinstance(evidence, dict) or evidence.get("protocol") != 1 or evidence.get("piSdk") is not True
+            if (not isinstance(evidence, dict) or evidence.get("protocol") != protocol or evidence.get("piSdk") is not True
                     or not isinstance(evidence.get("codexProfiles"), dict)
                     or not all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v)
                                for v in evidence["codexProfiles"].values())):
@@ -610,7 +611,8 @@ class Deployer:
             if job.get("commandEvidence"):
                 token = self.secret(self.c["runnerToken"])
                 runner = self.a.http(self.c.get("runnerUrl", "http://127.0.0.1:19789").rstrip("/") + "/health", token)
-                if runner.get("releaseId") != job["id"] or runner.get("commit") != job["commit"] or runner.get("commandProtocol") != 1:
+                if (runner.get("releaseId") != job["id"] or runner.get("commit") != job["commit"]
+                        or runner.get("commandProtocol") != job["commandEvidence"]["protocol"]):
                     raise DeployError("Runner command protocol or release identity mismatch")
             self.state["current"] = job["id"]
             self.change(job, "published")

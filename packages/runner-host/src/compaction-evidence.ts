@@ -3,7 +3,7 @@ import path from "node:path";
 import type { BackendProfile } from "@codebridge/core";
 import { compactionDigest } from "./compaction-receipts.js";
 
-export const COMMAND_PROTOCOL = 1;
+export const COMMAND_PROTOCOL = 2;
 
 interface CompactionEvidence {
   protocol: number;
