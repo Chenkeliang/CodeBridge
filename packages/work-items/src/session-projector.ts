@@ -306,23 +306,33 @@ function projectCommands(
       session_id, name, description, input_json, source_sequence
     ) VALUES (?, ?, ?, ?, ?)`,
   );
+  const byName = new Map<string, { name: string; description: string; hint?: string } | null>();
   for (const value of commands) {
     if (!value || typeof value !== "object") continue;
     const command = value as Record<string, unknown>;
     if (
       typeof command.name !== "string"
+      || command.name.length > 128
+      || !/^[a-z\d_-]+(?:[:/][a-z\d_-]+)*$/i.test(command.name)
       || typeof command.description !== "string"
     ) {
       continue;
     }
-    const input = command.input && typeof command.input === "object"
-      ? command.input
-      : null;
+    const key = command.name.toLowerCase();
+    const hint = (command.input as { hint?: unknown } | undefined)?.hint;
+    byName.set(key, byName.has(key) ? null : {
+      name: command.name,
+      description: command.description.slice(0, 500),
+      ...(typeof hint === "string" ? { hint: hint.slice(0, 240) } : {}),
+    });
+  }
+  for (const command of byName.values()) {
+    if (!command) continue;
     insert.run(
       sessionId,
       command.name,
       command.description,
-      input ? JSON.stringify(input) : null,
+      command.hint === undefined ? null : JSON.stringify({ hint: command.hint }),
       sequence,
     );
   }

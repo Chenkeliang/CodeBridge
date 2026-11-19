@@ -1,3 +1,5 @@
+import type { AgentAvailableCommand } from "@codebridge/core";
+
 export interface CommandHelpItem {
   command: string;
   summary: string;
@@ -16,6 +18,7 @@ const COMMAND_HELP_GROUPS: CommandHelpGroup[] = [
     items: [
       { command: "/help [full]", summary: "查看快捷菜单或全部命令" },
       { command: "/menu", summary: "查看手机快捷菜单" },
+      { command: "/commands [关键词]", summary: "查看当前会话的命令目录" },
       { command: "/status", summary: "查看 backend、目录、模型和任务状态（别名 /s）" },
     ],
   },
@@ -81,6 +84,47 @@ const COMMAND_HELP_GROUPS: CommandHelpGroup[] = [
 export const SLASH_COMMANDS: CommandHelpItem[] = COMMAND_HELP_GROUPS.flatMap(
   (group) => group.items,
 );
+
+const publicGroupCommands = new Set([
+  "/help", "/status", "/s", "/new", "/stop", "/cancel", "/x", "/continue", "/c", "/steer", "/commands",
+]);
+
+export function isPublicGroupCommand(command: string): boolean {
+  return publicGroupCommands.has(command);
+}
+
+const bridgeCommandNames = new Set([
+  ...SLASH_COMMANDS.map(({ command }) => command.split(" ", 1)[0]!),
+  "/s", "/reset", "/cancel", "/x", "/c", "/a", "/d", "/r", "/perm", "/think", "/b",
+]);
+
+export function discoveredAgentCommands(commands: readonly AgentAvailableCommand[]) {
+  return commands.filter(({ name }) => !bridgeCommandNames.has(`/${name.toLowerCase()}`))
+    .map((command) => ({ ...command, source: "agent" as const, status: "discovered" as const }));
+}
+
+export function formatCommandCatalog(
+  query: string,
+  observed: readonly AgentAvailableCommand[],
+  groupLimited: boolean,
+  format: CommandHelpFormat,
+): string {
+  const keyword = query.toLowerCase();
+  const builtin = SLASH_COMMANDS.filter(({ command, summary }) => (
+    (!groupLimited || isPublicGroupCommand(command.split(" ", 1)[0]!))
+    && `${command} ${summary}`.toLowerCase().includes(keyword)
+  ));
+  const discovered = discoveredAgentCommands(observed).filter(({ name }) => name.toLowerCase().includes(keyword));
+  const lines = builtin.length
+    ? [heading("CodeBridge 命令", format), ...builtin.map((item) => commandLine(item, format))]
+    : [];
+  if (discovered.length) {
+    lines.push(heading("Agent 已上报 · 待验证", format), ...discovered.map(({ name }) => (
+      format === "markdown" ? `\`/${name}\`` : `/${name}`
+    )));
+  }
+  return lines.join("\n") || "没有匹配的命令。";
+}
 
 const COMPACT_COMMANDS: CommandHelpItem[] = [
   { command: "/s", summary: "查看当前状态（/status）" },

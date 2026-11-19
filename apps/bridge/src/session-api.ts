@@ -4,6 +4,7 @@ import { canonicalWorkspaceKey, isSupportedAgentId } from "@codebridge/core";
 import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
 import type { ProjectDiscovery } from "@codebridge/project-catalog";
 import type { RunExecutor } from "@codebridge/run-executor";
+import { discoveredAgentCommands } from "@codebridge/router";
 import type { RunnerClient } from "@codebridge/runner-client";
 import type { AgentProfile, SessionCatalogStore, UpdateSessionInput } from "@codebridge/session-catalog";
 import type { SessionCoordinator } from "@codebridge/session-coordinator";
@@ -597,40 +598,10 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     return c.json(await request);
   });
 
-  app.get("/v1/sessions/:session_id/commands", async (c) => {
+  app.get("/v1/sessions/:session_id/commands", (c) => {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
-    const cwd = session.cwd ?? options.defaultCwd;
-    let native: Awaited<ReturnType<RunnerClient["listCommands"]>> = { commands: [] };
-    if (options.runner && cwd) {
-      try {
-        native = await options.runner.listCommands(session.agentId, cwd);
-      } catch (error) {
-        native = { commands: [], error: error instanceof Error ? error.message : String(error) };
-      }
-    }
-    const commands = new Map(native.commands.map((command) => [command.name, command]));
-    if (session.taskRecordId) {
-      const events = options.workItems.listEvents(session.taskRecordId).reverse();
-      const update = events.find((event) => {
-        const agentEvent = event.payload.event as Record<string, unknown> | undefined;
-        return event.type === "AGENT_EVENT" && agentEvent?.type === "available_commands_update";
-      });
-      const available = (update?.payload.event as { availableCommands?: unknown } | undefined)?.availableCommands;
-      if (Array.isArray(available)) {
-        for (const value of available) {
-          if (!value || typeof value !== "object") continue;
-          const command = value as { name?: unknown; description?: unknown; input?: unknown };
-          if (typeof command.name !== "string" || typeof command.description !== "string") continue;
-          commands.set(command.name, {
-            name: command.name,
-            description: command.description,
-            ...(command.input && typeof command.input === "object" ? { input: command.input as { hint: string } } : {}),
-          });
-        }
-      }
-    }
-    return c.json({ commands: [...commands.values()], ...(native.error ? { error: native.error } : {}) });
+    return c.json({ commands: discoveredAgentCommands(options.workItems.listSessionCommands(session.id)) });
   });
 
   app.patch("/v1/sessions/:session_id", async (c) => {

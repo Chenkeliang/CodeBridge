@@ -373,10 +373,11 @@ describe("Workbench component policy", () => {
     expect(source).toContain('document.addEventListener("pointerdown"');
   });
 
-  it("loads Agent-native commands for Web slash suggestions", () => {
+  it("reads Agent command observations from the live Web session snapshot", () => {
     const workbench = readFileSync(new URL("./workbench.tsx", import.meta.url), "utf8");
 
-    expect(workbench).toContain("api.commands(");
+    expect(workbench).toContain("sessionView?.snapshot.commands");
+    expect(workbench).not.toContain("api.commands(");
     expect(workbench).toContain("setCommandOpen(nextTrigger?.kind === \"command\")");
   });
 

@@ -105,7 +105,7 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
 
   function pickCommand(index: number) {
     const command = visibleCommands[index];
-    if (!command) return;
+    if (!command || command.status === "discovered") return;
     onDraft(applyComposerSuggestion(draft, `/${command.name} `));
     onCommandOpen(false);
   }
@@ -325,13 +325,14 @@ function CommandPicker({ activeIndex, commands, onPick, onSelect }: {
         index === activeIndex && "bg-surface-soft",
       )}
       key={command.name}
+      disabled={command.status === "discovered"}
       onClick={() => onPick(index)}
       onMouseEnter={() => onSelect(index)}
       ref={index === activeIndex ? (node) => node?.scrollIntoView?.({ block: "nearest" }) : undefined}
       type="button"
     >
       <span className="font-mono text-xs">/{command.name}</span>
-      <span className="truncate text-xs text-muted">{command.description}</span>
+      <span className="truncate text-xs text-muted">{command.status === "discovered" ? "Agent 已上报 · 待验证" : command.description}</span>
     </button>)}
   </div>;
 }

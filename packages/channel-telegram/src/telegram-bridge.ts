@@ -10,6 +10,7 @@ import {
   RunOrchestrator,
   createChannelStreamProjector,
   handleSlashCommand,
+  isPublicGroupCommand,
   sessionRotationNotice,
   sessionRotationReason,
 } from "@codebridge/router";
@@ -28,6 +29,7 @@ import { TelegramSessionWatcher } from "./telegram-session-watcher.js";
 export const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "menu", description: "打开手机快捷菜单" },
   { command: "help", description: "查看帮助；加 full 查看全部" },
+  { command: "commands", description: "查看当前会话的命令目录" },
   { command: "s", description: "查看当前会话状态（/status）" },
   { command: "c", description: "恢复暂停队列（/continue）" },
   { command: "r", description: "列出或恢复本机会话（/resume）" },
@@ -156,6 +158,8 @@ export class TelegramBridge {
     const rawText = message.text ?? message.caption ?? "";
     const text = rawText.trim();
     if (!text || !message.from) return;
+    const addressedCatalog = /^\/commands(@[^\s]+)(?:\s|$)/i.exec(text);
+    if (addressedCatalog && addressedCatalog[1]!.toLowerCase() !== this.botName?.toLowerCase()) return;
     const senderId = String(message.from.id);
     const rawChatId = String(message.chat.id);
     if (
@@ -223,9 +227,10 @@ export class TelegramBridge {
     }
     const normalized = text.replace(/^\/([^\s@]+)@[^\s]+/, "/$1");
     const command = normalized.trim().split(/\s/, 1)[0]!.toLowerCase();
-    if (message.chat.type !== "private" && telegram.admins !== undefined && command.startsWith("/")
-      && !telegram.admins.includes(senderId)
-      && !["/help", "/status", "/s", "/new", "/stop", "/cancel", "/x", "/continue", "/c", "/steer"].includes(command)) {
+    const isPrivate = message.chat.type === "private";
+    const isAdmin = telegram.admins?.includes(senderId) ?? false;
+    const groupCommandListOnly = !isPrivate && telegram.admins !== undefined && !isAdmin;
+    if (groupCommandListOnly && command.startsWith("/") && !isPublicGroupCommand(command)) {
       await this.api.sendMessage(chatId, "此操作需要当前 Telegram 渠道的管理员权限。", topicId);
       return;
     }
@@ -236,6 +241,10 @@ export class TelegramBridge {
       text: normalized,
       config: this.config,
       router: this.orchestrator.router,
+      groupCommandListOnly,
+      listDiscoveredCommands: isPrivate || isAdmin
+        ? async () => await this.sessionIngress?.listDiscoveredCommands?.(this.buildFullSlot(chatId, topicId)) ?? []
+        : undefined,
       listSessions: (options) =>
         this.orchestrator.listSessions(chatId, topicId, options),
       resumeProviderSession: async (providerSessionId) => {

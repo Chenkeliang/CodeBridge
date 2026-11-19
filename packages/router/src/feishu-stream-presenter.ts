@@ -26,7 +26,6 @@ export function createFeishuStreamPresenter(
     | undefined;
   let lastMode: string | undefined;
   let lastConfigKey: string | undefined;
-  let lastCommandsKey: string | undefined;
   let lastSessionTitle: string | null | undefined;
   let lastResultMessageId: string | undefined;
   let resultTrailingNewlines = 0;
@@ -162,18 +161,8 @@ export function createFeishuStreamPresenter(
           ? { zone: "thinking", text: `\n⚙️ config: ${values}\n` }
           : null;
       }
-      case "available_commands_update": {
-        if (!showThinking) return null;
-        const key = JSON.stringify(event.availableCommands);
-        if (key === lastCommandsKey) return null;
-        lastCommandsKey = key;
-        const commands = event.availableCommands
-          .map((command) => `/${command.name}`)
-          .join(" ");
-        return commands
-          ? { zone: "thinking", text: `\n⌘ 可用命令: ${commands}\n` }
-          : null;
-      }
+      case "available_commands_update":
+        return null;
       case "session_info_update":
         if (!showThinking || !event.title || event.title === lastSessionTitle) {
           return null;

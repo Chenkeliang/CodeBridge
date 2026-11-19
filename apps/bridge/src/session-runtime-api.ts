@@ -1,4 +1,5 @@
 import type { CapabilityRegistry } from "@codebridge/policy";
+import { discoveredAgentCommands } from "@codebridge/router";
 import type { RunExecutor } from "@codebridge/run-executor";
 import type { SessionCatalogStore } from "@codebridge/session-catalog";
 import { SessionCommandError, type SessionCoordinator, type SubmitTurnResult } from "@codebridge/session-coordinator";
@@ -234,7 +235,7 @@ export function registerSessionRuntimeReadRoutes(
         last_event_sequence: runtime?.lastEventSequence ?? 0,
       },
       timeline: toApiTimeline(timeline),
-      commands: options.workItems.listSessionCommands(session.id),
+      commands: discoveredAgentCommands(options.workItems.listSessionCommands(session.id)),
     });
   });
 

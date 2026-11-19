@@ -314,6 +314,7 @@ export interface ChannelSessionIngress {
   ): Promise<boolean>;
   completeDelivery(turnId: string, owner: string): Promise<boolean>;
   getSlotCommandContext(slot: ChannelSlot): Promise<ChannelCommandContext>;
+  listDiscoveredCommands?(slot: ChannelSlot): Promise<AgentAvailableCommand[]>;
   /** Task 10：将 Provider Session 绑定到槽位（幂等 + Lease 预检 + 原子建绑） */
   resumeProviderSession(
     slot: ChannelSlot,

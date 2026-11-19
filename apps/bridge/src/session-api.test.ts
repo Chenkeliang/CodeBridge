@@ -2425,22 +2425,18 @@ describe("session API", () => {
     workItems.close();
   });
 
-  it("merges native and session-advertised Agent commands", async () => {
+  it("reads the projected Agent command list without starting Runner discovery", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
+    const listCommands = vi.fn(async () => ({ commands: [{ name: "skill:review", description: "Review" }] }));
     const runner = {
-      listCommands: async () => ({ commands: [{ name: "skill:review", description: "Review" }] }),
+      listCommands,
     } as unknown as RunnerClient;
     const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/workspace" }, TOKEN);
     const session = catalog.createSession({ agentId: "pi" });
-    const message = await app.request(`/v1/sessions/${session.id}/messages`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ message: "hello" }),
-    });
-    const taskId = (await message.json() as { task_record_id: string }).task_record_id;
+    const item = workItems.createWorkItem({ title: "Example", mode: "auto", conversationId: "conv_example", sessionId: session.id, riskLevel: "read_only" });
     workItems.appendEvent({
-      workItemId: taskId,
+      workItemId: item.id,
       type: "AGENT_EVENT",
       actor: "adapter",
       payload: { event: { type: "available_commands_update", availableCommands: [{ name: "compact", description: "Compact context" }] } },
@@ -2452,30 +2448,22 @@ describe("session API", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       commands: [
-        { name: "skill:review", description: "Review" },
-        { name: "compact", description: "Compact context" },
+        { name: "compact", description: "Compact context", source: "agent", status: "discovered" },
       ],
     });
+    expect(listCommands).not.toHaveBeenCalled();
     catalog.close();
     workItems.close();
   });
 
-  it("keeps the command menu available when Runner command discovery fails", async () => {
+  it("keeps the projected command menu available without a Runner", async () => {
     const catalog = new SessionCatalogStore(":memory:");
     const workItems = new SqliteEventStore(":memory:");
-    const runner = {
-      listCommands: async () => { throw new Error("Runner command endpoint unavailable"); },
-    } as unknown as RunnerClient;
-    const app = createSessionApp({ catalog, agents, workItems, runner, defaultCwd: "/workspace" }, TOKEN);
+    const app = createSessionApp({ catalog, agents, workItems, defaultCwd: "/workspace" }, TOKEN);
     const session = catalog.createSession({ agentId: "pi" });
-    const message = await app.request(`/v1/sessions/${session.id}/messages`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ message: "hello" }),
-    });
-    const taskId = (await message.json() as { task_record_id: string }).task_record_id;
+    const item = workItems.createWorkItem({ title: "Example", mode: "auto", conversationId: "conv_example", sessionId: session.id, riskLevel: "read_only" });
     workItems.appendEvent({
-      workItemId: taskId,
+      workItemId: item.id,
       type: "AGENT_EVENT",
       actor: "adapter",
       payload: {
@@ -2491,8 +2479,7 @@ describe("session API", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      commands: [{ name: "compact", description: "Compact context" }],
-      error: "Runner command endpoint unavailable",
+      commands: [{ name: "compact", description: "Compact context", source: "agent", status: "discovered" }],
     });
     catalog.close();
     workItems.close();

@@ -22,6 +22,7 @@ import {
   createChannelStreamProjector,
   formatWelcomeMessage,
   handleSlashCommand,
+  isPublicGroupCommand,
   RunOrchestrator,
   sessionRotationNotice,
   sessionRotationReason,
@@ -643,7 +644,7 @@ export class FeishuBridge {
     const groupOperator = Boolean(this.config.access?.admins?.includes(msg.senderId)
       || this.config.access?.allowedUsers?.includes(msg.senderId));
     if (!isDm && !alertReply && command.startsWith("/") && !groupOperator
-      && !["/help", "/status", "/s", "/new", "/stop", "/cancel", "/x", "/continue", "/c", "/steer"].includes(command)) {
+      && !isPublicGroupCommand(command)) {
       await this.sendMarkdown(msg.chatId, "你可以在群里提问和续聊；此操作需要已配置的管理员权限。", msg.messageId);
       return;
     }
@@ -654,6 +655,10 @@ export class FeishuBridge {
       text: msg.content,
       config: this.config,
       router: this.orchestrator.router,
+      groupCommandListOnly: !isDm && !groupOperator,
+      listDiscoveredCommands: isDm || groupOperator
+        ? async () => await this.sessionIngress?.listDiscoveredCommands?.(this.buildFullSlot(msg.chatId, topicId)) ?? []
+        : undefined,
       listSessions: (options) =>
         this.orchestrator.listSessions(msg.chatId, topicId, options),
       resumeProviderSession: async (providerSessionId) => {

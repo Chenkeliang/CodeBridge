@@ -1,5 +1,5 @@
 import type { AgentAvailableCommand, AgentEvent, BackendConfigOption, RunContext } from "@codebridge/core";
-import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
+import type { CreateAgentSessionOptions, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -17,6 +17,7 @@ import type { CliSessionSummary, ProviderSessionHistoryEvent } from "./session-d
 export interface PiSession {
   readonly sessionId: string;
   readonly sessionFile?: string;
+  readonly resourceLoader?: Pick<ResourceLoader, "getSkills" | "getPrompts">;
   subscribe(listener: (event: unknown) => void): () => void;
   prompt(text: string, options?: { images?: unknown[] }): Promise<void>;
   steer(text: string): Promise<unknown>;
@@ -195,6 +196,18 @@ export async function* runPiSession(
   if (handleRef) handleRef.current = handle;
 
   try {
+    if (session.resourceLoader && !options.isAborted()) {
+      const { skills } = session.resourceLoader.getSkills();
+      const { prompts } = session.resourceLoader.getPrompts();
+      yield {
+        type: "available_commands_update",
+        availableCommands: [
+          ...skills.map(({ name, description }) => ({ name: `skill:${name}`, description })),
+          ...prompts.map(({ name, description }) => ({ name, description })),
+        ],
+      };
+    }
+    if (options.isAborted()) return;
     const prompt = await buildPrompt(ctx);
     const promptPromise = session
       .prompt(prompt.text, prompt.options)

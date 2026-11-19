@@ -180,8 +180,8 @@ describe("createFeishuStreamPresenter", () => {
       present({
         type: "available_commands_update",
         availableCommands: [{ name: "compact", description: "Compact context" }],
-      })?.text,
-    ).toContain("/compact");
+      }),
+    ).toBeNull();
     expect(
       present({ type: "session_info_update", title: "Refactor ACP" })?.text,
     ).toContain("Refactor ACP");

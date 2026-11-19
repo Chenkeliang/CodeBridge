@@ -31,7 +31,6 @@ import { SessionConnection } from "@/lib/session-connection";
 import { sessionViewStore, useSessionView } from "@/lib/session-store";
 import { submitSessionMessage } from "@/lib/submit-session-message";
 import type {
-  AgentCommand,
   AgentProfile,
   AgentSession,
   ConfigOption,
@@ -73,7 +72,6 @@ export function Workbench() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
-  const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [configOptions, setConfigOptions] = useState<ConfigOption[]>([]);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
@@ -117,6 +115,7 @@ export function Workbench() {
     openSession: api.openSession,
   }), []);
   const sessionView = useSessionView(selectedSessionId);
+  const commands = sessionView?.snapshot.commands ?? [];
 
   const selectedSession = sessions.find((session) => session.session_id === selectedSessionId) ?? null;
   const selectedAgent = agents.find((agent) => agent.agent_id === (selectedSession?.agent_id ?? selectedAgentId)) ?? null;
@@ -286,7 +285,6 @@ export function Workbench() {
   useEffect(() => {
     if (!selectedSessionId) {
       sessionConnection.close();
-      setCommands([]);
       setConfigOptions([]);
       setModel("");
       setEffort("");
@@ -315,14 +313,9 @@ export function Workbench() {
         sessionViewStore.hydrate(snapshot);
         const { session } = snapshot;
         setSessions((current) => current.map((value) => value.session_id === session.session_id ? session : value));
-        setCommands(snapshot.commands);
-        const [options, discovered] = await Promise.all([
-          api.configOptions(sessionId),
-          api.commands(sessionId).catch(() => snapshot.commands),
-        ]);
+        const options = await api.configOptions(sessionId);
         if (!active) return;
         setConfigOptions(options);
-        setCommands(discovered);
         setModel(session.model ?? "");
         setEffort(session.effort ?? "");
         setConfigOverrides(session.config_overrides ?? {});
@@ -436,7 +429,6 @@ export function Workbench() {
     // doesn't change (both null), the load effect won't rerun and the previous
     // Agent's options would leak into this one's selector.
     if (nextSessionId === selectedSessionId && agentId !== selectedAgentId) {
-      setCommands([]);
       setConfigOptions([]);
       setModel("");
       setEffort("");

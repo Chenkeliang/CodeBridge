@@ -1,4 +1,5 @@
 import type {
+  AgentAvailableCommand,
   ChannelCommandContext,
   ChannelDeliveryRow,
   ChannelRuntimeApproval,
@@ -375,6 +376,15 @@ export function createChannelSessionIngress(
     };
   };
 
+  const listDiscoveredCommands = async (slot: ChannelSlot): Promise<AgentAvailableCommand[]> => {
+    const { sessionId } = await getSlotCommandContext(slot);
+    if (!sessionId) return [];
+    const response = await app.request(`/v1/sessions/${encodeURIComponent(sessionId)}/commands`, { headers: auth });
+    if (response.status === 404) return [];
+    if (!response.ok) throw new Error("Agent command snapshot unavailable");
+    return (await response.json() as { commands: AgentAvailableCommand[] }).commands;
+  };
+
   const resolvePermission = async (
     runId: string,
     approve: boolean,
@@ -552,6 +562,7 @@ export function createChannelSessionIngress(
     ackDelivery,
     completeDelivery,
     getSlotCommandContext,
+    listDiscoveredCommands,
     resumeProviderSession,
     cancelRun,
     steerRun,

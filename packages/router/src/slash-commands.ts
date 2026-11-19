@@ -1,5 +1,6 @@
 import {
   resolveDefaultAgentId,
+  type AgentAvailableCommand,
   type AppConfig,
   type BackendConfigOption,
   type ChannelCommandContext,
@@ -8,7 +9,7 @@ import type { CliSessionSummary } from "@codebridge/runner-client";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { formatCompactCommandHelp, formatFullCommandHelp, type CommandHelpFormat } from "./command-help.js";
+import { formatCommandCatalog, formatCompactCommandHelp, formatFullCommandHelp, type CommandHelpFormat } from "./command-help.js";
 import { formatDynamicModelHelp, formatDynamicOptionHelp, matchBackendConfigValue } from "./model-effort.js";
 import { compactProjectPath, formatSessionLine, formatSessionListFooter, formatSessionListHeader } from "./session-list-format.js";
 import type { SessionRouter } from "./session-router.js";
@@ -59,6 +60,8 @@ export interface SlashContext {
   notifyStatus?: (text: string) => Promise<void>;
   /** 帮助文本格式；飞书默认 Markdown，Telegram 使用纯文本。 */
   helpFormat?: CommandHelpFormat;
+  listDiscoveredCommands?: () => Promise<AgentAvailableCommand[]>;
+  groupCommandListOnly?: boolean;
 }
 
 export type SlashResult =
@@ -110,6 +113,20 @@ export async function handleSlashCommand(
         type: "reply",
         text: formatCompactCommandHelp(ctx.helpFormat),
       };
+
+    case "/commands": {
+      let observed: AgentAvailableCommand[] = [];
+      let note = "";
+      try {
+        observed = await ctx.listDiscoveredCommands?.() ?? [];
+      } catch {
+        note = "\nAgent 命令快照暂时无法读取。";
+      }
+      return {
+        type: "reply",
+        text: formatCommandCatalog(arg, observed, ctx.groupCommandListOnly ?? false, ctx.helpFormat ?? "markdown") + note,
+      };
+    }
 
     case "/new":
     case "/reset":
