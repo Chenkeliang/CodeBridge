@@ -358,6 +358,11 @@ export interface RunContext {
   extraEnv?: Record<string, string>;
 }
 
+export type SessionCompactionResult =
+  | { status: "completed" }
+  | { status: "rejected"; reason: "unsupported" | "busy" | "session_missing" }
+  | { status: "unknown" };
+
 export type ClaudePermissionMode =
   | "acceptEdits"
   | "auto"

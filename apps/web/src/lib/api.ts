@@ -333,6 +333,13 @@ export const api = {
     request<{ ok: boolean; detail: string; compatSuggestion?: Record<string, unknown> }>("/v1/providers/test", { method: "POST", body: JSON.stringify(provider) }),
   commands: async (id: string) =>
     (await request<{ commands?: AgentCommand[] }>(`/v1/sessions/${encodeURIComponent(id)}/commands`)).commands ?? [],
+  compactSession: (id: string, providerId: string, instructions: string, key: string) =>
+    request<{ status: "completed" | "rejected" | "unknown"; reason?: "busy" | "session_missing" | "unsupported" }>(
+      `/v1/sessions/${encodeURIComponent(id)}/compact`, {
+        method: "POST", headers: { "idempotency-key": key },
+        body: JSON.stringify({ provider_session_id: providerId, instructions }),
+      },
+    ),
   pickDirectory: (id: string) =>
     request<AgentSession | { cancelled: true }>(`/v1/sessions/${encodeURIComponent(id)}/directories/pick`, { method: "POST", body: "{}" }),
   workspaceEntries: (id: string, root?: string, relativePath = "") => {

@@ -10,7 +10,7 @@ import type {
   WorkspaceListing,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { applyComposerSuggestion, composerTrigger, filterCommands, workspacePaths } from "@/lib/workbench-logic";
+import { applyComposerSuggestion, composerTrigger, filterCommands, parseCompactionCommand, workspacePaths } from "@/lib/workbench-logic";
 import {
   ChevronDown,
   ChevronRight,
@@ -171,8 +171,10 @@ export function Composer({ attachments, commands, contextOpen, workspaceListing,
 
   function submitWithSweep() {
     if (disabled || sending || !draft.trim() || serializationError) return;
-    setSweepKey((value) => value + 1);
-    onDraft("");
+    if (parseCompactionCommand(draft) === null) {
+      setSweepKey((value) => value + 1);
+      onDraft("");
+    }
     onSubmit();
   }
 

@@ -80,6 +80,7 @@ export {
 
 export {
   closePiSession,
+  compactPiSession,
   deletePiSession,
   forkPiSession,
   loadPiSessionHistory,

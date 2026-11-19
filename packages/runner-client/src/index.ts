@@ -3,6 +3,7 @@ import type {
   AgentEvent,
   BackendConfigOption,
   RunRequest,
+  SessionCompactionResult,
 } from "@codebridge/core";
 import type {
   AgentSetupInstallResult,
@@ -407,6 +408,28 @@ export class RunnerClient {
       cwd: body.cwd,
       error: body.error ?? (res.ok ? undefined : `Runner error: ${res.status}`),
     };
+  }
+
+  async compactSession(sessionId: string, input: {
+    backend: string;
+    cwd: string;
+    requestId: string;
+    instructions: string;
+    model?: string;
+  }): Promise<SessionCompactionResult> {
+    const res = await this.fetch(`/sessions/${encodeURIComponent(sessionId)}/compact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!res.ok) return { status: "unknown" };
+    const body = await res.json() as Partial<{ status: string; reason: string }> | null;
+    if (body?.status === "completed") return { status: "completed" };
+    if (body?.status === "rejected" && (body.reason === "unsupported" || body.reason === "busy" || body.reason === "session_missing")) {
+      return { status: "rejected", reason: body.reason };
+    }
+    return { status: "unknown" };
   }
 
   async cancel(runId: string): Promise<void> {

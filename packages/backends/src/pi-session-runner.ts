@@ -1,4 +1,4 @@
-import type { AgentAvailableCommand, AgentEvent, BackendConfigOption, RunContext } from "@codebridge/core";
+import type { AgentAvailableCommand, AgentEvent, BackendConfigOption, RunContext, SessionCompactionResult } from "@codebridge/core";
 import type { CreateAgentSessionOptions, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -18,6 +18,8 @@ export interface PiSession {
   readonly sessionId: string;
   readonly sessionFile?: string;
   readonly resourceLoader?: Pick<ResourceLoader, "getSkills" | "getPrompts">;
+  compact?(customInstructions?: string): Promise<{ firstKeptEntryId: string }>;
+  abortCompaction?(): void;
   subscribe(listener: (event: unknown) => void): () => void;
   prompt(text: string, options?: { images?: unknown[] }): Promise<void>;
   steer(text: string): Promise<unknown>;
@@ -545,6 +547,35 @@ export async function resolvePiSessionManager(ctx: RunContext): Promise<SessionM
   const match = sessions.find((session) => session.id === ctx.resumeSessionId);
   if (!match) return SessionManager.create(ctx.cwd);
   return SessionManager.open(match.path, undefined, ctx.cwd);
+}
+
+export async function compactPiSession(
+  ctx: RunContext & { resumeSessionId: string },
+  signal: AbortSignal,
+  createSession = createNativePiSession,
+): Promise<SessionCompactionResult> {
+  const existing = await findPiSession(ctx.cwd, ctx.resumeSessionId);
+  if (!existing) return { status: "rejected", reason: "session_missing" };
+  const manager = SessionManager.open(existing.path, undefined, ctx.cwd);
+  if (manager.getSessionId() !== ctx.resumeSessionId) return { status: "rejected", reason: "session_missing" };
+  const previous = new Set(manager.getEntries().filter((entry) => entry.type === "compaction").map((entry) => entry.id));
+  const session = await createSession(ctx, { resolveSessionManager: async () => manager });
+  const abort = () => session.abortCompaction?.();
+  try {
+    if (session.sessionId !== ctx.resumeSessionId) return { status: "rejected", reason: "session_missing" };
+    if (!session.compact) return { status: "rejected", reason: "unsupported" };
+    if (signal.aborted) return { status: "unknown" };
+    signal.addEventListener("abort", abort, { once: true });
+    const result = await session.compact(ctx.prompt || undefined);
+    const saved = SessionManager.open(existing.path, undefined, ctx.cwd);
+    const persisted = saved.getSessionId() === ctx.resumeSessionId && saved.getEntries().some((entry) =>
+      entry.type === "compaction" && !previous.has(entry.id) && entry.firstKeptEntryId === result.firstKeptEntryId
+    );
+    return { status: persisted ? "completed" : "unknown" };
+  } finally {
+    signal.removeEventListener("abort", abort);
+    session.dispose();
+  }
 }
 
 export function createPiModelRuntime(options: {

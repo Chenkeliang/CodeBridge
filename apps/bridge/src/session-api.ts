@@ -1,5 +1,5 @@
 import { AgentRegistry, cloneSetupManifest, projectAgentStatus, projectSetupState } from "@codebridge/agent-registry";
-import type { ChannelSlot, ConfigStore } from "@codebridge/core";
+import type { ChannelSlot, ConfigStore, SessionCompactionResult } from "@codebridge/core";
 import { canonicalWorkspaceKey, isSupportedAgentId } from "@codebridge/core";
 import type { ApprovalService, CapabilityRegistry } from "@codebridge/policy";
 import type { ProjectDiscovery } from "@codebridge/project-catalog";
@@ -11,7 +11,7 @@ import type { SessionCoordinator } from "@codebridge/session-coordinator";
 import type { SqliteEventStore } from "@codebridge/work-items";
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isNativeChannelRequest } from "./channel-origin.js";
 import { ProviderHistoryImporter } from "./session-history-import.js";
 import { registerSessionRuntimeCommandRoutes, registerSessionRuntimeReadRoutes } from "./session-runtime-api.js";
@@ -602,6 +602,51 @@ export function createSessionApp(options: SessionApiOptions, token: string) {
     const session = options.catalog.getSession(c.req.param("session_id"));
     if (!session) return c.json({ error: "session_not_found" }, 404);
     return c.json({ commands: discoveredAgentCommands(options.workItems.listSessionCommands(session.id)) });
+  });
+
+  app.post("/v1/sessions/:session_id/compact", async (c) => {
+    const session = options.catalog.getSession(c.req.param("session_id"));
+    if (!session) return c.json({ error: "session_not_found" }, 404);
+    const body = await readJson(c);
+    const key = c.req.header("idempotency-key");
+    const instructions = body?.instructions ?? "";
+    if (!key || key.length > 128 || typeof instructions !== "string" || instructions.length > 4096
+      || typeof body?.provider_session_id !== "string") {
+      return c.json({ error: "invalid_compaction_request" }, 400);
+    }
+    if (!session.cwd || !session.providerSessionId || body.provider_session_id !== session.providerSessionId) {
+      return c.json({ status: "rejected", reason: "session_missing" });
+    }
+    if (!options.runner) return c.json({ error: "runner_unavailable" }, 503);
+    const namespace = `session:compact:${session.id}`;
+    const terminal = `${namespace}:result`;
+    const requestId = createHash("sha256").update(JSON.stringify([session.id, key])).digest("hex");
+    const fingerprint = createHash("sha256").update(JSON.stringify([
+      session.agentId, session.cwd, session.providerSessionId, session.model, instructions,
+    ])).digest("hex");
+    const admission = options.workItems.withSessionTransaction((tx) => {
+      const prior = tx.getIdempotencyResponse<string>(namespace, key);
+      if (prior !== undefined) return prior === fingerprint ? "replay" : "conflict";
+      if (tx.getRuntime(session.id)?.activeRunId || tx.countQueuedTurns(session.id) > 0) return "busy";
+      tx.putIdempotencyResponse(namespace, key, fingerprint);
+      return "dispatch";
+    });
+    if (admission === "conflict") return c.json({ error: "compaction_key_conflict" }, 409);
+    if (admission === "busy") return c.json({ status: "rejected", reason: "busy" });
+    if (admission === "replay") {
+      return c.json((options.workItems.getIdempotencyResponse(terminal, key) as SessionCompactionResult | undefined)
+        ?? { status: "unknown" });
+    }
+    let result: SessionCompactionResult;
+    try {
+      result = await options.runner.compactSession(session.providerSessionId, {
+        backend: session.agentId, cwd: session.cwd, requestId, instructions, model: session.model ?? undefined,
+      });
+    } catch {
+      result = { status: "unknown" };
+    }
+    options.workItems.putIdempotencyResponse(terminal, key, result);
+    return c.json(result);
   });
 
   app.patch("/v1/sessions/:session_id", async (c) => {

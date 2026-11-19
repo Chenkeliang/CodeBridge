@@ -4,6 +4,7 @@ import {
   AgentSetupService,
   BackendRegistry,
   closePiSession,
+  compactPiSession,
   deleteAcpSession,
   deletePiSession,
   forkPiSession,
@@ -50,6 +51,7 @@ import type {
   LocalMediaPath,
   RunContext,
   RunRequest,
+  SessionCompactionResult,
 } from "@codebridge/core";
 import { DEFAULT_DATA_DIR, VERSION } from "@codebridge/core";
 import { Hono } from "hono";
@@ -85,6 +87,7 @@ export interface RunnerHostOptions {
   piSessionFactory?: (ctx: RunContext) => Promise<PiSession>;
   /** Test/embedding hook for provider-native session fork. */
   piSessionForker?: typeof forkPiSession;
+  piSessionCompactor?: typeof compactPiSession;
   inspectSessionOwners?: (
     sessionId: string,
     allowedProcessGroups: ReadonlySet<number>,
@@ -685,6 +688,42 @@ export class RunnerHost {
         ok: false,
         error: `${profile.type === "pi-sdk" ? "Pi session" : "ACP session"}/${action} failed for ${backendId}: ${message}`,
       };
+    }
+  }
+
+  async compactSession(
+    backend: string,
+    cwd: string,
+    sessionId: string,
+    requestId: string,
+    instructions: string,
+    model?: string,
+  ): Promise<SessionCompactionResult> {
+    const profile = this.options.config.backends[backend];
+    if (profile?.type !== "pi-sdk") return { status: "rejected", reason: "unsupported" };
+    const resolved = resolveRunCwd(cwd);
+    if ("error" in resolved) return { status: "rejected", reason: "session_missing" };
+    if (this.active.size >= this.maxConcurrent || this.active.has(requestId)
+      || [...this.active.values()].some((run) => run.sessionId === sessionId)) {
+      return { status: "rejected", reason: "busy" };
+    }
+    const lease = await this.sessionLeases.acquire(sessionId, requestId);
+    if (!lease) return { status: "rejected", reason: "busy" };
+    const controller = new AbortController();
+    const activeRun: ActiveRun = { runId: requestId, sessionId, aborted: false, cancel: () => controller.abort() };
+    void lease.lost.then(() => controller.abort());
+    try {
+      if (this.active.size >= this.maxConcurrent || this.active.has(requestId)) return { status: "rejected", reason: "busy" };
+      this.active.set(requestId, activeRun);
+      const operation = this.options.piSessionCompactor ?? compactPiSession;
+      const result = await operation({ runId: requestId, cwd: resolved.cwd, resumeSessionId: sessionId,
+        prompt: instructions, backendConfig: profile, model }, controller.signal);
+      return controller.signal.aborted ? { status: "unknown" } : result;
+    } catch {
+      return { status: "unknown" };
+    } finally {
+      if (this.active.get(requestId) === activeRun) this.active.delete(requestId);
+      await lease.release();
     }
   }
 
@@ -1514,6 +1553,17 @@ export function createRunnerApp(host: RunnerHost, token: string) {
       body.targetCwd,
     );
     return c.json(result, result.ok ? 201 : 409);
+  });
+
+  app.post("/sessions/:id/compact", async (c) => {
+    const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || typeof body.backend !== "string" || typeof body.cwd !== "string"
+      || typeof body.requestId !== "string" || !/^[0-9a-f]{64}$/.test(body.requestId) || typeof body.instructions !== "string"
+      || body.instructions.length > 4096 || (body.model !== undefined && typeof body.model !== "string")) {
+      return c.json({ error: "invalid_compaction_request" }, 400);
+    }
+    return c.json(await host.compactSession(body.backend, body.cwd, c.req.param("id"), body.requestId,
+      body.instructions, body.model as string | undefined));
   });
 
   app.delete("/sessions/:id", async (c) => {

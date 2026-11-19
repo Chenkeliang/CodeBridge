@@ -47,6 +47,7 @@ import {
   isSpeedOption,
   isThoughtLevelOption,
   orderSessions,
+  parseCompactionCommand,
   restoreSessionSelection,
   selectInitialAgent,
   serializeConfigOverride,
@@ -84,6 +85,7 @@ export function Workbench() {
   const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
   const [sending, setSending] = useState(false);
   const pendingSubmissionKey = useRef<string | null>(null);
+  const compactRequests = useRef(new Map<string, string>());
   const [providerHistory, setProviderHistory] = useState<ProviderHistoryImportState>({ kind: "idle" });
   const providerHistoryRequestVersion = useRef(0);
   const pendingHistoryImportKey = useRef<{ sessionId: string; key: string } | null>(null);
@@ -597,6 +599,40 @@ export function Workbench() {
   async function submit() {
     const message = draft.trim();
     if (!message || sending) return;
+    const instructions = parseCompactionCommand(draft);
+    if (instructions !== null) {
+      if (!selectedSession?.provider_session_id || attachments.length) {
+        setError(attachments.length ? "压缩命令不能携带附件。" : "请先在当前会话中开始对话，再压缩上下文。");
+        return;
+      }
+      const sessionId = selectedSession.session_id;
+      const providerId = selectedSession.provider_session_id;
+      const scope = JSON.stringify([sessionId, providerId, instructions]);
+      const key = compactRequests.current.get(scope) ?? crypto.randomUUID();
+      compactRequests.current.set(scope, key);
+      setSending(true);
+      setError(null);
+      try {
+        const result = await api.compactSession(sessionId, providerId, instructions, key);
+        if (result.status === "unknown") {
+          setError("压缩结果未知。再次发送同一命令只会查询原请求。");
+          return;
+        }
+        compactRequests.current.delete(scope);
+        if (result.status === "completed") {
+          setDraft((current) => current === draft ? "" : current);
+          notify("当前会话上下文已压缩。");
+        } else {
+          setError(result.reason === "busy" ? "当前会话有进行中或排队的任务，请结束后重试。"
+            : result.reason === "session_missing" ? "原会话已不可用，请重新选择会话。" : "当前 Agent 暂未开放原生压缩。");
+        }
+      } catch {
+        setError("压缩回执未收到。再次提交同一命令将沿用原请求编号，避免重复压缩。");
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
     setSending(true);
     setError(null);
     const pendingAttachments = attachments;
